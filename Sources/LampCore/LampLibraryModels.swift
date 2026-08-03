@@ -165,6 +165,48 @@ public struct LampTranslationSearchResult: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let kind: LampModuleKind
+    public let moduleID: String
+    public let moduleName: String
+    public let title: String
+    public let subtitle: String?
+    public let snippet: String
+    public let startReference: Int?
+    public let endReference: Int?
+
+    public init(
+        id: String,
+        kind: LampModuleKind,
+        moduleID: String,
+        moduleName: String,
+        title: String,
+        subtitle: String? = nil,
+        snippet: String,
+        startReference: Int? = nil,
+        endReference: Int? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.moduleID = moduleID
+        self.moduleName = moduleName
+        self.title = title
+        self.subtitle = subtitle
+        self.snippet = snippet
+        self.startReference = startReference
+        self.endReference = endReference
+    }
+
+    public var referenceDescription: String? {
+        guard let startReference else { return nil }
+        return LampBibleReferenceFormatter.describeRange(
+            from: startReference,
+            to: endReference ?? startReference
+        )
+    }
+}
+
 public struct LampVerseAnnotation: Identifiable, Equatable, Sendable {
     public var id: String {
         [kind, String(startOffset), String(endOffset), strongs, lemma]
@@ -429,6 +471,7 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
     public let footnotes: String?
     public let created: Date?
     public let lastModified: Date?
+    public let isEditable: Bool
 
     public init(
         id: String,
@@ -447,7 +490,8 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
         content: String,
         footnotes: String? = nil,
         created: Date? = nil,
-        lastModified: Date? = nil
+        lastModified: Date? = nil,
+        isEditable: Bool = false
     ) {
         self.id = id
         self.moduleID = moduleID
@@ -466,6 +510,7 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
         self.footnotes = footnotes
         self.created = created
         self.lastModified = lastModified
+        self.isEditable = isEditable
     }
 }
 
@@ -598,6 +643,54 @@ public enum LampHighlightStyle: Int, CaseIterable, Codable, Equatable, Sendable 
     case underlineDotted = 3
 }
 
+public struct LampHighlightSet: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let translationID: String
+    public let created: Date
+    public let lastModified: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        name: String,
+        description: String? = nil,
+        translationID: String,
+        created: Date = Date(),
+        lastModified: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.translationID = translationID
+        self.created = created
+        self.lastModified = lastModified
+    }
+}
+
+public struct LampHighlightTheme: Identifiable, Equatable, Sendable {
+    public var id: String { "\(setID):\(color):\(style.rawValue)" }
+    public let setID: String
+    public let color: String
+    public let style: LampHighlightStyle
+    public let name: String
+    public let description: String?
+
+    public init(
+        setID: String,
+        color: String,
+        style: LampHighlightStyle,
+        name: String,
+        description: String? = nil
+    ) {
+        self.setID = setID
+        self.color = color.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased()
+        self.style = style
+        self.name = name
+        self.description = description
+    }
+}
+
 public struct LampVerseHighlight: Identifiable, Equatable, Sendable {
     public let id: Int64
     public let setID: String
@@ -671,6 +764,41 @@ public struct LampStudyImportResult: Equatable, Sendable {
         self.kind = kind
         self.importedCount = importedCount
         self.skippedCount = skippedCount
+    }
+}
+
+public struct LampPortableBackupSummary: Codable, Equatable, Sendable {
+    public let moduleCount: Int
+    public let noteDocumentCount: Int
+    public let highlightDocumentCount: Int
+    public let devotionalDocumentCount: Int
+
+    public init(
+        moduleCount: Int,
+        noteDocumentCount: Int,
+        highlightDocumentCount: Int,
+        devotionalDocumentCount: Int
+    ) {
+        self.moduleCount = moduleCount
+        self.noteDocumentCount = noteDocumentCount
+        self.highlightDocumentCount = highlightDocumentCount
+        self.devotionalDocumentCount = devotionalDocumentCount
+    }
+
+    public var itemCount: Int {
+        moduleCount + noteDocumentCount + highlightDocumentCount + devotionalDocumentCount
+    }
+}
+
+public struct LampPortableBackupImportResult: Equatable, Sendable {
+    public let installedModules: Int
+    public let importedStudyEntries: Int
+    public let importedDevotionals: Int
+
+    public init(installedModules: Int, importedStudyEntries: Int, importedDevotionals: Int) {
+        self.installedModules = installedModules
+        self.importedStudyEntries = importedStudyEntries
+        self.importedDevotionals = importedDevotionals
     }
 }
 
@@ -845,6 +973,7 @@ public enum LampLibraryError: Error, LocalizedError, Equatable, Sendable {
     case noPersonalNotes(book: Int)
     case noPersonalHighlights(translationID: String)
     case invalidStudyDataExtension
+    case invalidPersonalContent(String)
 
     public var errorDescription: String? {
         switch self {
@@ -872,6 +1001,8 @@ public enum LampLibraryError: Error, LocalizedError, Equatable, Sendable {
             return "There are no saved personal highlights for \(translationID)."
         case .invalidStudyDataExtension:
             return "Choose canonical study data in a .json or .lamp file."
+        case .invalidPersonalContent(let reason):
+            return reason
         }
     }
 }

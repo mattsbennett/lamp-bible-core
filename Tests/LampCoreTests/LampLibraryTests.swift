@@ -90,6 +90,11 @@ struct LampLibraryTests {
         #expect(chapter.verses.last?.annotations.first?.kind == "added")
         #expect(chapter.verses.last?.annotations.first?.text == "was")
         #expect(chapter.headings.first?.text == "Creation")
+        #expect(try await library.translationWordCount(
+            moduleID: "TEST",
+            startReference: 1_001_001,
+            endReference: 1_001_002
+        ) == 7)
 
         let studyData = try #require(try await library.verseStudyData(
             moduleID: "TEST",
@@ -326,11 +331,23 @@ struct LampLibraryTests {
         _ = try await library.setPersonalVerseNote(
             reference: reference,
             title: "Gospel",
-            content: "An updated observation."
+            content: "An updated observation.",
+            verseReferences: [reference, reference + 1],
+            footnotes: [LampVerseFootnote(id: "1", kind: "study", content: "A supporting note.")]
         )
         let updatedNote = try #require(try await library.verseNotes(reference: reference).first)
         #expect(updatedNote.title == "Gospel")
         #expect(updatedNote.content == "An updated observation.")
+        #expect(updatedNote.verseReferences == [reference, reference + 1])
+        #expect(updatedNote.footnotes.first?.content == "A supporting note.")
+
+        let customSet = try await library.saveHighlightSet(LampHighlightSet(
+            id: "sermon-highlights",
+            name: "Sermon Notes",
+            description: "Highlights for sermon preparation",
+            translationID: "TEST"
+        ))
+        #expect(try await library.highlightSets(translationID: "TEST") == [customSet])
 
         let highlight = try await library.saveVerseHighlight(
             translationID: "TEST",
@@ -342,15 +359,24 @@ struct LampLibraryTests {
         )
         #expect(highlight.color == "FFCC00")
         #expect(highlight.setID == "personal-highlights:TEST")
+        let customHighlight = try await library.saveVerseHighlight(
+            translationID: "TEST",
+            reference: reference,
+            startOffset: 13,
+            endOffset: 18,
+            style: .underlineDashed,
+            color: "34C759",
+            setID: customSet.id
+        )
         #expect(try await library.verseHighlights(
             translationID: "TEST",
             reference: reference
-        ) == [highlight])
+        ) == [highlight, customHighlight])
         #expect(try await library.verseHighlights(
             translationID: "TEST",
             bookNumber: 43,
             chapterNumber: 3
-        ) == [highlight])
+        ) == [highlight, customHighlight])
         #expect(try await library.verseHighlights(
             translationID: "OTHER",
             reference: reference
@@ -360,10 +386,89 @@ struct LampLibraryTests {
         #expect(try await library.verseHighlights(
             translationID: "TEST",
             reference: reference
+        ) == [customHighlight])
+
+        try await library.deleteHighlightSet(id: customSet.id)
+        #expect(try await library.highlightSets(translationID: "TEST").count == 1)
+        #expect(try await library.verseHighlights(
+            translationID: "TEST",
+            reference: reference
         ).isEmpty)
 
         _ = try await library.setPersonalVerseNote(reference: reference, content: "")
         #expect(try await library.verseNotes(reference: reference).isEmpty)
+    }
+
+    @Test func exportsAndImportsPortableLibraryBackup() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-backup-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        let source = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Source"))
+        _ = try await source.setPersonalVerseNote(
+            reference: 43_003_016,
+            title: "Love",
+            content: "A synced note."
+        )
+        _ = try await source.saveVerseHighlight(
+            translationID: "TEST",
+            reference: 43_003_016,
+            startOffset: 0,
+            endOffset: 4,
+            color: "FFCC00"
+        )
+        let customSet = try await source.saveHighlightSet(LampHighlightSet(
+            id: "sermon-preparation",
+            name: "Sermon Preparation",
+            translationID: "TEST"
+        ))
+        _ = try await source.saveHighlightTheme(LampHighlightTheme(
+            setID: customSet.id,
+            color: "34C759",
+            style: .underlineDotted,
+            name: "Promises",
+            description: "Promises to revisit"
+        ))
+        _ = try await source.saveVerseHighlight(
+            translationID: "TEST",
+            reference: 43_003_016,
+            startOffset: 5,
+            endOffset: 9,
+            style: .underlineDotted,
+            color: "34C759",
+            setID: customSet.id
+        )
+        _ = try await source.savePersonalDevotional(LampDevotional(
+            id: "synced-devotional",
+            moduleID: "personal-devotionals",
+            moduleName: "My Devotionals",
+            title: "Synced Devotional",
+            content: "This devotional travels between devices."
+        ))
+
+        let backupURL = fixtureURL.appendingPathComponent("Backup", isDirectory: true)
+        let summary = try await source.exportPortableBackup(to: backupURL)
+        #expect(summary.noteDocumentCount == 1)
+        #expect(summary.highlightDocumentCount == 2)
+        #expect(summary.devotionalDocumentCount == 1)
+        #expect(FileManager.default.fileExists(atPath: backupURL.appendingPathComponent("manifest.json").path))
+
+        let destination = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Destination"))
+        let imported = try await destination.importPortableBackup(from: backupURL)
+        #expect(imported.importedStudyEntries == 3)
+        #expect(imported.importedDevotionals == 1)
+        #expect(try await destination.verseNotes(reference: 43_003_016).first?.content == "A synced note.")
+        #expect(try await destination.verseHighlights(
+            translationID: "TEST",
+            reference: 43_003_016
+        ).count == 2)
+        #expect(try await destination.highlightSets(translationID: "TEST")
+            .contains { $0.name == "Sermon Preparation" })
+        let syncedCustomSet = try #require(try await destination.highlightSets(translationID: "TEST")
+            .first { $0.name == "Sermon Preparation" })
+        #expect(try await destination.highlightThemes(setID: syncedCustomSet.id).first?.name == "Promises")
+        #expect(try await destination.personalDevotionals().first?.title == "Synced Devotional")
     }
 
     @Test func installsAndReadsPortableStudyModules() async throws {
@@ -434,6 +539,74 @@ struct LampLibraryTests {
         #expect(try await library.installedModules().map(\.kind) == [.highlights, .notes])
     }
 
+    @Test func createsSearchesExportsAndDeletesPersonalDevotionals() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-personal-devotional-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+        let saved = try await library.savePersonalDevotional(LampDevotional(
+            id: "morning-hope",
+            moduleID: "personal-devotionals",
+            moduleName: "My Devotionals",
+            title: "Morning Hope",
+            subtitle: "Beginning well",
+            author: "Author",
+            date: "2026-08-03",
+            tags: ["hope", "morning"],
+            category: "reflection",
+            seriesName: "Daily Hope",
+            seriesOrder: 1,
+            keyScriptures: [LampScriptureLink(
+                text: "Genesis 1:1",
+                startReference: 1_001_001
+            )],
+            summary: "God gives hope.",
+            content: "Begin the day remembering creation.",
+            footnotes: "A footnote"
+        ))
+
+        #expect(saved.isEditable)
+        #expect(saved.moduleID == "personal-devotionals")
+        #expect(try await library.personalDevotionals(query: "creation").first?.id == saved.id)
+        #expect(try await library.devotionals().first?.title == "Morning Hope")
+        let searchResults = try await library.searchModules(
+            query: "creation",
+            kinds: [.devotional]
+        )
+        #expect(searchResults.first?.moduleID == "personal-devotionals")
+
+        let document = try await library.personalDevotionalDocument(id: saved.id)
+        #expect(document.kind == .devotional)
+        let outputURL = fixtureURL.appendingPathComponent("morning-hope.lamp")
+        let build = try LampModuleCompiler().compile(
+            data: document.jsonData,
+            sourceFilename: document.suggestedJSONFilename,
+            destinationURL: outputURL
+        )
+        #expect(build.kind == .devotional)
+        #expect(build.tableCounts["devotional_entries"] == 1)
+
+        let attachmentSource = fixtureURL.appendingPathComponent("photo.jpg")
+        try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: attachmentSource)
+        let storedAttachment = try await library.storePersonalDevotionalMedia(
+            from: attachmentSource,
+            devotionalID: saved.id
+        )
+        #expect(FileManager.default.fileExists(atPath: storedAttachment.path))
+        #expect(storedAttachment.path.contains("Media/Devotionals/morning-hope"))
+
+        try await library.deletePersonalDevotional(id: saved.id)
+        #expect(try await library.personalDevotionals().isEmpty)
+
+        let jsonURL = fixtureURL.appendingPathComponent(document.suggestedJSONFilename)
+        try document.jsonData.write(to: jsonURL)
+        #expect(try await library.importPersonalDevotional(from: jsonURL).first?.id == saved.id)
+        try await library.deletePersonalDevotional(id: saved.id)
+        #expect(try await library.importPersonalDevotional(from: outputURL).first?.title == saved.title)
+    }
+
     @Test func exportsPersonalStudyDataThroughPortableFormats() async throws {
         let fixtureURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-study-export-tests-\(UUID().uuidString)", isDirectory: true)
@@ -446,6 +619,7 @@ struct LampLibraryTests {
             reference: 43_003_016,
             title: "The Gospel",
             content: "A saved observation for export.",
+            verseReferences: [43_003_016, 43_003_017],
             footnotes: [LampVerseFootnote(id: "1", kind: "explanation", content: "A saved footnote.")],
             lastModified: Date(timeIntervalSince1970: 1_700_000_000)
         ))
@@ -478,6 +652,7 @@ struct LampLibraryTests {
         let chapters = try #require(notesJSON["chapters"] as? [[String: Any]])
         let verses = try #require(chapters.first?["verses"] as? [[String: Any]])
         #expect(verses.first?["title"] as? String == "The Gospel")
+        #expect(verses.first?["ev"] as? Int == 43_003_017)
 
         let notesJSONURL = fixtureURL.appendingPathComponent(notesDocument.suggestedJSONFilename)
         let highlightsJSONURL = fixtureURL.appendingPathComponent(highlightsDocument.suggestedJSONFilename)
@@ -693,5 +868,14 @@ struct LampLibraryTests {
         let questions = try await library.quizQuestions(moduleID: "QUIZ", day: 1, ageGroup: "adult")
         #expect(questions.first?.question == "Who created?")
         #expect(questions.first?.answer == "God created.")
+
+        let creationResults = try await library.searchModules(query: "Creation")
+        #expect(creationResults.contains { $0.kind == .commentary && $0.moduleID == "COMM" })
+        #expect(creationResults.contains { $0.kind == .devotional && $0.moduleID == "DEV" })
+        let quizResults = try await library.searchModules(query: "God", kinds: [.quiz])
+        #expect(quizResults.first?.moduleID == "QUIZ")
+        #expect(quizResults.first?.startReference == 1_001_001)
+        let planResults = try await library.searchModules(query: "Bundled", kinds: [.plan])
+        #expect(planResults.first?.moduleID == "PLAN")
     }
 }

@@ -318,6 +318,41 @@ public actor LampLibrary {
         }
     }
 
+    public func translationWordCount(
+        moduleID: String,
+        startReference: Int,
+        endReference: Int
+    ) throws -> Int {
+        let lowerBound = min(startReference, endReference)
+        let upperBound = max(startReference, endReference)
+        let queue = try openDatabase(moduleID: moduleID)
+        return try queue.read { db in
+            let tables = try tableNames(in: db)
+            let table: String
+            let condition: String
+            let arguments: StatementArguments
+            if tables.contains("translation_meta") && tables.contains("verses") {
+                table = "verses"
+                condition = "ref BETWEEN ? AND ?"
+                arguments = [lowerBound, upperBound]
+            } else if tables.contains("translation_verses") {
+                table = "translation_verses"
+                condition = "translation_id = ? AND ref BETWEEN ? AND ?"
+                arguments = [moduleID, lowerBound, upperBound]
+            } else {
+                throw LampLibraryError.notATranslation(moduleID)
+            }
+            let texts = try String.fetchAll(
+                db,
+                sql: "SELECT text FROM \(table) WHERE \(condition) ORDER BY ref",
+                arguments: arguments
+            )
+            return texts.reduce(into: 0) { count, text in
+                count += text.split(whereSeparator: { $0.isWhitespace }).count
+            }
+        }
+    }
+
     public func searchTranslations(
         query: String,
         moduleIDs: Set<String>? = nil,
@@ -639,10 +674,13 @@ public actor LampLibrary {
         query: String? = nil
     ) throws -> [LampDevotional] {
         let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var results: [LampDevotional] = []
+        if moduleIDs == nil || moduleIDs?.contains("personal-devotionals") == true {
+            results += try personalDevotionals(query: trimmedQuery)
+        }
         let modules = try installedModules().filter {
             $0.kind == .devotional && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
-        var results: [LampDevotional] = []
 
         for module in modules {
             let queue = try openDatabase(moduleID: module.id)
@@ -700,7 +738,229 @@ public actor LampLibrary {
             }
             results.append(contentsOf: entries)
         }
-        return results
+        return results.sorted(by: devotionalSort)
+    }
+
+    public func personalDevotionals(query: String? = nil) throws -> [LampDevotional] {
+        let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            var sql = "SELECT * FROM personal_devotionals"
+            var arguments = StatementArguments()
+            if let trimmedQuery, !trimmedQuery.isEmpty {
+                let pattern = "%\(trimmedQuery)%"
+                sql += """
+                     WHERE title LIKE ? COLLATE NOCASE
+                       OR COALESCE(subtitle, '') LIKE ? COLLATE NOCASE
+                       OR COALESCE(author, '') LIKE ? COLLATE NOCASE
+                       OR COALESCE(summary, '') LIKE ? COLLATE NOCASE
+                       OR content LIKE ? COLLATE NOCASE
+                       OR tags_json LIKE ? COLLATE NOCASE
+                    """
+                arguments = [pattern, pattern, pattern, pattern, pattern, pattern]
+            }
+            sql += " ORDER BY COALESCE(series_name, ''), COALESCE(series_order, 0), COALESCE(devotional_date, ''), title"
+            return try Row.fetchAll(db, sql: sql, arguments: arguments).map(makePersonalDevotional)
+        }
+    }
+
+    @discardableResult
+    public func savePersonalDevotional(_ devotional: LampDevotional) throws -> LampDevotional {
+        let title = devotional.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = devotional.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !content.isEmpty else {
+            throw LampLibraryError.invalidPersonalContent("A devotional needs a title and content.")
+        }
+        let identifier = devotional.id.isEmpty ? UUID().uuidString : devotional.id
+        try validateIdentifier(identifier)
+        let now = Date()
+        let created = devotional.created ?? now
+        let saved = LampDevotional(
+            id: identifier,
+            moduleID: "personal-devotionals",
+            moduleName: "My Devotionals",
+            title: title,
+            subtitle: devotional.subtitle?.nilIfBlank,
+            author: devotional.author?.nilIfBlank,
+            date: devotional.date?.nilIfBlank,
+            tags: devotional.tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty },
+            category: devotional.category?.nilIfBlank,
+            seriesName: devotional.seriesName?.nilIfBlank,
+            seriesOrder: devotional.seriesOrder,
+            keyScriptures: devotional.keyScriptures,
+            summary: devotional.summary?.nilIfBlank,
+            content: devotional.content,
+            footnotes: devotional.footnotes?.nilIfBlank,
+            created: created,
+            lastModified: now,
+            isEditable: true
+        )
+        let tagsJSON = String(decoding: try JSONEncoder().encode(saved.tags), as: UTF8.self)
+        let scriptures = saved.keyScriptures.map { scripture -> [String: Any] in
+            var value: [String: Any] = ["sv": scripture.startReference]
+            if let end = scripture.endReference { value["ev"] = end }
+            if let text = scripture.text { value["label"] = text }
+            return value
+        }
+        let scripturesData = try JSONSerialization.data(withJSONObject: scriptures, options: [.sortedKeys])
+        let scripturesJSON = String(decoding: scripturesData, as: UTF8.self)
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO personal_devotionals (
+                    id, title, subtitle, author, devotional_date, tags_json,
+                    category, series_name, series_order, key_scriptures_json,
+                    summary, content, footnotes, created, last_modified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title = excluded.title,
+                    subtitle = excluded.subtitle,
+                    author = excluded.author,
+                    devotional_date = excluded.devotional_date,
+                    tags_json = excluded.tags_json,
+                    category = excluded.category,
+                    series_name = excluded.series_name,
+                    series_order = excluded.series_order,
+                    key_scriptures_json = excluded.key_scriptures_json,
+                    summary = excluded.summary,
+                    content = excluded.content,
+                    footnotes = excluded.footnotes,
+                    last_modified = excluded.last_modified
+                """, arguments: [
+                    saved.id,
+                    saved.title,
+                    saved.subtitle,
+                    saved.author,
+                    saved.date,
+                    tagsJSON,
+                    saved.category,
+                    saved.seriesName,
+                    saved.seriesOrder,
+                    scripturesJSON,
+                    saved.summary,
+                    saved.content,
+                    saved.footnotes,
+                    Int(created.timeIntervalSince1970),
+                    Int(now.timeIntervalSince1970),
+                ])
+        }
+        return saved
+    }
+
+    public func deletePersonalDevotional(id: String) throws {
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try db.execute(sql: "DELETE FROM personal_devotionals WHERE id = ?", arguments: [id])
+        }
+    }
+
+    public func personalDevotionalDocument(id: String) throws -> LampPortableStudyDocument {
+        guard let devotional = try personalDevotionals().first(where: { $0.id == id }) else {
+            throw LampLibraryError.moduleNotFound(id)
+        }
+        var meta: [String: Any] = [
+            "schemaVersion": "1.1",
+            "id": devotional.id,
+            "type": "devotional",
+            "title": devotional.title,
+            "tags": devotional.tags,
+            "created": Int((devotional.created ?? Date()).timeIntervalSince1970),
+            "lastModified": Int((devotional.lastModified ?? Date()).timeIntervalSince1970),
+        ]
+        if let subtitle = devotional.subtitle { meta["subtitle"] = subtitle }
+        if let author = devotional.author { meta["author"] = author }
+        if let date = devotional.date { meta["date"] = date }
+        if let category = devotional.category { meta["category"] = category }
+        if let seriesName = devotional.seriesName {
+            var series: [String: Any] = ["name": seriesName]
+            if let order = devotional.seriesOrder { series["order"] = order }
+            meta["series"] = series
+        }
+        meta["keyScriptures"] = devotional.keyScriptures.map { scripture in
+            var value: [String: Any] = ["sv": scripture.startReference]
+            if let end = scripture.endReference { value["ev"] = end }
+            if let text = scripture.text { value["label"] = text }
+            return value
+        }
+        var root: [String: Any] = [
+            "meta": meta,
+            "content": [[
+                "type": "paragraph",
+                "content": ["text": devotional.content],
+            ]],
+        ]
+        if let summary = devotional.summary { root["summary"] = summary }
+        if let footnotes = devotional.footnotes { root["footnotes"] = [footnotes] }
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        return LampPortableStudyDocument(
+            moduleID: devotional.id,
+            kind: .devotional,
+            name: devotional.title,
+            jsonData: data
+        )
+    }
+
+    @discardableResult
+    public func importPersonalDevotional(from sourceURL: URL) throws -> [LampDevotional] {
+        let fileExtension = sourceURL.pathExtension.lowercased()
+        guard ["json", "lamp"].contains(fileExtension) else {
+            throw LampLibraryError.invalidStudyDataExtension
+        }
+        let hasSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
+        }
+        let sourceData = try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
+        let devotionals: [LampDevotional]
+        if fileExtension == "json" {
+            devotionals = [try personalDevotional(fromJSONData: sourceData)]
+        } else {
+            guard let databaseData = try? (sourceData as NSData).decompressed(using: .zlib) as Data else {
+                throw LampLibraryError.decompressionFailed
+            }
+            let temporaryURL = fileManager.temporaryDirectory
+                .appendingPathComponent("lamp-devotional-import-\(UUID().uuidString)")
+                .appendingPathExtension("sqlite")
+            try databaseData.write(to: temporaryURL, options: [.atomic])
+            defer { try? fileManager.removeItem(at: temporaryURL) }
+            devotionals = try devotionalsFromDatabase(at: temporaryURL)
+        }
+        guard !devotionals.isEmpty else { throw LampLibraryError.unsupportedModuleSchema }
+        let existing = Dictionary(uniqueKeysWithValues: try personalDevotionals().map { ($0.id, $0) })
+        return try devotionals.compactMap { devotional in
+            if let local = existing[devotional.id],
+               let localModified = local.lastModified,
+               let incomingModified = devotional.lastModified,
+               incomingModified <= localModified {
+                return nil
+            }
+            return try savePersonalDevotional(devotional)
+        }
+    }
+
+    public func storePersonalDevotionalMedia(
+        from sourceURL: URL,
+        devotionalID: String
+    ) throws -> URL {
+        try validateIdentifier(devotionalID)
+        let hasSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
+        }
+        let destinationDirectory = rootURL
+            .appendingPathComponent("Media", isDirectory: true)
+            .appendingPathComponent("Devotionals", isDirectory: true)
+            .appendingPathComponent(devotionalID, isDirectory: true)
+        try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+        let sourceName = sourceURL.deletingPathExtension().lastPathComponent
+        let safeName = sourceName
+            .replacingOccurrences(of: "[^A-Za-z0-9._-]", with: "-", options: .regularExpression)
+        let filename = "\(safeName.isEmpty ? "attachment" : safeName)-\(UUID().uuidString.prefix(8))"
+            + (sourceURL.pathExtension.isEmpty ? "" : ".\(sourceURL.pathExtension.lowercased())")
+        let destinationURL = destinationDirectory.appendingPathComponent(filename)
+        try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        return destinationURL
     }
 
     public func quizModules(planID: String? = nil) throws -> [LampQuizModule] {
@@ -788,6 +1048,309 @@ public actor LampLibrary {
                     )
                 }
         }
+    }
+
+    public func searchModules(
+        query: String,
+        kinds: Set<LampModuleKind>? = nil,
+        moduleIDs: Set<String>? = nil,
+        limit: Int = 200
+    ) throws -> [LampModuleSearchResult] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return [] }
+        let resultLimit = min(max(limit, 1), 500)
+        let installed = try installedModules()
+        let wants: (LampModuleKind) -> Bool = { kinds == nil || kinds?.contains($0) == true }
+        let includesModule: (String) -> Bool = { moduleIDs == nil || moduleIDs?.contains($0) == true }
+        var results: [LampModuleSearchResult] = []
+
+        if wants(.translation), results.count < resultLimit {
+            let translationIDs = Set(installed.filter {
+                $0.kind == .translation && includesModule($0.id)
+            }.map(\.id))
+            if !translationIDs.isEmpty {
+                let matches = try searchTranslations(
+                    query: trimmedQuery,
+                    moduleIDs: translationIDs,
+                    limit: resultLimit - results.count
+                )
+                results += matches.map { match in
+                    LampModuleSearchResult(
+                        id: "translation:\(match.id)",
+                        kind: .translation,
+                        moduleID: match.translationID,
+                        moduleName: match.translationName,
+                        title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
+                        subtitle: match.translationAbbreviation,
+                        snippet: match.text,
+                        startReference: match.reference
+                    )
+                }
+            }
+        }
+
+        if wants(.dictionary), results.count < resultLimit {
+            let dictionaryIDs = Set(installed.filter {
+                $0.kind == .dictionary && includesModule($0.id)
+            }.map(\.id))
+            if !dictionaryIDs.isEmpty {
+                let matches = try searchDictionaries(
+                    query: trimmedQuery,
+                    moduleIDs: dictionaryIDs,
+                    limit: resultLimit - results.count
+                )
+                results += matches.map { match in
+                    let definition = match.senses
+                        .map { [$0.partOfSpeech, $0.gloss, $0.definition].compactMap { $0 }.joined(separator: ": ") }
+                        .joined(separator: " • ")
+                    return LampModuleSearchResult(
+                        id: "dictionary:\(match.moduleID):\(match.entryID)",
+                        kind: .dictionary,
+                        moduleID: match.moduleID,
+                        moduleName: match.moduleName,
+                        title: match.lemma,
+                        subtitle: match.transliteration,
+                        snippet: searchSnippet(definition.isEmpty ? match.key : definition)
+                    )
+                }
+            }
+        }
+
+        if wants(.commentary), results.count < resultLimit {
+            let pattern = "%\(trimmedQuery)%"
+            for module in installed where module.kind == .commentary && includesModule(module.id) {
+                let queue = try openDatabase(moduleID: module.id)
+                let remaining = resultLimit - results.count
+                let matches = try queue.read { db -> [LampModuleSearchResult] in
+                    guard try tableNames(in: db).contains("commentary_units") else { return [] }
+                    let columns = try columnNames(in: db, table: "commentary_units")
+                    var condition = "(COALESCE(title, '') LIKE ? COLLATE NOCASE OR COALESCE(introduction_json, '') LIKE ? COLLATE NOCASE OR COALESCE(translation_json, '') LIKE ? COLLATE NOCASE OR COALESCE(commentary_json, '') LIKE ? COLLATE NOCASE OR COALESCE(footnotes_json, '') LIKE ? COLLATE NOCASE)"
+                    var arguments: StatementArguments = [pattern, pattern, pattern, pattern, pattern]
+                    if columns.contains("module_id") {
+                        condition = "module_id = ? AND " + condition
+                        arguments = [module.id, pattern, pattern, pattern, pattern, pattern]
+                    }
+                    arguments += [remaining]
+                    return try Row.fetchAll(db, sql: """
+                        SELECT id, book, chapter, sv, ev, title,
+                               introduction_json, translation_json, commentary_json, footnotes_json
+                        FROM commentary_units
+                        WHERE \(condition)
+                        ORDER BY book, chapter, order_index
+                        LIMIT ?
+                        """, arguments: arguments).map { row in
+                            let introduction: String? = row["introduction_json"]
+                            let translation: String? = row["translation_json"]
+                            let commentary: String? = row["commentary_json"]
+                            let footnotes: String? = row["footnotes_json"]
+                            let start: Int = row["sv"]
+                            let end: Int? = row["ev"]
+                            let body = [introduction, translation, commentary, footnotes]
+                                .compactMap { plainText(fromJSONString: $0) }
+                                .joined(separator: " ")
+                            let title: String? = row["title"]
+                            return LampModuleSearchResult(
+                                id: "commentary:\(module.id):\(row["id"] as String)",
+                                kind: .commentary,
+                                moduleID: module.id,
+                                moduleName: module.name,
+                                title: title?.isEmpty == false
+                                    ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
+                                subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
+                                snippet: searchSnippet(body),
+                                startReference: start,
+                                endReference: end
+                            )
+                        }
+                }
+                results += matches
+                if results.count >= resultLimit { break }
+            }
+        }
+
+        if wants(.notes), results.count < resultLimit {
+            let pattern = "%\(trimmedQuery)%"
+            if includesModule("personal-notes") {
+                let queue = try openUserDatabase()
+                let remaining = resultLimit - results.count
+                results += try queue.read { db in
+                    try Row.fetchAll(db, sql: """
+                        SELECT id, module_id, verse_id, title, content
+                        FROM personal_notes
+                        WHERE COALESCE(title, '') LIKE ? COLLATE NOCASE
+                           OR content LIKE ? COLLATE NOCASE
+                        ORDER BY last_modified DESC
+                        LIMIT ?
+                        """, arguments: [pattern, pattern, remaining]).map { row in
+                            let reference: Int = row["verse_id"]
+                            let title: String? = row["title"]
+                            return LampModuleSearchResult(
+                                id: "notes:personal-notes:\(row["id"] as String)",
+                                kind: .notes,
+                                moduleID: "personal-notes",
+                                moduleName: "My Notes",
+                                title: title?.isEmpty == false
+                                    ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
+                                subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
+                                snippet: searchSnippet(row["content"] as String),
+                                startReference: reference
+                            )
+                        }
+                }
+            }
+            for module in installed where module.kind == .notes && includesModule(module.id) && results.count < resultLimit {
+                let queue = try openDatabase(moduleID: module.id)
+                let remaining = resultLimit - results.count
+                results += try queue.read { db in
+                    guard try tableNames(in: db).contains("note_entries") else { return [] }
+                    let columns = try columnNames(in: db, table: "note_entries")
+                    let titleColumn = columns.contains("title") ? "title" : "NULL AS title"
+                    let searchCondition = columns.contains("title")
+                        ? "COALESCE(title, '') LIKE ? COLLATE NOCASE OR content LIKE ? COLLATE NOCASE"
+                        : "content LIKE ? COLLATE NOCASE"
+                    var arguments: StatementArguments = columns.contains("title")
+                        ? [pattern, pattern] : [pattern]
+                    arguments += [remaining]
+                    return try Row.fetchAll(db, sql: """
+                        SELECT id, verse_id, \(titleColumn), content
+                        FROM note_entries
+                        WHERE \(searchCondition)
+                        ORDER BY verse_id, id
+                        LIMIT ?
+                        """, arguments: arguments).map { row in
+                            let reference: Int = row["verse_id"]
+                            let title: String? = row["title"]
+                            return LampModuleSearchResult(
+                                id: "notes:\(module.id):\(row["id"] as String)",
+                                kind: .notes,
+                                moduleID: module.id,
+                                moduleName: module.name,
+                                title: title?.isEmpty == false
+                                    ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
+                                subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
+                                snippet: searchSnippet(row["content"] as String),
+                                startReference: reference
+                            )
+                        }
+                }
+            }
+        }
+
+        if wants(.devotional), results.count < resultLimit {
+            let matches = try devotionals(moduleIDs: moduleIDs, query: trimmedQuery)
+            results += matches.prefix(resultLimit - results.count).map { devotional in
+                LampModuleSearchResult(
+                    id: "devotional:\(devotional.moduleID):\(devotional.id)",
+                    kind: .devotional,
+                    moduleID: devotional.moduleID,
+                    moduleName: devotional.moduleName,
+                    title: devotional.title,
+                    subtitle: devotional.subtitle ?? devotional.author,
+                    snippet: searchSnippet(devotional.summary ?? devotional.content),
+                    startReference: devotional.keyScriptures.first?.startReference,
+                    endReference: devotional.keyScriptures.first?.endReference
+                )
+            }
+        }
+
+        if wants(.plan), results.count < resultLimit {
+            results += try readingPlans().filter { plan in
+                includesModule(plan.id) && [plan.name, plan.description, plan.fullDescription, plan.author]
+                    .compactMap { $0 }
+                    .contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
+            }
+            .prefix(resultLimit - results.count)
+            .map { plan in
+                LampModuleSearchResult(
+                    id: "plan:\(plan.id)",
+                    kind: .plan,
+                    moduleID: plan.id,
+                    moduleName: plan.name,
+                    title: plan.name,
+                    subtitle: plan.author,
+                    snippet: searchSnippet(plan.fullDescription ?? plan.description ?? "\(plan.duration) days")
+                )
+            }
+        }
+
+        if wants(.quiz), results.count < resultLimit {
+            let pattern = "%\(trimmedQuery)%"
+            for module in installed where module.kind == .quiz && includesModule(module.id) {
+                let queue = try openDatabase(moduleID: module.id)
+                let remaining = resultLimit - results.count
+                results += try queue.read { db in
+                    guard try tableNames(in: db).contains("quiz_questions") else { return [] }
+                    return try Row.fetchAll(db, sql: """
+                        SELECT id, day, sv, ev, age_group, question_json, answer_json, theme
+                        FROM quiz_questions
+                        WHERE quiz_module_id = ?
+                          AND (question_json LIKE ? COLLATE NOCASE
+                            OR answer_json LIKE ? COLLATE NOCASE
+                            OR theme LIKE ? COLLATE NOCASE)
+                        ORDER BY day, sv, age_group, question_index
+                        LIMIT ?
+                        """, arguments: [module.id, pattern, pattern, pattern, remaining]).map { row in
+                            let start: Int = row["sv"]
+                            let end: Int = row["ev"]
+                            let questionJSON: String = row["question_json"]
+                            let answerJSON: String = row["answer_json"]
+                            return LampModuleSearchResult(
+                                id: "quiz:\(module.id):\(row["id"] as Int64)",
+                                kind: .quiz,
+                                moduleID: module.id,
+                                moduleName: module.name,
+                                title: plainText(fromJSONString: questionJSON) ?? "Quiz Question",
+                                subtitle: "Day \(row["day"] as Int) • \(row["age_group"] as String)",
+                                snippet: searchSnippet(plainText(fromJSONString: answerJSON) ?? answerJSON),
+                                startReference: start,
+                                endReference: end
+                            )
+                        }
+                }
+                if results.count >= resultLimit { break }
+            }
+        }
+
+        if wants(.highlights), results.count < resultLimit {
+            let translationIDs = Set(installed.filter { $0.kind == .translation }.map(\.id))
+            let verseMatches = try searchTranslations(
+                query: trimmedQuery,
+                moduleIDs: translationIDs,
+                limit: min((resultLimit - results.count) * 4, 500)
+            )
+            for match in verseMatches where results.count < resultLimit {
+                let personal = try verseHighlights(translationID: match.translationID, reference: match.reference)
+                for highlight in personal where includesModule(highlight.setID) && results.count < resultLimit {
+                    results.append(LampModuleSearchResult(
+                        id: "highlights:\(highlight.setID):\(highlight.id)",
+                        kind: .highlights,
+                        moduleID: highlight.setID,
+                        moduleName: "My Highlights",
+                        title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
+                        subtitle: match.translationAbbreviation,
+                        snippet: searchSnippet(match.text),
+                        startReference: match.reference
+                    ))
+                }
+                for module in installed where module.kind == .highlights && includesModule(module.id) {
+                    let moduleHighlights = try moduleVerseHighlights(moduleID: module.id, reference: match.reference)
+                    for highlight in moduleHighlights where highlight.translationID == match.translationID && results.count < resultLimit {
+                        results.append(LampModuleSearchResult(
+                            id: "highlights:\(module.id):\(highlight.id)",
+                            kind: .highlights,
+                            moduleID: module.id,
+                            moduleName: module.name,
+                            title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
+                            subtitle: match.translationAbbreviation,
+                            snippet: searchSnippet(match.text),
+                            startReference: match.reference
+                        ))
+                    }
+                }
+            }
+        }
+
+        return Array(results.prefix(resultLimit))
     }
 
     public func selectedPlanIDs() throws -> Set<String> {
@@ -992,12 +1555,16 @@ public actor LampLibrary {
     public func setPersonalVerseNote(
         reference: Int,
         title: String? = nil,
-        content: String
+        content: String,
+        verseReferences: [Int]? = nil,
+        footnotes: [LampVerseFootnote]? = nil
     ) throws -> LampVerseNote? {
         let noteID = "personal-notes:\(reference)"
         let meaningfulTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let meaningfulContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        if meaningfulTitle?.isEmpty != false && meaningfulContent.isEmpty {
+        if meaningfulTitle?.isEmpty != false
+            && meaningfulContent.isEmpty
+            && (footnotes ?? []).allSatisfy({ $0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             try deleteVerseNote(id: noteID)
             return nil
         }
@@ -1008,8 +1575,8 @@ public actor LampLibrary {
             reference: reference,
             title: meaningfulTitle?.isEmpty == false ? title : nil,
             content: content,
-            verseReferences: existing?.verseReferences ?? [],
-            footnotes: existing?.footnotes ?? []
+            verseReferences: verseReferences ?? existing?.verseReferences ?? [],
+            footnotes: footnotes ?? existing?.footnotes ?? []
         )
         try saveVerseNote(note)
         return note
@@ -1019,6 +1586,129 @@ public actor LampLibrary {
         let queue = try openUserDatabase()
         try queue.write { db in
             try db.execute(sql: "DELETE FROM personal_notes WHERE id = ?", arguments: [id])
+        }
+    }
+
+    public func highlightSets(translationID: String? = nil) throws -> [LampHighlightSet] {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            var sql = "SELECT * FROM highlight_sets"
+            var arguments = StatementArguments()
+            if let translationID {
+                sql += " WHERE translation_id = ?"
+                arguments = [translationID]
+            }
+            sql += " ORDER BY name COLLATE NOCASE, created"
+            return try Row.fetchAll(db, sql: sql, arguments: arguments).map { row in
+                let created: Int = row["created"]
+                let lastModified: Int = row["last_modified"]
+                return LampHighlightSet(
+                    id: row["id"],
+                    name: row["name"],
+                    description: row["description"],
+                    translationID: row["translation_id"],
+                    created: Date(timeIntervalSince1970: TimeInterval(created)),
+                    lastModified: Date(timeIntervalSince1970: TimeInterval(lastModified))
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    public func saveHighlightSet(_ set: LampHighlightSet) throws -> LampHighlightSet {
+        let name = set.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw LampLibraryError.invalidPersonalContent("A highlight set needs a name.")
+        }
+        try validateIdentifier(set.id)
+        let now = Date(timeIntervalSince1970: TimeInterval(Int(Date().timeIntervalSince1970)))
+        let created = Date(timeIntervalSince1970: TimeInterval(Int(set.created.timeIntervalSince1970)))
+        let saved = LampHighlightSet(
+            id: set.id,
+            name: name,
+            description: set.description?.nilIfBlank,
+            translationID: set.translationID,
+            created: created,
+            lastModified: now
+        )
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO highlight_sets (
+                    id, name, description, translation_id, created, last_modified
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    translation_id = excluded.translation_id,
+                    last_modified = excluded.last_modified
+                """, arguments: [
+                    saved.id,
+                    saved.name,
+                    saved.description,
+                    saved.translationID,
+                    Int(saved.created.timeIntervalSince1970),
+                    Int(saved.lastModified.timeIntervalSince1970),
+                ])
+        }
+        return saved
+    }
+
+    public func deleteHighlightSet(id: String) throws {
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try db.execute(sql: "DELETE FROM highlights WHERE set_id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM highlight_themes WHERE set_id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM highlight_sets WHERE id = ?", arguments: [id])
+        }
+    }
+
+    public func highlightThemes(setID: String) throws -> [LampHighlightTheme] {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT set_id, color, style, name, description
+                FROM highlight_themes WHERE set_id = ?
+                ORDER BY name COLLATE NOCASE, color, style
+                """, arguments: [setID]).compactMap(makeHighlightTheme)
+        }
+    }
+
+    @discardableResult
+    public func saveHighlightTheme(_ theme: LampHighlightTheme) throws -> LampHighlightTheme {
+        let name = theme.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw LampLibraryError.invalidPersonalContent("A highlight theme needs a name.")
+        }
+        let saved = LampHighlightTheme(
+            setID: theme.setID,
+            color: theme.color,
+            style: theme.style,
+            name: name,
+            description: theme.description?.nilIfBlank
+        )
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO highlight_themes (set_id, color, style, name, description)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(set_id, color, style) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description
+                """, arguments: [
+                    saved.setID, saved.color, saved.style.rawValue, saved.name, saved.description,
+                ])
+        }
+        return saved
+    }
+
+    public func deleteHighlightTheme(setID: String, color: String, style: LampHighlightStyle) throws {
+        let normalizedColor = color.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased()
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try db.execute(sql: """
+                DELETE FROM highlight_themes WHERE set_id = ? AND color = ? AND style = ?
+                """, arguments: [setID, normalizedColor, style.rawValue])
         }
     }
 
@@ -1207,7 +1897,7 @@ public actor LampLibrary {
                         "sv": note.reference,
                         "commentary": note.content,
                     ]
-                    if let endReference = note.verseReferences.first,
+                    if let endReference = note.verseReferences.max(),
                        endReference >= note.reference {
                         verse["ev"] = endReference
                     }
@@ -1251,13 +1941,14 @@ public actor LampLibrary {
     public func personalHighlightsDocument(
         translationID: String,
         moduleID requestedModuleID: String? = nil,
-        name requestedName: String? = nil
+        name requestedName: String? = nil,
+        setID requestedSetID: String? = nil
     ) throws -> LampPortableStudyDocument {
-        let setID = "personal-highlights:\(translationID)"
+        let setID = requestedSetID ?? "personal-highlights:\(translationID)"
         let queue = try openUserDatabase()
-        let export = try queue.read { db -> (created: Int?, modified: Int?, highlights: [LampVerseHighlight]) in
+        let export = try queue.read { db -> (name: String?, description: String?, created: Int?, modified: Int?, highlights: [LampVerseHighlight], themes: [LampHighlightTheme]) in
             let metadata = try Row.fetchOne(db, sql: """
-                SELECT created, last_modified
+                SELECT name, description, created, last_modified
                 FROM highlight_sets WHERE id = ?
                 """, arguments: [setID])
             let highlights = try Row.fetchAll(db, sql: """
@@ -1268,17 +1959,26 @@ public actor LampLibrary {
                 WHERE h.set_id = ?
                 ORDER BY h.ref, h.sc, h.ec, h.id
                 """, arguments: [setID]).map(makeVerseHighlight)
+            let themes = try Row.fetchAll(db, sql: """
+                SELECT set_id, color, style, name, description
+                FROM highlight_themes WHERE set_id = ?
+                ORDER BY name, color, style
+                """, arguments: [setID]).compactMap(makeHighlightTheme)
             let created: Int? = metadata?["created"]
             let modified: Int? = metadata?["last_modified"]
-            return (created, modified, highlights)
+            let name: String? = metadata?["name"]
+            let description: String? = metadata?["description"]
+            return (name, description, created, modified, highlights, themes)
         }
         guard !export.highlights.isEmpty else {
             throw LampLibraryError.noPersonalHighlights(translationID: translationID)
         }
 
         let safeTranslationID = safeExportIdentifier(translationID)
-        let moduleID = requestedModuleID ?? "personal-highlights-\(safeTranslationID)"
-        let name = requestedName ?? "My Highlights — \(translationID)"
+        let moduleID = requestedModuleID ?? (requestedSetID == nil
+            ? "personal-highlights-\(safeTranslationID)"
+            : safeExportIdentifier(setID))
+        let name = requestedName ?? export.name ?? "My Highlights — \(translationID)"
         var meta: [String: Any] = [
             "schemaVersion": "1.0",
             "id": moduleID,
@@ -1288,6 +1988,18 @@ public actor LampLibrary {
         ]
         if let created = export.created { meta["created"] = created }
         if let modified = export.modified { meta["lastModified"] = modified }
+        if let description = export.description { meta["description"] = description }
+        if !export.themes.isEmpty {
+            meta["themes"] = export.themes.map { theme -> [String: Any] in
+                var value: [String: Any] = [
+                    "color": theme.color,
+                    "style": theme.style.rawValue,
+                    "name": theme.name,
+                ]
+                if let description = theme.description { value["description"] = description }
+                return value
+            }
+        }
         let groupedHighlights = Dictionary(grouping: export.highlights, by: \.reference)
         let verses: [[String: Any]] = groupedHighlights.keys.sorted().map { reference in
             let spans: [[String: Any]] = (groupedHighlights[reference] ?? []).map { highlight in
@@ -1354,8 +2066,178 @@ public actor LampLibrary {
         )
     }
 
+    @discardableResult
+    public func exportPortableBackup(to destinationURL: URL) throws -> LampPortableBackupSummary {
+        try prepareDirectories()
+        let modulesDestination = destinationURL.appendingPathComponent("Modules", isDirectory: true)
+        let notesDestination = destinationURL.appendingPathComponent("Study/Notes", isDirectory: true)
+        let highlightsDestination = destinationURL.appendingPathComponent("Study/Highlights", isDirectory: true)
+        let devotionalsDestination = destinationURL.appendingPathComponent("Devotionals", isDirectory: true)
+        for directory in [destinationURL, modulesDestination, notesDestination, highlightsDestination, devotionalsDestination] {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+
+        var moduleCount = 0
+        for sourceURL in try fileManager.contentsOfDirectory(
+            at: modulesURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) where sourceURL.pathExtension.lowercased() == "lamp" {
+            let destination = modulesDestination.appendingPathComponent(sourceURL.lastPathComponent)
+            if fileManager.fileExists(atPath: destination.path) { try fileManager.removeItem(at: destination) }
+            try fileManager.copyItem(at: sourceURL, to: destination)
+            moduleCount += 1
+        }
+
+        let queue = try openUserDatabase()
+        let noteBooks = try queue.read { db in
+            try Int.fetchAll(db, sql: """
+                SELECT DISTINCT book FROM personal_notes
+                WHERE module_id = 'personal-notes' ORDER BY book
+                """)
+        }
+        var noteDocumentCount = 0
+        for book in noteBooks {
+            let document = try personalNotesDocument(bookNumber: book)
+            try document.jsonData.write(
+                to: notesDestination.appendingPathComponent(document.suggestedJSONFilename),
+                options: .atomic
+            )
+            noteDocumentCount += 1
+        }
+
+        let highlightSets = try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT DISTINCT s.id, s.translation_id
+                FROM highlight_sets s JOIN highlights h ON h.set_id = s.id
+                ORDER BY s.translation_id, s.name, s.id
+                """).map { row -> (id: String, translationID: String) in
+                    (row["id"], row["translation_id"])
+                }
+        }
+        var highlightDocumentCount = 0
+        for set in highlightSets {
+            let document = try personalHighlightsDocument(
+                translationID: set.translationID,
+                setID: set.id
+            )
+            try document.jsonData.write(
+                to: highlightsDestination.appendingPathComponent(document.suggestedJSONFilename),
+                options: .atomic
+            )
+            highlightDocumentCount += 1
+        }
+
+        let personalDevotionals = try personalDevotionals()
+        for devotional in personalDevotionals {
+            let document = try personalDevotionalDocument(id: devotional.id)
+            try document.jsonData.write(
+                to: devotionalsDestination.appendingPathComponent(document.suggestedJSONFilename),
+                options: .atomic
+            )
+        }
+
+        let mediaSource = rootURL.appendingPathComponent("Media", isDirectory: true)
+        let mediaDestination = destinationURL.appendingPathComponent("Media", isDirectory: true)
+        if fileManager.fileExists(atPath: mediaSource.path) {
+            if fileManager.fileExists(atPath: mediaDestination.path) { try fileManager.removeItem(at: mediaDestination) }
+            try fileManager.copyItem(at: mediaSource, to: mediaDestination)
+        }
+
+        let summary = LampPortableBackupSummary(
+            moduleCount: moduleCount,
+            noteDocumentCount: noteDocumentCount,
+            highlightDocumentCount: highlightDocumentCount,
+            devotionalDocumentCount: personalDevotionals.count
+        )
+        let manifest = PortableBackupManifest(
+            formatVersion: 1,
+            generatedAt: Date(),
+            summary: summary
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(manifest).write(
+            to: destinationURL.appendingPathComponent("manifest.json"),
+            options: .atomic
+        )
+        return summary
+    }
+
+    @discardableResult
+    public func importPortableBackup(from sourceURL: URL) throws -> LampPortableBackupImportResult {
+        guard fileManager.fileExists(atPath: sourceURL.appendingPathComponent("manifest.json").path) else {
+            throw LampLibraryError.invalidPersonalContent("The selected folder is not a Lamp Bible backup.")
+        }
+        var installedModules = 0
+        var importedStudyEntries = 0
+        var importedDevotionals = 0
+
+        let modulesSource = sourceURL.appendingPathComponent("Modules", isDirectory: true)
+        for url in backupFiles(in: modulesSource, extension: "lamp") {
+            _ = try install(from: url)
+            installedModules += 1
+        }
+        let studySource = sourceURL.appendingPathComponent("Study", isDirectory: true)
+        for url in backupFiles(in: studySource, extension: "json") {
+            let result = try importPersonalStudyData(from: url)
+            importedStudyEntries += result.importedCount
+        }
+        let devotionalsSource = sourceURL.appendingPathComponent("Devotionals", isDirectory: true)
+        for url in backupFiles(in: devotionalsSource, extension: "json") {
+            importedDevotionals += try importPersonalDevotional(from: url).count
+        }
+
+        let mediaSource = sourceURL.appendingPathComponent("Media", isDirectory: true)
+        if fileManager.fileExists(atPath: mediaSource.path) {
+            let mediaDestination = rootURL.appendingPathComponent("Media", isDirectory: true)
+            try mergeDirectory(from: mediaSource, to: mediaDestination)
+        }
+        return LampPortableBackupImportResult(
+            installedModules: installedModules,
+            importedStudyEntries: importedStudyEntries,
+            importedDevotionals: importedDevotionals
+        )
+    }
+
     private var modulesURL: URL {
         rootURL.appendingPathComponent("Modules", isDirectory: true)
+    }
+
+    private struct PortableBackupManifest: Codable {
+        let formatVersion: Int
+        let generatedAt: Date
+        let summary: LampPortableBackupSummary
+    }
+
+    private func backupFiles(in directory: URL, extension fileExtension: String) -> [URL] {
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return enumerator.compactMap { $0 as? URL }
+            .filter { $0.pathExtension.lowercased() == fileExtension }
+            .sorted { $0.path < $1.path }
+    }
+
+    private func mergeDirectory(from source: URL, to destination: URL) throws {
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        guard let children = try? fileManager.contentsOfDirectory(
+            at: source,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for child in children {
+            let target = destination.appendingPathComponent(child.lastPathComponent)
+            if (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                try mergeDirectory(from: child, to: target)
+            } else {
+                if fileManager.fileExists(atPath: target.path) { try fileManager.removeItem(at: target) }
+                try fileManager.copyItem(at: child, to: target)
+            }
+        }
     }
 
     private func safeExportIdentifier(_ value: String) -> String {
@@ -1436,7 +2318,31 @@ public actor LampLibrary {
                     in: db,
                     referenceRange: 1_000_000...66_999_999
                 )
-                return try mergeImportedHighlights(highlights, moduleID: moduleID)
+                let metadata = tables.contains("highlight_meta")
+                    ? try Row.fetchOne(db, sql: "SELECT * FROM highlight_meta LIMIT 1")
+                    : nil
+                let name: String? = metadata?["name"]
+                let description: String? = metadata?["description"]
+                let created: Int? = metadata?["created"]
+                let lastModified: Int? = metadata?["last_modified"]
+                let themes: [LampHighlightTheme]
+                if tables.contains("highlight_themes") {
+                    themes = try Row.fetchAll(db, sql: """
+                        SELECT ? AS set_id, color, style, name, description
+                        FROM highlight_themes ORDER BY name, color, style
+                        """, arguments: [moduleID]).compactMap(makeHighlightTheme)
+                } else {
+                    themes = []
+                }
+                return try mergeImportedHighlights(
+                    highlights,
+                    moduleID: moduleID,
+                    name: name,
+                    description: description,
+                    created: created,
+                    lastModified: lastModified,
+                    themes: themes
+                )
             }
             throw LampLibraryError.unsupportedModuleSchema
         }
@@ -1509,7 +2415,12 @@ public actor LampLibrary {
 
     private func mergeImportedHighlights(
         _ highlights: [LampVerseHighlight],
-        moduleID: String
+        moduleID: String,
+        name: String? = nil,
+        description: String? = nil,
+        created: Int? = nil,
+        lastModified: Int? = nil,
+        themes: [LampHighlightTheme] = []
     ) throws -> LampStudyImportResult {
         let queue = try openUserDatabase()
         let now = Int(Date().timeIntervalSince1970)
@@ -1518,13 +2429,23 @@ public actor LampLibrary {
         try queue.write { db in
             for translationGroup in Dictionary(grouping: highlights, by: \.translationID) {
                 let translationID = translationGroup.key
-                let setID = "personal-highlights:\(translationID)"
+                let setID = moduleID
                 try db.execute(sql: """
                     INSERT INTO highlight_sets (
                         id, name, description, translation_id, created, last_modified
-                    ) VALUES (?, 'My Highlights', NULL, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET last_modified = excluded.last_modified
-                    """, arguments: [setID, translationID, now, now])
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        name = excluded.name,
+                        description = excluded.description,
+                        last_modified = MAX(highlight_sets.last_modified, excluded.last_modified)
+                    """, arguments: [
+                        setID,
+                        name ?? "My Highlights",
+                        description,
+                        translationID,
+                        created ?? now,
+                        lastModified ?? now,
+                    ])
                 for highlight in translationGroup.value {
                     let components = LampBibleReferenceFormatter.components(of: highlight.reference)
                     guard (1...66).contains(components.book),
@@ -1567,6 +2488,21 @@ public actor LampLibrary {
                         ])
                     importedCount += 1
                 }
+                for theme in themes {
+                    try db.execute(sql: """
+                        INSERT INTO highlight_themes (set_id, color, style, name, description)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(set_id, color, style) DO UPDATE SET
+                            name = excluded.name,
+                            description = excluded.description
+                        """, arguments: [
+                            setID,
+                            theme.color,
+                            theme.style.rawValue,
+                            theme.name,
+                            theme.description,
+                        ])
+                }
             }
         }
         return LampStudyImportResult(
@@ -1584,6 +2520,27 @@ public actor LampLibrary {
         let isHex = [6, 8].contains(color.count)
             && color.unicodeScalars.allSatisfy(hexDigits.contains)
         return isHex ? color.uppercased() : color
+    }
+
+    private func searchSnippet(_ text: String, limit: Int = 280) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return String(normalized.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
+    private func devotionalSort(_ lhs: LampDevotional, _ rhs: LampDevotional) -> Bool {
+        let leftSeries = lhs.seriesName ?? ""
+        let rightSeries = rhs.seriesName ?? ""
+        if leftSeries != rightSeries {
+            return leftSeries.localizedStandardCompare(rightSeries) == .orderedAscending
+        }
+        if lhs.seriesOrder != rhs.seriesOrder {
+            return (lhs.seriesOrder ?? 0) < (rhs.seriesOrder ?? 0)
+        }
+        if lhs.date != rhs.date { return (lhs.date ?? "") < (rhs.date ?? "") }
+        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
     }
 
     private var databasesURL: URL {
@@ -1764,6 +2721,25 @@ public actor LampLibrary {
                     ON personal_notes(verse_id);
                 CREATE INDEX IF NOT EXISTS idx_personal_notes_chapter
                     ON personal_notes(book, chapter, verse);
+                CREATE TABLE IF NOT EXISTS personal_devotionals (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    subtitle TEXT,
+                    author TEXT,
+                    devotional_date TEXT,
+                    tags_json TEXT NOT NULL,
+                    category TEXT,
+                    series_name TEXT,
+                    series_order INTEGER,
+                    key_scriptures_json TEXT NOT NULL,
+                    summary TEXT,
+                    content TEXT NOT NULL,
+                    footnotes TEXT,
+                    created INTEGER NOT NULL,
+                    last_modified INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_personal_devotionals_date
+                    ON personal_devotionals(devotional_date, last_modified);
                 CREATE TABLE IF NOT EXISTS highlight_sets (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -1785,6 +2761,14 @@ public actor LampLibrary {
                 );
                 CREATE INDEX IF NOT EXISTS idx_highlights_set_ref
                     ON highlights(set_id, ref, sc);
+                CREATE TABLE IF NOT EXISTS highlight_themes (
+                    set_id TEXT NOT NULL REFERENCES highlight_sets(id) ON DELETE CASCADE,
+                    color TEXT NOT NULL,
+                    style INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    PRIMARY KEY (set_id, color, style)
+                );
                 """)
             let personalNoteColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(personal_notes)")
                 .compactMap { $0["name"] as String? }
@@ -1814,6 +2798,36 @@ public actor LampLibrary {
         )
     }
 
+    private func makePersonalDevotional(_ row: Row) -> LampDevotional {
+        let tagsJSON: String = row["tags_json"]
+        let tags = tagsJSON.data(using: .utf8).flatMap {
+            try? JSONDecoder().decode([String].self, from: $0)
+        } ?? []
+        let scripturesJSON: String = row["key_scriptures_json"]
+        let createdTimestamp: Int = row["created"]
+        let modifiedTimestamp: Int = row["last_modified"]
+        return LampDevotional(
+            id: row["id"],
+            moduleID: "personal-devotionals",
+            moduleName: "My Devotionals",
+            title: row["title"],
+            subtitle: row["subtitle"],
+            author: row["author"],
+            date: row["devotional_date"],
+            tags: tags,
+            category: row["category"],
+            seriesName: row["series_name"],
+            seriesOrder: row["series_order"],
+            keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
+            summary: row["summary"],
+            content: row["content"],
+            footnotes: row["footnotes"],
+            created: Date(timeIntervalSince1970: TimeInterval(createdTimestamp)),
+            lastModified: Date(timeIntervalSince1970: TimeInterval(modifiedTimestamp)),
+            isEditable: true
+        )
+    }
+
     private func makeVerseHighlight(_ row: Row) -> LampVerseHighlight {
         let rawStyle: Int = row["style"]
         return LampVerseHighlight(
@@ -1825,6 +2839,18 @@ public actor LampLibrary {
             endOffset: row["ec"],
             style: LampHighlightStyle(rawValue: rawStyle) ?? .highlight,
             color: row["color"]
+        )
+    }
+
+    private func makeHighlightTheme(_ row: Row) -> LampHighlightTheme? {
+        let rawStyle: Int = row["style"]
+        guard let style = LampHighlightStyle(rawValue: rawStyle) else { return nil }
+        return LampHighlightTheme(
+            setID: row["set_id"],
+            color: row["color"],
+            style: style,
+            name: row["name"],
+            description: row["description"]
         )
     }
 
@@ -2250,6 +3276,92 @@ public actor LampLibrary {
         return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
     }
 
+    private func personalDevotional(fromJSONData data: Data) throws -> LampDevotional {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let meta = root["meta"] as? [String: Any],
+              let identifier = stringValue(meta["id"]),
+              let title = stringValue(meta["title"]),
+              let content = plainText(from: root["content"]),
+              !content.isEmpty else {
+            throw LampLibraryError.invalidPersonalContent("The devotional JSON needs meta.id, meta.title, and content.")
+        }
+        let tags = (meta["tags"] as? [Any])?.compactMap(stringValue) ?? []
+        let series = meta["series"] as? [String: Any]
+        let scripturesData = try JSONSerialization.data(
+            withJSONObject: meta["keyScriptures"] as? [Any] ?? [],
+            options: [.sortedKeys]
+        )
+        let scripturesJSON = String(decoding: scripturesData, as: UTF8.self)
+        let created = integerValue(meta["created"]).map {
+            Date(timeIntervalSince1970: TimeInterval($0))
+        }
+        let modified = integerValue(meta["lastModified"]).map {
+            Date(timeIntervalSince1970: TimeInterval($0))
+        }
+        return LampDevotional(
+            id: identifier,
+            moduleID: "personal-devotionals",
+            moduleName: "My Devotionals",
+            title: title,
+            subtitle: stringValue(meta["subtitle"]),
+            author: stringValue(meta["author"]),
+            date: stringValue(meta["date"]),
+            tags: tags,
+            category: stringValue(meta["category"]),
+            seriesName: stringValue(series?["name"]),
+            seriesOrder: integerValue(series?["order"]),
+            keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
+            summary: plainText(from: root["summary"]),
+            content: content,
+            footnotes: plainText(from: root["footnotes"]),
+            created: created,
+            lastModified: modified,
+            isEditable: true
+        )
+    }
+
+    private func devotionalsFromDatabase(at databaseURL: URL) throws -> [LampDevotional] {
+        let queue = try openReadOnlyDatabase(at: databaseURL)
+        return try queue.read { db in
+            guard try tableNames(in: db).contains("devotional_entries") else {
+                throw LampLibraryError.unsupportedModuleSchema
+            }
+            let moduleName = try Row.fetchOne(db, sql: "SELECT name FROM module_meta LIMIT 1")
+                .flatMap { $0["name"] as String? } ?? "Imported Devotionals"
+            return try Row.fetchAll(db, sql: "SELECT * FROM devotional_entries ORDER BY title").map { row in
+                let scripturesJSON: String? = row["key_scriptures_json"]
+                let tags: String? = row["tags"]
+                let createdTimestamp: Int? = row["created"]
+                let modifiedTimestamp: Int? = row["last_modified"]
+                let contentJSON: String = row["content_json"]
+                let summaryJSON: String? = row["summary_json"]
+                let footnotesJSON: String? = row["footnotes_json"]
+                return LampDevotional(
+                    id: row["id"],
+                    moduleID: "personal-devotionals",
+                    moduleName: moduleName,
+                    title: row["title"],
+                    subtitle: row["subtitle"],
+                    author: row["author"],
+                    date: row["date"],
+                    tags: tags?.split(separator: ",").map {
+                        String($0).trimmingCharacters(in: .whitespaces)
+                    } ?? [],
+                    category: row["category"],
+                    seriesName: row["series_name"],
+                    seriesOrder: row["series_order"],
+                    keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
+                    summary: plainText(fromJSONString: summaryJSON),
+                    content: plainText(fromJSONString: contentJSON) ?? contentJSON,
+                    footnotes: plainText(fromJSONString: footnotesJSON),
+                    created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                    lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                    isEditable: true
+                )
+            }
+        }
+    }
+
     private func devotionalScriptureLinks(from json: String?) -> [LampScriptureLink] {
         guard let json,
               let data = json.data(using: .utf8),
@@ -2289,5 +3401,12 @@ public actor LampLibrary {
             return text.isEmpty ? nil : text
         }
         return nil
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
