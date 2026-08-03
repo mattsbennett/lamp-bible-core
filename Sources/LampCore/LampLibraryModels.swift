@@ -8,6 +8,7 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
     public let abbreviation: String?
     public let language: String?
     public let compressedByteCount: Int
+    public let isBundled: Bool
 
     public init(
         id: String,
@@ -15,7 +16,8 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
         name: String,
         abbreviation: String? = nil,
         language: String? = nil,
-        compressedByteCount: Int = 0
+        compressedByteCount: Int = 0,
+        isBundled: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -23,6 +25,7 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
         self.abbreviation = abbreviation
         self.language = language
         self.compressedByteCount = compressedByteCount
+        self.isBundled = isBundled
     }
 }
 
@@ -405,6 +408,151 @@ public struct LampScriptureLink: Identifiable, Equatable, Sendable {
             from: startReference,
             to: endReference ?? startReference
         )
+    }
+}
+
+public struct LampDevotional: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let moduleID: String
+    public let moduleName: String
+    public let title: String
+    public let subtitle: String?
+    public let author: String?
+    public let date: String?
+    public let tags: [String]
+    public let category: String?
+    public let seriesName: String?
+    public let seriesOrder: Int?
+    public let keyScriptures: [LampScriptureLink]
+    public let summary: String?
+    public let content: String
+    public let footnotes: String?
+    public let created: Date?
+    public let lastModified: Date?
+
+    public init(
+        id: String,
+        moduleID: String,
+        moduleName: String,
+        title: String,
+        subtitle: String? = nil,
+        author: String? = nil,
+        date: String? = nil,
+        tags: [String] = [],
+        category: String? = nil,
+        seriesName: String? = nil,
+        seriesOrder: Int? = nil,
+        keyScriptures: [LampScriptureLink] = [],
+        summary: String? = nil,
+        content: String,
+        footnotes: String? = nil,
+        created: Date? = nil,
+        lastModified: Date? = nil
+    ) {
+        self.id = id
+        self.moduleID = moduleID
+        self.moduleName = moduleName
+        self.title = title
+        self.subtitle = subtitle
+        self.author = author
+        self.date = date
+        self.tags = tags
+        self.category = category
+        self.seriesName = seriesName
+        self.seriesOrder = seriesOrder
+        self.keyScriptures = keyScriptures
+        self.summary = summary
+        self.content = content
+        self.footnotes = footnotes
+        self.created = created
+        self.lastModified = lastModified
+    }
+}
+
+public struct LampQuizAgeGroup: Identifiable, Equatable, Codable, Sendable {
+    public let id: String
+    public let label: String
+    public let ageRange: String
+
+    public init(id: String, label: String, ageRange: String) {
+        self.id = id
+        self.label = label
+        self.ageRange = ageRange
+    }
+}
+
+public struct LampQuizModule: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let planID: String
+    public let name: String
+    public let description: String?
+    public let questionsPerReading: Int
+    public let ageGroups: [LampQuizAgeGroup]
+
+    public init(
+        id: String,
+        planID: String,
+        name: String,
+        description: String? = nil,
+        questionsPerReading: Int,
+        ageGroups: [LampQuizAgeGroup]
+    ) {
+        self.id = id
+        self.planID = planID
+        self.name = name
+        self.description = description
+        self.questionsPerReading = questionsPerReading
+        self.ageGroups = ageGroups
+    }
+}
+
+public struct LampQuizQuestion: Identifiable, Equatable, Sendable {
+    public let id: Int64
+    public let moduleID: String
+    public let day: Int
+    public let startReference: Int
+    public let endReference: Int
+    public let ageGroup: String
+    public let questionIndex: Int
+    public let question: String
+    public let answer: String
+    public let theme: String
+    public let isChristFocused: Bool
+    public let references: [Int]
+    public let crossReferences: [Int]
+
+    public init(
+        id: Int64,
+        moduleID: String,
+        day: Int,
+        startReference: Int,
+        endReference: Int,
+        ageGroup: String,
+        questionIndex: Int,
+        question: String,
+        answer: String,
+        theme: String,
+        isChristFocused: Bool,
+        references: [Int] = [],
+        crossReferences: [Int] = []
+    ) {
+        self.id = id
+        self.moduleID = moduleID
+        self.day = day
+        self.startReference = startReference
+        self.endReference = endReference
+        self.ageGroup = ageGroup
+        self.questionIndex = questionIndex
+        self.question = question
+        self.answer = answer
+        self.theme = theme
+        self.isChristFocused = isChristFocused
+        self.references = references
+        self.crossReferences = crossReferences
+    }
+
+    public var readingDescription: String {
+        LampBibleReferenceFormatter.describeRange(from: startReference, to: endReference)
     }
 }
 

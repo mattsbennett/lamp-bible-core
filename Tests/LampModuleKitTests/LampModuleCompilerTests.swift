@@ -314,6 +314,99 @@ struct LampModuleCompilerTests {
         }
     }
 
+    @Test func compilesCanonicalDevotionalForIOSImport() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("test_devotional.lamp")
+
+        let result = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "1.1", "id": "test_devotional",
+                "type": "devotional", "title": "Hope in Christ",
+                "subtitle": "A short reflection", "author": "Lamp Bible",
+                "date": "2026-08-02", "tags": ["hope", "faith"],
+                "category": "reflection",
+                "series": {"id": "foundations", "name": "Foundations", "order": 1},
+                "keyScriptures": [{"sv": 43003016, "ev": 43003017, "label": "John 3:16–17"}],
+                "created": 1700000000, "lastModified": 1700000100
+              },
+              "summary": "God's promise gives hope.",
+              "content": [{
+                "type": "paragraph",
+                "content": {"text": "God loved the world and gave his Son."}
+              }],
+              "footnotes": [{"id": "a", "content": "Compare Romans 5."}],
+              "relatedDevotionals": ["grace"],
+              "media": []
+            }
+            """#.utf8),
+            sourceFilename: "test_devotional.json",
+            destinationURL: outputURL
+        )
+
+        #expect(result.kind == .devotional)
+        #expect(result.tableCounts["devotional_entries"] == 1)
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let row = try #require(try Row.fetchOne(db, sql: "SELECT * FROM devotional_entries"))
+            #expect(row["module_id"] as String == "test_devotional")
+            #expect(row["title"] as String == "Hope in Christ")
+            #expect(row["tags"] as String == "hope,faith")
+            #expect((row["summary_json"] as String?)?.contains("God's promise") == true)
+            #expect((row["content_json"] as String).contains("gave his Son") == true)
+            #expect((row["search_text"] as String?)?.contains("Compare Romans 5") == true)
+        }
+    }
+
+    @Test func compilesCanonicalQuizForIOSImport() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("test_quiz.lamp")
+
+        let result = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "1.0", "id": "test_quiz", "type": "quiz",
+                "planId": "test_plan", "name": "Test Quiz",
+                "questionsPerReading": 1,
+                "ageGroups": [{"id": "adult", "label": "Adult", "ageRange": "18+"}]
+              },
+              "days": [{
+                "day": 1,
+                "readings": [{
+                  "sv": 1001001, "ev": 1001999,
+                  "quizzes": {"adult": [{
+                    "question": {"text": "Who created the heavens?"},
+                    "answer": "God created the heavens and the earth.",
+                    "theme": "doctrine", "christFocused": false,
+                    "references": [1001001], "crossReferences": [58001002]
+                  }]}
+                }]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "test_quiz.json",
+            destinationURL: outputURL
+        )
+
+        #expect(result.kind == .quiz)
+        #expect(result.tableCounts["quiz_questions"] == 1)
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let module = try #require(try Row.fetchOne(db, sql: "SELECT * FROM quiz_modules"))
+            let question = try #require(try Row.fetchOne(db, sql: "SELECT * FROM quiz_questions"))
+            #expect(module["plan_id"] as String == "test_plan")
+            #expect((module["age_groups_json"] as String).contains("adult") == true)
+            #expect(question["day"] as Int == 1)
+            #expect((question["question_json"] as String).contains("Who created") == true)
+            #expect((question["answer_json"] as String).contains("God created") == true)
+            #expect(question["theme"] as String == "doctrine")
+        }
+    }
+
     @Test func enforcesModuleIdentityFilename() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }

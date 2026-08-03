@@ -12,9 +12,17 @@ public actor LampLibrary {
     public nonisolated let rootURL: URL
 
     private let fileManager: FileManager
+    private let bundledModulesArchiveURL: URL?
+    private var cachedBundledDatabaseURL: URL?
+    private var cachedBundledModules: [LampInstalledModule]?
 
-    public init(rootURL: URL? = nil, fileManager: FileManager = .default) {
+    public init(
+        rootURL: URL? = nil,
+        bundledModulesArchiveURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) {
         self.fileManager = fileManager
+        self.bundledModulesArchiveURL = bundledModulesArchiveURL
         if let rootURL {
             self.rootURL = rootURL
         } else {
@@ -36,7 +44,7 @@ public actor LampLibrary {
             options: [.skipsHiddenFiles]
         )
 
-        return databaseURLs
+        let localModules = databaseURLs
             .filter { $0.pathExtension.lowercased() == "sqlite" }
             .compactMap { databaseURL in
                 let storageKey = databaseURL.deletingPathExtension().lastPathComponent
@@ -50,7 +58,13 @@ public actor LampLibrary {
                     compressedByteCount: byteCount
                 )
             }
-            .sorted {
+        var modulesByKey = Dictionary(
+            uniqueKeysWithValues: try bundledModules().map { ("\($0.kind.rawValue):\($0.id)", $0) }
+        )
+        for module in localModules {
+            modulesByKey["\(module.kind.rawValue):\(module.id)"] = module
+        }
+        return modulesByKey.values.sorted {
                 if $0.kind != $1.kind { return $0.kind.rawValue < $1.kind.rawValue }
                 return $0.name.localizedStandardCompare($1.name) == .orderedAscending
             }
@@ -439,17 +453,25 @@ public actor LampLibrary {
                 }
                 var searchColumns = ["key", "lemma", "transliteration", "senses_json"]
                 if columns.contains("search_text") { searchColumns.append("search_text") }
-                let conditions = searchColumns.map { "\($0) LIKE ? COLLATE NOCASE" }
+                let searchCondition = searchColumns.map { "\($0) LIKE ? COLLATE NOCASE" }
                     .joined(separator: " OR ")
                 let pattern = "%\(trimmedQuery)%"
-                var queryArguments = StatementArguments(
+                var queryArguments = StatementArguments()
+                let moduleCondition: String
+                if columns.contains("module_id") {
+                    moduleCondition = "module_id = ? AND"
+                    queryArguments += [dictionary.id]
+                } else {
+                    moduleCondition = ""
+                }
+                queryArguments += StatementArguments(
                     Array(repeating: pattern, count: searchColumns.count)
                 )
                 queryArguments += [trimmedQuery, trimmedQuery, queryLimit]
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT id, key, lemma, transliteration, pronunciation, senses_json
                     FROM dictionary_entries
-                    WHERE \(conditions)
+                    WHERE \(moduleCondition) (\(searchCondition))
                     ORDER BY
                         CASE
                             WHEN key = ? COLLATE NOCASE THEN 0
@@ -462,8 +484,12 @@ public actor LampLibrary {
 
                 return rows.map { row in
                     let sensesJSON: String? = row["senses_json"]
+                    let idValue: DatabaseValue = row["id"]
+                    let entryID = String.fromDatabaseValue(idValue)
+                        ?? Int64.fromDatabaseValue(idValue).map(String.init)
+                        ?? "\(dictionary.id):\(row["key"] as String)"
                     return LampDictionaryResult(
-                        entryID: row["id"],
+                        entryID: entryID,
                         moduleID: dictionary.id,
                         moduleName: dictionary.name,
                         key: row["key"],
@@ -498,6 +524,11 @@ public actor LampLibrary {
 
                 var condition = "book = ? AND chapter = ?"
                 var arguments: StatementArguments = [bookNumber, chapterNumber]
+                let columns = try columnNames(in: db, table: "commentary_units")
+                if columns.contains("module_id") {
+                    condition = "module_id = ? AND " + condition
+                    arguments = [commentaryModule.id, bookNumber, chapterNumber]
+                }
                 if let reference {
                     condition += " AND ((sv <= ? AND COALESCE(ev, sv) >= ?) OR level = 0)"
                     arguments += [reference, reference]
@@ -600,6 +631,162 @@ public actor LampLibrary {
                 )
             }
             return LampReadingPlanDay(planID: moduleID, day: day, readings: readings)
+        }
+    }
+
+    public func devotionals(
+        moduleIDs: Set<String>? = nil,
+        query: String? = nil
+    ) throws -> [LampDevotional] {
+        let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modules = try installedModules().filter {
+            $0.kind == .devotional && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
+        }
+        var results: [LampDevotional] = []
+
+        for module in modules {
+            let queue = try openDatabase(moduleID: module.id)
+            let entries = try queue.read { db -> [LampDevotional] in
+                guard try tableNames(in: db).contains("devotional_entries") else { return [] }
+                let columns = try columnNames(in: db, table: "devotional_entries")
+                var conditions: [String] = []
+                var arguments = StatementArguments()
+                if columns.contains("module_id") {
+                    conditions.append("module_id = ?")
+                    arguments += [module.id]
+                }
+                if let trimmedQuery, !trimmedQuery.isEmpty {
+                    conditions.append("(title LIKE ? COLLATE NOCASE OR search_text LIKE ? COLLATE NOCASE)")
+                    let pattern = "%\(trimmedQuery)%"
+                    arguments += [pattern, pattern]
+                }
+                let whereClause = conditions.isEmpty
+                    ? "" : "WHERE \(conditions.joined(separator: " AND "))"
+                return try Row.fetchAll(db, sql: """
+                    SELECT * FROM devotional_entries
+                    \(whereClause)
+                    ORDER BY COALESCE(series_name, ''), COALESCE(series_order, 0),
+                             COALESCE(date, ''), title
+                    """, arguments: arguments).map { row in
+                        let contentJSON: String = row["content_json"]
+                        let summaryJSON: String? = row["summary_json"]
+                        let footnotesJSON: String? = row["footnotes_json"]
+                        let scripturesJSON: String? = row["key_scriptures_json"]
+                        let createdTimestamp: Int? = row["created"]
+                        let modifiedTimestamp: Int? = row["last_modified"]
+                        let tags: String? = row["tags"]
+                        return LampDevotional(
+                            id: row["id"],
+                            moduleID: module.id,
+                            moduleName: module.name,
+                            title: row["title"],
+                            subtitle: row["subtitle"],
+                            author: row["author"],
+                            date: row["date"],
+                            tags: tags?.split(separator: ",").map {
+                                String($0).trimmingCharacters(in: .whitespaces)
+                            } ?? [],
+                            category: row["category"],
+                            seriesName: row["series_name"],
+                            seriesOrder: row["series_order"],
+                            keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
+                            summary: plainText(fromJSONString: summaryJSON),
+                            content: plainText(fromJSONString: contentJSON) ?? contentJSON,
+                            footnotes: plainText(fromJSONString: footnotesJSON),
+                            created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                            lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                        )
+                    }
+            }
+            results.append(contentsOf: entries)
+        }
+        return results
+    }
+
+    public func quizModules(planID: String? = nil) throws -> [LampQuizModule] {
+        let modules = try installedModules().filter { $0.kind == .quiz }
+        return try modules.compactMap { module in
+            let queue = try openDatabase(moduleID: module.id)
+            return try queue.read { db in
+                var sql = "SELECT * FROM quiz_modules WHERE id = ?"
+                var arguments: StatementArguments = [module.id]
+                if let planID {
+                    sql += " AND plan_id = ?"
+                    arguments += [planID]
+                }
+                guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments) else {
+                    return nil
+                }
+                let ageGroupsJSON: String = row["age_groups_json"]
+                let ageGroups = ageGroupsJSON.data(using: .utf8).flatMap {
+                    try? JSONDecoder().decode([LampQuizAgeGroup].self, from: $0)
+                } ?? []
+                let questionCount: Int? = row["questions_per_reading"]
+                return LampQuizModule(
+                    id: row["id"],
+                    planID: row["plan_id"],
+                    name: row["name"],
+                    description: row["description"],
+                    questionsPerReading: questionCount ?? 0,
+                    ageGroups: ageGroups
+                )
+            }
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    public func quizQuestions(
+        moduleID: String,
+        day: Int,
+        startReference: Int? = nil,
+        endReference: Int? = nil,
+        ageGroup: String? = nil
+    ) throws -> [LampQuizQuestion] {
+        let queue = try openDatabase(moduleID: moduleID)
+        return try queue.read { db in
+            guard try tableNames(in: db).contains("quiz_questions") else {
+                throw LampLibraryError.unsupportedModuleSchema
+            }
+            var conditions = ["quiz_module_id = ?", "day = ?"]
+            var arguments: StatementArguments = [moduleID, day]
+            if let startReference {
+                conditions.append("sv = ?")
+                arguments += [startReference]
+            }
+            if let endReference {
+                conditions.append("ev = ?")
+                arguments += [endReference]
+            }
+            if let ageGroup {
+                conditions.append("age_group = ?")
+                arguments += [ageGroup]
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT * FROM quiz_questions
+                WHERE \(conditions.joined(separator: " AND "))
+                ORDER BY sv, ev, age_group, question_index
+                """, arguments: arguments).map { row in
+                    let questionJSON: String = row["question_json"]
+                    let answerJSON: String = row["answer_json"]
+                    let referencesJSON: String? = row["references_json"]
+                    let crossReferencesJSON: String? = row["cross_references_json"]
+                    let christFocused: Int = row["christ_focused"]
+                    return LampQuizQuestion(
+                        id: row["id"],
+                        moduleID: moduleID,
+                        day: row["day"],
+                        startReference: row["sv"],
+                        endReference: row["ev"],
+                        ageGroup: row["age_group"],
+                        questionIndex: row["question_index"],
+                        question: plainText(fromJSONString: questionJSON) ?? questionJSON,
+                        answer: plainText(fromJSONString: answerJSON) ?? answerJSON,
+                        theme: row["theme"],
+                        isChristFocused: christFocused != 0,
+                        references: integerArray(fromJSONString: referencesJSON),
+                        crossReferences: integerArray(fromJSONString: crossReferencesJSON)
+                    )
+                }
         }
     }
 
@@ -1403,6 +1590,10 @@ public actor LampLibrary {
         rootURL.appendingPathComponent("Databases", isDirectory: true)
     }
 
+    private var bundledDatabasesURL: URL {
+        rootURL.appendingPathComponent("Bundled", isDirectory: true)
+    }
+
     private var userDatabaseURL: URL {
         rootURL.appendingPathComponent("UserData.sqlite")
     }
@@ -1416,12 +1607,125 @@ public actor LampLibrary {
         let url = databasesURL
             .appendingPathComponent(storageKey(for: moduleID))
             .appendingPathExtension("sqlite")
-        guard fileManager.fileExists(atPath: url.path) else {
-            throw LampLibraryError.moduleNotFound(moduleID)
+        if fileManager.fileExists(atPath: url.path) {
+            return try openReadOnlyDatabase(at: url)
         }
+        if try bundledModules().contains(where: { $0.id == moduleID }),
+           let bundledURL = try preparedBundledDatabaseURL() {
+            return try openReadOnlyDatabase(at: bundledURL)
+        }
+        throw LampLibraryError.moduleNotFound(moduleID)
+    }
+
+    private func openReadOnlyDatabase(at url: URL) throws -> DatabaseQueue {
         var configuration = Configuration()
         configuration.readonly = true
         return try DatabaseQueue(path: url.path, configuration: configuration)
+    }
+
+    private func preparedBundledDatabaseURL() throws -> URL? {
+        if let cachedBundledDatabaseURL,
+           fileManager.fileExists(atPath: cachedBundledDatabaseURL.path) {
+            return cachedBundledDatabaseURL
+        }
+        guard let archiveURL = bundledModulesArchiveURL,
+              fileManager.fileExists(atPath: archiveURL.path) else {
+            return nil
+        }
+
+        try fileManager.createDirectory(at: bundledDatabasesURL, withIntermediateDirectories: true)
+        let databaseURL = bundledDatabasesURL.appendingPathComponent("bundled_modules.sqlite")
+        let markerURL = bundledDatabasesURL.appendingPathComponent("bundled_modules.version")
+        let archiveSize = try archiveURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        let currentVersion = "\(archiveSize)"
+        if fileManager.fileExists(atPath: databaseURL.path),
+           (try? String(contentsOf: markerURL, encoding: .utf8)) == currentVersion {
+            cachedBundledDatabaseURL = databaseURL
+            return databaseURL
+        }
+
+        let hasSecurityScope = archiveURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { archiveURL.stopAccessingSecurityScopedResource() }
+        }
+        let sourceData = try Data(contentsOf: archiveURL, options: [.mappedIfSafe])
+        let databaseData: Data
+        if archiveURL.pathExtension.lowercased() == "zlib" {
+            guard let decompressed = try? (sourceData as NSData).decompressed(using: .zlib) as Data else {
+                throw LampLibraryError.decompressionFailed
+            }
+            databaseData = decompressed
+        } else {
+            databaseData = sourceData
+        }
+        try databaseData.write(to: databaseURL, options: [.atomic])
+        try currentVersion.write(to: markerURL, atomically: true, encoding: .utf8)
+        cachedBundledDatabaseURL = databaseURL
+        cachedBundledModules = nil
+        return databaseURL
+    }
+
+    private func bundledModules() throws -> [LampInstalledModule] {
+        if let cachedBundledModules { return cachedBundledModules }
+        guard let databaseURL = try preparedBundledDatabaseURL() else { return [] }
+        let queue = try openReadOnlyDatabase(at: databaseURL)
+        let modules = try queue.read { db -> [LampInstalledModule] in
+            let integrityResults = try String.fetchAll(db, sql: "PRAGMA quick_check")
+            guard integrityResults == ["ok"] else {
+                throw LampLibraryError.integrityCheckFailed(integrityResults.joined(separator: "; "))
+            }
+            let tables = try tableNames(in: db)
+            var modules: [LampInstalledModule] = []
+            if tables.contains("translations") {
+                modules += try Row.fetchAll(db, sql: """
+                    SELECT id, name, abbreviation, language FROM translations
+                    ORDER BY name
+                    """).map { row in
+                        LampInstalledModule(
+                            id: row["id"], kind: .translation, name: row["name"],
+                            abbreviation: row["abbreviation"], language: row["language"],
+                            isBundled: true
+                        )
+                    }
+            }
+            if tables.contains("lexicons") {
+                modules += try Row.fetchAll(db, sql: """
+                    SELECT id, name, language FROM lexicons ORDER BY name
+                    """).map { row in
+                        LampInstalledModule(
+                            id: row["id"], kind: .dictionary, name: row["name"],
+                            language: row["language"], isBundled: true
+                        )
+                    }
+            }
+            if tables.contains("modules") {
+                modules += try Row.fetchAll(db, sql: """
+                    SELECT id, type, name, series_abbrev FROM modules
+                    WHERE type IN ('commentary', 'devotional', 'notes', 'highlights')
+                    ORDER BY type, name
+                    """).compactMap { row in
+                        let type: String = row["type"]
+                        guard let kind = LampModuleKind(schemaValue: type) else { return nil }
+                        return LampInstalledModule(
+                            id: row["id"], kind: kind, name: row["name"],
+                            abbreviation: row["series_abbrev"], isBundled: true
+                        )
+                    }
+            }
+            if tables.contains("plans") {
+                modules += try Row.fetchAll(db, sql: "SELECT id, name FROM plans ORDER BY name").map { row in
+                    LampInstalledModule(id: row["id"], kind: .plan, name: row["name"], isBundled: true)
+                }
+            }
+            if tables.contains("quiz_modules") {
+                modules += try Row.fetchAll(db, sql: "SELECT id, name FROM quiz_modules ORDER BY name").map { row in
+                    LampInstalledModule(id: row["id"], kind: .quiz, name: row["name"], isBundled: true)
+                }
+            }
+            return modules
+        }
+        cachedBundledModules = modules
+        return modules
     }
 
     private func openUserDatabase() throws -> DatabaseQueue {
@@ -1629,6 +1933,31 @@ public actor LampLibrary {
                 return LampInstalledModule(
                     id: formatID ?? row["id"],
                     kind: declaredKind ?? .plan,
+                    name: row["name"],
+                    compressedByteCount: compressedByteCount
+                )
+            }
+            if tables.contains("devotional_entries") {
+                let row = tables.contains("module_meta")
+                    ? try Row.fetchOne(db, sql: "SELECT id, name FROM module_meta LIMIT 1")
+                    : nil
+                let metadataID: String? = row?["id"]
+                let metadataName: String? = row?["name"]
+                guard let id = formatID ?? metadataID ?? fallbackID else {
+                    throw LampLibraryError.missingModuleMetadata
+                }
+                return LampInstalledModule(
+                    id: id,
+                    kind: declaredKind ?? .devotional,
+                    name: metadataName ?? id,
+                    compressedByteCount: compressedByteCount
+                )
+            }
+            if tables.contains("quiz_modules"),
+               let row = try Row.fetchOne(db, sql: "SELECT id, name FROM quiz_modules LIMIT 1") {
+                return LampInstalledModule(
+                    id: formatID ?? row["id"],
+                    kind: declaredKind ?? .quiz,
                     name: row["name"],
                     compressedByteCount: compressedByteCount
                 )
@@ -1914,6 +2243,27 @@ public actor LampLibrary {
             return nil
         }
         return plainText(from: value)
+    }
+
+    private func integerArray(fromJSONString json: String?) -> [Int] {
+        guard let json, let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
+    }
+
+    private func devotionalScriptureLinks(from json: String?) -> [LampScriptureLink] {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        return values.compactMap { value in
+            guard let start = integerValue(value["sv"]) else { return nil }
+            return LampScriptureLink(
+                text: stringValue(value["label"]),
+                startReference: start,
+                endReference: integerValue(value["ev"])
+            )
+        }
     }
 
     private func plainText(from value: Any?) -> String? {

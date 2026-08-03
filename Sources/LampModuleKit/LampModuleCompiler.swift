@@ -8,9 +8,11 @@ public struct LampModuleCompiler: Sendable {
         .translation,
         .dictionary,
         .commentary,
+        .devotional,
         .notes,
         .plan,
         .highlights,
+        .quiz,
     ]
 
     public init() {}
@@ -106,14 +108,16 @@ public struct LampModuleCompiler: Sendable {
                 tableCounts = try compileDictionary(root: root, databaseURL: databaseURL, moduleID: moduleID)
             case .commentary:
                 tableCounts = try compileCommentary(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .devotional:
+                tableCounts = try compileDevotional(root: root, databaseURL: databaseURL, moduleID: moduleID)
             case .notes:
                 tableCounts = try compileNotes(root: root, databaseURL: databaseURL, moduleID: moduleID)
             case .plan:
                 tableCounts = try compilePlan(root: root, databaseURL: databaseURL, moduleID: moduleID)
             case .highlights:
                 tableCounts = try compileHighlights(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            default:
-                throw ModuleCompilationError.unsupportedModuleType(kind)
+            case .quiz:
+                tableCounts = try compileQuiz(root: root, databaseURL: databaseURL, moduleID: moduleID)
             }
         } catch let error as ModuleCompilationError {
             throw error

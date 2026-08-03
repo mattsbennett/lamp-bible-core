@@ -62,6 +62,15 @@ enum JSONSupport {
         return String(decoding: data, as: UTF8.self)
     }
 
+    static func jsonFragmentString(_ value: Any?) throws -> String? {
+        guard let value, !(value is NSNull), isMeaningful(value) else { return nil }
+        let data = try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed, .sortedKeys]
+        )
+        return String(decoding: data, as: UTF8.self)
+    }
+
     static func plainText(_ value: Any?) -> String {
         guard let value, !(value is NSNull) else { return "" }
         if let string = value as? String { return string }
@@ -70,7 +79,16 @@ enum JSONSupport {
         }
         if let object = value as? [String: Any] {
             if let text = object["text"] as? String { return text }
-            if let content = object["content"] { return plainText(content) }
+            let textKeys = [
+                "title", "content", "children", "introduction", "sections",
+                "blocks", "subsections", "conclusion", "caption", "items",
+                "tableData", "headers", "rows",
+            ]
+            return textKeys
+                .compactMap { object[$0] }
+                .map(plainText)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
         }
         return ""
     }

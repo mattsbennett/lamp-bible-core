@@ -561,4 +561,137 @@ struct LampLibraryTests {
             reference: 43_003_016
         ).first?.color == "34C759")
     }
+
+    @Test func readsCombinedBundledModulesAndRemainingModuleKinds() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-bundled-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        let databaseURL = fixtureURL.appendingPathComponent("bundled.sqlite")
+        do {
+            let queue = try DatabaseQueue(path: databaseURL.path)
+            try await queue.writeWithoutTransaction { db in
+                try db.execute(sql: "PRAGMA journal_mode = DELETE")
+                try db.execute(sql: #"""
+                    CREATE TABLE translations (
+                        id TEXT PRIMARY KEY, name TEXT NOT NULL, abbreviation TEXT,
+                        language TEXT, description TEXT
+                    );
+                    CREATE TABLE translation_books (
+                        id INTEGER PRIMARY KEY, translation_id TEXT, book_number INTEGER,
+                        book_id TEXT, name TEXT, testament TEXT, chapter_count INTEGER
+                    );
+                    CREATE TABLE translation_verses (
+                        id INTEGER PRIMARY KEY, translation_id TEXT, ref INTEGER,
+                        book INTEGER, chapter INTEGER, verse INTEGER, text TEXT,
+                        paragraph INTEGER, annotations_json TEXT, footnotes_json TEXT,
+                        footnote_refs_json TEXT, poetry_json TEXT
+                    );
+                    CREATE TABLE lexicons (
+                        id TEXT PRIMARY KEY, name TEXT, language TEXT
+                    );
+                    CREATE TABLE dictionary_entries (
+                        id INTEGER PRIMARY KEY, module_id TEXT, key TEXT, lemma TEXT,
+                        transliteration TEXT, pronunciation TEXT, senses_json TEXT,
+                        metadata_json TEXT, search_text TEXT
+                    );
+                    CREATE TABLE modules (
+                        id TEXT PRIMARY KEY, type TEXT, name TEXT, series_abbrev TEXT
+                    );
+                    CREATE TABLE commentary_units (
+                        id TEXT PRIMARY KEY, module_id TEXT, book INTEGER, chapter INTEGER,
+                        sv INTEGER, ev INTEGER, unit_type TEXT, level INTEGER, title TEXT,
+                        introduction_json TEXT, translation_json TEXT, commentary_json TEXT,
+                        footnotes_json TEXT, order_index INTEGER
+                    );
+                    CREATE TABLE devotional_entries (
+                        id TEXT PRIMARY KEY, module_id TEXT, title TEXT, subtitle TEXT,
+                        author TEXT, date TEXT, tags TEXT, category TEXT, series_name TEXT,
+                        series_order INTEGER, key_scriptures_json TEXT, summary_json TEXT,
+                        content_json TEXT, footnotes_json TEXT, created INTEGER,
+                        last_modified INTEGER, search_text TEXT
+                    );
+                    CREATE TABLE plans (
+                        id TEXT PRIMARY KEY, name TEXT, description TEXT, author TEXT,
+                        full_description TEXT, duration INTEGER, readings_per_day INTEGER
+                    );
+                    CREATE TABLE plan_days (
+                        plan_id TEXT, day INTEGER, readings_json TEXT
+                    );
+                    CREATE TABLE quiz_modules (
+                        id TEXT PRIMARY KEY, plan_id TEXT, name TEXT, description TEXT,
+                        questions_per_reading INTEGER, age_groups_json TEXT
+                    );
+                    CREATE TABLE quiz_questions (
+                        id INTEGER PRIMARY KEY, quiz_module_id TEXT, day INTEGER,
+                        sv INTEGER, ev INTEGER, age_group TEXT, question_index INTEGER,
+                        question_json TEXT, answer_json TEXT, theme TEXT,
+                        christ_focused INTEGER, references_json TEXT,
+                        cross_references_json TEXT
+                    );
+
+                    INSERT INTO translations VALUES ('BIBLE', 'Bundled Bible', 'BB', 'en', NULL);
+                    INSERT INTO translation_books VALUES (1, 'BIBLE', 1, 'Gen', 'Genesis', 'OT', 1);
+                    INSERT INTO translation_verses VALUES (
+                        1, 'BIBLE', 1001001, 1, 1, 1, 'In the beginning', 1,
+                        NULL, NULL, NULL, NULL
+                    );
+                    INSERT INTO lexicons VALUES ('DICT', 'Bundled Dictionary', 'en');
+                    INSERT INTO dictionary_entries VALUES (
+                        1, 'DICT', 'G1', 'alpha', NULL, NULL,
+                        '[{"definition":"first"}]', NULL, 'first'
+                    );
+                    INSERT INTO modules VALUES ('COMM', 'commentary', 'Bundled Commentary', 'BC');
+                    INSERT INTO modules VALUES ('DEV', 'devotional', 'Bundled Devotionals', NULL);
+                    INSERT INTO commentary_units VALUES (
+                        'c1', 'COMM', 1, 1, 1001001, NULL, 'verse', 1, NULL,
+                        NULL, NULL, '"Creation commentary"', NULL, 0
+                    );
+                    INSERT INTO devotional_entries VALUES (
+                        'dev1', 'DEV', 'Creation Hope', NULL, 'Author', '2026-08-02',
+                        'hope', 'reflection', NULL, NULL,
+                        '[{"sv":1001001,"label":"Genesis 1:1"}]',
+                        '"A summary"',
+                        '[{"type":"paragraph","content":{"text":"A devotional body"}}]',
+                        NULL, 1700000000, 1700000001, 'Creation Hope A devotional body'
+                    );
+                    INSERT INTO plans VALUES ('PLAN', 'Bundled Plan', NULL, NULL, NULL, 1, 1);
+                    INSERT INTO plan_days VALUES ('PLAN', 1, '[{"sv":1001001,"ev":1001999}]');
+                    INSERT INTO quiz_modules VALUES (
+                        'QUIZ', 'PLAN', 'Bundled Quiz', NULL, 1,
+                        '[{"id":"adult","label":"Adult","ageRange":"18+"}]'
+                    );
+                    INSERT INTO quiz_questions VALUES (
+                        1, 'QUIZ', 1, 1001001, 1001999, 'adult', 0,
+                        '"Who created?"', '"God created."', 'doctrine', 0,
+                        '[1001001]', '[]'
+                    );
+                    """#)
+            }
+        }
+
+        let archiveURL = fixtureURL.appendingPathComponent("bundled_modules.db.zlib")
+        let databaseData = try Data(contentsOf: databaseURL)
+        let compressedData = try (databaseData as NSData).compressed(using: .zlib) as Data
+        try compressedData.write(to: archiveURL)
+        let library = LampLibrary(
+            rootURL: fixtureURL.appendingPathComponent("Library"),
+            bundledModulesArchiveURL: archiveURL
+        )
+
+        let modules = try await library.installedModules()
+        #expect(modules.count == 6)
+        #expect(modules.filter { !$0.isBundled }.isEmpty)
+        #expect(try await library.chapter(moduleID: "BIBLE", bookNumber: 1, chapterNumber: 1)
+            .verses.first?.text == "In the beginning")
+        #expect(try await library.searchDictionaries(query: "alpha").first?.moduleID == "DICT")
+        #expect(try await library.commentary(bookNumber: 1, chapterNumber: 1).first?.moduleID == "COMM")
+        #expect(try await library.devotionals().first?.content == "A devotional body")
+        #expect(try await library.readingPlans().first?.id == "PLAN")
+        #expect(try await library.quizModules(planID: "PLAN").first?.id == "QUIZ")
+        let questions = try await library.quizQuestions(moduleID: "QUIZ", day: 1, ageGroup: "adult")
+        #expect(questions.first?.question == "Who created?")
+        #expect(questions.first?.answer == "God created.")
+    }
 }

@@ -7,7 +7,9 @@ Shared Swift code for the Lamp Bible iOS and macOS applications.
 - `LampModuleKit`: module detection, validation, SQLite compilation, and `.lamp` packaging.
 - `LampCore`: persistent module installation, translation reading and full-text search, rich verse annotation and poetry metadata, study lookups, reading-plan progress, personal notes and span-based highlights, portable study-data import/export and deterministic merging, plus shared database, sync, and domain services as they are extracted from the iOS app.
 
-The package currently provides JSON module detection, structural validation, BBCCCVVV reference validation, duplicate and span checks, summary statistics, and installable `.lamp` compilation for translations, dictionaries, commentaries, reading plans, notes, and highlights. Compiler output is SQLite with a versioned format marker, integrity checked, zlib compressed, round-trip verified, and SHA-256 hashed.
+The package currently provides JSON module detection, structural validation, BBCCCVVV reference validation, duplicate and span checks, summary statistics, and installable `.lamp` compilation for translations, dictionaries, commentaries, reading plans, devotionals, quizzes, notes, and highlights. Compiler output is SQLite with a versioned format marker, integrity checked, zlib compressed, round-trip verified, and SHA-256 hashed.
+
+`LampCore` can also open a combined `bundled_modules.db.zlib` archive, lazily expand and cache it, and merge its read-only modules with user-installed `.lamp` files. A user-installed module with the same type and ID takes precedence over its bundled counterpart.
 
 ## Repository responsibilities
 

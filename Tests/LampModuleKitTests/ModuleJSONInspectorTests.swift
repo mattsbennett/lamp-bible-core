@@ -172,6 +172,51 @@ struct ModuleJSONInspectorTests {
         #expect(highlights.issues.contains { $0.path.hasSuffix("/style") })
     }
 
+    @Test func validatesQuizAgeGroupsAndQuestions() throws {
+        let quiz = try inspector.inspect(Data(#"""
+        {
+          "meta": {
+            "schemaVersion": "1.0", "id": "quiz", "type": "quiz",
+            "planId": "plan", "name": "Quiz",
+            "ageGroups": [{"id": "adult", "label": "Adult", "ageRange": "18+"}]
+          },
+          "days": [{
+            "day": 1,
+            "readings": [{
+              "sv": 1001001, "ev": 1001999,
+              "quizzes": {
+                "unknown": [{
+                  "question": "Question", "answer": "Answer",
+                  "theme": "narrative", "christFocused": false,
+                  "references": [1001001]
+                }]
+              }
+            }]
+          }]
+        }
+        """#.utf8))
+
+        #expect(quiz.kind == .quiz)
+        #expect(!quiz.canCompile)
+        #expect(quiz.issues.contains { $0.message.contains("undefined age group") })
+    }
+
+    @Test func rejectsEmptyDevotionalContent() throws {
+        let devotional = try inspector.inspect(Data(#"""
+        {
+          "meta": {
+            "schemaVersion": "1.1", "id": "devotional", "type": "devotional",
+            "title": "Devotional"
+          },
+          "content": []
+        }
+        """#.utf8))
+
+        #expect(devotional.kind == .devotional)
+        #expect(!devotional.canCompile)
+        #expect(devotional.issues.contains { $0.path == "/content" })
+    }
+
     @Test func rejectsArrayRoot() {
         #expect(throws: ModuleInspectionError.rootMustBeObject) {
             try inspector.inspect(Data("[]".utf8))

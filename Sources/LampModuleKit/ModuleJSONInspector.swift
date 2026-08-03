@@ -155,15 +155,126 @@ public struct ModuleJSONInspector: Sendable {
             validateTranslationReferences(root: root, issues: &issues)
         case .dictionary:
             validateDictionaryKeys(root: root, issues: &issues)
+        case .devotional:
+            if let content = root["content"], !JSONSupport.isMeaningful(content) {
+                issues.append(.init(
+                    severity: .error,
+                    path: "/content",
+                    message: "Expected non-empty devotional content."
+                ))
+            }
         case .plan:
             validatePlanDays(root: root, issues: &issues)
         case .notes:
             validateNotes(root: root, issues: &issues)
         case .highlights:
             validateHighlights(root: root, issues: &issues)
-        default:
+        case .quiz:
+            validateQuiz(root: root, issues: &issues)
+        case .commentary:
             break
         }
+    }
+
+    private func validateQuiz(
+        root: [String: Any],
+        issues: inout [ModuleValidationIssue]
+    ) {
+        validatePlanDays(root: root, issues: &issues)
+        let meta = object(root["meta"])
+        let ageGroups = array(meta?["ageGroups"]) ?? []
+        var ageGroupIDs: Set<String> = []
+        for (index, value) in ageGroups.enumerated() {
+            let path = "/meta/ageGroups/\(index)"
+            guard let group = object(value),
+                  let id = string(group["id"]), !id.isEmpty,
+                  let label = string(group["label"]), !label.isEmpty,
+                  let ageRange = string(group["ageRange"]), !ageRange.isEmpty else {
+                issues.append(.init(
+                    severity: .error,
+                    path: path,
+                    message: "Expected non-empty id, label, and ageRange values."
+                ))
+                continue
+            }
+            if !ageGroupIDs.insert(id).inserted {
+                issues.append(.init(
+                    severity: .error,
+                    path: "\(path)/id",
+                    message: "Duplicate age-group ID ‘\(id)’."
+                ))
+            }
+        }
+
+        for (dayIndex, dayValue) in (array(root["days"]) ?? []).enumerated() {
+            guard let day = object(dayValue) else { continue }
+            for (readingIndex, readingValue) in (array(day["readings"]) ?? []).enumerated() {
+                let readingPath = "/days/\(dayIndex)/readings/\(readingIndex)"
+                guard let reading = object(readingValue),
+                      let quizzes = object(reading["quizzes"]) else {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(readingPath)/quizzes",
+                        message: "Expected an object keyed by age-group ID."
+                    ))
+                    continue
+                }
+                for (ageGroupID, questionValue) in quizzes {
+                    let path = "\(readingPath)/quizzes/\(ageGroupID)"
+                    if !ageGroupIDs.contains(ageGroupID) {
+                        issues.append(.init(
+                            severity: .error,
+                            path: path,
+                            message: "Quiz questions use undefined age group ‘\(ageGroupID)’."
+                        ))
+                    }
+                    guard let questions = array(questionValue) else {
+                        issues.append(.init(severity: .error, path: path, message: "Expected an array."))
+                        continue
+                    }
+                    for (questionIndex, value) in questions.enumerated() {
+                        let questionPath = "\(path)/\(questionIndex)"
+                        guard let question = object(value) else {
+                            issues.append(.init(severity: .error, path: questionPath, message: "Expected an object."))
+                            continue
+                        }
+                        for key in ["question", "answer"] where question[key].map(isMeaningfulText) != true {
+                            issues.append(.init(
+                                severity: .error,
+                                path: "\(questionPath)/\(key)",
+                                message: "Expected a string or annotated text."
+                            ))
+                        }
+                        if string(question["theme"])?.isEmpty != false {
+                            issues.append(.init(
+                                severity: .error,
+                                path: "\(questionPath)/theme",
+                                message: "Expected a non-empty theme."
+                            ))
+                        }
+                        if !(question["christFocused"] is Bool) {
+                            issues.append(.init(
+                                severity: .error,
+                                path: "\(questionPath)/christFocused",
+                                message: "Expected a Boolean."
+                            ))
+                        }
+                        if array(question["references"]) == nil {
+                            issues.append(.init(
+                                severity: .error,
+                                path: "\(questionPath)/references",
+                                message: "Expected an array of verse references."
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func isMeaningfulText(_ value: Any) -> Bool {
+        if let string = string(value) { return !string.isEmpty }
+        return object(value).flatMap { string($0["text"]) }?.isEmpty == false
     }
 
     private func validateTranslationReferences(
