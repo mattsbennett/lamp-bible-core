@@ -514,6 +514,125 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct LampBook: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let subtitle: String?
+    public let description: String?
+    public let author: String?
+    public let editor: String?
+    public let publisher: String?
+    public let year: Int?
+    public let edition: String?
+    public let isbn: String?
+    public let language: String
+    public let textDirection: String
+    public let copyright: String?
+    public let license: String?
+    public let version: String?
+    public let tags: [String]
+    public let coverMediaID: String?
+    public let isEditable: Bool
+    public let created: Date?
+    public let lastModified: Date?
+    public let footnotesJSON: String?
+    public let mediaJSON: String?
+
+    public init(
+        id: String,
+        title: String,
+        subtitle: String? = nil,
+        description: String? = nil,
+        author: String? = nil,
+        editor: String? = nil,
+        publisher: String? = nil,
+        year: Int? = nil,
+        edition: String? = nil,
+        isbn: String? = nil,
+        language: String,
+        textDirection: String = "ltr",
+        copyright: String? = nil,
+        license: String? = nil,
+        version: String? = nil,
+        tags: [String] = [],
+        coverMediaID: String? = nil,
+        isEditable: Bool = false,
+        created: Date? = nil,
+        lastModified: Date? = nil,
+        footnotesJSON: String? = nil,
+        mediaJSON: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.description = description
+        self.author = author
+        self.editor = editor
+        self.publisher = publisher
+        self.year = year
+        self.edition = edition
+        self.isbn = isbn
+        self.language = language
+        self.textDirection = textDirection
+        self.copyright = copyright
+        self.license = license
+        self.version = version
+        self.tags = tags
+        self.coverMediaID = coverMediaID
+        self.isEditable = isEditable
+        self.created = created
+        self.lastModified = lastModified
+        self.footnotesJSON = footnotesJSON
+        self.mediaJSON = mediaJSON
+    }
+}
+
+public struct LampBookSection: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let moduleID: String
+    public let sectionID: String
+    public let parentID: String?
+    public let type: String
+    public let number: String?
+    public let title: String
+    public let subtitle: String?
+    public let depth: Int
+    public let orderIndex: Int
+    public let keyScriptures: [LampScriptureLink]
+    public let contentJSON: String
+    public let content: String
+
+    public init(
+        id: String,
+        moduleID: String,
+        sectionID: String,
+        parentID: String? = nil,
+        type: String,
+        number: String? = nil,
+        title: String,
+        subtitle: String? = nil,
+        depth: Int,
+        orderIndex: Int,
+        keyScriptures: [LampScriptureLink] = [],
+        contentJSON: String,
+        content: String
+    ) {
+        self.id = id
+        self.moduleID = moduleID
+        self.sectionID = sectionID
+        self.parentID = parentID
+        self.type = type
+        self.number = number
+        self.title = title
+        self.subtitle = subtitle
+        self.depth = depth
+        self.orderIndex = orderIndex
+        self.keyScriptures = keyScriptures
+        self.contentJSON = contentJSON
+        self.content = content
+    }
+}
+
 public struct LampQuizAgeGroup: Identifiable, Equatable, Codable, Sendable {
     public let id: String
     public let label: String

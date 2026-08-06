@@ -607,6 +607,34 @@ struct LampLibraryTests {
         #expect(try await library.importPersonalDevotional(from: outputURL).first?.title == saved.title)
     }
 
+    @Test func savesPartiallyAuthoredPersonalDevotionals() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-partial-devotional-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+        let bodyOnly = try await library.savePersonalDevotional(LampDevotional(
+            id: "body-only",
+            moduleID: "personal-devotionals",
+            moduleName: "My Devotionals",
+            title: "",
+            content: "A thought that does not have a title yet."
+        ))
+        #expect(bodyOnly.title == "Untitled Devotional")
+        #expect(bodyOnly.content == "A thought that does not have a title yet.")
+
+        let titleOnly = try await library.savePersonalDevotional(LampDevotional(
+            id: "title-only",
+            moduleID: "personal-devotionals",
+            moduleName: "My Devotionals",
+            title: "An Outline",
+            content: ""
+        ))
+        #expect(titleOnly.title == "An Outline")
+        #expect(titleOnly.content.isEmpty)
+    }
+
     @Test func exportsPersonalStudyDataThroughPortableFormats() async throws {
         let fixtureURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-study-export-tests-\(UUID().uuidString)", isDirectory: true)
@@ -771,6 +799,10 @@ struct LampLibraryTests {
                         transliteration TEXT, pronunciation TEXT, senses_json TEXT,
                         metadata_json TEXT, search_text TEXT
                     );
+                    CREATE TABLE lexicon_mappings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, mapping_id TEXT,
+                        source_key TEXT, target_keys_json TEXT
+                    );
                     CREATE TABLE modules (
                         id TEXT PRIMARY KEY, type TEXT, name TEXT, series_abbrev TEXT
                     );
@@ -817,6 +849,16 @@ struct LampLibraryTests {
                         1, 'DICT', 'G1', 'alpha', NULL, NULL,
                         '[{"definition":"first"}]', NULL, 'first'
                     );
+                    INSERT INTO dictionary_entries VALUES (
+                        2, 'DICT', 'BDB3', 'ab', NULL, NULL,
+                        '[{"definition":"BDB first"}]', NULL, 'BDB first'
+                    );
+                    INSERT INTO dictionary_entries VALUES (
+                        3, 'DICT', 'BDB9264', 'ab', NULL, NULL,
+                        '[{"definition":"BDB second"}]', NULL, 'BDB second'
+                    );
+                    INSERT INTO lexicon_mappings (mapping_id, source_key, target_keys_json)
+                    VALUES ('strongs_hebrew_to_bdb', 'H3', '["BDB3","BDB9264"]');
                     INSERT INTO modules VALUES ('COMM', 'commentary', 'Bundled Commentary', 'BC');
                     INSERT INTO modules VALUES ('DEV', 'devotional', 'Bundled Devotionals', NULL);
                     INSERT INTO commentary_units VALUES (
@@ -861,6 +903,11 @@ struct LampLibraryTests {
         #expect(try await library.chapter(moduleID: "BIBLE", bookNumber: 1, chapterNumber: 1)
             .verses.first?.text == "In the beginning")
         #expect(try await library.searchDictionaries(query: "alpha").first?.moduleID == "DICT")
+        #expect(try await library.lexiconMappings(sourceKey: "h0003") == ["BDB3", "BDB9264"])
+        let mappedEntries = try await library.dictionaryEntries(
+            keys: try await library.lexiconMappings(sourceKey: "H3")
+        )
+        #expect(mappedEntries.map(\.key) == ["BDB3", "BDB9264"])
         #expect(try await library.commentary(bookNumber: 1, chapterNumber: 1).first?.moduleID == "COMM")
         #expect(try await library.devotionals().first?.content == "A devotional body")
         #expect(try await library.readingPlans().first?.id == "PLAN")

@@ -407,6 +407,64 @@ struct LampModuleCompilerTests {
         }
     }
 
+    @Test func compilesHierarchicalBookForLibraryImport() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("test_book.lamp")
+
+        let result = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "1.0", "id": "test_book", "type": "book",
+                "title": "The Test Book", "subtitle": "A useful volume",
+                "author": "Lamp Bible", "language": "en",
+                "tags": ["study", "test"]
+              },
+              "sections": [{
+                "id": "part-one", "type": "part", "title": "Part One",
+                "sections": [{
+                  "id": "chapter-one", "type": "chapter", "number": 1,
+                  "title": "The Beginning",
+                  "keyScriptures": [{"sv": 1001001, "ev": 1001003}],
+                  "content": [
+                    {"type": "paragraph", "content": {"text": "Grace in the beginning."}},
+                    {"type": "list", "listType": "bullet", "items": [
+                      {"content": {"text": "A nested thought"}}
+                    ]}
+                  ]
+                }]
+              }],
+              "footnotes": [{"id": "1", "content": "A note."}]
+            }
+            """#.utf8),
+            sourceFilename: "test_book.json",
+            destinationURL: outputURL
+        )
+
+        #expect(result.kind == .book)
+        #expect(result.tableCounts["book_sections"] == 2)
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let module = try #require(try Row.fetchOne(db, sql: "SELECT * FROM book_modules"))
+            #expect(module["title"] as String == "The Test Book")
+            #expect(module["language"] as String == "en")
+            #expect((module["tags_json"] as String?)?.contains("study") == true)
+
+            let sections = try Row.fetchAll(db, sql: "SELECT * FROM book_sections ORDER BY rowid")
+            #expect(sections.count == 2)
+            #expect(sections[1]["parent_id"] as String? == "test_book:part-one")
+            #expect(sections[1]["depth"] as Int == 1)
+            #expect((sections[1]["search_text"] as String).contains("nested thought"))
+
+            let matches = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM book_sections_fts WHERE book_sections_fts MATCH 'grace'"
+            )
+            #expect(matches == 1)
+        }
+    }
+
     @Test func enforcesModuleIdentityFilename() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }

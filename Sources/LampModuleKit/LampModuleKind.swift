@@ -5,6 +5,7 @@ public enum LampModuleKind: String, Codable, CaseIterable, Sendable {
     case translation
     case dictionary
     case commentary
+    case book
     case devotional
     case notes
     case plan
@@ -17,6 +18,7 @@ public enum LampModuleKind: String, Codable, CaseIterable, Sendable {
         case "translation": self = .translation
         case "dictionary", "lexicon": self = .dictionary
         case "commentary": self = .commentary
+        case "book": self = .book
         case "devotional": self = .devotional
         case "notes", "note": self = .notes
         case "plan": self = .plan

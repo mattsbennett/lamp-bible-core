@@ -217,6 +217,47 @@ struct ModuleJSONInspectorTests {
         #expect(devotional.issues.contains { $0.path == "/content" })
     }
 
+    @Test func validatesHierarchicalBookSections() throws {
+        let book = try inspector.inspect(Data(#"""
+        {
+          "meta": {
+            "schemaVersion": "1.0", "id": "test-book", "type": "book",
+            "title": "Test Book", "language": "en"
+          },
+          "sections": [{
+            "id": "part-one", "type": "part", "title": "Part One",
+            "sections": [{
+              "id": "chapter-one", "type": "chapter", "title": "Chapter One",
+              "content": [{"type": "paragraph", "content": {"text": "Opening words."}}]
+            }]
+          }]
+        }
+        """#.utf8))
+
+        #expect(book.kind == .book)
+        #expect(book.canCompile)
+        #expect(book.statistics == ["sections": 2, "contentBlocks": 1])
+
+        let duplicate = try inspector.inspect(Data(#"""
+        {
+          "meta": {
+            "schemaVersion": "1.0", "id": "invalid-book", "type": "book",
+            "title": "Invalid Book", "language": "en"
+          },
+          "sections": [
+            {"id": "same", "type": "chapter", "title": "One", "content": []},
+            {"id": "same", "type": "chapter", "title": "Two", "content": [
+              {"type": "paragraph", "content": {"text": "Two"}}
+            ]}
+          ]
+        }
+        """#.utf8))
+
+        #expect(!duplicate.canCompile)
+        #expect(duplicate.issues.contains { $0.message.contains("Duplicate section ID") })
+        #expect(duplicate.issues.contains { $0.message.contains("needs content or child sections") })
+    }
+
     @Test func rejectsArrayRoot() {
         #expect(throws: ModuleInspectionError.rootMustBeObject) {
             try inspector.inspect(Data("[]".utf8))

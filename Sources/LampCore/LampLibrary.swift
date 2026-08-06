@@ -55,7 +55,9 @@ public actor LampLibrary {
                 return try? inspectDatabase(
                     at: databaseURL,
                     fallbackID: nil,
-                    compressedByteCount: byteCount
+                    compressedByteCount: byteCount,
+                    // Already verified when it was installed.
+                    verifyIntegrity: false
                 )
             }
         var modulesByKey = Dictionary(
@@ -540,6 +542,131 @@ public actor LampLibrary {
         return results
     }
 
+    /// Returns dictionary entries whose keys exactly match the supplied keys.
+    ///
+    /// This is deliberately separate from ``searchDictionaries``: lexicon keys
+    /// are identifiers, and a text search can also return entries that merely
+    /// cite an identifier in their definition.
+    public func dictionaryEntries(
+        keys: [String],
+        moduleIDs: Set<String>? = nil
+    ) throws -> [LampDictionaryResult] {
+        var seenKeys = Set<String>()
+        let normalizedKeys = keys.compactMap { key -> String? in
+            let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard !normalized.isEmpty, seenKeys.insert(normalized).inserted else { return nil }
+            return normalized
+        }
+        guard !normalizedKeys.isEmpty else { return [] }
+
+        let dictionaries = try installedModules().filter {
+            $0.kind == .dictionary && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
+        }
+        let placeholders = Array(repeating: "?", count: normalizedKeys.count).joined(separator: ", ")
+        var results: [LampDictionaryResult] = []
+
+        for dictionary in dictionaries {
+            let queue = try openDatabase(moduleID: dictionary.id)
+            let entries = try queue.read { db -> [LampDictionaryResult] in
+                let tables = try tableNames(in: db)
+                guard tables.contains("dictionary_entries") else {
+                    throw LampLibraryError.unsupportedModuleSchema
+                }
+                let columns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(dictionary_entries)")
+                    .compactMap { $0["name"] as String? })
+                guard columns.contains("senses_json") else {
+                    throw LampLibraryError.unsupportedModuleSchema
+                }
+
+                var arguments = StatementArguments()
+                let moduleCondition: String
+                if columns.contains("module_id") {
+                    moduleCondition = "module_id = ? AND"
+                    arguments += [dictionary.id]
+                } else {
+                    moduleCondition = ""
+                }
+                arguments += StatementArguments(normalizedKeys)
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT id, key, lemma, transliteration, pronunciation, senses_json
+                    FROM dictionary_entries
+                    WHERE \(moduleCondition) key COLLATE NOCASE IN (\(placeholders))
+                    ORDER BY key, lemma
+                    """, arguments: arguments)
+
+                return rows.map { row in
+                    let sensesJSON: String? = row["senses_json"]
+                    let idValue: DatabaseValue = row["id"]
+                    let entryID = String.fromDatabaseValue(idValue)
+                        ?? Int64.fromDatabaseValue(idValue).map(String.init)
+                        ?? "\(dictionary.id):\(row["key"] as String)"
+                    return LampDictionaryResult(
+                        entryID: entryID,
+                        moduleID: dictionary.id,
+                        moduleName: dictionary.name,
+                        key: row["key"],
+                        lemma: row["lemma"],
+                        transliteration: row["transliteration"],
+                        pronunciation: row["pronunciation"],
+                        senses: dictionarySenses(from: sensesJSON)
+                    )
+                }
+            }
+            results.append(contentsOf: entries)
+        }
+
+        let keyOrder = Dictionary(uniqueKeysWithValues: normalizedKeys.enumerated().map { ($1, $0) })
+        return results.sorted {
+            let lhsOrder = keyOrder[$0.key.uppercased()] ?? Int.max
+            let rhsOrder = keyOrder[$1.key.uppercased()] ?? Int.max
+            if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+            return $0.moduleName.localizedStandardCompare($1.moduleName) == .orderedAscending
+        }
+    }
+
+    /// Resolves a lexicon key through the mappings embedded in the bundled
+    /// module database (for example, a Strong's Hebrew key to one or more BDB
+    /// entry keys).
+    public func lexiconMappings(sourceKey: String) throws -> [String] {
+        let uppercasedKey = sourceKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let normalizedKey: String
+        if let prefix = uppercasedKey.first, prefix == "H" || prefix == "G" {
+            let remainder = uppercasedKey.dropFirst()
+            let digits = remainder.prefix { $0.isNumber }
+            let suffix = remainder.dropFirst(digits.count)
+            let unpaddedDigits = String(digits.drop { $0 == "0" })
+            normalizedKey = String(prefix)
+                + (unpaddedDigits.isEmpty && !digits.isEmpty ? "0" : unpaddedDigits)
+                + suffix
+        } else {
+            normalizedKey = uppercasedKey
+        }
+        guard !normalizedKey.isEmpty,
+              let databaseURL = try preparedBundledDatabaseURL() else { return [] }
+
+        let queue = try openReadOnlyDatabase(at: databaseURL)
+        return try queue.read { db in
+            guard try tableNames(in: db).contains("lexicon_mappings") else { return [] }
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT target_keys_json
+                FROM lexicon_mappings
+                WHERE source_key = ? COLLATE NOCASE
+                ORDER BY id
+                """, arguments: [normalizedKey])
+
+            var seenTargets = Set<String>()
+            return rows.flatMap { row -> [String] in
+                let json: String = row["target_keys_json"]
+                let targets = (try? JSONDecoder().decode([String].self, from: Data(json.utf8))) ?? []
+                return targets.compactMap { target in
+                    let normalized = target.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+                    guard !normalized.isEmpty, seenTargets.insert(normalized).inserted else { return nil }
+                    return normalized
+                }
+            }
+        }
+    }
+
     public func commentary(
         bookNumber: Int,
         chapterNumber: Int,
@@ -669,6 +796,92 @@ public actor LampLibrary {
         }
     }
 
+    public func bookModules(moduleIDs: Set<String>? = nil) throws -> [LampBook] {
+        let modules = try installedModules().filter {
+            $0.kind == .book && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
+        }
+        var books: [LampBook] = []
+
+        for module in modules {
+            let queue = try openDatabase(moduleID: module.id)
+            if let book = try queue.read({ db -> LampBook? in
+                guard try tableNames(in: db).contains("book_modules"),
+                      let row = try Row.fetchOne(
+                        db,
+                        sql: "SELECT * FROM book_modules WHERE id = ? LIMIT 1",
+                        arguments: [module.id]
+                      ) else { return nil }
+                let tagsJSON: String? = row["tags_json"]
+                let tags = tagsJSON
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+                let editable: Int = row["is_editable"]
+                let createdTimestamp: Int? = row["created"]
+                let modifiedTimestamp: Int? = row["last_modified"]
+                return LampBook(
+                    id: row["id"],
+                    title: row["title"],
+                    subtitle: row["subtitle"],
+                    description: row["description"],
+                    author: row["author"],
+                    editor: row["editor"],
+                    publisher: row["publisher"],
+                    year: row["year"],
+                    edition: row["edition"],
+                    isbn: row["isbn"],
+                    language: row["language"],
+                    textDirection: row["text_direction"],
+                    copyright: row["copyright"],
+                    license: row["license"],
+                    version: row["version"],
+                    tags: tags,
+                    coverMediaID: row["cover_media_id"],
+                    isEditable: editable != 0,
+                    created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                    lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                    footnotesJSON: row["footnotes_json"],
+                    mediaJSON: row["media_json"]
+                )
+            }) {
+                books.append(book)
+            }
+        }
+
+        return books.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    public func bookSections(moduleID: String) throws -> [LampBookSection] {
+        let queue = try openDatabase(moduleID: moduleID)
+        return try queue.read { db in
+            guard try tableNames(in: db).contains("book_sections") else {
+                throw LampLibraryError.unsupportedModuleSchema
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT * FROM book_sections
+                WHERE module_id = ?
+                ORDER BY rowid
+                """, arguments: [moduleID]).map { row in
+                    let scripturesJSON: String? = row["key_scriptures_json"]
+                    let contentJSON: String = row["content_json"]
+                    return LampBookSection(
+                        id: row["id"],
+                        moduleID: row["module_id"],
+                        sectionID: row["section_id"],
+                        parentID: row["parent_id"],
+                        type: row["section_type"],
+                        number: row["number"],
+                        title: row["title"],
+                        subtitle: row["subtitle"],
+                        depth: row["depth"],
+                        orderIndex: row["order_index"],
+                        keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
+                        contentJSON: contentJSON,
+                        content: plainText(fromJSONString: contentJSON) ?? ""
+                    )
+                }
+        }
+    }
+
     public func devotionals(
         moduleIDs: Set<String>? = nil,
         query: String? = nil
@@ -767,9 +980,21 @@ public actor LampLibrary {
     @discardableResult
     public func savePersonalDevotional(_ devotional: LampDevotional) throws -> LampDevotional {
         let title = devotional.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let content = devotional.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, !content.isEmpty else {
-            throw LampLibraryError.invalidPersonalContent("A devotional needs a title and content.")
+        let hasAuthoredContent = [
+            devotional.title,
+            devotional.subtitle,
+            devotional.author,
+            devotional.tags.joined(separator: ""),
+            devotional.seriesName,
+            devotional.summary,
+            devotional.content,
+            devotional.footnotes,
+        ]
+            .compactMap { $0 }
+            .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            || !devotional.keyScriptures.isEmpty
+        guard hasAuthoredContent else {
+            throw LampLibraryError.invalidPersonalContent("Add devotional content before saving.")
         }
         let identifier = devotional.id.isEmpty ? UUID().uuidString : devotional.id
         try validateIdentifier(identifier)
@@ -779,7 +1004,7 @@ public actor LampLibrary {
             id: identifier,
             moduleID: "personal-devotionals",
             moduleName: "My Devotionals",
-            title: title,
+            title: title.isEmpty ? "Untitled Devotional" : title,
             subtitle: devotional.subtitle?.nilIfBlank,
             author: devotional.author?.nilIfBlank,
             date: devotional.date?.nilIfBlank,
@@ -1164,6 +1389,44 @@ public actor LampLibrary {
                         }
                 }
                 results += matches
+                if results.count >= resultLimit { break }
+            }
+        }
+
+        if wants(.book), results.count < resultLimit {
+            let pattern = "%\(trimmedQuery)%"
+            for module in installed where module.kind == .book && includesModule(module.id) {
+                let queue = try openDatabase(moduleID: module.id)
+                let remaining = resultLimit - results.count
+                results += try queue.read { db in
+                    guard try tableNames(in: db).contains("book_sections") else { return [] }
+                    return try Row.fetchAll(db, sql: """
+                        SELECT id, title, subtitle, key_scriptures_json,
+                               content_json, search_text
+                        FROM book_sections
+                        WHERE module_id = ?
+                          AND (title LIKE ? COLLATE NOCASE
+                            OR COALESCE(subtitle, '') LIKE ? COLLATE NOCASE
+                            OR search_text LIKE ? COLLATE NOCASE)
+                        ORDER BY rowid
+                        LIMIT ?
+                        """, arguments: [module.id, pattern, pattern, pattern, remaining]).map { row in
+                            let scripturesJSON: String? = row["key_scriptures_json"]
+                            let scriptures = devotionalScriptureLinks(from: scripturesJSON)
+                            let contentJSON: String = row["content_json"]
+                            return LampModuleSearchResult(
+                                id: "book:\(module.id):\(row["id"] as String)",
+                                kind: .book,
+                                moduleID: module.id,
+                                moduleName: module.name,
+                                title: row["title"],
+                                subtitle: row["subtitle"],
+                                snippet: searchSnippet(plainText(fromJSONString: contentJSON) ?? contentJSON),
+                                startReference: scriptures.first?.startReference,
+                                endReference: scriptures.first?.endReference
+                            )
+                        }
+                }
                 if results.count >= resultLimit { break }
             }
         }
@@ -2616,6 +2879,19 @@ public actor LampLibrary {
             databaseData = sourceData
         }
         try databaseData.write(to: databaseURL, options: [.atomic])
+
+        // Verified here, once, rather than on every read of the bundled modules.
+        // The version marker is written only after the check passes, so a corrupt
+        // extraction is redone on the next launch instead of being trusted.
+        let queue = try openReadOnlyDatabase(at: databaseURL)
+        let integrityResults = try queue.read { db in
+            try String.fetchAll(db, sql: "PRAGMA quick_check")
+        }
+        guard integrityResults == ["ok"] else {
+            try? fileManager.removeItem(at: databaseURL)
+            throw LampLibraryError.integrityCheckFailed(integrityResults.joined(separator: "; "))
+        }
+
         try currentVersion.write(to: markerURL, atomically: true, encoding: .utf8)
         cachedBundledDatabaseURL = databaseURL
         cachedBundledModules = nil
@@ -2627,10 +2903,6 @@ public actor LampLibrary {
         guard let databaseURL = try preparedBundledDatabaseURL() else { return [] }
         let queue = try openReadOnlyDatabase(at: databaseURL)
         let modules = try queue.read { db -> [LampInstalledModule] in
-            let integrityResults = try String.fetchAll(db, sql: "PRAGMA quick_check")
-            guard integrityResults == ["ok"] else {
-                throw LampLibraryError.integrityCheckFailed(integrityResults.joined(separator: "; "))
-            }
             let tables = try tableNames(in: db)
             var modules: [LampInstalledModule] = []
             if tables.contains("translations") {
@@ -2666,6 +2938,16 @@ public actor LampLibrary {
                         return LampInstalledModule(
                             id: row["id"], kind: kind, name: row["name"],
                             abbreviation: row["series_abbrev"], isBundled: true
+                        )
+                    }
+            }
+            if tables.contains("book_modules") {
+                modules += try Row.fetchAll(db, sql: """
+                    SELECT id, title, language FROM book_modules ORDER BY title
+                    """).map { row in
+                        LampInstalledModule(
+                            id: row["id"], kind: .book, name: row["title"],
+                            language: row["language"], isBundled: true
                         )
                     }
             }
@@ -2884,18 +3166,25 @@ public actor LampLibrary {
         throw LampLibraryError.unsupportedModuleSchema
     }
 
+    /// - Parameter verifyIntegrity: Whether to run `PRAGMA quick_check`, which
+    ///   reads every page of the database. Worth it for a file arriving from
+    ///   outside the library; ruinous for merely listing what is already
+    ///   installed, where it costs seconds per gigabyte on every launch.
     private func inspectDatabase(
         at url: URL,
         fallbackID: String?,
-        compressedByteCount: Int
+        compressedByteCount: Int,
+        verifyIntegrity: Bool = true
     ) throws -> LampInstalledModule {
         var configuration = Configuration()
         configuration.readonly = true
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         return try queue.read { db in
-            let integrityResults = try String.fetchAll(db, sql: "PRAGMA quick_check")
-            guard integrityResults == ["ok"] else {
-                throw LampLibraryError.integrityCheckFailed(integrityResults.joined(separator: "; "))
+            if verifyIntegrity {
+                let integrityResults = try String.fetchAll(db, sql: "PRAGMA quick_check")
+                guard integrityResults == ["ok"] else {
+                    throw LampLibraryError.integrityCheckFailed(integrityResults.joined(separator: "; "))
+                }
             }
 
             let tables = try tableNames(in: db)
@@ -2951,6 +3240,16 @@ public actor LampLibrary {
                     kind: declaredKind ?? .commentary,
                     name: title ?? id,
                     abbreviation: seriesAbbreviation,
+                    compressedByteCount: compressedByteCount
+                )
+            }
+            if tables.contains("book_modules"),
+               let row = try Row.fetchOne(db, sql: "SELECT id, title, language FROM book_modules LIMIT 1") {
+                return LampInstalledModule(
+                    id: formatID ?? row["id"],
+                    kind: declaredKind ?? .book,
+                    name: row["title"],
+                    language: row["language"],
                     compressedByteCount: compressedByteCount
                 )
             }

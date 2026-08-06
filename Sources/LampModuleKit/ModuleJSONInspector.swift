@@ -64,6 +64,7 @@ public struct ModuleJSONInspector: Sendable {
         }
 
         if root["verses"] is [Any], meta["translationId"] != nil { return .highlights }
+        if root["sections"] is [Any], meta["title"] != nil { return .book }
         if root["content"] != nil, meta["title"] != nil { return .devotional }
 
         if root["chapters"] is [Any], root["book"] != nil {
@@ -103,6 +104,9 @@ public struct ModuleJSONInspector: Sendable {
             requireInteger(root, key: "bookNumber", issues: &issues)
             requireString(root, key: "book", basePath: "", issues: &issues)
             requireArray(root, key: "chapters", issues: &issues)
+        case .book:
+            requireStrings(meta, keys: ["schemaVersion", "id", "type", "title", "language"], issues: &issues)
+            requireArray(root, key: "sections", issues: &issues)
         case .devotional:
             requireStrings(meta, keys: ["schemaVersion", "id", "type", "title"], issues: &issues)
             if root["content"] == nil {
@@ -155,6 +159,8 @@ public struct ModuleJSONInspector: Sendable {
             validateTranslationReferences(root: root, issues: &issues)
         case .dictionary:
             validateDictionaryKeys(root: root, issues: &issues)
+        case .book:
+            validateBook(root: root, issues: &issues)
         case .devotional:
             if let content = root["content"], !JSONSupport.isMeaningful(content) {
                 issues.append(.init(
@@ -174,6 +180,151 @@ public struct ModuleJSONInspector: Sendable {
         case .commentary:
             break
         }
+    }
+
+    private func validateBook(
+        root: [String: Any],
+        issues: inout [ModuleValidationIssue]
+    ) {
+        guard let sections = array(root["sections"]) else { return }
+        if sections.isEmpty {
+            issues.append(.init(
+                severity: .error,
+                path: "/sections",
+                message: "Expected at least one book section."
+            ))
+            return
+        }
+
+        let allowedTypes: Set<String> = [
+            "front-matter", "part", "chapter", "section",
+            "appendix", "back-matter", "other",
+        ]
+        var firstPathByID: [String: String] = [:]
+
+        func validateSections(_ values: [Any], path: String) {
+            for (index, value) in values.enumerated() {
+                let sectionPath = "\(path)/\(index)"
+                guard let section = object(value) else {
+                    issues.append(.init(severity: .error, path: sectionPath, message: "Expected an object."))
+                    continue
+                }
+
+                guard let id = string(section["id"]), !id.isEmpty else {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(sectionPath)/id",
+                        message: "Expected a non-empty section ID."
+                    ))
+                    continue
+                }
+                if let firstPath = firstPathByID[id] {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(sectionPath)/id",
+                        message: "Duplicate section ID ‘\(id)’; it first appears at \(firstPath)/id."
+                    ))
+                } else {
+                    firstPathByID[id] = sectionPath
+                }
+
+                if string(section["title"])?.isEmpty != false {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(sectionPath)/title",
+                        message: "Expected a non-empty section title."
+                    ))
+                }
+                if let type = string(section["type"]), allowedTypes.contains(type) {
+                    // Valid.
+                } else {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(sectionPath)/type",
+                        message: "Expected a supported book section type."
+                    ))
+                }
+
+                let content = array(section["content"])
+                let children = array(section["sections"])
+                if section["content"] != nil, content == nil {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(sectionPath)/content",
+                        message: "Expected an array."
+                    ))
+                }
+                if section["sections"] != nil, children == nil {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(sectionPath)/sections",
+                        message: "Expected an array."
+                    ))
+                }
+                if (content?.isEmpty ?? true) && (children?.isEmpty ?? true) {
+                    issues.append(.init(
+                        severity: .error,
+                        path: sectionPath,
+                        message: "A book section needs content or child sections."
+                    ))
+                }
+
+                if let orderValue = section["order"],
+                   integer(orderValue).map({ $0 >= 0 }) != true {
+                    issues.append(.init(
+                        severity: .error,
+                        path: "\(sectionPath)/order",
+                        message: "Expected a non-negative integer."
+                    ))
+                }
+
+                if let scriptureValues = section["keyScriptures"] {
+                    guard let scriptures = array(scriptureValues) else {
+                        issues.append(.init(
+                            severity: .error,
+                            path: "\(sectionPath)/keyScriptures",
+                            message: "Expected an array."
+                        ))
+                        continue
+                    }
+                    for (scriptureIndex, scriptureValue) in scriptures.enumerated() {
+                        let scripturePath = "\(sectionPath)/keyScriptures/\(scriptureIndex)"
+                        guard let scripture = object(scriptureValue),
+                              let start = integer(scripture["sv"]) else {
+                            issues.append(.init(
+                                severity: .error,
+                                path: scripturePath,
+                                message: "Expected an object with an integer sv reference."
+                            ))
+                            continue
+                        }
+                        if let endValue = scripture["ev"] {
+                            guard let end = integer(endValue) else {
+                                issues.append(.init(
+                                    severity: .error,
+                                    path: "\(scripturePath)/ev",
+                                    message: "Expected an integer BBCCCVVV reference."
+                                ))
+                                continue
+                            }
+                            if end < start {
+                                issues.append(.init(
+                                    severity: .error,
+                                    path: "\(scripturePath)/ev",
+                                    message: "End reference \(end) precedes start reference \(start)."
+                                ))
+                            }
+                        }
+                    }
+                }
+
+                if let children {
+                    validateSections(children, path: "\(sectionPath)/sections")
+                }
+            }
+        }
+
+        validateSections(sections, path: "/sections")
     }
 
     private func validateQuiz(
@@ -688,6 +839,19 @@ public struct ModuleJSONInspector: Sendable {
             return ["entries": array(root["entries"])?.count ?? 0]
         case .commentary:
             return ["chapters": array(root["chapters"])?.count ?? 0]
+        case .book:
+            func counts(_ values: [Any]) -> (sections: Int, blocks: Int) {
+                values.reduce(into: (sections: 0, blocks: 0)) { result, value in
+                    guard let section = object(value) else { return }
+                    result.sections += 1
+                    result.blocks += array(section["content"])?.count ?? 0
+                    let childCounts = counts(array(section["sections"]) ?? [])
+                    result.sections += childCounts.sections
+                    result.blocks += childCounts.blocks
+                }
+            }
+            let result = counts(array(root["sections"]) ?? [])
+            return ["sections": result.sections, "contentBlocks": result.blocks]
         case .notes:
             let chapters = array(root["chapters"]) ?? []
             let notes = chapters.reduce(into: 0) { count, value in

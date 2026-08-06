@@ -8,6 +8,7 @@ public struct LampModuleCompiler: Sendable {
         .translation,
         .dictionary,
         .commentary,
+        .book,
         .devotional,
         .notes,
         .plan,
@@ -108,6 +109,8 @@ public struct LampModuleCompiler: Sendable {
                 tableCounts = try compileDictionary(root: root, databaseURL: databaseURL, moduleID: moduleID)
             case .commentary:
                 tableCounts = try compileCommentary(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .book:
+                tableCounts = try compileBook(root: root, databaseURL: databaseURL, moduleID: moduleID)
             case .devotional:
                 tableCounts = try compileDevotional(root: root, databaseURL: databaseURL, moduleID: moduleID)
             case .notes:
