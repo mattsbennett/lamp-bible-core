@@ -209,6 +209,7 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
     public let snippet: String
     public let startReference: Int?
     public let endReference: Int?
+    public let highlightColor: String?
 
     public init(
         id: String,
@@ -219,7 +220,8 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         subtitle: String? = nil,
         snippet: String,
         startReference: Int? = nil,
-        endReference: Int? = nil
+        endReference: Int? = nil,
+        highlightColor: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -230,6 +232,7 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         self.snippet = snippet
         self.startReference = startReference
         self.endReference = endReference
+        self.highlightColor = highlightColor
     }
 
     public var referenceDescription: String? {

@@ -216,17 +216,38 @@ struct LampLibraryTests {
 
         ### 1:1
 
+        **Title:** First note
+
         The Word is eternal.
+
+        A note[^one].
+
+        ### Footnotes
+
+        Some further reflection about the note.
 
         ### Verses 2-3
 
         The Word is with God and creates.
+
+        ### Footnotes
+
+        - **two:** A second footnote.
+
+        ---
+
+        [^one]: An explanatory footnote.
         """#.utf8).write(to: notesURL)
         let notesResult = try await library.importPersonalMarkdown(from: notesURL, as: .notes)
         #expect(notesResult.importedCount == 2)
         let notes = try await library.verseNotes(bookNumber: 43, chapterNumber: 1)
         #expect(notes.map(\.reference) == [43_001_001, 43_001_002])
+        #expect(notes.first?.title == "First note")
         #expect(notes.last?.verseReferences == [43_001_002, 43_001_003])
+        #expect(notes.first?.content.contains("A note[^one].") == true)
+        #expect(notes.first?.content.contains("Some further reflection") == true)
+        #expect(notes.first?.footnotes.first?.content == "An explanatory footnote.")
+        #expect(notes.last?.footnotes.first?.content == "A second footnote.")
 
         let devotionalURL = fixtureURL.appendingPathComponent("hope.md")
         try Data(#"""
@@ -235,6 +256,14 @@ struct LampLibraryTests {
         date: 08-09
         tags: hope, grace
         author: A Reader
+        series:
+          id: "daily"
+          name: "Daily Hope"
+          order: 2
+        keyScriptures:
+          - ref: "John 1:1"
+            sv: 43001001
+            ev: 43001002
         ---
 
         Hope does not disappoint.
@@ -248,7 +277,53 @@ struct LampLibraryTests {
         #expect(devotionals.first?.title == "Living Hope")
         #expect(devotionals.first?.author == "A Reader")
         #expect(devotionals.first?.tags == ["hope", "grace"])
+        #expect(devotionals.first?.seriesName == "Daily Hope")
+        #expect(devotionals.first?.seriesOrder == 2)
+        #expect(devotionals.first?.keyScriptures.first?.startReference == 43_001_001)
         #expect(devotionals.first?.content == "Hope does not disappoint.")
+    }
+
+    @Test func importsRichDevotionalMarkdownMetadata() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-rich-markdown-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+        let sourceURL = fixtureURL.appendingPathComponent("writing.md")
+        try Data(#"""
+        # My Writing
+
+        ## Morning Hope
+
+        *Beginning well*
+
+        **Author:** A Reader | **Date:** 2026-08-03 | **Tags:** hope, morning | **Category:** reflection | **Series:** Daily Hope | **Series Order:** 1
+
+        **Scripture:** John 1:1
+
+        > **Summary:** God gives hope.
+
+        Begin the day remembering creation.
+
+        ### Footnotes
+
+        [^one]: A footnote.
+        """#.utf8).write(to: sourceURL)
+        let imported = try await library.importPersonalMarkdown(from: sourceURL, as: .devotionals)
+        #expect(imported.importedCount == 1)
+        let entry = try #require(try await library.personalDevotionals().first)
+        #expect(entry.title == "Morning Hope")
+        #expect(entry.subtitle == "Beginning well")
+        #expect(entry.author == "A Reader")
+        #expect(entry.date == "2026-08-03")
+        #expect(entry.tags == ["hope", "morning"])
+        #expect(entry.category == "reflection")
+        #expect(entry.seriesName == "Daily Hope")
+        #expect(entry.seriesOrder == 1)
+        #expect(entry.keyScriptures.first?.startReference == 43_001_001)
+        #expect(entry.summary == "God gives hope.")
+        #expect(entry.content == "Begin the day remembering creation.")
+        #expect(entry.footnotes == "[^one]: A footnote.")
     }
 
     @Test func planCalendarRoundTripsStableLeapDaySlots() throws {
@@ -517,14 +592,18 @@ struct LampLibraryTests {
                         id INTEGER PRIMARY KEY, translation_id TEXT NOT NULL,
                         ref INTEGER NOT NULL, book INTEGER NOT NULL,
                         chapter INTEGER NOT NULL, verse INTEGER NOT NULL,
-                        text TEXT NOT NULL, paragraph INTEGER DEFAULT 0
+                        text TEXT NOT NULL, paragraph INTEGER DEFAULT 0,
+                        annotations_json TEXT
                     );
                     CREATE VIRTUAL TABLE translation_verses_fts USING fts5(
                         text, content='translation_verses', content_rowid='id'
                     );
                     INSERT INTO translations VALUES ('FULL', 'Full Translation', 'FUL', 'en');
                     INSERT INTO translation_books VALUES ('FULL:43', 'FULL', 43, 'John', 'John', 'NT', 21);
-                    INSERT INTO translation_verses VALUES (1, 'FULL', 43001005, 43, 1, 5, 'The light shines in the darkness', 1);
+                    INSERT INTO translation_verses VALUES (1, 'FULL', 43001005, 43, 1, 5, 'The light shines in the darkness', 1, NULL);
+                    UPDATE translation_verses
+                    SET annotations_json = '[{"type":"strongs","start":4,"end":9,"data":{"strongs":"G5457"}}'
+                    WHERE id = 1;
                     INSERT INTO translation_verses_fts(translation_verses_fts) VALUES('rebuild');
                     """)
             }
@@ -539,6 +618,30 @@ struct LampLibraryTests {
         _ = try await library.install(from: moduleURL)
         let results = try await library.searchTranslations(query: "light darkness")
         #expect(results.first?.displayReference == "John 1:5")
+        #expect(try await library.searchTranslations(query: "\"light shines\"").count == 1)
+        #expect(try await library.searchTranslations(query: "shin").count == 1)
+        #expect(try await library.searchTranslations(query: "light", bookRange: 1...39).isEmpty)
+        #expect(try await library.searchTranslations(query: "light", bookRange: 40...66).count == 1)
+        #expect(try await library.searchTranslationsByStrongs(key: "G5457").count == 1)
+        #expect(try await library.searchTranslationsByStrongs(key: "G5457", bookRange: 1...39).isEmpty)
+        #expect(try await library.searchModules(
+            query: "", kinds: [.translation], strongsKey: "G5457"
+        ).first?.startReference == 43_001_005)
+        _ = try await library.saveVerseHighlight(
+            translationID: "FULL", reference: 43_001_005,
+            startOffset: 4, endOffset: 9, color: "#FFCC00"
+        )
+        let colorResults = try await library.searchModules(
+            query: "", kinds: [.highlights], highlightColors: ["FFCC00"]
+        )
+        #expect(colorResults.first?.highlightColor == "FFCC00")
+        #expect(colorResults.first?.snippet == "<mark>light</mark>")
+        #expect(try await library.searchModules(
+            query: "", kinds: [.highlights], highlightColors: ["00FF00"]
+        ).isEmpty)
+        #expect(try await library.searchModules(
+            query: "light", kinds: [.highlights], highlightColors: ["00FF00"]
+        ).isEmpty)
 
         let chapter = try await library.chapter(
             moduleID: "FULL",
@@ -936,6 +1039,19 @@ struct LampLibraryTests {
             kinds: [.devotional]
         )
         #expect(searchResults.first?.moduleID == "personal-devotionals")
+        #expect(try await library.searchModules(
+            query: "Morning creation", kinds: [.devotional]
+        ).first?.id == searchResults.first?.id)
+        #expect(try await library.searchModules(
+            query: "creation", kinds: [.devotional],
+            devotionalCriteria: LampDevotionalSearchCriteria(
+                monthDay: "08-03", tags: ["hope"], categories: ["reflection"]
+            )
+        ).first?.id == searchResults.first?.id)
+        #expect(try await library.searchModules(
+            query: "creation", kinds: [.devotional],
+            devotionalCriteria: LampDevotionalSearchCriteria(categories: ["prayer"])
+        ).isEmpty)
 
         let document = try await library.personalDevotionalDocument(id: saved.id)
         #expect(document.kind == .devotional)

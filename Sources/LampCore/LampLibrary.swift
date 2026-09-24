@@ -496,16 +496,19 @@ public actor LampLibrary {
     public func searchTranslations(
         query: String,
         moduleIDs: Set<String>? = nil,
+        bookRange: ClosedRange<Int>? = nil,
         limit: Int = 100
     ) throws -> [LampTranslationSearchResult] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty else { return [] }
 
         let resultLimit = min(max(limit, 1), 500)
-        let ftsQuery = trimmedQuery
-            .split(whereSeparator: { $0.isWhitespace })
-            .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
-            .joined(separator: " AND ")
+        let parsedQuery = LampSearchQuery(query)
+        let ftsQuery = parsedQuery.fts5Query
+        guard !ftsQuery.isEmpty else { return [] }
+        let fallbackPattern = "%\(parsedQuery.plainText)%"
+        let firstBook = bookRange?.lowerBound ?? Int.min
+        let lastBook = bookRange?.upperBound ?? Int.max
         let translations = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
@@ -530,9 +533,10 @@ public actor LampLibrary {
                             JOIN verses v ON v.id = verses_fts.rowid
                             JOIN books b ON b.id = v.book
                             WHERE verses_fts MATCH ?
+                              AND v.book BETWEEN ? AND ?
                             ORDER BY bm25(verses_fts), v.ref
                             LIMIT ?
-                            """, arguments: [ftsQuery, remainingLimit])
+                            """, arguments: [ftsQuery, firstBook, lastBook, remainingLimit])
                     } else {
                         rows = try Row.fetchAll(db, sql: """
                             SELECT v.ref, v.book, b.name AS book_name,
@@ -540,9 +544,10 @@ public actor LampLibrary {
                             FROM verses v
                             JOIN books b ON b.id = v.book
                             WHERE v.text LIKE ? COLLATE NOCASE
+                              AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
                             LIMIT ?
-                            """, arguments: ["%\(trimmedQuery)%", remainingLimit])
+                            """, arguments: [fallbackPattern, firstBook, lastBook, remainingLimit])
                     }
                 } else if tables.contains("translation_verses") {
                     if tables.contains("translation_verses_fts") {
@@ -556,9 +561,10 @@ public actor LampLibrary {
                              AND b.book_number = v.book
                             WHERE translation_verses_fts MATCH ?
                               AND v.translation_id = ?
+                              AND v.book BETWEEN ? AND ?
                             ORDER BY bm25(translation_verses_fts), v.ref
                             LIMIT ?
-                            """, arguments: [ftsQuery, translation.id, remainingLimit])
+                            """, arguments: [ftsQuery, translation.id, firstBook, lastBook, remainingLimit])
                     } else {
                         rows = try Row.fetchAll(db, sql: """
                             SELECT v.ref, v.book, b.name AS book_name,
@@ -569,9 +575,10 @@ public actor LampLibrary {
                              AND b.book_number = v.book
                             WHERE v.translation_id = ?
                               AND v.text LIKE ? COLLATE NOCASE
+                              AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
                             LIMIT ?
-                            """, arguments: [translation.id, "%\(trimmedQuery)%", remainingLimit])
+                            """, arguments: [translation.id, fallbackPattern, firstBook, lastBook, remainingLimit])
                     }
                 } else {
                     throw LampLibraryError.notATranslation(translation.id)
@@ -592,6 +599,74 @@ public actor LampLibrary {
                 }
             }
             results.append(contentsOf: moduleResults)
+        }
+        return results
+    }
+
+    public func searchTranslationsByStrongs(
+        key: String,
+        moduleIDs: Set<String>? = nil,
+        bookRange: ClosedRange<Int>? = nil,
+        limit: Int = 100
+    ) throws -> [LampTranslationSearchResult] {
+        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return [] }
+        let resultLimit = min(max(limit, 1), 500)
+        let firstBook = bookRange?.lowerBound ?? Int.min
+        let lastBook = bookRange?.upperBound ?? Int.max
+        let modules = try installedModules().filter {
+            $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
+        }
+        var results: [LampTranslationSearchResult] = []
+        for module in modules where results.count < resultLimit {
+            let queue = try openDatabase(moduleID: module.id)
+            let remaining = resultLimit - results.count
+            let matches = try queue.read { db -> [LampTranslationSearchResult] in
+                let tables = try tableNames(in: db)
+                let table: String
+                let books: String
+                var condition = "v.annotations_json LIKE ? COLLATE NOCASE AND v.book BETWEEN ? AND ?"
+                var arguments: StatementArguments = [
+                    LampStrongsSearch.sqlLikePattern(for: normalized), firstBook, lastBook,
+                ]
+                if tables.contains("verses"), tables.contains("books") {
+                    table = "verses"
+                    books = "JOIN books b ON b.id = v.book"
+                } else if tables.contains("translation_verses"), tables.contains("translation_books") {
+                    table = "translation_verses"
+                    books = "JOIN translation_books b ON b.translation_id = v.translation_id AND b.book_number = v.book"
+                    condition = "v.translation_id = ? AND " + condition
+                    arguments = [module.id, LampStrongsSearch.sqlLikePattern(for: normalized), firstBook, lastBook]
+                } else {
+                    return []
+                }
+                guard try columnNames(in: db, table: table).contains("annotations_json") else {
+                    return []
+                }
+                arguments += [remaining]
+                return try Row.fetchAll(db, sql: """
+                    SELECT v.ref, v.book, b.name AS book_name,
+                           v.chapter, v.verse, v.text
+                    FROM \(table) v
+                    \(books)
+                    WHERE \(condition)
+                    ORDER BY v.ref
+                    LIMIT ?
+                    """, arguments: arguments).map { row in
+                    LampTranslationSearchResult(
+                        translationID: module.id,
+                        translationName: module.name,
+                        translationAbbreviation: module.abbreviation,
+                        reference: row["ref"],
+                        bookNumber: row["book"],
+                        bookName: row["book_name"],
+                        chapterNumber: row["chapter"],
+                        verseNumber: row["verse"],
+                        text: row["text"]
+                    )
+                }
+            }
+            results += matches
         }
         return results
     }
@@ -628,9 +703,7 @@ public actor LampLibrary {
                 }
                 var searchColumns = ["key", "lemma", "transliteration", "senses_json"]
                 if columns.contains("search_text") { searchColumns.append("search_text") }
-                let searchCondition = searchColumns.map { "\($0) LIKE ? COLLATE NOCASE" }
-                    .joined(separator: " OR ")
-                let pattern = "%\(trimmedQuery)%"
+                let like = LampSearchQuery(trimmedQuery).sqlLikePredicate(columns: searchColumns)
                 var queryArguments = StatementArguments()
                 let moduleCondition: String
                 if columns.contains("module_id") {
@@ -639,14 +712,12 @@ public actor LampLibrary {
                 } else {
                     moduleCondition = ""
                 }
-                queryArguments += StatementArguments(
-                    Array(repeating: pattern, count: searchColumns.count)
-                )
+                queryArguments += StatementArguments(like.arguments)
                 queryArguments += [trimmedQuery, trimmedQuery, queryLimit]
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT id, key, lemma, transliteration, pronunciation, senses_json
                     FROM dictionary_entries
-                    WHERE \(moduleCondition) (\(searchCondition))
+                    WHERE \(moduleCondition) (\(like.condition))
                     ORDER BY
                         CASE
                             WHEN key = ? COLLATE NOCASE THEN 0
@@ -1489,26 +1560,43 @@ public actor LampLibrary {
         query: String,
         kinds: Set<LampModuleKind>? = nil,
         moduleIDs: Set<String>? = nil,
+        bookRange: ClosedRange<Int>? = nil,
+        strongsKey: String? = nil,
+        highlightColors: Set<String>? = nil,
+        devotionalCriteria: LampDevotionalSearchCriteria = .init(),
         limit: Int = 200
     ) throws -> [LampModuleSearchResult] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else { return [] }
         let resultLimit = min(max(limit, 1), 500)
+        let parsedQuery = LampSearchQuery(trimmedQuery)
+        let searchableQuery = parsedQuery.plainText
+        let normalizedStrongs = strongsKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        let hasTextQuery = !parsedQuery.isEmpty && !searchableQuery.isEmpty
+        let hasColorFilter = highlightColors?.isEmpty == false
+        guard hasTextQuery || normalizedStrongs != nil || hasColorFilter else { return [] }
         let installed = try installedModules()
         let wants: (LampModuleKind) -> Bool = { kinds == nil || kinds?.contains($0) == true }
         let includesModule: (String) -> Bool = { moduleIDs == nil || moduleIDs?.contains($0) == true }
         var results: [LampModuleSearchResult] = []
+        let countForKind: (LampModuleKind) -> Int = { kind in
+            results.count { $0.kind == kind }
+        }
 
-        if wants(.translation), results.count < resultLimit {
+        if (hasTextQuery || normalizedStrongs != nil) && wants(.translation) {
             let translationIDs = Set(installed.filter {
                 $0.kind == .translation && includesModule($0.id)
             }.map(\.id))
             if !translationIDs.isEmpty {
-                let matches = try searchTranslations(
-                    query: trimmedQuery,
-                    moduleIDs: translationIDs,
-                    limit: resultLimit - results.count
-                )
+                let matches = try hasTextQuery
+                    ? searchTranslations(
+                        query: trimmedQuery, moduleIDs: translationIDs,
+                        bookRange: bookRange, limit: resultLimit - countForKind(.translation)
+                    )
+                    : searchTranslationsByStrongs(
+                        key: normalizedStrongs ?? "", moduleIDs: translationIDs,
+                        bookRange: bookRange, limit: resultLimit - countForKind(.translation)
+                    )
                 results += matches.map { match in
                     LampModuleSearchResult(
                         id: "translation:\(match.id)",
@@ -1524,15 +1612,22 @@ public actor LampLibrary {
             }
         }
 
-        if wants(.dictionary), results.count < resultLimit {
+        if (hasTextQuery || normalizedStrongs != nil) && wants(.dictionary) {
             let dictionaryIDs = Set(installed.filter {
                 $0.kind == .dictionary && includesModule($0.id)
             }.map(\.id))
             if !dictionaryIDs.isEmpty {
-                let matches = try searchDictionaries(
-                    query: trimmedQuery,
-                    moduleIDs: dictionaryIDs,
-                    limit: resultLimit - results.count
+                let matches = try normalizedStrongs.map { key in
+                    try dictionaryEntries(keys: [key], moduleIDs: dictionaryIDs).filter { entry in
+                        !hasTextQuery || parsedQuery.matches([
+                            entry.key, entry.lemma, entry.transliteration,
+                            entry.senses.map { [$0.gloss, $0.definition].compactMap { $0 }.joined(separator: " ") }
+                                .joined(separator: " "),
+                        ].compactMap { $0 }.joined(separator: " "))
+                    }
+                } ?? searchDictionaries(
+                    query: searchableQuery, moduleIDs: dictionaryIDs,
+                    limit: resultLimit - countForKind(.dictionary)
                 )
                 results += matches.map { match in
                     let definition = match.senses
@@ -1551,19 +1646,21 @@ public actor LampLibrary {
             }
         }
 
-        if wants(.commentary), results.count < resultLimit {
-            let pattern = "%\(trimmedQuery)%"
+        if hasTextQuery && wants(.commentary) {
+            let like = parsedQuery.sqlLikePredicate(columns: [
+                "title", "introduction_json", "translation_json", "commentary_json", "footnotes_json",
+            ])
             for module in installed where module.kind == .commentary && includesModule(module.id) {
                 let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - results.count
+                let remaining = resultLimit - countForKind(.commentary)
                 let matches = try queue.read { db -> [LampModuleSearchResult] in
                     guard try tableNames(in: db).contains("commentary_units") else { return [] }
                     let columns = try columnNames(in: db, table: "commentary_units")
-                    var condition = "(COALESCE(title, '') LIKE ? COLLATE NOCASE OR COALESCE(introduction_json, '') LIKE ? COLLATE NOCASE OR COALESCE(translation_json, '') LIKE ? COLLATE NOCASE OR COALESCE(commentary_json, '') LIKE ? COLLATE NOCASE OR COALESCE(footnotes_json, '') LIKE ? COLLATE NOCASE)"
-                    var arguments: StatementArguments = [pattern, pattern, pattern, pattern, pattern]
+                    var condition = like.condition
+                    var arguments = StatementArguments(like.arguments)
                     if columns.contains("module_id") {
                         condition = "module_id = ? AND " + condition
-                        arguments = [module.id, pattern, pattern, pattern, pattern, pattern]
+                        arguments = StatementArguments([module.id] + like.arguments)
                     }
                     arguments += [remaining]
                     return try Row.fetchAll(db, sql: """
@@ -1599,28 +1696,28 @@ public actor LampLibrary {
                         }
                 }
                 results += matches
-                if results.count >= resultLimit { break }
+                if countForKind(.commentary) >= resultLimit { break }
             }
         }
 
-        if wants(.book), results.count < resultLimit {
-            let pattern = "%\(trimmedQuery)%"
+        if hasTextQuery && wants(.book) {
+            let like = parsedQuery.sqlLikePredicate(columns: ["title", "subtitle", "search_text"])
             for module in installed where module.kind == .book && includesModule(module.id) {
                 let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - results.count
+                let remaining = resultLimit - countForKind(.book)
                 results += try queue.read { db in
                     guard try tableNames(in: db).contains("book_sections") else { return [] }
+                    var arguments = StatementArguments([module.id] + like.arguments)
+                    arguments += [remaining]
                     return try Row.fetchAll(db, sql: """
                         SELECT id, title, subtitle, key_scriptures_json,
                                content_json, search_text
                         FROM book_sections
                         WHERE module_id = ?
-                          AND (title LIKE ? COLLATE NOCASE
-                            OR COALESCE(subtitle, '') LIKE ? COLLATE NOCASE
-                            OR search_text LIKE ? COLLATE NOCASE)
+                          AND \(like.condition)
                         ORDER BY rowid
                         LIMIT ?
-                        """, arguments: [module.id, pattern, pattern, pattern, remaining]).map { row in
+                        """, arguments: arguments).map { row in
                             let scripturesJSON: String? = row["key_scriptures_json"]
                             let scriptures = devotionalScriptureLinks(from: scripturesJSON)
                             let contentJSON: String = row["content_json"]
@@ -1637,24 +1734,25 @@ public actor LampLibrary {
                             )
                         }
                 }
-                if results.count >= resultLimit { break }
+                if countForKind(.book) >= resultLimit { break }
             }
         }
 
-        if wants(.notes), results.count < resultLimit {
-            let pattern = "%\(trimmedQuery)%"
+        if hasTextQuery && wants(.notes) {
+            let personalLike = parsedQuery.sqlLikePredicate(columns: ["title", "content"])
             if includesModule("personal-notes") {
                 let queue = try openUserDatabase()
-                let remaining = resultLimit - results.count
+                let remaining = resultLimit - countForKind(.notes)
                 results += try queue.read { db in
-                    try Row.fetchAll(db, sql: """
+                    var arguments = StatementArguments(personalLike.arguments)
+                    arguments += [remaining]
+                    return try Row.fetchAll(db, sql: """
                         SELECT id, module_id, verse_id, title, content
                         FROM personal_notes
-                        WHERE COALESCE(title, '') LIKE ? COLLATE NOCASE
-                           OR content LIKE ? COLLATE NOCASE
+                        WHERE \(personalLike.condition)
                         ORDER BY last_modified DESC
                         LIMIT ?
-                        """, arguments: [pattern, pattern, remaining]).map { row in
+                        """, arguments: arguments).map { row in
                             let reference: Int = row["verse_id"]
                             let title: String? = row["title"]
                             return LampModuleSearchResult(
@@ -1671,18 +1769,18 @@ public actor LampLibrary {
                         }
                 }
             }
-            for module in installed where module.kind == .notes && includesModule(module.id) && results.count < resultLimit {
+            for module in installed where module.kind == .notes && includesModule(module.id) && countForKind(.notes) < resultLimit {
                 let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - results.count
+                let remaining = resultLimit - countForKind(.notes)
                 results += try queue.read { db in
                     guard try tableNames(in: db).contains("note_entries") else { return [] }
                     let columns = try columnNames(in: db, table: "note_entries")
                     let titleColumn = columns.contains("title") ? "title" : "NULL AS title"
-                    let searchCondition = columns.contains("title")
-                        ? "COALESCE(title, '') LIKE ? COLLATE NOCASE OR content LIKE ? COLLATE NOCASE"
-                        : "content LIKE ? COLLATE NOCASE"
-                    var arguments: StatementArguments = columns.contains("title")
-                        ? [pattern, pattern] : [pattern]
+                    let like = parsedQuery.sqlLikePredicate(
+                        columns: columns.contains("title") ? ["title", "content"] : ["content"]
+                    )
+                    let searchCondition = like.condition
+                    var arguments = StatementArguments(like.arguments)
                     arguments += [remaining]
                     return try Row.fetchAll(db, sql: """
                         SELECT id, verse_id, \(titleColumn), content
@@ -1709,9 +1807,15 @@ public actor LampLibrary {
             }
         }
 
-        if wants(.devotional), results.count < resultLimit {
-            let matches = try devotionals(moduleIDs: moduleIDs, query: trimmedQuery)
-            results += matches.prefix(resultLimit - results.count).map { devotional in
+        if hasTextQuery && wants(.devotional) {
+            let matches = try devotionals(moduleIDs: moduleIDs).filter {
+                devotionalCriteria.matches(date: $0.date, tags: $0.tags, category: $0.category)
+                    && parsedQuery.matches([
+                        $0.title, $0.subtitle, $0.author, $0.summary, $0.content,
+                        $0.tags.joined(separator: " "),
+                    ].compactMap { $0 }.joined(separator: " "))
+            }
+            results += matches.prefix(resultLimit - countForKind(.devotional)).map { devotional in
                 LampModuleSearchResult(
                     id: "devotional:\(devotional.moduleID):\(devotional.id)",
                     kind: .devotional,
@@ -1726,13 +1830,14 @@ public actor LampLibrary {
             }
         }
 
-        if wants(.plan), results.count < resultLimit {
+        if hasTextQuery && wants(.plan) {
             results += try readingPlans().filter { plan in
-                includesModule(plan.id) && [plan.name, plan.description, plan.fullDescription, plan.author]
+                let text = [plan.name, plan.description, plan.fullDescription, plan.author]
                     .compactMap { $0 }
-                    .contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
+                    .joined(separator: " ")
+                return includesModule(plan.id) && parsedQuery.matches(text)
             }
-            .prefix(resultLimit - results.count)
+            .prefix(resultLimit - countForKind(.plan))
             .map { plan in
                 LampModuleSearchResult(
                     id: "plan:\(plan.id)",
@@ -1746,23 +1851,25 @@ public actor LampLibrary {
             }
         }
 
-        if wants(.quiz), results.count < resultLimit {
-            let pattern = "%\(trimmedQuery)%"
+        if hasTextQuery && wants(.quiz) {
+            let like = parsedQuery.sqlLikePredicate(columns: [
+                "question_json", "answer_json", "theme",
+            ])
             for module in installed where module.kind == .quiz && includesModule(module.id) {
                 let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - results.count
+                let remaining = resultLimit - countForKind(.quiz)
                 results += try queue.read { db in
                     guard try tableNames(in: db).contains("quiz_questions") else { return [] }
+                    var arguments = StatementArguments([module.id] + like.arguments)
+                    arguments += [remaining]
                     return try Row.fetchAll(db, sql: """
                         SELECT id, day, sv, ev, age_group, question_json, answer_json, theme
                         FROM quiz_questions
                         WHERE quiz_module_id = ?
-                          AND (question_json LIKE ? COLLATE NOCASE
-                            OR answer_json LIKE ? COLLATE NOCASE
-                            OR theme LIKE ? COLLATE NOCASE)
+                          AND \(like.condition)
                         ORDER BY day, sv, age_group, question_index
                         LIMIT ?
-                        """, arguments: [module.id, pattern, pattern, pattern, remaining]).map { row in
+                        """, arguments: arguments).map { row in
                             let start: Int = row["sv"]
                             let end: Int = row["ev"]
                             let questionJSON: String = row["question_json"]
@@ -1780,20 +1887,23 @@ public actor LampLibrary {
                             )
                         }
                 }
-                if results.count >= resultLimit { break }
+                if countForKind(.quiz) >= resultLimit { break }
             }
         }
 
-        if wants(.highlights), results.count < resultLimit {
+        if hasTextQuery && wants(.highlights) {
             let translationIDs = Set(installed.filter { $0.kind == .translation }.map(\.id))
             let verseMatches = try searchTranslations(
                 query: trimmedQuery,
                 moduleIDs: translationIDs,
-                limit: min((resultLimit - results.count) * 4, 500)
+                bookRange: bookRange,
+                limit: min((resultLimit - countForKind(.highlights)) * 4, 500)
             )
-            for match in verseMatches where results.count < resultLimit {
+            for match in verseMatches where countForKind(.highlights) < resultLimit {
                 let personal = try verseHighlights(translationID: match.translationID, reference: match.reference)
-                for highlight in personal where includesModule(highlight.setID) && results.count < resultLimit {
+                for highlight in personal where includesModule(highlight.setID)
+                    && LampHighlightSearch.matchesColor(highlight.color, in: highlightColors)
+                    && countForKind(.highlights) < resultLimit {
                     results.append(LampModuleSearchResult(
                         id: "highlights:\(highlight.setID):\(highlight.id)",
                         kind: .highlights,
@@ -1802,12 +1912,15 @@ public actor LampLibrary {
                         title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
                         subtitle: match.translationAbbreviation,
                         snippet: searchSnippet(match.text),
-                        startReference: match.reference
+                        startReference: match.reference,
+                        highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
                     ))
                 }
                 for module in installed where module.kind == .highlights && includesModule(module.id) {
                     let moduleHighlights = try moduleVerseHighlights(moduleID: module.id, reference: match.reference)
-                    for highlight in moduleHighlights where highlight.translationID == match.translationID && results.count < resultLimit {
+                    for highlight in moduleHighlights where highlight.translationID == match.translationID
+                        && LampHighlightSearch.matchesColor(highlight.color, in: highlightColors)
+                        && countForKind(.highlights) < resultLimit {
                         results.append(LampModuleSearchResult(
                             id: "highlights:\(module.id):\(highlight.id)",
                             kind: .highlights,
@@ -1816,14 +1929,97 @@ public actor LampLibrary {
                             title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
                             subtitle: match.translationAbbreviation,
                             snippet: searchSnippet(match.text),
-                            startReference: match.reference
+                            startReference: match.reference,
+                            highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
                         ))
                     }
                 }
             }
         }
 
-        return Array(results.prefix(resultLimit))
+        if !hasTextQuery && hasColorFilter && wants(.highlights) {
+            results += try searchHighlightsByColor(
+                colors: highlightColors ?? [], moduleIDs: moduleIDs,
+                bookRange: bookRange, limit: resultLimit
+            )
+        }
+
+        // Preserve each provider's order for equally ranked results.
+        return Array(results.enumerated().sorted { lhs, rhs in
+            let left = parsedQuery.textRank(in: [lhs.element.title, lhs.element.subtitle ?? "", lhs.element.snippet])
+            let right = parsedQuery.textRank(in: [rhs.element.title, rhs.element.subtitle ?? "", rhs.element.snippet])
+            return left == right ? lhs.offset < rhs.offset : left > right
+        }.prefix(resultLimit).map(\.element))
+    }
+
+    private func searchHighlightsByColor(
+        colors: Set<String>,
+        moduleIDs: Set<String>?,
+        bookRange: ClosedRange<Int>?,
+        limit: Int
+    ) throws -> [LampModuleSearchResult] {
+        var matches: [(highlight: LampVerseHighlight, moduleID: String, name: String)] = []
+        let queue = try openUserDatabase()
+        for set in try highlightSets() where moduleIDs == nil || moduleIDs?.contains(set.id) == true {
+            let highlights = try queue.read { db in
+                try Row.fetchAll(db, sql: """
+                    SELECT h.id, h.set_id, s.translation_id, h.ref,
+                           h.sc, h.ec, h.style, h.color
+                    FROM highlights h
+                    JOIN highlight_sets s ON s.id = h.set_id
+                    WHERE h.set_id = ?
+                    ORDER BY h.id DESC
+                    """, arguments: [set.id]).map(makeVerseHighlight)
+            }
+            matches += highlights.filter {
+                LampHighlightSearch.matchesColor($0.color, in: colors)
+            }.map { ($0, set.id, set.name) }
+        }
+        for module in try installedModules() where module.kind == .highlights
+            && (moduleIDs == nil || moduleIDs?.contains(module.id) == true) {
+            let moduleQueue = try openDatabase(moduleID: module.id)
+            let highlights = try moduleQueue.read { db in
+                try readModuleHighlights(in: db, referenceRange: Int.min...Int.max)
+            }
+            matches += highlights.filter {
+                LampHighlightSearch.matchesColor($0.color, in: colors)
+            }.map { ($0, module.id, module.name) }
+        }
+
+        var chapters: [String: LampChapter] = [:]
+        var results: [LampModuleSearchResult] = []
+        for (highlight, moduleID, name) in matches {
+            let book = highlight.bookNumber
+            if let bookRange, !bookRange.contains(book) { continue }
+            let chapterNumber = highlight.chapterNumber
+            let key = "\(highlight.translationID):\(book):\(chapterNumber)"
+            if chapters[key] == nil {
+                chapters[key] = try? chapter(
+                    moduleID: highlight.translationID,
+                    bookNumber: book, chapterNumber: chapterNumber
+                )
+            }
+            guard let chapter = chapters[key],
+                  let verse = chapter.verses.first(where: {
+                      $0.number == highlight.verseNumber
+                  }) else { continue }
+            results.append(LampModuleSearchResult(
+                id: "highlights:\(moduleID):\(highlight.id)",
+                kind: .highlights,
+                moduleID: moduleID,
+                moduleName: name,
+                title: "\(chapter.book.name) \(chapterNumber):\(highlight.verseNumber)",
+                snippet: LampHighlightSearch.markedSnippet(
+                    text: verse.text,
+                    startOffset: highlight.startOffset,
+                    endOffset: highlight.endOffset
+                ),
+                startReference: highlight.reference,
+                highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
+            ))
+            if results.count >= limit { break }
+        }
+        return results
     }
 
     public func selectedPlanIDs() throws -> Set<String> {

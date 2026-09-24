@@ -43,8 +43,10 @@ public extension LampLibrary {
             for draft in drafts {
                 _ = try setPersonalVerseNote(
                     reference: draft.reference,
+                    title: draft.title,
                     content: draft.content,
-                    verseReferences: draft.verseReferences
+                    verseReferences: draft.verseReferences,
+                    footnotes: draft.footnotes
                 )
             }
             return LampPersonalMarkdownImportResult(kind: kind, importedCount: drafts.count)
@@ -60,12 +62,17 @@ public extension LampLibrary {
                     moduleID: "personal-devotionals",
                     moduleName: "My Writing",
                     title: draft.title,
+                    subtitle: draft.subtitle,
                     author: draft.author,
                     date: draft.date,
                     tags: draft.tags,
                     category: draft.category,
+                    seriesName: draft.seriesName,
+                    seriesOrder: draft.seriesOrder,
+                    keyScriptures: draft.keyScriptures,
                     summary: draft.summary,
                     content: draft.content,
+                    footnotes: draft.footnotes,
                     created: Date(),
                     lastModified: Date(),
                     isEditable: true
@@ -80,21 +87,29 @@ private enum LampPersonalMarkdownParser {
     struct NoteDraft {
         let reference: Int
         let verseReferences: [Int]
+        let title: String?
         let content: String
+        let footnotes: [LampVerseFootnote]
     }
 
     struct DevotionalDraft {
         let title: String
+        let subtitle: String?
         let author: String?
         let date: String?
         let tags: [String]
         let category: String?
+        let seriesName: String?
+        let seriesOrder: Int?
+        let keyScriptures: [LampScriptureLink]
         let summary: String?
         let content: String
+        let footnotes: String?
     }
 
     static func notes(from markdown: String, filename: String) throws -> [NoteDraft] {
         let (metadata, body) = frontmatter(in: markdown)
+        let extracted = LampPersonalMarkdownDocument.extractFootnoteDefinitions(in: body)
         var currentBook = metadata["book"] ?? bookName(from: filename)
         var currentChapter: Int?
         var currentRange: LampAgentReferenceRange?
@@ -111,6 +126,7 @@ private enum LampPersonalMarkdownParser {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             contentLines.removeAll()
             guard !content.isEmpty else { return }
+            let parsed = noteContent(content, definitions: extracted.definitions)
 
             let startVerse = range.start.verse ?? 0
             let reference = encodedReference(
@@ -134,11 +150,13 @@ private enum LampPersonalMarkdownParser {
             drafts.append(NoteDraft(
                 reference: reference,
                 verseReferences: references,
-                content: content
+                title: parsed.title,
+                content: parsed.body,
+                footnotes: parsed.footnotes
             ))
         }
 
-        for line in body.components(separatedBy: .newlines) {
+        for line in extracted.body.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let heading = markdownHeading(trimmed)
             let candidate = heading?.text ?? bracketedReference(trimmed)
@@ -202,9 +220,58 @@ private enum LampPersonalMarkdownParser {
         return drafts
     }
 
+    private static func noteContent(
+        _ raw: String, definitions: [String: String]
+    ) -> (title: String?, body: String, footnotes: [LampVerseFootnote]) {
+        var lines = raw.components(separatedBy: "\n")
+        var title: String?
+        if let first = lines.first, first.hasPrefix("**Title:**") {
+            title = String(first.dropFirst("**Title:**".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+            lines.removeFirst()
+        }
+        var footnotes: [LampVerseFootnote] = []
+        if let heading = lines.lastIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "### Footnotes"
+        }) {
+            var parsed: [LampVerseFootnote] = []
+            for line in lines[(heading + 1)...] {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("- **"),
+                      let separator = trimmed.range(of: ":**") else { continue }
+                let id = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 4)..<separator.lowerBound])
+                let content = String(trimmed[separator.upperBound...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !id.isEmpty { parsed.append(LampVerseFootnote(id: id, content: content)) }
+            }
+            if !parsed.isEmpty {
+                footnotes += parsed
+                lines = Array(lines[..<heading])
+            }
+        }
+        let body = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !definitions.isEmpty else { return (title, body, footnotes) }
+        let pattern = #"\[\^([^\]]+)\]"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return (title, body, footnotes)
+        }
+        let matches = expression.matches(in: body, range: NSRange(body.startIndex..., in: body))
+        var seen = Set(footnotes.map(\.id))
+        for match in matches {
+            guard let range = Range(match.range(at: 1), in: body) else { continue }
+            let id = String(body[range])
+            if seen.insert(id).inserted, let content = definitions[id] {
+                footnotes.append(LampVerseFootnote(id: id, content: content))
+            }
+        }
+        return (title, body, footnotes)
+    }
+
     static func devotionals(from markdown: String, filename: String) throws -> [DevotionalDraft] {
         let (metadata, body) = frontmatter(in: markdown)
         if let title = metadata["title"]?.nilIfBlank {
+            let structured = LampPersonalMarkdownDocument.frontmatterLines(in: markdown)
+                .map(LampDevotionalFrontmatter.init(lines:))
             let content = body.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !content.isEmpty else {
                 throw LampLibraryError.invalidPersonalContent(
@@ -214,7 +281,8 @@ private enum LampPersonalMarkdownParser {
             return [devotional(
                 title: title,
                 content: content,
-                metadata: metadata
+                metadata: metadata,
+                frontmatter: structured
             )]
         }
 
@@ -252,6 +320,23 @@ private enum LampPersonalMarkdownParser {
             if currentTitle != nil, parseInlineMetadata(trimmed, into: &currentMetadata) {
                 continue
             }
+            if currentTitle != nil, contentLines.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }),
+               trimmed.hasPrefix("*"), trimmed.hasSuffix("*"), !trimmed.hasPrefix("**"),
+               trimmed.count > 2 {
+                currentMetadata["subtitle"] = String(trimmed.dropFirst().dropLast())
+                continue
+            }
+            if currentTitle != nil, trimmed.hasPrefix("> **Summary:**") {
+                currentMetadata["summary"] = String(trimmed.dropFirst("> **Summary:**".count))
+                    .trimmingCharacters(in: .whitespaces)
+                continue
+            }
+            if currentTitle != nil, currentMetadata["summary"] != nil,
+               contentLines.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }),
+               trimmed.hasPrefix("> ") {
+                currentMetadata["summary"]! += "\n" + String(trimmed.dropFirst(2))
+                continue
+            }
             if currentTitle != nil, trimmed != "---" {
                 contentLines.append(line)
             }
@@ -273,58 +358,88 @@ private enum LampPersonalMarkdownParser {
     private static func devotional(
         title: String,
         content: String,
-        metadata: [String: String]
+        metadata: [String: String],
+        frontmatter: LampDevotionalFrontmatter? = nil
     ) -> DevotionalDraft {
-        DevotionalDraft(
+        let (body, footnotes) = devotionalFootnotes(in: content)
+        let (summary, mainBody) = devotionalSummary(in: body)
+        return DevotionalDraft(
             title: title,
+            subtitle: metadata["subtitle"]?.nilIfBlank,
             author: metadata["author"]?.nilIfBlank,
             date: metadata["date"]?.nilIfBlank,
-            tags: commaSeparated(metadata["tags"]),
+            tags: frontmatter?.tags ?? commaSeparated(metadata["tags"]),
             category: metadata["category"]?.nilIfBlank,
-            summary: metadata["summary"]?.nilIfBlank,
-            content: content
+            seriesName: frontmatter?.series["name"] ?? metadata["series"]?.nilIfBlank,
+            seriesOrder: frontmatter?.series["order"].flatMap(Int.init)
+                ?? metadata["series order"].flatMap(Int.init),
+            keyScriptures: frontmatter?.scriptures.map {
+                LampScriptureLink(
+                    text: $0.label, startReference: $0.startReference,
+                    endReference: $0.endReference
+                )
+            } ?? commaSeparated(metadata["scripture"]).compactMap { value in
+                guard let range = try? LampReferenceParser.parse(value),
+                      let start = range.start.reference else { return nil }
+                return LampScriptureLink(
+                    text: value, startReference: start, endReference: range.end.reference
+                )
+            },
+            summary: metadata["summary"]?.nilIfBlank ?? summary,
+            content: mainBody,
+            footnotes: footnotes
         )
     }
 
-    private static func frontmatter(in markdown: String) -> ([String: String], String) {
-        let lines = markdown.components(separatedBy: .newlines)
-        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
-              let closing = lines.dropFirst().firstIndex(where: {
-                  $0.trimmingCharacters(in: .whitespaces) == "---"
-              }) else { return ([:], markdown) }
+    private static func devotionalSummary(in content: String) -> (summary: String?, content: String) {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("## summary\n") else { return (nil, trimmed) }
+        let lines = trimmed.components(separatedBy: "\n")
+        let summaryStart = lines.indices.dropFirst().first(where: {
+            !lines[$0].trimmingCharacters(in: .whitespaces).isEmpty
+        }) ?? lines.count
+        let summaryEnd = lines.indices.dropFirst(summaryStart).first(where: {
+            lines[$0].trimmingCharacters(in: .whitespaces).isEmpty || lines[$0].hasPrefix("## ")
+        }) ?? lines.count
+        let summary = lines[summaryStart..<summaryEnd].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let remaining = lines[summaryEnd...].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (summary.nilIfBlank, remaining.isEmpty ? trimmed : remaining)
+    }
 
-        var metadata: [String: String] = [:]
-        for line in lines[1..<closing] {
-            guard let separator = line.firstIndex(of: ":") else { continue }
-            let key = line[..<separator]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-            var value = line[line.index(after: separator)...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.count >= 2,
-               (value.hasPrefix("\"") && value.hasSuffix("\"")
-                   || value.hasPrefix("'") && value.hasSuffix("'")) {
-                value.removeFirst()
-                value.removeLast()
-            }
-            metadata[key] = value
+    private static func devotionalFootnotes(in content: String) -> (content: String, footnotes: String?) {
+        guard let range = content.range(of: "\n### Footnotes\n", options: .backwards) else {
+            return (content, nil)
         }
-        return (metadata, lines[(closing + 1)...].joined(separator: "\n"))
+        let footnotes = String(content[range.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !footnotes.isEmpty else { return (content, nil) }
+        return (String(content[..<range.lowerBound]), footnotes)
+    }
+
+    private static func frontmatter(in markdown: String) -> ([String: String], String) {
+        let document = LampPersonalMarkdownDocument.frontmatter(in: markdown)
+        return (Dictionary(uniqueKeysWithValues: document.metadata.map {
+            ($0.key.lowercased(), $0.value)
+        }), document.body)
     }
 
     private static func parseInlineMetadata(
         _ line: String,
         into metadata: inout [String: String]
     ) -> Bool {
-        guard line.contains("**Date:**") || line.contains("**Tags:**") else { return false }
+        let names = ["Author", "Date", "Tags", "Category", "Series", "Series Order", "Scripture"]
+        guard names.contains(where: { line.contains("**\($0):**") }) else { return false }
         for component in line.components(separatedBy: "|") {
             let value = component.trimmingCharacters(in: .whitespaces)
-            if value.hasPrefix("**Date:**") {
-                metadata["date"] = String(value.dropFirst("**Date:**".count))
-                    .trimmingCharacters(in: .whitespaces)
-            } else if value.hasPrefix("**Tags:**") {
-                metadata["tags"] = String(value.dropFirst("**Tags:**".count))
-                    .trimmingCharacters(in: .whitespaces)
+            for name in names {
+                let prefix = "**\(name):**"
+                if value.hasPrefix(prefix) {
+                    metadata[name.lowercased()] = String(value.dropFirst(prefix.count))
+                        .trimmingCharacters(in: .whitespaces)
+                    break
+                }
             }
         }
         return true
