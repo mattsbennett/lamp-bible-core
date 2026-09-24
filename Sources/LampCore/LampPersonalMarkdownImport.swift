@@ -83,7 +83,7 @@ public extension LampLibrary {
     }
 }
 
-private enum LampPersonalMarkdownParser {
+public enum LampPersonalMarkdownParser {
     struct NoteDraft {
         let reference: Int
         let verseReferences: [Int]
@@ -92,19 +92,19 @@ private enum LampPersonalMarkdownParser {
         let footnotes: [LampVerseFootnote]
     }
 
-    struct DevotionalDraft {
-        let title: String
-        let subtitle: String?
-        let author: String?
-        let date: String?
-        let tags: [String]
-        let category: String?
-        let seriesName: String?
-        let seriesOrder: Int?
-        let keyScriptures: [LampScriptureLink]
-        let summary: String?
-        let content: String
-        let footnotes: String?
+    public struct DevotionalDraft {
+        public let title: String
+        public let subtitle: String?
+        public let author: String?
+        public let date: String?
+        public let tags: [String]
+        public let category: String?
+        public let seriesName: String?
+        public let seriesOrder: Int?
+        public let keyScriptures: [LampScriptureLink]
+        public let summary: String?
+        public let content: String
+        public let footnotes: String?
     }
 
     static func notes(from markdown: String, filename: String) throws -> [NoteDraft] {
@@ -146,6 +146,13 @@ private enum LampPersonalMarkdownParser {
                         verse: $0
                     )
                 }
+            } else if range.start.book == range.end.book,
+                      let endVerse = range.end.verse {
+                references.append(encodedReference(
+                    book: range.end.book,
+                    chapter: range.end.chapter,
+                    verse: endVerse
+                ))
             }
             drafts.append(NoteDraft(
                 reference: reference,
@@ -267,7 +274,7 @@ private enum LampPersonalMarkdownParser {
         return (title, body, footnotes)
     }
 
-    static func devotionals(from markdown: String, filename: String) throws -> [DevotionalDraft] {
+    public static func devotionals(from markdown: String, filename: String) throws -> [DevotionalDraft] {
         let (metadata, body) = frontmatter(in: markdown)
         if let title = metadata["title"]?.nilIfBlank {
             let structured = LampPersonalMarkdownDocument.frontmatterLines(in: markdown)
@@ -309,13 +316,29 @@ private enum LampPersonalMarkdownParser {
             currentMetadata = [:]
         }
 
-        for line in body.components(separatedBy: .newlines) {
+        let lines = body.components(separatedBy: .newlines)
+        let usesEntrySeparators = lines.prefix(while: {
+            !$0.trimmingCharacters(in: .whitespaces).hasPrefix("## ")
+        }).contains { $0.trimmingCharacters(in: .whitespaces) == "---" }
+        var pendingSeparator = false
+        for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## "), !trimmed.hasPrefix("### ") {
+            if usesEntrySeparators, trimmed == "---" {
+                pendingSeparator = true
+                continue
+            }
+            if pendingSeparator, trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("## "), !trimmed.hasPrefix("### "),
+               currentTitle == nil || !usesEntrySeparators || pendingSeparator {
                 flush()
                 currentTitle = String(trimmed.dropFirst(3))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                pendingSeparator = false
                 continue
+            }
+            if pendingSeparator, currentTitle != nil {
+                contentLines.append("---")
+                pendingSeparator = false
             }
             if currentTitle != nil, parseInlineMetadata(trimmed, into: &currentMetadata) {
                 continue
@@ -337,7 +360,7 @@ private enum LampPersonalMarkdownParser {
                 currentMetadata["summary"]! += "\n" + String(trimmed.dropFirst(2))
                 continue
             }
-            if currentTitle != nil, trimmed != "---" {
+            if currentTitle != nil, trimmed != "---" || usesEntrySeparators {
                 contentLines.append(line)
             }
         }
@@ -409,12 +432,25 @@ private enum LampPersonalMarkdownParser {
     }
 
     private static func devotionalFootnotes(in content: String) -> (content: String, footnotes: String?) {
+        let extracted = LampPersonalMarkdownDocument.extractFootnoteDefinitions(in: content)
+        if !extracted.definitions.isEmpty {
+            let definitions = extracted.definitions.sorted { $0.key < $1.key }.map {
+                (id: $0.key, content: $0.value)
+            }
+            return (
+                extracted.body.trimmingCharacters(in: .whitespacesAndNewlines),
+                LampPersonalMarkdownWriter.footnoteDefinitions(definitions)
+            )
+        }
         guard let range = content.range(of: "\n### Footnotes\n", options: .backwards) else {
             return (content, nil)
         }
         let footnotes = String(content[range.upperBound...])
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !footnotes.isEmpty else { return (content, nil) }
+        guard footnotes.components(separatedBy: .newlines).contains(where: {
+            $0.hasPrefix("[^") && $0.contains("]:")
+                || $0.trimmingCharacters(in: .whitespaces).hasPrefix("- **")
+        }) else { return (content, nil) }
         return (String(content[..<range.lowerBound]), footnotes)
     }
 

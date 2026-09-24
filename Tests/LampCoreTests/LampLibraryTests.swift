@@ -326,6 +326,61 @@ struct LampLibraryTests {
         #expect(entry.footnotes == "[^one]: A footnote.")
     }
 
+    @Test func roundTripsRichMultiDevotionalMarkdownWithBodyHeadings() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-rich-markdown-export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = LampLibrary(rootURL: root.appendingPathComponent("Source"))
+        try await source.savePersonalDevotional(LampDevotional(
+            id: "rich-writing",
+            moduleID: LampPersonalModule.writing.id,
+            moduleName: LampPersonalModule.writing.name,
+            title: "Morning Hope",
+            subtitle: "Beginning well",
+            author: "A Reader",
+            date: "2026-08-03",
+            tags: ["hope", "morning"],
+            category: "reflection",
+            seriesName: "Daily Hope",
+            seriesOrder: 1,
+            keyScriptures: [LampScriptureLink(
+                text: "John 1:1", startReference: 43_001_001
+            )],
+            summary: "God gives hope.",
+            content: "Opening paragraph.\n\n## A body heading\n\nMore detail.",
+            footnotes: "[^one]: A footnote."
+        ))
+        try await source.savePersonalDevotional(LampDevotional(
+            id: "second-writing",
+            moduleID: LampPersonalModule.writing.id,
+            moduleName: LampPersonalModule.writing.name,
+            title: "Evening Peace",
+            content: "A second entry."
+        ))
+        let url = root.appendingPathComponent("writing.md")
+        try await source.exportPersonalModule(.writing, format: .markdown, to: url)
+        let markdown = try String(contentsOf: url, encoding: .utf8)
+        #expect(markdown.contains("## A body heading"))
+
+        let target = LampLibrary(rootURL: root.appendingPathComponent("Target"))
+        #expect(try await target.importPersonalMarkdown(from: url, as: .devotionals)
+            .importedCount == 2)
+        let entries = try await target.personalDevotionals()
+        let rich = try #require(entries.first { $0.title == "Morning Hope" })
+        #expect(rich.subtitle == "Beginning well")
+        #expect(rich.author == "A Reader")
+        #expect(rich.date == "2026-08-03")
+        #expect(rich.tags == ["hope", "morning"])
+        #expect(rich.category == "reflection")
+        #expect(rich.seriesName == "Daily Hope")
+        #expect(rich.seriesOrder == 1)
+        #expect(rich.keyScriptures.first?.startReference == 43_001_001)
+        #expect(rich.summary == "God gives hope.")
+        #expect(rich.content.contains("## A body heading"))
+        #expect(rich.footnotes == "[^one]: A footnote.")
+    }
+
     @Test func planCalendarRoundTripsStableLeapDaySlots() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
@@ -996,7 +1051,7 @@ struct LampLibraryTests {
         )
         let markdown = try String(contentsOf: markdownURL, encoding: .utf8)
         #expect(markdown.contains("# Portable Notes"))
-        #expect(markdown.contains("## John 3:16"))
+        #expect(markdown.contains("## John\n\n### Chapter 3\n\n#### 3:16"))
         #expect(markdown.contains("A portable observation."))
         #expect(try await library.installedModules().map(\.kind) == [.highlights, .notes])
     }
@@ -1200,8 +1255,25 @@ struct LampLibraryTests {
         )
         #expect(try String(contentsOf: personalWritingMarkdownURL, encoding: .utf8)
             .contains("## Portable Writing"))
-        #expect(try String(contentsOf: personalNotesMarkdownURL, encoding: .utf8)
-            .contains("## John 3:16–17"))
+        let notesMarkdown = try String(contentsOf: personalNotesMarkdownURL, encoding: .utf8)
+        #expect(notesMarkdown.contains("## John\n\n### Chapter 3\n\n#### 3:16-17"))
+        #expect(notesMarkdown.contains("[^43-3:16-1]: A saved footnote."))
+
+        let markdownImportLibrary = LampLibrary(
+            rootURL: fixtureURL.appendingPathComponent("MarkdownImportLibrary")
+        )
+        #expect(try await markdownImportLibrary.importPersonalMarkdown(
+            from: personalNotesMarkdownURL, as: .notes
+        ).importedCount == 1)
+        let markdownImportedNote = try #require(
+            try await markdownImportLibrary.verseNotes(bookNumber: 43, chapterNumber: 3).first
+        )
+        #expect(markdownImportedNote.title == "The Gospel")
+        #expect(markdownImportedNote.verseReferences == [43_003_016, 43_003_017])
+        #expect(markdownImportedNote.footnotes.first?.content == "A saved footnote.")
+        #expect(try await markdownImportLibrary.importPersonalMarkdown(
+            from: personalWritingMarkdownURL, as: .devotionals
+        ).importedCount == 1)
 
         let personalImportLibrary = LampLibrary(
             rootURL: fixtureURL.appendingPathComponent("PersonalImportLibrary")

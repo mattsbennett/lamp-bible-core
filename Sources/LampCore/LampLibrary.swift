@@ -4074,30 +4074,22 @@ public actor LampLibrary {
     private func devotionalMarkdown(title: String, entries: [LampDevotional]) -> String {
         var blocks = ["# \(markdownHeading(title, fallback: "Writing"))"]
         for devotional in entries {
-            var entry = ["## \(markdownHeading(devotional.title, fallback: "Untitled"))"]
-            if let subtitle = markdownValue(devotional.subtitle) { entry.append("*\(subtitle)*") }
-
-            var metadata: [String] = []
-            if let author = markdownValue(devotional.author) { metadata.append("**Author:** \(author)") }
-            if let date = markdownValue(devotional.date) { metadata.append("**Date:** \(date)") }
-            if !devotional.tags.isEmpty { metadata.append("**Tags:** \(devotional.tags.joined(separator: ", "))") }
-            if let category = markdownValue(devotional.category) { metadata.append("**Category:** \(category)") }
-            if let series = markdownValue(devotional.seriesName) { metadata.append("**Series:** \(series)") }
-            if let order = devotional.seriesOrder { metadata.append("**Series Order:** \(order)") }
-            if !metadata.isEmpty { entry.append(metadata.joined(separator: " | ")) }
-            if !devotional.keyScriptures.isEmpty {
-                entry.append(
-                    "**Scripture:** " + devotional.keyScriptures.map(\.displayDescription).joined(separator: ", ")
+            blocks.append(LampPersonalMarkdownWriter.devotionalEntry(
+                LampMarkdownDevotionalEntry(
+                    title: markdownHeading(devotional.title, fallback: "Untitled"),
+                    subtitle: devotional.subtitle,
+                    author: devotional.author,
+                    date: devotional.date,
+                    tags: devotional.tags,
+                    category: devotional.category,
+                    seriesName: devotional.seriesName,
+                    seriesOrder: devotional.seriesOrder,
+                    scriptureDescriptions: devotional.keyScriptures.map(\.displayDescription),
+                    summary: devotional.summary,
+                    content: devotional.displayMarkdown,
+                    footnotes: devotional.footnotes
                 )
-            }
-            if let summary = markdownValue(devotional.summary) {
-                entry.append("> **Summary:** \(summary.replacingOccurrences(of: "\n", with: "\n> "))")
-            }
-            if let content = markdownValue(devotional.content) { entry.append(content) }
-            if let footnotes = markdownValue(devotional.footnotes) {
-                entry.append("### Footnotes\n\n\(footnotes)")
-            }
-            blocks.append(entry.joined(separator: "\n\n"))
+            ))
         }
         return blocks.joined(separator: "\n\n---\n\n")
     }
@@ -4148,20 +4140,41 @@ public actor LampLibrary {
 
     private func notesMarkdown(title: String, notes: [LampVerseNote]) -> String {
         var blocks = ["# \(markdownHeading(title, fallback: "Notes"))"]
-        for note in notes {
+        var currentBook = 0
+        var currentChapter = 0
+        var definitions: [(id: String, content: String)] = []
+        for note in notes.sorted(by: { $0.reference < $1.reference }) {
+            let book = note.reference / 1_000_000
+            let chapter = (note.reference / 1_000) % 1_000
+            if book != currentBook {
+                blocks.append("## \(LampBibleReferenceFormatter.bookName(book))")
+                currentBook = book
+                currentChapter = 0
+            }
+            if chapter != currentChapter {
+                blocks.append("### Chapter \(chapter)")
+                currentChapter = chapter
+            }
             let endReference = note.verseReferences.filter { $0 >= note.reference }.max()
                 ?? note.reference
+            let heading = LampPersonalMarkdownWriter.noteHeading(
+                reference: note.reference, endReference: endReference
+            )
             var entry = [
-                "## \(LampBibleReferenceFormatter.describeRange(from: note.reference, to: endReference))",
+                "#### \(heading)",
             ]
             if let title = markdownValue(note.title) { entry.append("**Title:** \(title)") }
-            if let content = markdownValue(note.content) { entry.append(content) }
-            if !note.footnotes.isEmpty {
-                entry.append("### Footnotes\n\n" + note.footnotes.map {
-                    "- **\($0.id):** \($0.content)"
-                }.joined(separator: "\n"))
-            }
+            let rewritten = LampPersonalMarkdownWriter.rewritingFootnoteMarkers(
+                in: note.content,
+                prefix: "\(book)-\(chapter):\(note.reference % 1_000)",
+                footnotes: note.footnotes.map { (id: $0.id, content: $0.content) }
+            )
+            if let content = markdownValue(rewritten.content) { entry.append(content) }
+            definitions += rewritten.definitions
             blocks.append(entry.joined(separator: "\n\n"))
+        }
+        if !definitions.isEmpty {
+            blocks.append("---\n\n" + LampPersonalMarkdownWriter.footnoteDefinitions(definitions))
         }
         return blocks.joined(separator: "\n\n")
     }
