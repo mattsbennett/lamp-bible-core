@@ -13,8 +13,10 @@ public actor LampLibrary {
 
     private let fileManager: FileManager
     private let bundledModulesArchiveURL: URL?
+    private let isStagingLibrary: Bool
     private var cachedBundledDatabaseURL: URL?
     private var cachedBundledModules: [LampInstalledModule]?
+    private var openDatabases: [String: DatabaseQueue] = [:]
 
     public init(
         rootURL: URL? = nil,
@@ -23,6 +25,7 @@ public actor LampLibrary {
     ) {
         self.fileManager = fileManager
         self.bundledModulesArchiveURL = bundledModulesArchiveURL
+        self.isStagingLibrary = false
         if let rootURL {
             self.rootURL = rootURL
         } else {
@@ -34,6 +37,17 @@ public actor LampLibrary {
                 .appendingPathComponent("Lamp Bible", isDirectory: true)
                 .appendingPathComponent("Library", isDirectory: true)
         }
+    }
+
+    private init(
+        stagingRootURL: URL,
+        bundledModulesArchiveURL: URL?,
+        fileManager: FileManager
+    ) {
+        self.rootURL = stagingRootURL
+        self.bundledModulesArchiveURL = bundledModulesArchiveURL
+        self.fileManager = fileManager
+        self.isStagingLibrary = true
     }
 
     public func installedModules() throws -> [LampInstalledModule] {
@@ -74,6 +88,9 @@ public actor LampLibrary {
 
     @discardableResult
     public func install(from sourceURL: URL) throws -> LampInstalledModule {
+        // Installing replaces a database file that a cached connection may be
+        // holding open, so no connection outlives this call.
+        defer { forgetOpenDatabases() }
         guard sourceURL.pathExtension.lowercased() == "lamp" else {
             throw LampLibraryError.invalidFileExtension
         }
@@ -102,6 +119,12 @@ public actor LampLibrary {
             compressedByteCount: compressedData.count
         )
         try validateIdentifier(module.id)
+        try LampPortableModuleInspector.validateOwnership(
+            databaseURL: temporaryURL,
+            expectedID: module.id,
+            kind: module.kind,
+            verifyIntegrity: false // inspectDatabase just completed quick_check.
+        )
         try prepareDirectories()
 
         let storageKey = storageKey(for: module.id)
@@ -119,7 +142,122 @@ public actor LampLibrary {
         return module
     }
 
+    /// Returns the portable formats that can faithfully represent an installed
+    /// user module. Every user module retains its original `.lamp` archive;
+    /// document-oriented modules additionally have a readable Markdown form.
+    public func supportedExportFormats(moduleID: String) throws -> [LampModuleExportFormat] {
+        let module = try installedModuleForExport(moduleID: moduleID)
+        var formats: [LampModuleExportFormat] = [.lamp]
+        if Self.supportsMarkdownExport(for: module.kind) {
+            formats.append(.markdown)
+        }
+        return formats
+    }
+
+    public nonisolated static func supportsMarkdownExport(for kind: LampModuleKind) -> Bool {
+        switch kind {
+        case .book, .devotional, .notes:
+            true
+        case .translation, .dictionary, .commentary, .plan, .highlights, .quiz:
+            false
+        }
+    }
+
+    public nonisolated static func supportedExportFormats(
+        for personalModule: LampPersonalModule
+    ) -> [LampModuleExportFormat] {
+        switch personalModule {
+        case .writing, .notes:
+            [.lamp, .markdown]
+        case .highlights:
+            [.lamp]
+        }
+    }
+
+    /// Exports a user-installed module. Lamp exports copy the exact portable
+    /// archive that was installed, preserving all module-specific structure.
+    public func exportModule(
+        moduleID: String,
+        format: LampModuleExportFormat,
+        to destinationURL: URL
+    ) throws {
+        let module = try installedModuleForExport(moduleID: moduleID)
+        let hasSecurityScope = destinationURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { destinationURL.stopAccessingSecurityScopedResource() }
+        }
+
+        switch format {
+        case .lamp:
+            let sourceURL = modulesURL
+                .appendingPathComponent(storageKey(for: module.id))
+                .appendingPathExtension("lamp")
+            guard fileManager.fileExists(atPath: sourceURL.path) else {
+                throw LampLibraryError.invalidPersonalContent(
+                    "The portable copy of \(module.name) is unavailable. Reinstall the module and try again."
+                )
+            }
+            try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
+                .write(to: destinationURL, options: [.atomic])
+
+        case .markdown:
+            guard Self.supportsMarkdownExport(for: module.kind) else {
+                throw LampLibraryError.invalidPersonalContent(
+                    "\(module.name) cannot be represented as Markdown. Export it as a Lamp module instead."
+                )
+            }
+            try markdownExport(for: module)
+                .write(to: destinationURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// Exports one of the default editable collections as a portable module.
+    /// Unlike installed-module exports, this archive is assembled from the
+    /// current contents of the user's library at export time.
+    public func exportPersonalModule(
+        _ personalModule: LampPersonalModule,
+        format: LampModuleExportFormat,
+        to destinationURL: URL
+    ) throws {
+        guard Self.supportedExportFormats(for: personalModule).contains(format) else {
+            throw LampLibraryError.invalidPersonalContent(
+                "\(personalModule.name) cannot be represented as Markdown. Export it as a Lamp module instead."
+            )
+        }
+        let hasSecurityScope = destinationURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { destinationURL.stopAccessingSecurityScopedResource() }
+        }
+
+        switch format {
+        case .lamp:
+            try personalModuleArchive(for: personalModule)
+                .write(to: destinationURL, options: [.atomic])
+        case .markdown:
+            let markdown: String
+            switch personalModule {
+            case .writing:
+                markdown = devotionalMarkdown(
+                    title: personalModule.name,
+                    entries: try personalDevotionals()
+                )
+            case .notes:
+                markdown = notesMarkdown(
+                    title: personalModule.name,
+                    notes: try allPersonalNotes()
+                )
+            case .highlights:
+                throw LampLibraryError.invalidPersonalContent(
+                    "My Highlights cannot be represented as Markdown."
+                )
+            }
+            try (markdown.trimmingCharacters(in: .whitespacesAndNewlines) + "\n")
+                .write(to: destinationURL, atomically: true, encoding: .utf8)
+        }
+    }
+
     public func remove(moduleID: String) throws {
+        defer { forgetOpenDatabases() }
         let storageKey = storageKey(for: moduleID)
         let databaseURL = databasesURL
             .appendingPathComponent(storageKey)
@@ -647,10 +785,14 @@ public actor LampLibrary {
         let queue = try openReadOnlyDatabase(at: databaseURL)
         return try queue.read { db in
             guard try tableNames(in: db).contains("lexicon_mappings") else { return [] }
+            // No `COLLATE NOCASE`. `idx_mapping_source` is a binary index, so the
+            // collation made this a full table scan rather than an index search —
+            // and it bought nothing: the key has already been uppercased above, and
+            // every stored key is uppercase.
             let rows = try Row.fetchAll(db, sql: """
                 SELECT target_keys_json
                 FROM lexicon_mappings
-                WHERE source_key = ? COLLATE NOCASE
+                WHERE source_key = ?
                 ORDER BY id
                 """, arguments: [normalizedKey])
 
@@ -942,8 +1084,11 @@ public actor LampLibrary {
                             seriesOrder: row["series_order"],
                             keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
                             summary: plainText(fromJSONString: summaryJSON),
-                            content: plainText(fromJSONString: contentJSON) ?? contentJSON,
+                            content: LampPortableDevotionalContent.plainText(from: contentJSON)
+                                ?? contentJSON,
+                            contentJSON: contentJSON,
                             footnotes: plainText(fromJSONString: footnotesJSON),
+                            mediaJSON: columns.contains("media_json") ? row["media_json"] : nil,
                             created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
                             lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
                         )
@@ -978,7 +1123,10 @@ public actor LampLibrary {
     }
 
     @discardableResult
-    public func savePersonalDevotional(_ devotional: LampDevotional) throws -> LampDevotional {
+    public func savePersonalDevotional(
+        _ devotional: LampDevotional,
+        preserveLastModified: Bool = false
+    ) throws -> LampDevotional {
         let title = devotional.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasAuthoredContent = [
             devotional.title,
@@ -998,13 +1146,23 @@ public actor LampLibrary {
         }
         let identifier = devotional.id.isEmpty ? UUID().uuidString : devotional.id
         try validateIdentifier(identifier)
+        let queue = try openUserDatabase()
+        let prior = try queue.read { db in
+            try Row.fetchOne(
+                db, sql: "SELECT content, content_json, media_json FROM personal_devotionals WHERE id = ?",
+                arguments: [identifier]
+            )
+        }
+        let priorContent: String? = prior?["content"]
+        let storedContentJSON: String? = prior?["content_json"]
+        let storedMediaJSON: String? = prior?["media_json"]
         let now = Date()
         let created = devotional.created ?? now
         let saved = LampDevotional(
             id: identifier,
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
-            title: title.isEmpty ? "Untitled Devotional" : title,
+            moduleName: "My Writing",
+            title: title.isEmpty ? "Untitled" : title,
             subtitle: devotional.subtitle?.nilIfBlank,
             author: devotional.author?.nilIfBlank,
             date: devotional.date?.nilIfBlank,
@@ -1016,9 +1174,12 @@ public actor LampLibrary {
             keyScriptures: devotional.keyScriptures,
             summary: devotional.summary?.nilIfBlank,
             content: devotional.content,
+            contentJSON: devotional.contentJSON
+                ?? (priorContent == devotional.content ? storedContentJSON : nil),
             footnotes: devotional.footnotes?.nilIfBlank,
+            mediaJSON: devotional.mediaJSON ?? storedMediaJSON,
             created: created,
-            lastModified: now,
+            lastModified: preserveLastModified ? (devotional.lastModified ?? now) : now,
             isEditable: true
         )
         let tagsJSON = String(decoding: try JSONEncoder().encode(saved.tags), as: UTF8.self)
@@ -1030,14 +1191,13 @@ public actor LampLibrary {
         }
         let scripturesData = try JSONSerialization.data(withJSONObject: scriptures, options: [.sortedKeys])
         let scripturesJSON = String(decoding: scripturesData, as: UTF8.self)
-        let queue = try openUserDatabase()
         try queue.write { db in
             try db.execute(sql: """
                 INSERT INTO personal_devotionals (
                     id, title, subtitle, author, devotional_date, tags_json,
                     category, series_name, series_order, key_scriptures_json,
-                    summary, content, footnotes, created, last_modified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    summary, content, content_json, footnotes, media_json, created, last_modified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     subtitle = excluded.subtitle,
@@ -1050,7 +1210,9 @@ public actor LampLibrary {
                     key_scriptures_json = excluded.key_scriptures_json,
                     summary = excluded.summary,
                     content = excluded.content,
+                    content_json = excluded.content_json,
                     footnotes = excluded.footnotes,
+                    media_json = excluded.media_json,
                     last_modified = excluded.last_modified
                 """, arguments: [
                     saved.id,
@@ -1065,9 +1227,11 @@ public actor LampLibrary {
                     scripturesJSON,
                     saved.summary,
                     saved.content,
+                    saved.contentJSON,
                     saved.footnotes,
+                    saved.mediaJSON,
                     Int(created.timeIntervalSince1970),
-                    Int(now.timeIntervalSince1970),
+                    Int((saved.lastModified ?? now).timeIntervalSince1970),
                 ])
         }
         return saved
@@ -1108,13 +1272,21 @@ public actor LampLibrary {
             if let text = scripture.text { value["label"] = text }
             return value
         }
-        var root: [String: Any] = [
-            "meta": meta,
-            "content": [[
-                "type": "paragraph",
-                "content": ["text": devotional.content],
-            ]],
-        ]
+        let content: Any
+        if let contentJSON = devotional.contentJSON {
+            content = try JSONSerialization.jsonObject(with: Data(contentJSON.utf8))
+        } else {
+            content = [["type": "paragraph", "content": ["text": devotional.content]]]
+        }
+        var root: [String: Any] = ["meta": meta, "content": content]
+        if let mediaJSON = devotional.mediaJSON {
+            guard let media = try JSONSerialization.jsonObject(
+                with: Data(mediaJSON.utf8)
+            ) as? [Any] else {
+                throw LampLibraryError.invalidPersonalContent("Invalid devotional media metadata.")
+            }
+            root["media"] = media
+        }
         if let summary = devotional.summary { root["summary"] = summary }
         if let footnotes = devotional.footnotes { root["footnotes"] = [footnotes] }
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
@@ -1126,8 +1298,7 @@ public actor LampLibrary {
         )
     }
 
-    @discardableResult
-    public func importPersonalDevotional(from sourceURL: URL) throws -> [LampDevotional] {
+    public func personalDevotionalCandidates(from sourceURL: URL) throws -> [LampDevotional] {
         let fileExtension = sourceURL.pathExtension.lowercased()
         guard ["json", "lamp"].contains(fileExtension) else {
             throw LampLibraryError.invalidStudyDataExtension
@@ -1152,15 +1323,50 @@ public actor LampLibrary {
             devotionals = try devotionalsFromDatabase(at: temporaryURL)
         }
         guard !devotionals.isEmpty else { throw LampLibraryError.unsupportedModuleSchema }
+        return devotionals
+    }
+
+    @discardableResult
+    public func importPersonalDevotional(from sourceURL: URL) throws -> [LampDevotional] {
+        let devotionals = try personalDevotionalCandidates(from: sourceURL)
         let existing = Dictionary(uniqueKeysWithValues: try personalDevotionals().map { ($0.id, $0) })
         return try devotionals.compactMap { devotional in
-            if let local = existing[devotional.id],
-               let localModified = local.lastModified,
-               let incomingModified = devotional.lastModified,
-               incomingModified <= localModified {
-                return nil
+            if let local = existing[devotional.id] {
+                let sameCore = local.title == devotional.title
+                    && local.subtitle == devotional.subtitle
+                    && local.author == devotional.author
+                    && local.date == devotional.date
+                    && local.tags == devotional.tags
+                    && local.category == devotional.category
+                    && local.seriesName == devotional.seriesName
+                    && local.seriesOrder == devotional.seriesOrder
+                    && local.keyScriptures == devotional.keyScriptures
+                    && local.summary == devotional.summary
+                    && local.content == devotional.content
+                    && local.footnotes == devotional.footnotes
+                if sameCore,
+                   (local.mediaJSON == nil && devotional.mediaJSON != nil
+                    || local.contentJSON == nil && devotional.contentJSON != nil) {
+                    var enriched = local
+                    enriched.mediaJSON = local.mediaJSON ?? devotional.mediaJSON
+                    enriched.contentJSON = local.contentJSON ?? devotional.contentJSON
+                    return try savePersonalDevotional(enriched, preserveLastModified: true)
+                }
+                let decision = LampSyncMerge.decide(
+                    localModified: local.lastModified.map { Int($0.timeIntervalSince1970) },
+                    incomingModified: devotional.lastModified.map { Int($0.timeIntervalSince1970) },
+                    sameContent: sameCore
+                        && (local.contentJSON == devotional.contentJSON
+                            || devotional.contentJSON == nil)
+                        && (local.mediaJSON == devotional.mediaJSON
+                            || devotional.mediaJSON == nil)
+                )
+                if decision == .conflict {
+                    throw LampLibraryError.syncConflict("devotional \(devotional.id)")
+                }
+                guard decision == .incoming else { return nil }
             }
-            return try savePersonalDevotional(devotional)
+            return try savePersonalDevotional(devotional, preserveLastModified: true)
         }
     }
 
@@ -1253,6 +1459,8 @@ public actor LampLibrary {
                 """, arguments: arguments).map { row in
                     let questionJSON: String = row["question_json"]
                     let answerJSON: String = row["answer_json"]
+                    let questionContent = annotatedText(fromJSONString: questionJSON)
+                    let answerContent = annotatedText(fromJSONString: answerJSON)
                     let referencesJSON: String? = row["references_json"]
                     let crossReferencesJSON: String? = row["cross_references_json"]
                     let christFocused: Int = row["christ_focused"]
@@ -1264,8 +1472,10 @@ public actor LampLibrary {
                         endReference: row["ev"],
                         ageGroup: row["age_group"],
                         questionIndex: row["question_index"],
-                        question: plainText(fromJSONString: questionJSON) ?? questionJSON,
-                        answer: plainText(fromJSONString: answerJSON) ?? answerJSON,
+                        question: questionContent.text,
+                        questionAnnotations: questionContent.annotations,
+                        answer: answerContent.text,
+                        answerAnnotations: answerContent.annotations,
                         theme: row["theme"],
                         isChristFocused: christFocused != 0,
                         references: integerArray(fromJSONString: referencesJSON),
@@ -2332,10 +2542,10 @@ public actor LampLibrary {
     @discardableResult
     public func exportPortableBackup(to destinationURL: URL) throws -> LampPortableBackupSummary {
         try prepareDirectories()
-        let modulesDestination = destinationURL.appendingPathComponent("Modules", isDirectory: true)
-        let notesDestination = destinationURL.appendingPathComponent("Study/Notes", isDirectory: true)
-        let highlightsDestination = destinationURL.appendingPathComponent("Study/Highlights", isDirectory: true)
-        let devotionalsDestination = destinationURL.appendingPathComponent("Devotionals", isDirectory: true)
+        let modulesDestination = destinationURL.appendingPathComponent(LampPortableBackupLayout.modulesDirectory, isDirectory: true)
+        let notesDestination = destinationURL.appendingPathComponent(LampPortableBackupLayout.notesDirectory, isDirectory: true)
+        let highlightsDestination = destinationURL.appendingPathComponent(LampPortableBackupLayout.highlightsDirectory, isDirectory: true)
+        let devotionalsDestination = destinationURL.appendingPathComponent(LampPortableBackupLayout.devotionalsDirectory, isDirectory: true)
         for directory in [destinationURL, modulesDestination, notesDestination, highlightsDestination, devotionalsDestination] {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
@@ -2401,7 +2611,7 @@ public actor LampLibrary {
         }
 
         let mediaSource = rootURL.appendingPathComponent("Media", isDirectory: true)
-        let mediaDestination = destinationURL.appendingPathComponent("Media", isDirectory: true)
+        let mediaDestination = destinationURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
         if fileManager.fileExists(atPath: mediaSource.path) {
             if fileManager.fileExists(atPath: mediaDestination.path) { try fileManager.removeItem(at: mediaDestination) }
             try fileManager.copyItem(at: mediaSource, to: mediaDestination)
@@ -2413,48 +2623,139 @@ public actor LampLibrary {
             highlightDocumentCount: highlightDocumentCount,
             devotionalDocumentCount: personalDevotionals.count
         )
-        let manifest = PortableBackupManifest(
-            formatVersion: 1,
+        let manifest = LampPortableBackupManifest(
             generatedAt: Date(),
-            summary: summary
+            summary: .init(
+                moduleCount: summary.moduleCount,
+                noteDocumentCount: summary.noteDocumentCount,
+                highlightDocumentCount: summary.highlightDocumentCount,
+                devotionalDocumentCount: summary.devotionalDocumentCount
+            )
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(manifest).write(
-            to: destinationURL.appendingPathComponent("manifest.json"),
+            to: destinationURL.appendingPathComponent(LampPortableBackupLayout.manifestPath),
             options: .atomic
         )
         return summary
     }
 
     @discardableResult
-    public func importPortableBackup(from sourceURL: URL) throws -> LampPortableBackupImportResult {
-        guard fileManager.fileExists(atPath: sourceURL.appendingPathComponent("manifest.json").path) else {
+    public func importPortableBackup(from sourceURL: URL) async throws -> LampPortableBackupImportResult {
+        if isStagingLibrary {
+            return try importPortableBackupContents(from: sourceURL)
+        }
+        return try await withStagedChanges { stagedLibrary in
+            try await stagedLibrary.importPortableBackup(from: sourceURL)
+        }
+    }
+
+    /// Apply every part of an incoming sync to a sibling copy of the library.
+    /// A thrown operation discards that copy; a successful one replaces the root
+    /// only if the live library has not changed while the operation was running.
+    @discardableResult
+    public func withStagedChanges<Result>(
+        _ operation: (LampLibrary) async throws -> Result
+    ) async throws -> Result {
+        precondition(!isStagingLibrary, "Nested staged library changes are unsupported")
+        let parent = rootURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        let stagedURL = parent.appendingPathComponent(
+            ".lamp-backup-import-\(UUID().uuidString)", isDirectory: true
+        )
+        defer { try? fileManager.removeItem(at: stagedURL) }
+        let rootExisted = fileManager.fileExists(atPath: rootURL.path)
+        if rootExisted {
+            try fileManager.copyItem(at: rootURL, to: stagedURL)
+        } else {
+            try fileManager.createDirectory(at: stagedURL, withIntermediateDirectories: false)
+        }
+        let originalFiles = try libraryFileRevisions(at: stagedURL)
+
+        let stagedLibrary = LampLibrary(
+            stagingRootURL: stagedURL,
+            bundledModulesArchiveURL: bundledModulesArchiveURL,
+            fileManager: fileManager
+        )
+        let result = try await operation(stagedLibrary)
+        await stagedLibrary.forgetOpenDatabases()
+
+        // Another actor call may have changed the live library while this
+        // actor was suspended for the staged import. Never replace that edit.
+        let liveUnchanged: Bool
+        if rootExisted, fileManager.fileExists(atPath: rootURL.path) {
+            liveUnchanged = try libraryFileRevisions(at: rootURL) == originalFiles
+        } else {
+            liveUnchanged = !rootExisted && !fileManager.fileExists(atPath: rootURL.path)
+        }
+        guard liveUnchanged else {
+            throw LampLibraryError.syncConflict("Local library changed during sync import.")
+        }
+
+        // The destination and stage are siblings on one volume. Replace the
+        // directory only after all incoming content has been accepted.
+        forgetOpenDatabases()
+        cachedBundledDatabaseURL = nil
+        cachedBundledModules = nil
+        if fileManager.fileExists(atPath: rootURL.path) {
+            let backupName = ".lamp-backup-previous-\(UUID().uuidString)"
+            let previousURL = parent.appendingPathComponent(backupName, isDirectory: true)
+            do {
+                _ = try fileManager.replaceItemAt(
+                    rootURL, withItemAt: stagedURL, backupItemName: backupName
+                )
+            } catch {
+                if !fileManager.fileExists(atPath: rootURL.path),
+                   fileManager.fileExists(atPath: previousURL.path) {
+                    try? fileManager.moveItem(at: previousURL, to: rootURL)
+                }
+                throw error
+            }
+            try? fileManager.removeItem(at: previousURL)
+        } else {
+            try fileManager.moveItem(at: stagedURL, to: rootURL)
+        }
+        return result
+    }
+
+    private func importPortableBackupContents(
+        from sourceURL: URL
+    ) throws -> LampPortableBackupImportResult {
+        let manifestURL = sourceURL.appendingPathComponent(LampPortableBackupLayout.manifestPath)
+        guard fileManager.fileExists(atPath: manifestURL.path) else {
             throw LampLibraryError.invalidPersonalContent("The selected folder is not a Lamp Bible backup.")
         }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(
+            LampPortableBackupManifest.self,
+            from: Data(contentsOf: manifestURL)
+        )
+        try manifest.validate()
         var installedModules = 0
         var importedStudyEntries = 0
         var importedDevotionals = 0
 
-        let modulesSource = sourceURL.appendingPathComponent("Modules", isDirectory: true)
+        let modulesSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.modulesDirectory, isDirectory: true)
         for url in backupFiles(in: modulesSource, extension: "lamp") {
             _ = try install(from: url)
             installedModules += 1
         }
-        let studySource = sourceURL.appendingPathComponent("Study", isDirectory: true)
+        let studySource = sourceURL.appendingPathComponent(LampPortableBackupLayout.studyDirectory, isDirectory: true)
         for url in backupFiles(in: studySource, extension: "json") {
             let result = try importPersonalStudyData(from: url)
             importedStudyEntries += result.importedCount
         }
-        let devotionalsSource = sourceURL.appendingPathComponent("Devotionals", isDirectory: true)
+        let devotionalsSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.devotionalsDirectory, isDirectory: true)
         for url in backupFiles(in: devotionalsSource, extension: "json") {
             importedDevotionals += try importPersonalDevotional(from: url).count
         }
 
-        let mediaSource = sourceURL.appendingPathComponent("Media", isDirectory: true)
+        let mediaSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
         if fileManager.fileExists(atPath: mediaSource.path) {
-            let mediaDestination = rootURL.appendingPathComponent("Media", isDirectory: true)
+            let mediaDestination = rootURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
             try mergeDirectory(from: mediaSource, to: mediaDestination)
         }
         return LampPortableBackupImportResult(
@@ -2464,14 +2765,48 @@ public actor LampLibrary {
         )
     }
 
-    private var modulesURL: URL {
-        rootURL.appendingPathComponent("Modules", isDirectory: true)
+    private func libraryFileRevisions(at directory: URL) throws -> [String: String] {
+        var enumerationError: Error?
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
+        ) else {
+            throw LampLibraryError.syncConflict("Could not inspect the local library.")
+        }
+        let pathPrefix = directory.standardizedFileURL.path + "/"
+        var revisions: [String: String] = [:]
+        for case let url as URL in enumerator {
+            let itemPath = url.standardizedFileURL.path
+            guard itemPath.hasPrefix(pathPrefix) else {
+                throw LampLibraryError.syncConflict("Could not inspect the local library.")
+            }
+            let relativePath = String(itemPath.dropFirst(pathPrefix.count))
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            if values.isSymbolicLink == true {
+                revisions[relativePath] = "link:" + (try fileManager.destinationOfSymbolicLink(
+                    atPath: url.path
+                ))
+            } else if values.isRegularFile == true {
+                var digest = SHA256()
+                let handle = try FileHandle(forReadingFrom: url)
+                defer { try? handle.close() }
+                while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
+                    digest.update(data: chunk)
+                }
+                revisions[relativePath] = digest.finalize()
+                    .map { String(format: "%02x", $0) }.joined()
+            }
+        }
+        if let enumerationError { throw enumerationError }
+        return revisions
     }
 
-    private struct PortableBackupManifest: Codable {
-        let formatVersion: Int
-        let generatedAt: Date
-        let summary: LampPortableBackupSummary
+    private var modulesURL: URL {
+        rootURL.appendingPathComponent("Modules", isDirectory: true)
     }
 
     private func backupFiles(in directory: URL, extension fileExtension: String) -> [URL] {
@@ -2486,15 +2821,22 @@ public actor LampLibrary {
     }
 
     private func mergeDirectory(from source: URL, to destination: URL) throws {
+        if try source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+            throw LampLibraryError.syncConflict("Media backup contains a symbolic link.")
+        }
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-        guard let children = try? fileManager.contentsOfDirectory(
+        let children = try fileManager.contentsOfDirectory(
             at: source,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: []
+        )
         for child in children {
             let target = destination.appendingPathComponent(child.lastPathComponent)
-            if (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if values.isSymbolicLink == true {
+                throw LampLibraryError.syncConflict("Media backup contains a symbolic link.")
+            }
+            if values.isDirectory == true {
                 try mergeDirectory(from: child, to: target)
             } else {
                 if fileManager.fileExists(atPath: target.path) { try fileManager.removeItem(at: target) }
@@ -2550,9 +2892,18 @@ public actor LampLibrary {
             let formatModuleID: String? = formatRow?["module_id"]
             let formatType: String? = formatRow?["module_type"]
             let declaredKind = formatType.flatMap(LampModuleKind.init(rawValue:))
-            let moduleID = formatModuleID ?? fallbackModuleID
+            let metadataModuleID = tables.contains("module_meta")
+                ? try String.fetchOne(db, sql: "SELECT id FROM module_meta LIMIT 1")
+                : nil
+            let moduleID = formatModuleID ?? metadataModuleID ?? fallbackModuleID
 
             if declaredKind == .notes || tables.contains("note_entries") {
+                try LampPortableModuleInspector.validateOwnership(
+                    databaseURL: databaseURL,
+                    expectedID: moduleID,
+                    kind: .notes,
+                    verifyIntegrity: false
+                )
                 let columns = try columnNames(in: db, table: "note_entries")
                 let references = columns.contains("verse_refs_json")
                     ? "verse_refs_json"
@@ -2577,6 +2928,12 @@ public actor LampLibrary {
             if declaredKind == .highlights
                 || (tables.contains("highlights")
                     && (tables.contains("highlight_meta") || tables.contains("highlight_sets"))) {
+                try LampPortableModuleInspector.validateOwnership(
+                    databaseURL: databaseURL,
+                    expectedID: moduleID,
+                    kind: .highlights,
+                    verifyIntegrity: false
+                )
                 let highlights = try readModuleHighlights(
                     in: db,
                     referenceRange: 1_000_000...66_999_999
@@ -2588,12 +2945,37 @@ public actor LampLibrary {
                 let description: String? = metadata?["description"]
                 let created: Int? = metadata?["created"]
                 let lastModified: Int? = metadata?["last_modified"]
+                let setMetadata: [String: ImportedHighlightSetMetadata]
+                if tables.contains("highlight_sets") {
+                    setMetadata = Dictionary(uniqueKeysWithValues: try Row.fetchAll(db, sql: """
+                        SELECT id, name, description, created, last_modified
+                        FROM highlight_sets
+                        """).map { row in
+                            let id: String = row["id"]
+                            return (id, ImportedHighlightSetMetadata(
+                                name: row["name"],
+                                description: row["description"],
+                                created: row["created"],
+                                lastModified: row["last_modified"]
+                            ))
+                        })
+                } else {
+                    setMetadata = [:]
+                }
                 let themes: [LampHighlightTheme]
                 if tables.contains("highlight_themes") {
-                    themes = try Row.fetchAll(db, sql: """
-                        SELECT ? AS set_id, color, style, name, description
-                        FROM highlight_themes ORDER BY name, color, style
-                        """, arguments: [moduleID]).compactMap(makeHighlightTheme)
+                    let themeColumns = try columnNames(in: db, table: "highlight_themes")
+                    if themeColumns.contains("set_id") {
+                        themes = try Row.fetchAll(db, sql: """
+                            SELECT set_id, color, style, name, description
+                            FROM highlight_themes ORDER BY set_id, name, color, style
+                            """).compactMap(makeHighlightTheme)
+                    } else {
+                        themes = try Row.fetchAll(db, sql: """
+                            SELECT ? AS set_id, color, style, name, description
+                            FROM highlight_themes ORDER BY name, color, style
+                            """, arguments: [moduleID]).compactMap(makeHighlightTheme)
+                    }
                 } else {
                     themes = []
                 }
@@ -2604,7 +2986,8 @@ public actor LampLibrary {
                     description: description,
                     created: created,
                     lastModified: lastModified,
-                    themes: themes
+                    themes: themes,
+                    setMetadata: setMetadata
                 )
             }
             throw LampLibraryError.unsupportedModuleSchema
@@ -2629,16 +3012,8 @@ public actor LampLibrary {
                 }
                 let id = "personal-notes:\(note.reference)"
                 let incomingTimestamp = Int(note.lastModified.timeIntervalSince1970)
-                let existing = try Row.fetchOne(db, sql: """
-                    SELECT last_modified FROM personal_notes WHERE id = ?
-                    """, arguments: [id])
-                let existingTimestamp: Int? = existing?["last_modified"]
-                if let existingTimestamp,
-                   incomingTimestamp == 0 || incomingTimestamp <= existingTimestamp {
-                    skippedCount += 1
-                    continue
-                }
                 let referencesData = try JSONEncoder().encode(note.verseReferences)
+                let referencesJSON = String(decoding: referencesData, as: UTF8.self)
                 let footnotes = note.footnotes.map { footnote -> [String: String] in
                     var value = ["id": footnote.id, "content": footnote.content]
                     if let kind = footnote.kind { value["type"] = kind }
@@ -2648,6 +3023,33 @@ public actor LampLibrary {
                     withJSONObject: footnotes,
                     options: [.sortedKeys]
                 )
+                let footnotesJSON = String(decoding: footnotesData, as: UTF8.self)
+                let existing = try Row.fetchOne(db, sql: """
+                    SELECT title, content, verse_refs_json, footnotes_json, last_modified
+                    FROM personal_notes WHERE id = ?
+                    """, arguments: [id])
+                let existingTimestamp: Int? = existing?["last_modified"]
+                if let existingTimestamp {
+                    let existingTitle: String? = existing?["title"]
+                    let existingContent: String? = existing?["content"]
+                    let existingReferences: String? = existing?["verse_refs_json"]
+                    let existingFootnotes: String? = existing?["footnotes_json"]
+                    let decision = LampSyncMerge.decide(
+                        localModified: existingTimestamp,
+                        incomingModified: incomingTimestamp,
+                        sameContent: existingTitle == note.title
+                            && existingContent == note.content
+                            && (existingReferences ?? "[]") == referencesJSON
+                            && (existingFootnotes ?? "[]") == footnotesJSON
+                    )
+                    if decision == .conflict {
+                        throw LampLibraryError.syncConflict("note \(note.reference)")
+                    }
+                    if decision != .incoming {
+                        skippedCount += 1
+                        continue
+                    }
+                }
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO personal_notes (
                         id, module_id, verse_id, book, chapter, verse,
@@ -2661,8 +3063,8 @@ public actor LampLibrary {
                         components.verse,
                         note.title,
                         note.content,
-                        String(decoding: referencesData, as: UTF8.self),
-                        String(decoding: footnotesData, as: UTF8.self),
+                        referencesJSON,
+                        footnotesJSON,
                         incomingTimestamp > 0 ? incomingTimestamp : importTimestamp,
                     ])
                 importedCount += 1
@@ -2683,16 +3085,18 @@ public actor LampLibrary {
         description: String? = nil,
         created: Int? = nil,
         lastModified: Int? = nil,
-        themes: [LampHighlightTheme] = []
+        themes: [LampHighlightTheme] = [],
+        setMetadata: [String: ImportedHighlightSetMetadata] = [:]
     ) throws -> LampStudyImportResult {
         let queue = try openUserDatabase()
         let now = Int(Date().timeIntervalSince1970)
         var importedCount = 0
         var skippedCount = 0
         try queue.write { db in
-            for translationGroup in Dictionary(grouping: highlights, by: \.translationID) {
-                let translationID = translationGroup.key
-                let setID = moduleID
+            for setGroup in Dictionary(grouping: highlights, by: \.setID) {
+                let setID = setGroup.key
+                guard let translationID = setGroup.value.first?.translationID else { continue }
+                let metadata = setMetadata[setID]
                 try db.execute(sql: """
                     INSERT INTO highlight_sets (
                         id, name, description, translation_id, created, last_modified
@@ -2700,16 +3104,17 @@ public actor LampLibrary {
                     ON CONFLICT(id) DO UPDATE SET
                         name = excluded.name,
                         description = excluded.description,
+                        translation_id = excluded.translation_id,
                         last_modified = MAX(highlight_sets.last_modified, excluded.last_modified)
                     """, arguments: [
                         setID,
-                        name ?? "My Highlights",
-                        description,
+                        metadata?.name ?? name ?? "My Highlights",
+                        metadata?.description ?? description,
                         translationID,
-                        created ?? now,
-                        lastModified ?? now,
+                        metadata?.created ?? created ?? now,
+                        metadata?.lastModified ?? lastModified ?? now,
                     ])
-                for highlight in translationGroup.value {
+                for highlight in setGroup.value {
                     let components = LampBibleReferenceFormatter.components(of: highlight.reference)
                     guard (1...66).contains(components.book),
                           components.chapter > 0,
@@ -2751,7 +3156,7 @@ public actor LampLibrary {
                         ])
                     importedCount += 1
                 }
-                for theme in themes {
+                for theme in themes where theme.setID == setID {
                     try db.execute(sql: """
                         INSERT INTO highlight_themes (set_id, color, style, name, description)
                         VALUES (?, ?, ?, ?, ?)
@@ -2774,6 +3179,13 @@ public actor LampLibrary {
             importedCount: importedCount,
             skippedCount: skippedCount
         )
+    }
+
+    private struct ImportedHighlightSetMetadata {
+        let name: String
+        let description: String?
+        let created: Int?
+        let lastModified: Int?
     }
 
     private func normalizedHighlightColor(_ color: String?) -> String? {
@@ -2837,10 +3249,29 @@ public actor LampLibrary {
         throw LampLibraryError.moduleNotFound(moduleID)
     }
 
+    /// A read-only connection to `url`, reused across calls.
+    ///
+    /// Opening a connection is not free: it maps the file, reads the header and
+    /// parses the schema. The library answers a great many small queries, so
+    /// opening one per query meant that fixed cost dominated reads whose SQL takes
+    /// well under a millisecond — measured at roughly 200 ms per lookup against a
+    /// bundled database of a few hundred megabytes.
+    ///
+    /// `forgetOpenDatabases()` drops the cache whenever a database file is
+    /// rewritten or removed, so nothing can read through a stale handle.
     private func openReadOnlyDatabase(at url: URL) throws -> DatabaseQueue {
+        if let existing = openDatabases[url.path] { return existing }
         var configuration = Configuration()
         configuration.readonly = true
-        return try DatabaseQueue(path: url.path, configuration: configuration)
+        let queue = try DatabaseQueue(path: url.path, configuration: configuration)
+        openDatabases[url.path] = queue
+        return queue
+    }
+
+    /// Drops every cached connection. Called after any write that could replace a
+    /// database file underneath one.
+    private func forgetOpenDatabases() {
+        openDatabases.removeAll()
     }
 
     private func preparedBundledDatabaseURL() throws -> URL? {
@@ -2878,7 +3309,10 @@ public actor LampLibrary {
         } else {
             databaseData = sourceData
         }
+        // The bundled database is being replaced on disk, so any connection still
+        // held to the previous copy has to go before the new one is opened below.
         try databaseData.write(to: databaseURL, options: [.atomic])
+        forgetOpenDatabases()
 
         // Verified here, once, rather than on every read of the bundled modules.
         // The version marker is written only after the check passes, so a corrupt
@@ -3016,7 +3450,9 @@ public actor LampLibrary {
                     key_scriptures_json TEXT NOT NULL,
                     summary TEXT,
                     content TEXT NOT NULL,
+                    content_json TEXT,
                     footnotes TEXT,
+                    media_json TEXT,
                     created INTEGER NOT NULL,
                     last_modified INTEGER NOT NULL
                 );
@@ -3057,6 +3493,14 @@ public actor LampLibrary {
             if !personalNoteColumns.contains("footnotes_json") {
                 try db.execute(sql: "ALTER TABLE personal_notes ADD COLUMN footnotes_json TEXT")
             }
+            let devotionalColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(personal_devotionals)")
+                .compactMap { $0["name"] as String? }
+            if !devotionalColumns.contains("media_json") {
+                try db.execute(sql: "ALTER TABLE personal_devotionals ADD COLUMN media_json TEXT")
+            }
+            if !devotionalColumns.contains("content_json") {
+                try db.execute(sql: "ALTER TABLE personal_devotionals ADD COLUMN content_json TEXT")
+            }
         }
         return queue
     }
@@ -3088,11 +3532,14 @@ public actor LampLibrary {
         let scripturesJSON: String = row["key_scriptures_json"]
         let createdTimestamp: Int = row["created"]
         let modifiedTimestamp: Int = row["last_modified"]
+        let storedTitle: String = row["title"]
         return LampDevotional(
             id: row["id"],
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
-            title: row["title"],
+            moduleName: "My Writing",
+            title: storedTitle == "Untitled Devotional"
+                ? "Untitled"
+                : storedTitle,
             subtitle: row["subtitle"],
             author: row["author"],
             date: row["devotional_date"],
@@ -3103,7 +3550,9 @@ public actor LampLibrary {
             keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
             summary: row["summary"],
             content: row["content"],
+            contentJSON: row["content_json"],
             footnotes: row["footnotes"],
+            mediaJSON: row["media_json"],
             created: Date(timeIntervalSince1970: TimeInterval(createdTimestamp)),
             lastModified: Date(timeIntervalSince1970: TimeInterval(modifiedTimestamp)),
             isEditable: true
@@ -3303,10 +3752,16 @@ public actor LampLibrary {
                     compressedByteCount: compressedByteCount
                 )
             }
+            let highlightModuleID = tables.contains("module_meta")
+                ? try String.fetchOne(db, sql: "SELECT id FROM module_meta LIMIT 1")
+                : nil
             if tables.contains("highlight_meta"),
                let row = try Row.fetchOne(db, sql: "SELECT id, name FROM highlight_meta LIMIT 1") {
+                guard let id = formatID ?? highlightModuleID ?? fallbackID else {
+                    throw LampLibraryError.missingModuleMetadata
+                }
                 return LampInstalledModule(
-                    id: formatID ?? row["id"],
+                    id: id,
                     kind: declaredKind ?? .highlights,
                     name: row["name"],
                     compressedByteCount: compressedByteCount
@@ -3315,9 +3770,8 @@ public actor LampLibrary {
             if tables.contains("highlight_sets"),
                let row = try Row.fetchOne(db, sql: "SELECT * FROM highlight_sets LIMIT 1") {
                 let metadataModuleID: String? = row.hasColumn("module_id") ? row["module_id"] : nil
-                let setID: String? = row["id"]
                 let name: String? = row["name"]
-                guard let id = formatID ?? metadataModuleID ?? setID ?? fallbackID else {
+                guard let id = formatID ?? highlightModuleID ?? metadataModuleID ?? fallbackID else {
                     throw LampLibraryError.missingModuleMetadata
                 }
                 return LampInstalledModule(
@@ -3349,6 +3803,541 @@ public actor LampLibrary {
               identifier.unicodeScalars.allSatisfy(allowed.contains) else {
             throw LampLibraryError.unsafeModuleIdentifier(identifier)
         }
+    }
+
+    private func installedModuleForExport(moduleID: String) throws -> LampInstalledModule {
+        guard let module = try installedModules().first(where: { $0.id == moduleID }) else {
+            throw LampLibraryError.moduleNotFound(moduleID)
+        }
+        guard !module.isBundled else {
+            throw LampLibraryError.invalidPersonalContent(
+                "Built-in modules are supplied with Lamp Bible and do not need to be exported."
+            )
+        }
+        return module
+    }
+
+    private func markdownExport(for module: LampInstalledModule) throws -> String {
+        let markdown: String
+        switch module.kind {
+        case .book:
+            markdown = try bookMarkdown(module: module)
+        case .devotional:
+            markdown = try devotionalMarkdown(module: module)
+        case .notes:
+            markdown = try notesMarkdown(module: module)
+        case .translation, .dictionary, .commentary, .plan, .highlights, .quiz:
+            throw LampLibraryError.invalidPersonalContent(
+                "\(module.name) cannot be represented as Markdown. Export it as a Lamp module instead."
+            )
+        }
+        return markdown.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+    }
+
+    private func bookMarkdown(module: LampInstalledModule) throws -> String {
+        guard let book = try bookModules(moduleIDs: [module.id]).first else {
+            throw LampLibraryError.unsupportedModuleSchema
+        }
+        var blocks = ["# \(markdownHeading(book.title, fallback: module.name))"]
+        if let subtitle = markdownValue(book.subtitle) {
+            blocks.append("*\(subtitle)*")
+        }
+
+        var credits: [String] = []
+        if let author = markdownValue(book.author) { credits.append("**Author:** \(author)") }
+        if let editor = markdownValue(book.editor) { credits.append("**Editor:** \(editor)") }
+        if let publisher = markdownValue(book.publisher) { credits.append("**Publisher:** \(publisher)") }
+        if let year = book.year { credits.append("**Year:** \(year)") }
+        if !credits.isEmpty { blocks.append(credits.joined(separator: " | ")) }
+        if let description = markdownValue(book.description) { blocks.append(description) }
+
+        for section in try bookSections(moduleID: module.id) {
+            let level = min(max(section.depth + 2, 2), 6)
+            var sectionBlocks = [
+                "\(String(repeating: "#", count: level)) \(markdownHeading(section.title, fallback: section.sectionID))",
+            ]
+            if let subtitle = markdownValue(section.subtitle) {
+                sectionBlocks.append("*\(subtitle)*")
+            }
+            if !section.keyScriptures.isEmpty {
+                sectionBlocks.append(
+                    "**Scripture:** " + section.keyScriptures.map(\.displayDescription).joined(separator: ", ")
+                )
+            }
+            if let content = markdownValue(section.content) { sectionBlocks.append(content) }
+            blocks.append(sectionBlocks.joined(separator: "\n\n"))
+        }
+        return blocks.joined(separator: "\n\n")
+    }
+
+    private func devotionalMarkdown(module: LampInstalledModule) throws -> String {
+        let entries = try devotionals(moduleIDs: [module.id])
+        return devotionalMarkdown(title: module.name, entries: entries)
+    }
+
+    private func devotionalMarkdown(title: String, entries: [LampDevotional]) -> String {
+        var blocks = ["# \(markdownHeading(title, fallback: "Writing"))"]
+        for devotional in entries {
+            var entry = ["## \(markdownHeading(devotional.title, fallback: "Untitled"))"]
+            if let subtitle = markdownValue(devotional.subtitle) { entry.append("*\(subtitle)*") }
+
+            var metadata: [String] = []
+            if let author = markdownValue(devotional.author) { metadata.append("**Author:** \(author)") }
+            if let date = markdownValue(devotional.date) { metadata.append("**Date:** \(date)") }
+            if !devotional.tags.isEmpty { metadata.append("**Tags:** \(devotional.tags.joined(separator: ", "))") }
+            if let category = markdownValue(devotional.category) { metadata.append("**Category:** \(category)") }
+            if let series = markdownValue(devotional.seriesName) { metadata.append("**Series:** \(series)") }
+            if let order = devotional.seriesOrder { metadata.append("**Series Order:** \(order)") }
+            if !metadata.isEmpty { entry.append(metadata.joined(separator: " | ")) }
+            if !devotional.keyScriptures.isEmpty {
+                entry.append(
+                    "**Scripture:** " + devotional.keyScriptures.map(\.displayDescription).joined(separator: ", ")
+                )
+            }
+            if let summary = markdownValue(devotional.summary) {
+                entry.append("> **Summary:** \(summary.replacingOccurrences(of: "\n", with: "\n> "))")
+            }
+            if let content = markdownValue(devotional.content) { entry.append(content) }
+            if let footnotes = markdownValue(devotional.footnotes) {
+                entry.append("### Footnotes\n\n\(footnotes)")
+            }
+            blocks.append(entry.joined(separator: "\n\n"))
+        }
+        return blocks.joined(separator: "\n\n---\n\n")
+    }
+
+    private func notesMarkdown(module: LampInstalledModule) throws -> String {
+        let queue = try openDatabase(moduleID: module.id)
+        let notes = try queue.read { db -> [LampVerseNote] in
+            guard try tableNames(in: db).contains("note_entries") else {
+                throw LampLibraryError.unsupportedModuleSchema
+            }
+            let columns = try columnNames(in: db, table: "note_entries")
+            let references = columns.contains("verse_refs_json")
+                ? "verse_refs_json"
+                : columns.contains("verse_refs")
+                    ? "verse_refs AS verse_refs_json" : "NULL AS verse_refs_json"
+            let footnotes = columns.contains("footnotes_json")
+                ? "footnotes_json" : "NULL AS footnotes_json"
+            let title = columns.contains("title") ? "title" : "NULL AS title"
+            let modified = columns.contains("last_modified")
+                ? "last_modified" : "NULL AS last_modified"
+            return try Row.fetchAll(db, sql: """
+                SELECT id, verse_id, \(title), content,
+                       \(references), \(footnotes), \(modified)
+                FROM note_entries
+                ORDER BY verse_id, last_modified, id
+                """).map { row in
+                    let referencesJSON: String? = row["verse_refs_json"]
+                    let verseReferences = referencesJSON
+                        .flatMap { $0.data(using: .utf8) }
+                        .flatMap { try? JSONDecoder().decode([Int].self, from: $0) } ?? []
+                    let modifiedTimestamp: Int? = row["last_modified"]
+                    let footnotesJSON: String? = row["footnotes_json"]
+                    return LampVerseNote(
+                        id: row["id"],
+                        moduleID: module.id,
+                        reference: row["verse_id"],
+                        title: row["title"],
+                        content: row["content"],
+                        verseReferences: verseReferences,
+                        footnotes: verseFootnotes(from: footnotesJSON),
+                        lastModified: Date(timeIntervalSince1970: TimeInterval(modifiedTimestamp ?? 0))
+                    )
+                }
+        }
+
+        return notesMarkdown(title: module.name, notes: notes)
+    }
+
+    private func notesMarkdown(title: String, notes: [LampVerseNote]) -> String {
+        var blocks = ["# \(markdownHeading(title, fallback: "Notes"))"]
+        for note in notes {
+            let endReference = note.verseReferences.filter { $0 >= note.reference }.max()
+                ?? note.reference
+            var entry = [
+                "## \(LampBibleReferenceFormatter.describeRange(from: note.reference, to: endReference))",
+            ]
+            if let title = markdownValue(note.title) { entry.append("**Title:** \(title)") }
+            if let content = markdownValue(note.content) { entry.append(content) }
+            if !note.footnotes.isEmpty {
+                entry.append("### Footnotes\n\n" + note.footnotes.map {
+                    "- **\($0.id):** \($0.content)"
+                }.joined(separator: "\n"))
+            }
+            blocks.append(entry.joined(separator: "\n\n"))
+        }
+        return blocks.joined(separator: "\n\n")
+    }
+
+    private func allPersonalNotes() throws -> [LampVerseNote] {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT id, module_id, verse_id, title, content,
+                       verse_refs_json, footnotes_json, last_modified
+                FROM personal_notes
+                WHERE module_id = 'personal-notes'
+                ORDER BY book, chapter, verse, last_modified, id
+                """).map(makeVerseNote)
+        }
+    }
+
+    private func personalModuleArchive(for module: LampPersonalModule) throws -> Data {
+        let databaseURL = fileManager.temporaryDirectory
+            .appendingPathComponent("lamp-personal-export-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        defer {
+            try? fileManager.removeItem(at: databaseURL)
+            try? fileManager.removeItem(atPath: databaseURL.path + "-shm")
+            try? fileManager.removeItem(atPath: databaseURL.path + "-wal")
+        }
+
+        switch module {
+        case .writing:
+            try createPersonalWritingDatabase(at: databaseURL)
+        case .notes:
+            try createPersonalNotesDatabase(at: databaseURL)
+        case .highlights:
+            try createPersonalHighlightsDatabase(at: databaseURL)
+        }
+
+        let databaseData = try Data(contentsOf: databaseURL, options: [.mappedIfSafe])
+        guard let compressedData = try? (databaseData as NSData).compressed(using: .zlib) as Data,
+              let verification = try? (compressedData as NSData).decompressed(using: .zlib) as Data,
+              verification == databaseData else {
+            throw LampLibraryError.invalidPersonalContent(
+                "Lamp Bible could not create the portable \(module.name) archive."
+            )
+        }
+        return compressedData
+    }
+
+    private func createPersonalWritingDatabase(at databaseURL: URL) throws {
+        let entries = try personalDevotionals()
+        try createPersonalExportDatabase(
+            at: databaseURL,
+            module: .writing,
+            schema: """
+                CREATE TABLE module_meta (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                    author TEXT, version TEXT, is_editable INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE devotional_entries (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL,
+                    title TEXT NOT NULL, subtitle TEXT, author TEXT, date TEXT,
+                    tags TEXT, category TEXT, series_id TEXT, series_name TEXT,
+                    series_order INTEGER, key_scriptures_json TEXT,
+                    summary_json TEXT, content_json TEXT NOT NULL,
+                    footnotes_json TEXT, related_ids TEXT, created INTEGER NOT NULL,
+                    last_modified INTEGER, search_text TEXT, record_change_tag TEXT,
+                    subscription_id TEXT, is_read_only INTEGER, media_json TEXT
+                );
+                CREATE INDEX idx_dev_module ON devotional_entries(module_id);
+                CREATE INDEX idx_dev_date ON devotional_entries(date);
+                CREATE INDEX idx_dev_series ON devotional_entries(series_id, series_order);
+                """
+        ) { db in
+            try db.execute(sql: """
+                INSERT INTO module_meta (id, name, version, is_editable)
+                VALUES (?, ?, ?, 1)
+                """, arguments: [
+                    LampPersonalModule.writing.id,
+                    LampPersonalModule.writing.name,
+                    LampModuleCompiler.formatVersion,
+                ])
+            for devotional in entries {
+                let scriptureValues = devotional.keyScriptures.map { scripture -> [String: Any] in
+                    var value: [String: Any] = ["sv": scripture.startReference]
+                    if let endReference = scripture.endReference { value["ev"] = endReference }
+                    if let text = scripture.text { value["label"] = text }
+                    return value
+                }
+                let contentJSON: String
+                if let stored = devotional.contentJSON {
+                    contentJSON = stored
+                } else {
+                    let blocks: [[String: Any]] = [[
+                        "type": "paragraph", "content": ["text": devotional.content],
+                    ]]
+                    contentJSON = String(decoding: try JSONSerialization.data(
+                        withJSONObject: blocks, options: [.sortedKeys]
+                    ), as: UTF8.self)
+                }
+                let searchText = [
+                    devotional.title,
+                    devotional.subtitle,
+                    devotional.summary,
+                    devotional.content,
+                    devotional.footnotes,
+                ].compactMap { $0 }.joined(separator: " ")
+                try db.execute(sql: """
+                    INSERT INTO devotional_entries (
+                        id, module_id, title, subtitle, author, date, tags, category,
+                        series_id, series_name, series_order, key_scriptures_json,
+                        summary_json, content_json, footnotes_json, related_ids,
+                        created, last_modified, search_text, record_change_tag,
+                        subscription_id, is_read_only, media_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL,
+                              ?, ?, ?, NULL, NULL, 0, ?)
+                    """, arguments: [
+                        devotional.id,
+                        LampPersonalModule.writing.id,
+                        devotional.title,
+                        devotional.subtitle,
+                        devotional.author,
+                        devotional.date,
+                        devotional.tags.joined(separator: ","),
+                        devotional.category,
+                        devotional.seriesName,
+                        devotional.seriesName,
+                        devotional.seriesOrder,
+                        try jsonFragmentString(scriptureValues),
+                        try jsonFragmentString(devotional.summary),
+                        contentJSON,
+                        try jsonFragmentString(devotional.footnotes),
+                        Int((devotional.created ?? Date()).timeIntervalSince1970),
+                        Int((devotional.lastModified ?? Date()).timeIntervalSince1970),
+                        searchText,
+                        devotional.mediaJSON,
+                    ])
+            }
+        }
+    }
+
+    private func createPersonalNotesDatabase(at databaseURL: URL) throws {
+        let notes = try allPersonalNotes()
+        try createPersonalExportDatabase(
+            at: databaseURL,
+            module: .notes,
+            schema: """
+                CREATE TABLE module_meta (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                    author TEXT, version TEXT, is_editable INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE note_entries (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, verse_id INTEGER NOT NULL,
+                    book INTEGER NOT NULL, chapter INTEGER NOT NULL, verse INTEGER NOT NULL,
+                    title TEXT, content TEXT NOT NULL, verse_refs_json TEXT,
+                    last_modified INTEGER, footnotes_json TEXT, search_text TEXT,
+                    record_change_tag TEXT
+                );
+                CREATE INDEX idx_note_module ON note_entries(module_id);
+                CREATE INDEX idx_note_verse ON note_entries(verse_id);
+                CREATE INDEX idx_note_chapter ON note_entries(book, chapter, verse);
+                """
+        ) { db in
+            try db.execute(sql: """
+                INSERT INTO module_meta (id, name, version, is_editable)
+                VALUES (?, ?, ?, 1)
+                """, arguments: [
+                    LampPersonalModule.notes.id,
+                    LampPersonalModule.notes.name,
+                    LampModuleCompiler.formatVersion,
+                ])
+            for note in notes {
+                let components = LampBibleReferenceFormatter.components(of: note.reference)
+                let footnotes = note.footnotes.map { footnote -> [String: String] in
+                    var value = ["id": footnote.id, "content": footnote.content]
+                    if let kind = footnote.kind { value["type"] = kind }
+                    return value
+                }
+                try db.execute(sql: """
+                    INSERT INTO note_entries (
+                        id, module_id, verse_id, book, chapter, verse, title, content,
+                        verse_refs_json, last_modified, footnotes_json, search_text,
+                        record_change_tag
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    """, arguments: [
+                        note.id,
+                        LampPersonalModule.notes.id,
+                        note.reference,
+                        components.book,
+                        components.chapter,
+                        components.verse,
+                        note.title,
+                        note.content,
+                        try jsonFragmentString(note.verseReferences),
+                        Int(note.lastModified.timeIntervalSince1970),
+                        try jsonFragmentString(footnotes),
+                        [note.title, note.content].compactMap { $0 }.joined(separator: " "),
+                    ])
+            }
+        }
+    }
+
+    private func createPersonalHighlightsDatabase(at databaseURL: URL) throws {
+        let sourceQueue = try openUserDatabase()
+        let export = try sourceQueue.read { db -> (
+            sets: [LampHighlightSet],
+            highlights: [LampVerseHighlight],
+            themes: [LampHighlightTheme]
+        ) in
+            let sets = try Row.fetchAll(db, sql: """
+                SELECT * FROM highlight_sets ORDER BY name COLLATE NOCASE, created, id
+                """).map { row in
+                    let created: Int = row["created"]
+                    let modified: Int = row["last_modified"]
+                    return LampHighlightSet(
+                        id: row["id"],
+                        name: row["name"],
+                        description: row["description"],
+                        translationID: row["translation_id"],
+                        created: Date(timeIntervalSince1970: TimeInterval(created)),
+                        lastModified: Date(timeIntervalSince1970: TimeInterval(modified))
+                    )
+                }
+            let highlights = try Row.fetchAll(db, sql: """
+                SELECT h.id, h.set_id, s.translation_id, h.ref,
+                       h.sc, h.ec, h.style, h.color
+                FROM highlights h JOIN highlight_sets s ON s.id = h.set_id
+                ORDER BY h.set_id, h.ref, h.sc, h.ec, h.id
+                """).map(makeVerseHighlight)
+            let themes = try Row.fetchAll(db, sql: """
+                SELECT set_id, color, style, name, description
+                FROM highlight_themes ORDER BY set_id, name, color, style
+                """).compactMap(makeHighlightTheme)
+            return (sets, highlights, themes)
+        }
+
+        try createPersonalExportDatabase(
+            at: databaseURL,
+            module: .highlights,
+            schema: """
+                CREATE TABLE module_meta (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                    author TEXT, version TEXT, is_editable INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE highlight_sets (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                    translation_id TEXT NOT NULL, created INTEGER NOT NULL,
+                    last_modified INTEGER NOT NULL
+                );
+                CREATE TABLE highlights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    set_id TEXT NOT NULL REFERENCES highlight_sets(id) ON DELETE CASCADE,
+                    ref INTEGER NOT NULL, sc INTEGER NOT NULL, ec INTEGER NOT NULL,
+                    style INTEGER NOT NULL, color TEXT
+                );
+                CREATE INDEX idx_highlights_set_ref ON highlights(set_id, ref, sc);
+                CREATE TABLE highlight_themes (
+                    set_id TEXT NOT NULL REFERENCES highlight_sets(id) ON DELETE CASCADE,
+                    color TEXT NOT NULL, style INTEGER NOT NULL, name TEXT NOT NULL,
+                    description TEXT, PRIMARY KEY (set_id, color, style)
+                );
+                """
+        ) { db in
+            try db.execute(sql: """
+                INSERT INTO module_meta (id, name, version, is_editable)
+                VALUES (?, ?, ?, 1)
+                """, arguments: [
+                    LampPersonalModule.highlights.id,
+                    LampPersonalModule.highlights.name,
+                    LampModuleCompiler.formatVersion,
+                ])
+            for set in export.sets {
+                try db.execute(sql: """
+                    INSERT INTO highlight_sets (
+                        id, name, description, translation_id, created, last_modified
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """, arguments: [
+                        set.id,
+                        set.name,
+                        set.description,
+                        set.translationID,
+                        Int(set.created.timeIntervalSince1970),
+                        Int(set.lastModified.timeIntervalSince1970),
+                    ])
+            }
+            for highlight in export.highlights {
+                try db.execute(sql: """
+                    INSERT INTO highlights (id, set_id, ref, sc, ec, style, color)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: [
+                        highlight.id,
+                        highlight.setID,
+                        highlight.reference,
+                        highlight.startOffset,
+                        highlight.endOffset,
+                        highlight.style.rawValue,
+                        highlight.color,
+                    ])
+            }
+            for theme in export.themes {
+                try db.execute(sql: """
+                    INSERT INTO highlight_themes (set_id, color, style, name, description)
+                    VALUES (?, ?, ?, ?, ?)
+                    """, arguments: [
+                        theme.setID,
+                        theme.color,
+                        theme.style.rawValue,
+                        theme.name,
+                        theme.description,
+                    ])
+            }
+        }
+    }
+
+    private func createPersonalExportDatabase(
+        at databaseURL: URL,
+        module: LampPersonalModule,
+        schema: String,
+        populate: (Database) throws -> Void
+    ) throws {
+        var configuration = Configuration()
+        configuration.label = "LampCore.PersonalModuleExport"
+        let queue = try DatabaseQueue(path: databaseURL.path, configuration: configuration)
+        try queue.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA journal_mode = DELETE")
+            try db.execute(sql: "PRAGMA foreign_keys = ON")
+            try db.execute(sql: """
+                CREATE TABLE module_format (
+                    format_version TEXT NOT NULL,
+                    module_type TEXT NOT NULL,
+                    module_id TEXT NOT NULL
+                )
+                """)
+            try db.execute(
+                sql: """
+                    INSERT INTO module_format (format_version, module_type, module_id)
+                    VALUES (?, ?, ?)
+                    """,
+                arguments: [
+                    LampModuleCompiler.formatVersion,
+                    module.kind.rawValue,
+                    module.id,
+                ]
+            )
+            try db.execute(sql: schema)
+            try populate(db)
+            try db.execute(sql: "ANALYZE")
+            try db.execute(sql: "VACUUM")
+        }
+        let integrityResults = try queue.read { db in
+            try String.fetchAll(db, sql: "PRAGMA quick_check")
+        }
+        guard integrityResults == ["ok"] else {
+            throw LampLibraryError.integrityCheckFailed(integrityResults.joined(separator: "; "))
+        }
+    }
+
+    private func jsonFragmentString(_ value: Any?) throws -> String? {
+        guard let value else { return nil }
+        let data = try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]
+        )
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func markdownHeading(_ value: String, fallback: String) -> String {
+        markdownValue(value)?.replacingOccurrences(of: "#", with: "\\#") ?? fallback
+    }
+
+    private func markdownValue(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
     }
 
     private func storageKey(for moduleID: String) -> String {
@@ -3408,8 +4397,92 @@ public actor LampLibrary {
                 gloss: plainText(from: object["gloss"]),
                 shortDefinition: plainText(from: object["shortDefinition"] ?? object["short_definition"]),
                 definition: plainText(from: object["definition"] ?? object["def"]),
-                usage: plainText(from: object["usage"])
+                derivation: plainText(from: object["derivation"]),
+                usage: plainText(from: object["usage"]),
+                scriptureLinks: dictionaryScriptureLinks(from: object),
+                dictionaryLinks: dictionaryEntryLinks(from: object)
             )
+        }
+    }
+
+    /// Dictionary senses can link scripture in two complementary ways: inline
+    /// annotated text and an explicit `references` collection. Preserve both so
+    /// clients can make inline labels interactive and append references that do
+    /// not occur verbatim in the prose.
+    private func dictionaryScriptureLinks(from sense: [String: Any]) -> [LampScriptureLink] {
+        var links: [LampScriptureLink] = []
+        collectScriptureLinks(from: sense, into: &links)
+
+        if let references = sense["references"] as? [Any] {
+            for value in references {
+                guard let reference = value as? [String: Any],
+                      let startReference = integerValue(reference["sv"]) else { continue }
+                let endReference = integerValue(reference["ev"])
+                guard !links.contains(where: {
+                    $0.startReference == startReference && $0.endReference == endReference
+                }) else { continue }
+                links.append(LampScriptureLink(
+                    text: stringValue(reference["label"] ?? reference["text"]),
+                    startReference: startReference,
+                    endReference: endReference
+                ))
+            }
+        }
+
+        var seen = Set<String>()
+        return links.filter { seen.insert($0.id).inserted }
+    }
+
+    /// Extracts annotated links to other lexicon entries. Strong's source data
+    /// places these primarily in annotated derivation fields, but walking the
+    /// complete sense also supports links embedded in definitions and usage notes.
+    private func dictionaryEntryLinks(from sense: [String: Any]) -> [LampDictionaryLink] {
+        var links: [LampDictionaryLink] = []
+        collectDictionaryEntryLinks(from: sense, into: &links)
+        var seen = Set<String>()
+        return links.filter { seen.insert($0.id).inserted }
+    }
+
+    private func collectDictionaryEntryLinks(
+        from value: Any,
+        into links: inout [LampDictionaryLink]
+    ) {
+        if let values = value as? [Any] {
+            for value in values {
+                collectDictionaryEntryLinks(from: value, into: &links)
+            }
+            return
+        }
+        guard let object = value as? [String: Any] else { return }
+
+        let parentText = stringValue(object["text"])
+        if let annotations = object["annotations"] as? [Any] {
+            for annotationValue in annotations {
+                guard let annotation = annotationValue as? [String: Any] else { continue }
+                let annotationData = annotation["data"] as? [String: Any]
+                guard let key = stringValue(
+                    annotationData?["strongs"]
+                        ?? annotationData?["key"]
+                        ?? annotation["strongs"]
+                        ?? annotation["key"]
+                )?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !key.isEmpty else { continue }
+                let startOffset = integerValue(annotation["start"])
+                let endOffset = integerValue(annotation["end"])
+                let derivedText = startOffset.flatMap { start in
+                    endOffset.flatMap { end in
+                        parentText.flatMap { substring(of: $0, from: start, to: end) }
+                    }
+                }
+                links.append(LampDictionaryLink(
+                    text: stringValue(annotation["text"]) ?? derivedText,
+                    key: key
+                ))
+            }
+        }
+
+        for (key, nestedValue) in object where key != "annotations" {
+            collectDictionaryEntryLinks(from: nestedValue, into: &links)
         }
     }
 
@@ -3570,6 +4643,23 @@ public actor LampLibrary {
         return plainText(from: value)
     }
 
+    private func annotatedText(
+        fromJSONString json: String
+    ) -> (text: String, annotations: [LampVerseAnnotation]) {
+        guard let data = json.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+            return (json, [])
+        }
+        let text = plainText(from: value) ?? json
+        guard let object = value as? [String: Any],
+              let annotations = object["annotations"] as? [Any],
+              let annotationData = try? JSONSerialization.data(withJSONObject: annotations),
+              let annotationJSON = String(data: annotationData, encoding: .utf8) else {
+            return (text, [])
+        }
+        return (text, verseAnnotations(from: annotationJSON, verseText: text))
+    }
+
     private func integerArray(fromJSONString json: String?) -> [Int] {
         guard let json, let data = json.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
@@ -3580,10 +4670,16 @@ public actor LampLibrary {
               let meta = root["meta"] as? [String: Any],
               let identifier = stringValue(meta["id"]),
               let title = stringValue(meta["title"]),
-              let content = plainText(from: root["content"]),
-              !content.isEmpty else {
+              let contentValue = root["content"] else {
             throw LampLibraryError.invalidPersonalContent("The devotional JSON needs meta.id, meta.title, and content.")
         }
+        // Title-only outlines are valid authored drafts. Their canonical JSON
+        // contains the content field, but its paragraph text is intentionally
+        // empty and should round-trip without becoming an import error.
+        let contentJSON = String(decoding: try JSONSerialization.data(
+            withJSONObject: contentValue, options: [.sortedKeys, .fragmentsAllowed]
+        ), as: UTF8.self)
+        let content = LampPortableDevotionalContent.plainText(from: contentJSON) ?? ""
         let tags = (meta["tags"] as? [Any])?.compactMap(stringValue) ?? []
         let series = meta["series"] as? [String: Any]
         let scripturesData = try JSONSerialization.data(
@@ -3591,6 +4687,17 @@ public actor LampLibrary {
             options: [.sortedKeys]
         )
         let scripturesJSON = String(decoding: scripturesData, as: UTF8.self)
+        let mediaJSON: String?
+        if let media = root["media"] {
+            guard let values = media as? [Any] else {
+                throw LampLibraryError.invalidPersonalContent("Invalid devotional media metadata.")
+            }
+            mediaJSON = String(decoding: try JSONSerialization.data(
+                withJSONObject: values, options: [.sortedKeys]
+            ), as: UTF8.self)
+        } else {
+            mediaJSON = nil
+        }
         let created = integerValue(meta["created"]).map {
             Date(timeIntervalSince1970: TimeInterval($0))
         }
@@ -3600,7 +4707,7 @@ public actor LampLibrary {
         return LampDevotional(
             id: identifier,
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
+            moduleName: "My Writing",
             title: title,
             subtitle: stringValue(meta["subtitle"]),
             author: stringValue(meta["author"]),
@@ -3612,7 +4719,9 @@ public actor LampLibrary {
             keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
             summary: plainText(from: root["summary"]),
             content: content,
+            contentJSON: contentJSON,
             footnotes: plainText(from: root["footnotes"]),
+            mediaJSON: mediaJSON,
             created: created,
             lastModified: modified,
             isEditable: true
@@ -3625,6 +4734,7 @@ public actor LampLibrary {
             guard try tableNames(in: db).contains("devotional_entries") else {
                 throw LampLibraryError.unsupportedModuleSchema
             }
+            let columns = try columnNames(in: db, table: "devotional_entries")
             let moduleName = try Row.fetchOne(db, sql: "SELECT name FROM module_meta LIMIT 1")
                 .flatMap { $0["name"] as String? } ?? "Imported Devotionals"
             return try Row.fetchAll(db, sql: "SELECT * FROM devotional_entries ORDER BY title").map { row in
@@ -3651,8 +4761,11 @@ public actor LampLibrary {
                     seriesOrder: row["series_order"],
                     keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
                     summary: plainText(fromJSONString: summaryJSON),
-                    content: plainText(fromJSONString: contentJSON) ?? contentJSON,
+                    content: LampPortableDevotionalContent.plainText(from: contentJSON)
+                        ?? contentJSON,
+                    contentJSON: contentJSON,
                     footnotes: plainText(fromJSONString: footnotesJSON),
+                    mediaJSON: columns.contains("media_json") ? row["media_json"] : nil,
                     created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
                     lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
                     isEditable: true

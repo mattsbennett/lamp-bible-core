@@ -508,6 +508,9 @@ private struct FixtureDirectory {
 
     func openLamp(_ lampURL: URL) throws -> DatabaseQueue {
         let compressed = try Data(contentsOf: lampURL)
+        _ = try LampPortableModuleInspector.inspect(
+            compressedData: compressed, requireImportSchema: true
+        )
         let database = try (compressed as NSData).decompressed(using: .zlib) as Data
         let databaseURL = url.appendingPathComponent("\(UUID().uuidString).sqlite")
         try database.write(to: databaseURL)

@@ -5,6 +5,284 @@ import LampModuleKit
 import Testing
 
 struct LampLibraryTests {
+    @Test func installsLegacyCompactHighlightsWithoutUsingSetIDAsModuleID() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-legacy-highlight-install-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("source.sqlite")
+        let archiveURL = root.appendingPathComponent("highlight-module.lamp")
+        let queue = try DatabaseQueue(path: databaseURL.path)
+        try await queue.write { db in
+            try db.execute(sql: "CREATE TABLE highlight_meta (id TEXT, name TEXT, translation_id TEXT)")
+            try db.execute(sql: "INSERT INTO highlight_meta VALUES ('set-uuid', 'My Set', 'TEST')")
+            try db.execute(sql: """
+                CREATE TABLE highlights (
+                    id INTEGER, ref INTEGER, sc INTEGER, ec INTEGER, style INTEGER, color TEXT
+                )
+                """)
+            try db.execute(sql: "INSERT INTO highlights VALUES (1, 43003016, 0, 4, 0, 'FFCC00')")
+        }
+        let archive = try (Data(contentsOf: databaseURL) as NSData).compressed(using: .zlib) as Data
+        try archive.write(to: archiveURL)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let installed = try await library.install(from: archiveURL)
+        #expect(installed.id == "highlight-module")
+        #expect(installed.kind == .highlights)
+        let highlights = try await library.moduleVerseHighlights(
+            moduleID: "highlight-module", reference: 43_003_016
+        )
+        #expect(highlights.first?.setID == "set-uuid")
+    }
+
+    @Test func personalStudyImportRejectsForeignOwnedArchiveRows() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-personal-ownership-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let source = LampLibrary(rootURL: root.appendingPathComponent("Source"))
+        let target = LampLibrary(rootURL: root.appendingPathComponent("Target"))
+        try await source.saveVerseNote(LampVerseNote(
+            id: "personal-notes:43003016", reference: 43_003_016,
+            content: "Remote note", lastModified: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        _ = try await source.saveVerseHighlight(
+            translationID: "TEST", reference: 43_003_016,
+            startOffset: 0, endOffset: 4, color: "#ffcc00"
+        )
+
+        for (module, corruptSQL) in [
+            (LampPersonalModule.notes, "UPDATE note_entries SET module_id = 'foreign'"),
+            (LampPersonalModule.highlights, "UPDATE module_meta SET id = 'foreign'")
+        ] {
+            let archiveURL = root.appendingPathComponent("\(module.id).lamp")
+            let databaseURL = root.appendingPathComponent("\(module.id).sqlite")
+            try await source.exportPersonalModule(module, format: .lamp, to: archiveURL)
+            let databaseData = try (Data(contentsOf: archiveURL) as NSData)
+                .decompressed(using: .zlib) as Data
+            try databaseData.write(to: databaseURL)
+            let queue = try DatabaseQueue(path: databaseURL.path)
+            try await queue.write { db in
+                try db.execute(sql: corruptSQL)
+            }
+            let corruptArchive = try (Data(contentsOf: databaseURL) as NSData)
+                .compressed(using: .zlib) as Data
+            try corruptArchive.write(to: archiveURL)
+
+            await #expect(throws: LampPortableModuleInspector.InspectionError.self) {
+                _ = try await target.importPersonalStudyData(from: archiveURL)
+            }
+        }
+        #expect(try await target.verseNotes(reference: 43_003_016).isEmpty)
+        #expect(try await target.verseHighlights(
+            translationID: "TEST", reference: 43_003_016
+        ).isEmpty)
+
+        // Mac downloads into a temporary filename. A legacy notes archive
+        // without module_format must use module_meta rather than that name.
+        let legacyURL = root.appendingPathComponent("random-download-name.lamp")
+        let legacyDatabaseURL = root.appendingPathComponent("legacy-notes.sqlite")
+        try await source.exportPersonalModule(.notes, format: .lamp, to: legacyURL)
+        let legacyData = try (Data(contentsOf: legacyURL) as NSData)
+            .decompressed(using: .zlib) as Data
+        try legacyData.write(to: legacyDatabaseURL)
+        let legacyQueue = try DatabaseQueue(path: legacyDatabaseURL.path)
+        try await legacyQueue.write { db in
+            try db.execute(sql: "DROP TABLE module_format")
+        }
+        let legacyArchive = try (Data(contentsOf: legacyDatabaseURL) as NSData)
+            .compressed(using: .zlib) as Data
+        try legacyArchive.write(to: legacyURL)
+        #expect(try await target.importPersonalStudyData(from: legacyURL).importedCount == 1)
+        #expect(try await target.verseNotes(reference: 43_003_016).first?.content == "Remote note")
+    }
+
+    @Test func installRejectsForeignOwnedRowsBeforeReplacingModule() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-owned-install-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("source.sqlite")
+        let archiveURL = root.appendingPathComponent("selected.lamp")
+        let queue = try DatabaseQueue(path: sourceURL.path)
+        try await queue.write { db in
+            try db.execute(sql: "CREATE TABLE module_format (module_id TEXT, module_type TEXT)")
+            try db.execute(sql: "INSERT INTO module_format VALUES ('selected', 'dictionary')")
+            try db.execute(sql: "CREATE TABLE module_metadata (id TEXT, name TEXT, language TEXT)")
+            try db.execute(sql: "INSERT INTO module_metadata VALUES ('selected', 'Installed dictionary', 'en')")
+            try db.execute(sql: "CREATE TABLE dictionary_entries (id TEXT, module_id TEXT)")
+            try db.execute(sql: "INSERT INTO dictionary_entries VALUES ('selected:G1', 'selected')")
+        }
+        let installedArchive = try (Data(contentsOf: sourceURL) as NSData)
+            .compressed(using: .zlib) as Data
+        try installedArchive.write(to: archiveURL)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        _ = try await library.install(from: archiveURL)
+
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE dictionary_entries SET module_id = 'foreign'")
+        }
+        let mixedArchive = try (Data(contentsOf: sourceURL) as NSData)
+            .compressed(using: .zlib) as Data
+        try mixedArchive.write(to: archiveURL)
+        await #expect(throws: LampPortableModuleInspector.InspectionError.self) {
+            _ = try await library.install(from: archiveURL)
+        }
+        let installedURL = try #require(FileManager.default.contentsOfDirectory(
+            at: library.rootURL.appendingPathComponent("Modules", isDirectory: true),
+            includingPropertiesForKeys: nil
+        ).first { $0.pathExtension == "lamp" })
+        #expect(try Data(contentsOf: installedURL) == installedArchive)
+        #expect(try await library.installedModules().first?.name == "Installed dictionary")
+    }
+
+    @Test func equalTimePersonalEditsStopPortableImport() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-equal-time-import-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let source = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Source"))
+        let target = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Target"))
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+
+        try await source.saveVerseNote(LampVerseNote(
+            id: "personal-notes:43003016",
+            reference: 43_003_016,
+            content: "remote note",
+            lastModified: timestamp
+        ))
+        try await target.saveVerseNote(LampVerseNote(
+            id: "personal-notes:43003016",
+            reference: 43_003_016,
+            content: "local note",
+            lastModified: timestamp
+        ))
+        let noteDocument = try await source.personalNotesDocument(bookNumber: 43)
+        let noteURL = fixtureURL.appendingPathComponent(noteDocument.suggestedJSONFilename)
+        try noteDocument.jsonData.write(to: noteURL)
+        do {
+            _ = try await target.importPersonalStudyData(from: noteURL)
+            Issue.record("Equal-time note edits must stop the import")
+        } catch LampLibraryError.syncConflict(_) {
+            #expect(try await target.verseNotes(reference: 43_003_016).first?.content == "local note")
+        }
+
+        let remoteDevotional = LampDevotional(
+            id: "equal-time-devotional",
+            moduleID: "personal-devotionals",
+            moduleName: "My Writing",
+            title: "Remote title",
+            content: "Same body",
+            created: timestamp,
+            lastModified: timestamp
+        )
+        let localDevotional = LampDevotional(
+            id: "equal-time-devotional",
+            moduleID: "personal-devotionals",
+            moduleName: "My Writing",
+            title: "Local title",
+            content: "Same body",
+            created: timestamp,
+            lastModified: timestamp
+        )
+        try await source.savePersonalDevotional(remoteDevotional, preserveLastModified: true)
+        try await target.savePersonalDevotional(localDevotional, preserveLastModified: true)
+        let devotionalDocument = try await source.personalDevotionalDocument(id: remoteDevotional.id)
+        let devotionalURL = fixtureURL.appendingPathComponent(devotionalDocument.suggestedJSONFilename)
+        try devotionalDocument.jsonData.write(to: devotionalURL)
+        do {
+            _ = try await target.importPersonalDevotional(from: devotionalURL)
+            Issue.record("Equal-time devotional edits must stop the import")
+        } catch LampLibraryError.syncConflict(_) {
+            #expect(try await target.personalDevotionals().first?.title == "Local title")
+        }
+    }
+
+    @Test func importsPersonalNotesAndDevotionalsFromMarkdown() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-markdown-import-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+
+        let notesURL = fixtureURL.appendingPathComponent("John.md")
+        try Data(#"""
+        ---
+        book: John
+        ---
+
+        ## Chapter 1
+
+        ### 1:1
+
+        The Word is eternal.
+
+        ### Verses 2-3
+
+        The Word is with God and creates.
+        """#.utf8).write(to: notesURL)
+        let notesResult = try await library.importPersonalMarkdown(from: notesURL, as: .notes)
+        #expect(notesResult.importedCount == 2)
+        let notes = try await library.verseNotes(bookNumber: 43, chapterNumber: 1)
+        #expect(notes.map(\.reference) == [43_001_001, 43_001_002])
+        #expect(notes.last?.verseReferences == [43_001_002, 43_001_003])
+
+        let devotionalURL = fixtureURL.appendingPathComponent("hope.md")
+        try Data(#"""
+        ---
+        title: Living Hope
+        date: 08-09
+        tags: hope, grace
+        author: A Reader
+        ---
+
+        Hope does not disappoint.
+        """#.utf8).write(to: devotionalURL)
+        let devotionalResult = try await library.importPersonalMarkdown(
+            from: devotionalURL,
+            as: .devotionals
+        )
+        #expect(devotionalResult.importedCount == 1)
+        let devotionals = try await library.personalDevotionals()
+        #expect(devotionals.first?.title == "Living Hope")
+        #expect(devotionals.first?.author == "A Reader")
+        #expect(devotionals.first?.tags == ["hope", "grace"])
+        #expect(devotionals.first?.content == "Hope does not disappoint.")
+    }
+
+    @Test func planCalendarRoundTripsStableLeapDaySlots() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+
+        let augustSixth = try #require(LampPlanCalendar.date(
+            forDayNumber: 219,
+            year: 2026,
+            calendar: calendar
+        ))
+        #expect(calendar.dateComponents([.year, .month, .day], from: augustSixth)
+            == DateComponents(year: 2026, month: 8, day: 6))
+        #expect(LampPlanCalendar.dayNumber(for: augustSixth, calendar: calendar) == 219)
+
+        #expect(LampPlanCalendar.date(forDayNumber: 60, year: 2026, calendar: calendar) == nil)
+        let marchFirst = try #require(LampPlanCalendar.date(
+            forDayNumber: 61,
+            year: 2026,
+            calendar: calendar
+        ))
+        #expect(calendar.dateComponents([.month, .day], from: marchFirst)
+            == DateComponents(month: 3, day: 1))
+
+        let leapDay = try #require(LampPlanCalendar.date(
+            forDayNumber: 60,
+            year: 2024,
+            calendar: calendar
+        ))
+        #expect(calendar.dateComponents([.month, .day], from: leapDay)
+            == DateComponents(month: 2, day: 29))
+        #expect(LampPlanCalendar.dayNumber(for: leapDay, calendar: calendar) == 60)
+    }
+
     @Test func installsAndReadsCompiledTranslation() async throws {
         let fixtureURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-library-tests-\(UUID().uuidString)", isDirectory: true)
@@ -72,6 +350,10 @@ struct LampLibraryTests {
 
         let modules = try await library.installedModules()
         #expect(modules == [installed])
+        #expect(try await library.supportedExportFormats(moduleID: "TEST") == [.lamp])
+        let exportedModuleURL = fixtureURL.appendingPathComponent("TEST-exported.lamp")
+        try await library.exportModule(moduleID: "TEST", format: .lamp, to: exportedModuleURL)
+        #expect(try Data(contentsOf: exportedModuleURL) == Data(contentsOf: moduleURL))
 
         let books = try await library.translationBooks(moduleID: "TEST")
         #expect(books.count == 1)
@@ -124,7 +406,22 @@ struct LampLibraryTests {
                 "key": "G1", "lemma": "alpha", "transliteration": "a",
                 "senses": [{
                   "partOfSpeech": "noun", "shortDefinition": "first letter",
-                  "definition": [{"type": "paragraph", "text": "The first letter of the Greek alphabet."}]
+                  "definition": [{
+                    "type": "paragraph",
+                    "text": "The first letter of the Greek alphabet. See John 1:1.",
+                    "annotations": [{
+                      "type": "scripture", "start": 44, "end": 52,
+                      "text": "John 1:1", "data": {"sv": 43001001}
+                    }]
+                  }],
+                  "derivation": {
+                    "text": "from G25 (ἀγαπάω)",
+                    "annotations": [{
+                      "type": "strongs", "start": 5, "end": 17,
+                      "text": "G25 (ἀγαπάω)", "data": {"strongs": "G25"}
+                    }]
+                  },
+                  "references": [{"sv": 43001002, "ev": 43001003}]
                 }]
               }]
             }
@@ -135,7 +432,20 @@ struct LampLibraryTests {
         _ = try await library.install(from: dictionaryURL)
         let dictionaryResults = try await library.searchDictionaries(query: "alpha")
         #expect(dictionaryResults.first?.key == "G1")
-        #expect(dictionaryResults.first?.senses.first?.definition == "The first letter of the Greek alphabet.")
+        #expect(dictionaryResults.first?.senses.first?.definition == "The first letter of the Greek alphabet. See John 1:1.")
+        let dictionarySense = try #require(dictionaryResults.first?.senses.first)
+        #expect(dictionarySense.derivation == "from G25 (ἀγαπάω)")
+        #expect(dictionarySense.dictionaryLinks == [
+            LampDictionaryLink(text: "G25 (ἀγαπάω)", key: "G25"),
+        ])
+        #expect(dictionarySense.scriptureLinks.contains {
+            $0.text == "John 1:1" && $0.startReference == 43_001_001
+        })
+        #expect(dictionarySense.scriptureLinks.contains {
+            $0.text == nil
+                && $0.startReference == 43_001_002
+                && $0.endReference == 43_001_003
+        })
 
         let commentaryURL = fixtureURL.appendingPathComponent("TEST_COMM.lamp")
         _ = try LampModuleCompiler().compile(
@@ -439,12 +749,27 @@ struct LampLibraryTests {
             color: "34C759",
             setID: customSet.id
         )
+        let attachment = fixtureURL.appendingPathComponent(".image.png")
+        let attachmentData = Data("portable image".utf8)
+        try attachmentData.write(to: attachment)
+        let storedAttachment = try await source.storePersonalDevotionalMedia(
+            from: attachment,
+            devotionalID: "synced-devotional"
+        )
+        #expect(storedAttachment.lastPathComponent.hasPrefix(".image-"))
+        let devotionalContent = "![Image](lamp-media://synced-devotional/\(storedAttachment.lastPathComponent))"
+        let mediaMetadata = """
+        [{"id":"lamp-media://synced-devotional/\(storedAttachment.lastPathComponent)",
+          "type":"image","filename":"\(storedAttachment.lastPathComponent)",
+          "mimeType":"image/png","alt":"Portable image description"}]
+        """
         _ = try await source.savePersonalDevotional(LampDevotional(
             id: "synced-devotional",
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
+            moduleName: "My Writing",
             title: "Synced Devotional",
-            content: "This devotional travels between devices."
+            content: devotionalContent,
+            mediaJSON: mediaMetadata
         ))
 
         let backupURL = fixtureURL.appendingPathComponent("Backup", isDirectory: true)
@@ -453,6 +778,11 @@ struct LampLibraryTests {
         #expect(summary.highlightDocumentCount == 2)
         #expect(summary.devotionalDocumentCount == 1)
         #expect(FileManager.default.fileExists(atPath: backupURL.appendingPathComponent("manifest.json").path))
+        let portableAttachmentPath = "Media/Devotionals/synced-devotional/\(storedAttachment.lastPathComponent)"
+        let portableAttachment = backupURL.appendingPathComponent(portableAttachmentPath)
+        #expect(try Data(contentsOf: portableAttachment) == attachmentData)
+        let archive = try LampSyncArchive.create(from: backupURL)
+        #expect(archive.entries.first { $0.path == portableAttachmentPath }?.data == attachmentData)
 
         let destination = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Destination"))
         let imported = try await destination.importPortableBackup(from: backupURL)
@@ -469,6 +799,21 @@ struct LampLibraryTests {
             .first { $0.name == "Sermon Preparation" })
         #expect(try await destination.highlightThemes(setID: syncedCustomSet.id).first?.name == "Promises")
         #expect(try await destination.personalDevotionals().first?.title == "Synced Devotional")
+        #expect(try await destination.personalDevotionals().first?.content == devotionalContent)
+        #expect(try await destination.personalDevotionals().first?.mediaReferences.first?.alt
+            == "Portable image description")
+        #expect(try Data(contentsOf: fixtureURL.appendingPathComponent("Destination").appendingPathComponent(portableAttachmentPath)) == attachmentData)
+
+        try FileManager.default.createSymbolicLink(
+            at: backupURL.appendingPathComponent("Media/Devotionals/synced-devotional/linked.png"),
+            withDestinationURL: attachment
+        )
+        do {
+            _ = try await destination.importPortableBackup(from: backupURL)
+            Issue.record("Media symlink should stop portable backup import")
+        } catch LampLibraryError.syncConflict(let reason) {
+            #expect(reason == "Media backup contains a symbolic link.")
+        }
     }
 
     @Test func installsAndReadsPortableStudyModules() async throws {
@@ -536,6 +881,20 @@ struct LampLibraryTests {
         )
         #expect(highlights.first?.translationID == "TEST")
         #expect(highlights.first?.endOffset == 8)
+        #expect(try await library.supportedExportFormats(moduleID: "portable_notes")
+            == [.lamp, .markdown])
+        #expect(try await library.supportedExportFormats(moduleID: "portable_highlights")
+            == [.lamp])
+        let markdownURL = fixtureURL.appendingPathComponent("portable_notes.md")
+        try await library.exportModule(
+            moduleID: "portable_notes",
+            format: .markdown,
+            to: markdownURL
+        )
+        let markdown = try String(contentsOf: markdownURL, encoding: .utf8)
+        #expect(markdown.contains("# Portable Notes"))
+        #expect(markdown.contains("## John 3:16"))
+        #expect(markdown.contains("A portable observation."))
         #expect(try await library.installedModules().map(\.kind) == [.highlights, .notes])
     }
 
@@ -549,7 +908,7 @@ struct LampLibraryTests {
         let saved = try await library.savePersonalDevotional(LampDevotional(
             id: "morning-hope",
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
+            moduleName: "My Writing",
             title: "Morning Hope",
             subtitle: "Beginning well",
             author: "Author",
@@ -569,6 +928,7 @@ struct LampLibraryTests {
 
         #expect(saved.isEditable)
         #expect(saved.moduleID == "personal-devotionals")
+        #expect(saved.moduleName == "My Writing")
         #expect(try await library.personalDevotionals(query: "creation").first?.id == saved.id)
         #expect(try await library.devotionals().first?.title == "Morning Hope")
         let searchResults = try await library.searchModules(
@@ -617,22 +977,32 @@ struct LampLibraryTests {
         let bodyOnly = try await library.savePersonalDevotional(LampDevotional(
             id: "body-only",
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
+            moduleName: "My Writing",
             title: "",
             content: "A thought that does not have a title yet."
         ))
-        #expect(bodyOnly.title == "Untitled Devotional")
+        #expect(bodyOnly.title == "Untitled")
         #expect(bodyOnly.content == "A thought that does not have a title yet.")
 
         let titleOnly = try await library.savePersonalDevotional(LampDevotional(
             id: "title-only",
             moduleID: "personal-devotionals",
-            moduleName: "My Devotionals",
+            moduleName: "My Writing",
             title: "An Outline",
             content: ""
         ))
         #expect(titleOnly.title == "An Outline")
         #expect(titleOnly.content.isEmpty)
+
+        let titleOnlyDocument = try await library.personalDevotionalDocument(id: titleOnly.id)
+        let titleOnlyURL = fixtureURL.appendingPathComponent("title-only.json")
+        try titleOnlyDocument.jsonData.write(to: titleOnlyURL)
+        try await library.deletePersonalDevotional(id: titleOnly.id)
+        let importedTitleOnly = try #require(
+            try await library.importPersonalDevotional(from: titleOnlyURL).first
+        )
+        #expect(importedTitleOnly.title == "An Outline")
+        #expect(importedTitleOnly.content.isEmpty)
     }
 
     @Test func exportsPersonalStudyDataThroughPortableFormats() async throws {
@@ -659,6 +1029,84 @@ struct LampLibraryTests {
             style: .underlineSolid,
             color: "#34c759"
         )
+        _ = try await sourceLibrary.saveHighlightSet(LampHighlightSet(
+            id: "personal-highlights-ALT",
+            name: "Alternate Translation Highlights",
+            translationID: "ALT",
+            created: Date(timeIntervalSince1970: 1_700_000_000),
+            lastModified: Date(timeIntervalSince1970: 1_700_000_001)
+        ))
+        _ = try await sourceLibrary.saveVerseHighlight(
+            translationID: "ALT",
+            reference: 43_003_017,
+            startOffset: 0,
+            endOffset: 4,
+            color: "#ffcc00",
+            setID: "personal-highlights-ALT"
+        )
+        _ = try await sourceLibrary.saveHighlightTheme(LampHighlightTheme(
+            setID: "personal-highlights-ALT",
+            color: "FFCC00",
+            style: .highlight,
+            name: "Promises"
+        ))
+        _ = try await sourceLibrary.savePersonalDevotional(LampDevotional(
+            id: "personal-writing-export",
+            moduleID: LampPersonalModule.writing.id,
+            moduleName: LampPersonalModule.writing.name,
+            title: "Portable Writing",
+            tags: ["export"],
+            content: "A personal writing entry for export.",
+            created: Date(timeIntervalSince1970: 1_700_000_000),
+            lastModified: Date(timeIntervalSince1970: 1_700_000_001)
+        ))
+
+        #expect(LampLibrary.supportedExportFormats(for: .writing) == [.lamp, .markdown])
+        #expect(LampLibrary.supportedExportFormats(for: .notes) == [.lamp, .markdown])
+        #expect(LampLibrary.supportedExportFormats(for: .highlights) == [.lamp])
+        let personalWritingURL = fixtureURL.appendingPathComponent("personal-devotionals.lamp")
+        let personalNotesURL = fixtureURL.appendingPathComponent("personal-notes.lamp")
+        let personalHighlightsURL = fixtureURL.appendingPathComponent("personal-highlights.lamp")
+        let personalWritingMarkdownURL = fixtureURL.appendingPathComponent("personal-devotionals.md")
+        let personalNotesMarkdownURL = fixtureURL.appendingPathComponent("personal-notes.md")
+        try await sourceLibrary.exportPersonalModule(.writing, format: .lamp, to: personalWritingURL)
+        try await sourceLibrary.exportPersonalModule(.notes, format: .lamp, to: personalNotesURL)
+        try await sourceLibrary.exportPersonalModule(.highlights, format: .lamp, to: personalHighlightsURL)
+        try await sourceLibrary.exportPersonalModule(
+            .writing,
+            format: .markdown,
+            to: personalWritingMarkdownURL
+        )
+        try await sourceLibrary.exportPersonalModule(
+            .notes,
+            format: .markdown,
+            to: personalNotesMarkdownURL
+        )
+        #expect(try String(contentsOf: personalWritingMarkdownURL, encoding: .utf8)
+            .contains("## Portable Writing"))
+        #expect(try String(contentsOf: personalNotesMarkdownURL, encoding: .utf8)
+            .contains("## John 3:16–17"))
+
+        let personalImportLibrary = LampLibrary(
+            rootURL: fixtureURL.appendingPathComponent("PersonalImportLibrary")
+        )
+        #expect(try await personalImportLibrary.importPersonalDevotional(
+            from: personalWritingURL
+        ).first?.title == "Portable Writing")
+        #expect(try await personalImportLibrary.importPersonalStudyData(
+            from: personalNotesURL
+        ).importedCount == 1)
+        #expect(try await personalImportLibrary.importPersonalStudyData(
+            from: personalHighlightsURL
+        ).importedCount == 2)
+        #expect(try await personalImportLibrary.highlightSets().contains {
+            $0.id == "personal-highlights-ALT"
+                && $0.name == "Alternate Translation Highlights"
+                && $0.translationID == "ALT"
+        })
+        #expect(try await personalImportLibrary.highlightThemes(
+            setID: "personal-highlights-ALT"
+        ).first?.name == "Promises")
 
         let notesDocument = try await sourceLibrary.personalNotesDocument(bookNumber: 43)
         let highlightsDocument = try await sourceLibrary.personalHighlightsDocument(
@@ -881,7 +1329,9 @@ struct LampLibraryTests {
                     );
                     INSERT INTO quiz_questions VALUES (
                         1, 'QUIZ', 1, 1001001, 1001999, 'adult', 0,
-                        '"Who created?"', '"God created."', 'doctrine', 0,
+                        '{"text":"Who created?","annotations":[{"type":"scripture","start":0,"end":3,"text":"Who","data":{"sv":1001001,"ev":1001002}}]}',
+                        '{"text":"God created.","annotations":[{"type":"scripture","start":0,"end":3,"text":"God","data":{"sv":1001003}}]}',
+                        'doctrine', 0,
                         '[1001001]', '[]'
                     );
                     """#)
@@ -915,6 +1365,9 @@ struct LampLibraryTests {
         let questions = try await library.quizQuestions(moduleID: "QUIZ", day: 1, ageGroup: "adult")
         #expect(questions.first?.question == "Who created?")
         #expect(questions.first?.answer == "God created.")
+        #expect(questions.first?.questionAnnotations.first?.startReference == 1_001_001)
+        #expect(questions.first?.questionAnnotations.first?.endReference == 1_001_002)
+        #expect(questions.first?.answerAnnotations.first?.startReference == 1_001_003)
 
         let creationResults = try await library.searchModules(query: "Creation")
         #expect(creationResults.contains { $0.kind == .commentary && $0.moduleID == "COMM" })

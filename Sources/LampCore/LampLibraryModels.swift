@@ -29,6 +29,40 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Portable formats available when exporting an installed user module.
+public enum LampModuleExportFormat: String, CaseIterable, Identifiable, Sendable {
+    case lamp
+    case markdown
+
+    public var id: String { rawValue }
+}
+
+/// The editable collections Lamp Bible creates for every library, independent
+/// of any imported module files.
+public enum LampPersonalModule: String, CaseIterable, Identifiable, Sendable {
+    case writing = "personal-devotionals"
+    case notes = "personal-notes"
+    case highlights = "personal-highlights"
+
+    public var id: String { rawValue }
+
+    public var kind: LampModuleKind {
+        switch self {
+        case .writing: .devotional
+        case .notes: .notes
+        case .highlights: .highlights
+        }
+    }
+
+    public var name: String {
+        switch self {
+        case .writing: "My Writing"
+        case .notes: "My Notes"
+        case .highlights: "My Highlights"
+        }
+    }
+}
+
 public struct LampTranslationBook: Identifiable, Equatable, Sendable {
     public let id: Int
     public let osisID: String
@@ -318,21 +352,47 @@ public struct LampDictionarySense: Equatable, Sendable {
     public let gloss: String?
     public let shortDefinition: String?
     public let definition: String?
+    public let derivation: String?
     public let usage: String?
+    public let scriptureLinks: [LampScriptureLink]
+    public let dictionaryLinks: [LampDictionaryLink]
 
     public init(
         partOfSpeech: String? = nil,
         gloss: String? = nil,
         shortDefinition: String? = nil,
         definition: String? = nil,
-        usage: String? = nil
+        derivation: String? = nil,
+        usage: String? = nil,
+        scriptureLinks: [LampScriptureLink] = [],
+        dictionaryLinks: [LampDictionaryLink] = []
     ) {
         self.partOfSpeech = partOfSpeech
         self.gloss = gloss
         self.shortDefinition = shortDefinition
         self.definition = definition
+        self.derivation = derivation
         self.usage = usage
+        self.scriptureLinks = scriptureLinks
+        self.dictionaryLinks = dictionaryLinks
     }
+}
+
+/// An inline link from one dictionary entry to another, most commonly a Strong's
+/// derivation such as "from G25". The label is preserved separately because many
+/// lexicons include the related lemma alongside the key.
+public struct LampDictionaryLink: Identifiable, Equatable, Sendable {
+    public var id: String { "\(key):\(text ?? "")" }
+
+    public let text: String?
+    public let key: String
+
+    public init(text: String? = nil, key: String) {
+        self.text = text
+        self.key = key
+    }
+
+    public var displayDescription: String { text ?? key }
 }
 
 public struct LampDictionaryResult: Identifiable, Equatable, Sendable {
@@ -468,7 +528,11 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
     public let keyScriptures: [LampScriptureLink]
     public let summary: String?
     public let content: String
+    /// Original structured blocks from a devotional module, retained while the body is unchanged.
+    public var contentJSON: String?
     public let footnotes: String?
+    /// Original wire JSON is kept so metadata added by a newer client survives.
+    public var mediaJSON: String?
     public let created: Date?
     public let lastModified: Date?
     public let isEditable: Bool
@@ -488,7 +552,9 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
         keyScriptures: [LampScriptureLink] = [],
         summary: String? = nil,
         content: String,
+        contentJSON: String? = nil,
         footnotes: String? = nil,
+        mediaJSON: String? = nil,
         created: Date? = nil,
         lastModified: Date? = nil,
         isEditable: Bool = false
@@ -507,10 +573,28 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
         self.keyScriptures = keyScriptures
         self.summary = summary
         self.content = content
+        self.contentJSON = contentJSON
         self.footnotes = footnotes
+        self.mediaJSON = mediaJSON
         self.created = created
         self.lastModified = lastModified
         self.isEditable = isEditable
+    }
+
+    public var mediaReferences: [LampDevotionalMediaReference] {
+        guard let mediaJSON else { return [] }
+        return (try? JSONDecoder().decode(
+            [LampDevotionalMediaReference].self, from: Data(mediaJSON.utf8)
+        )) ?? []
+    }
+
+    /// Rich iOS blocks are rendered from their original JSON without changing
+    /// the flattened text used by the portable library's merge decisions.
+    public var displayMarkdown: String {
+        guard let contentJSON,
+              let markdown = LampPortableDevotionalContent.markdown(from: contentJSON),
+              !markdown.isEmpty || content.isEmpty else { return content }
+        return markdown
     }
 }
 
@@ -679,7 +763,9 @@ public struct LampQuizQuestion: Identifiable, Equatable, Sendable {
     public let ageGroup: String
     public let questionIndex: Int
     public let question: String
+    public let questionAnnotations: [LampVerseAnnotation]
     public let answer: String
+    public let answerAnnotations: [LampVerseAnnotation]
     public let theme: String
     public let isChristFocused: Bool
     public let references: [Int]
@@ -694,7 +780,9 @@ public struct LampQuizQuestion: Identifiable, Equatable, Sendable {
         ageGroup: String,
         questionIndex: Int,
         question: String,
+        questionAnnotations: [LampVerseAnnotation] = [],
         answer: String,
+        answerAnnotations: [LampVerseAnnotation] = [],
         theme: String,
         isChristFocused: Bool,
         references: [Int] = [],
@@ -708,7 +796,9 @@ public struct LampQuizQuestion: Identifiable, Equatable, Sendable {
         self.ageGroup = ageGroup
         self.questionIndex = questionIndex
         self.question = question
+        self.questionAnnotations = questionAnnotations
         self.answer = answer
+        self.answerAnnotations = answerAnnotations
         self.theme = theme
         self.isChristFocused = isChristFocused
         self.references = references
@@ -1014,6 +1104,29 @@ public enum LampPlanCalendar {
         let leapYear = calendar.range(of: .day, in: .year, for: date)?.count == 366
         return !leapYear && day >= 60 ? day + 1 : day
     }
+
+    /// Resolves the plan's stable 366-slot day number back to a date. Day 60 is
+    /// reserved for February 29, so it intentionally has no date in non-leap years.
+    public static func date(
+        forDayNumber dayNumber: Int,
+        year: Int,
+        calendar: Calendar = .current
+    ) -> Date? {
+        guard (1...366).contains(dayNumber),
+              let startOfYear = calendar.date(from: DateComponents(year: year, month: 1, day: 1)),
+              let daysInYear = calendar.range(of: .day, in: .year, for: startOfYear)?.count else {
+            return nil
+        }
+        let isLeapYear = daysInYear == 366
+        if !isLeapYear && dayNumber == 60 { return nil }
+        let ordinalDay = !isLeapYear && dayNumber > 60 ? dayNumber - 1 : dayNumber
+        guard ordinalDay <= daysInYear,
+              let date = calendar.date(byAdding: .day, value: ordinalDay - 1, to: startOfYear),
+              calendar.component(.year, from: date) == year else {
+            return nil
+        }
+        return date
+    }
 }
 
 public enum LampBibleReferenceFormatter {
@@ -1093,6 +1206,7 @@ public enum LampLibraryError: Error, LocalizedError, Equatable, Sendable {
     case noPersonalHighlights(translationID: String)
     case invalidStudyDataExtension
     case invalidPersonalContent(String)
+    case syncConflict(String)
 
     public var errorDescription: String? {
         switch self {
@@ -1122,6 +1236,8 @@ public enum LampLibraryError: Error, LocalizedError, Equatable, Sendable {
             return "Choose canonical study data in a .json or .lamp file."
         case .invalidPersonalContent(let reason):
             return reason
+        case .syncConflict(let identifier):
+            return "Two versions of \(identifier) have the same change time but different content. Sync stopped to preserve both."
         }
     }
 }
