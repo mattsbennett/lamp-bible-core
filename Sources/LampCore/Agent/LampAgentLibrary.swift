@@ -39,7 +39,7 @@ public actor LampAgentLibrary {
                 LampAgentModule(
                     id: "personal-devotionals",
                     kind: .devotional,
-                    name: "My Devotionals",
+                    name: "My Writing",
                     isPersonal: true
                 ),
                 LampAgentModule(

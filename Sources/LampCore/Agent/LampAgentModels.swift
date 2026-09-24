@@ -226,14 +226,18 @@ public struct LampAgentDictionarySense: Codable, Equatable, Sendable {
     public let gloss: String?
     public let shortDefinition: String?
     public let definition: String?
+    public let derivation: String?
     public let usage: String?
+    public let relatedEntries: [String]
 
     public init(_ sense: LampDictionarySense) {
         partOfSpeech = sense.partOfSpeech
         gloss = sense.gloss
         shortDefinition = sense.shortDefinition
         definition = sense.definition
+        derivation = sense.derivation
         usage = sense.usage
+        relatedEntries = sense.dictionaryLinks.map(\.key)
     }
 }
 

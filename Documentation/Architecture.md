@@ -24,7 +24,8 @@ Neither application repository may define a second `.lamp` schema or compiler. P
 4. GRDB module records and database migrations.
 5. Search and richer reader data services.
 6. Notes, highlights, devotionals, plans, and quizzes. Personal notes, highlight spans, and plan progress now share the user-data store; notes and highlights also have canonical JSON round-tripping, deterministic editable-data merging, and iOS-compatible portable compilers, while the remaining formats continue incrementally.
-7. Storage and sync protocols, followed by platform-specific provider adapters.
+7. Semantic presentation decks, including versioned JSON validation, shared document storage, QR/manual pairing, fresh connection challenges, and a tested authenticated-encryption and TCP-framing contract; rendering and Network.framework transport lifecycles remain platform concerns.
+8. Storage and sync protocols, followed by platform-specific provider adapters.
 
 UIKit, AppKit, WidgetKit, application lifecycle, camera/photo pickers, share sheets, and platform background execution remain in their app repositories.
 
