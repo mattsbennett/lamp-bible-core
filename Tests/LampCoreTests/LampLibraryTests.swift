@@ -1201,7 +1201,7 @@ struct LampLibraryTests {
             color: "#34c759"
         )
         _ = try await sourceLibrary.saveHighlightSet(LampHighlightSet(
-            id: "personal-highlights-ALT",
+            id: "alternate-highlights",
             name: "Alternate Translation Highlights",
             translationID: "ALT",
             created: Date(timeIntervalSince1970: 1_700_000_000),
@@ -1213,10 +1213,10 @@ struct LampLibraryTests {
             startOffset: 0,
             endOffset: 4,
             color: "#ffcc00",
-            setID: "personal-highlights-ALT"
+            setID: "alternate-highlights"
         )
         _ = try await sourceLibrary.saveHighlightTheme(LampHighlightTheme(
-            setID: "personal-highlights-ALT",
+            setID: "alternate-highlights",
             color: "FFCC00",
             style: .highlight,
             name: "Promises"
@@ -1288,12 +1288,12 @@ struct LampLibraryTests {
             from: personalHighlightsURL
         ).importedCount == 2)
         #expect(try await personalImportLibrary.highlightSets().contains {
-            $0.id == "personal-highlights-ALT"
+            $0.id == "alternate-highlights"
                 && $0.name == "Alternate Translation Highlights"
                 && $0.translationID == "ALT"
         })
         #expect(try await personalImportLibrary.highlightThemes(
-            setID: "personal-highlights-ALT"
+            setID: "alternate-highlights"
         ).first?.name == "Promises")
 
         let notesDocument = try await sourceLibrary.personalNotesDocument(bookNumber: 43)

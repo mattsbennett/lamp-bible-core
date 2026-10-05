@@ -435,6 +435,10 @@ public enum LampPresentationDeckValidator {
 }
 
 public struct LampPresentationDeckStore: Sendable {
+    /// The directory decks live in, under a library root and, with the
+    /// portable workspaces prefix, inside a backup or sync archive.
+    public static let directoryName = "Presentations"
+
     public let rootURL: URL
 
     public init(rootURL: URL) {
@@ -442,7 +446,7 @@ public struct LampPresentationDeckStore: Sendable {
     }
 
     public var decksDirectoryURL: URL {
-        rootURL.appendingPathComponent("Presentations", isDirectory: true)
+        rootURL.appendingPathComponent(Self.directoryName, isDirectory: true)
     }
 
     public func decks() throws -> [LampPresentationDeck] {
@@ -459,7 +463,7 @@ public struct LampPresentationDeckStore: Sendable {
     }
 
     public func deck(id: String) throws -> LampPresentationDeck? {
-        let url = deckURL(for: id)
+        let url = deckFileURL(for: id)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try decode(Data(contentsOf: url))
     }
@@ -475,20 +479,26 @@ public struct LampPresentationDeckStore: Sendable {
             withIntermediateDirectories: true
         )
         let data = try Self.encoder.encode(deck)
-        let destination = deckURL(for: deck.id)
+        let destination = deckFileURL(for: deck.id)
         try data.write(to: destination, options: [.atomic])
         return destination
     }
 
     public func delete(id: String) throws {
-        let url = deckURL(for: id)
+        let url = deckFileURL(for: id)
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
     }
 
     public func decode(_ data: Data) throws -> LampPresentationDeck {
-        let deck = try Self.decoder.decode(LampPresentationDeck.self, from: data)
+        try Self.decode(data)
+    }
+
+    /// Decoding and validation need no library root, so readers that only
+    /// inspect deck bytes — a sync pull, a file import — use this directly.
+    public static func decode(_ data: Data) throws -> LampPresentationDeck {
+        let deck = try decoder.decode(LampPresentationDeck.self, from: data)
         let errors = LampPresentationDeckValidator.errors(in: deck)
         guard errors.isEmpty else {
             throw LampPresentationDeckStoreError.invalidDeck(errors)
@@ -504,10 +514,13 @@ public struct LampPresentationDeckStore: Sendable {
         return try Self.encoder.encode(deck)
     }
 
-    private func deckURL(for id: String) -> URL {
+    /// The one file this store uses for a deck, so a caller that needs the
+    /// file itself — to stamp a synced modification date, say — does not have
+    /// to reproduce the naming rule.
+    public func deckFileURL(for id: String) -> URL {
         decksDirectoryURL
             .appendingPathComponent(storageKey(for: id))
-            .appendingPathExtension("lampdeck")
+            .appendingPathExtension(LampPresentationDeckPortableLayout.deckExtension)
     }
 
     private func storageKey(for id: String) -> String {

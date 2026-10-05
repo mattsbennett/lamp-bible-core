@@ -31,4 +31,7 @@ public enum LampPortableBackupLayout {
     public static let workspacesDirectory = "Workspaces"
     public static let settingsPath = "settings.plist"
     public static let sharedPreferencesPath = "Settings/shared-preferences.json"
+    /// Deletions of personal content, kept apart from the content folders so
+    /// versions that predate it never mistake it for content.
+    public static let deletionLedgerPath = "Deletions/ledger.json"
 }

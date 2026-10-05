@@ -56,7 +56,7 @@ extension LampModuleCompiler {
                         id: "\(moduleID):\(reference)",
                         moduleID: moduleID,
                         reference: reference,
-                        title: "Introduction",
+                        title: JSONSupport.string(chapter["introductionTitle"]) ?? "Introduction",
                         contentValue: introduction,
                         endReference: nil,
                         lastModified: JSONSupport.integer(chapter["lastModified"]),

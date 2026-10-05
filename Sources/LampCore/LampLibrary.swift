@@ -1304,6 +1304,10 @@ public actor LampLibrary {
                     Int(created.timeIntervalSince1970),
                     Int((saved.lastModified ?? now).timeIntervalSince1970),
                 ])
+            // An edit made here; a copy carried in by sync keeps its own time.
+            if !preserveLastModified {
+                try Self.recordPresence(db, .devotional, saved.id)
+            }
         }
         return saved
     }
@@ -1312,6 +1316,7 @@ public actor LampLibrary {
         let queue = try openUserDatabase()
         try queue.write { db in
             try db.execute(sql: "DELETE FROM personal_devotionals WHERE id = ?", arguments: [id])
+            try Self.recordDeletion(db, .devotional, id)
         }
     }
 
@@ -1397,24 +1402,46 @@ public actor LampLibrary {
         return devotionals
     }
 
+    /// Imports writing from a file.
+    ///
+    /// - Parameter forSync: the file comes from sync, so writing deleted here
+    ///   since that copy was made stays deleted. Otherwise the person chose to
+    ///   import it, which brings it back even if it was deleted, and counts as
+    ///   a fresh save so sync keeps it too.
     @discardableResult
-    public func importPersonalDevotional(from sourceURL: URL) throws -> [LampDevotional] {
+    public func importPersonalDevotional(
+        from sourceURL: URL,
+        forSync: Bool = false
+    ) throws -> [LampDevotional] {
         let devotionals = try personalDevotionalCandidates(from: sourceURL)
         let existing = Dictionary(uniqueKeysWithValues: try personalDevotionals().map { ($0.id, $0) })
-        return try devotionals.compactMap { devotional in
+        let queue = try openUserDatabase()
+        let imported: [LampDevotional] = try devotionals.compactMap { devotional in
+            if forSync, try queue.read({ db in
+                try Self.isDeleted(
+                    db, .devotional, devotional.id,
+                    itemModified: devotional.lastModified.map { Int($0.timeIntervalSince1970) }
+                )
+            }) {
+                return nil
+            }
             if let local = existing[devotional.id] {
+                // An empty field and a missing one are the same: export leaves
+                // out empty fields, so writing that stored "" must still match
+                // its own copy coming back.
+                func same(_ a: String?, _ b: String?) -> Bool { a?.nilIfBlank == b?.nilIfBlank }
                 let sameCore = local.title == devotional.title
-                    && local.subtitle == devotional.subtitle
-                    && local.author == devotional.author
-                    && local.date == devotional.date
+                    && same(local.subtitle, devotional.subtitle)
+                    && same(local.author, devotional.author)
+                    && same(local.date, devotional.date)
                     && local.tags == devotional.tags
-                    && local.category == devotional.category
-                    && local.seriesName == devotional.seriesName
+                    && same(local.category, devotional.category)
+                    && same(local.seriesName, devotional.seriesName)
                     && local.seriesOrder == devotional.seriesOrder
                     && local.keyScriptures == devotional.keyScriptures
-                    && local.summary == devotional.summary
+                    && same(local.summary, devotional.summary)
                     && local.content == devotional.content
-                    && local.footnotes == devotional.footnotes
+                    && same(local.footnotes, devotional.footnotes)
                 if sameCore,
                    (local.mediaJSON == nil && devotional.mediaJSON != nil
                     || local.contentJSON == nil && devotional.contentJSON != nil) {
@@ -1439,6 +1466,12 @@ public actor LampLibrary {
             }
             return try savePersonalDevotional(devotional, preserveLastModified: true)
         }
+        if !forSync, !imported.isEmpty {
+            try queue.write { db in
+                for devotional in imported { try Self.recordPresence(db, .devotional, devotional.id) }
+            }
+        }
+        return imported
     }
 
     public func storePersonalDevotionalMedia(
@@ -2217,6 +2250,7 @@ public actor LampLibrary {
                     footnotesJSON,
                     Int(note.lastModified.timeIntervalSince1970),
                 ])
+            try Self.recordPresence(db, .note, note.id)
         }
     }
 
@@ -2255,6 +2289,7 @@ public actor LampLibrary {
         let queue = try openUserDatabase()
         try queue.write { db in
             try db.execute(sql: "DELETE FROM personal_notes WHERE id = ?", arguments: [id])
+            try Self.recordDeletion(db, .note, id)
         }
     }
 
@@ -2319,6 +2354,7 @@ public actor LampLibrary {
                     Int(saved.created.timeIntervalSince1970),
                     Int(saved.lastModified.timeIntervalSince1970),
                 ])
+            try Self.recordPresence(db, .highlightSet, saved.id)
         }
         return saved
     }
@@ -2326,6 +2362,18 @@ public actor LampLibrary {
     public func deleteHighlightSet(id: String) throws {
         let queue = try openUserDatabase()
         try queue.write { db in
+            // Its highlights and themes are recorded too, so if the set is made
+            // again later, copies of its old contents can't return with it.
+            try Self.recordHighlightDeletions(db, matching: "set_id = ?", arguments: [id])
+            for row in try Row.fetchAll(
+                db, sql: "SELECT set_id, color, style FROM highlight_themes WHERE set_id = ?",
+                arguments: [id]
+            ) {
+                try Self.recordDeletion(db, .highlightTheme, Self.highlightThemeKey(
+                    setID: row["set_id"], color: row["color"], style: row["style"]
+                ))
+            }
+            try Self.recordDeletion(db, .highlightSet, id)
             try db.execute(sql: "DELETE FROM highlights WHERE set_id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM highlight_themes WHERE set_id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM highlight_sets WHERE id = ?", arguments: [id])
@@ -2367,6 +2415,9 @@ public actor LampLibrary {
                 """, arguments: [
                     saved.setID, saved.color, saved.style.rawValue, saved.name, saved.description,
                 ])
+            try Self.recordPresence(db, .highlightTheme, Self.highlightThemeKey(
+                setID: saved.setID, color: saved.color, style: saved.style.rawValue
+            ))
         }
         return saved
     }
@@ -2378,6 +2429,9 @@ public actor LampLibrary {
             try db.execute(sql: """
                 DELETE FROM highlight_themes WHERE set_id = ? AND color = ? AND style = ?
                 """, arguments: [setID, normalizedColor, style.rawValue])
+            try Self.recordDeletion(db, .highlightTheme, Self.highlightThemeKey(
+                setID: setID, color: normalizedColor, style: style.rawValue
+            ))
         }
     }
 
@@ -2477,8 +2531,15 @@ public actor LampLibrary {
                     style.rawValue,
                     normalizedColor,
                 ])
+            let insertedID = db.lastInsertedRowID
+            try Self.recordPresence(db, .highlightSet, resolvedSetID)
+            try Self.recordPresence(db, .highlight, Self.highlightKey(
+                setID: resolvedSetID, reference: reference,
+                start: normalizedStartOffset, end: normalizedEndOffset,
+                style: style.rawValue, color: normalizedColor
+            ))
             return LampVerseHighlight(
-                id: db.lastInsertedRowID,
+                id: insertedID,
                 setID: resolvedSetID,
                 translationID: translationID,
                 reference: reference,
@@ -2493,6 +2554,7 @@ public actor LampLibrary {
     public func deleteVerseHighlight(id: Int64) throws {
         let queue = try openUserDatabase()
         try queue.write { db in
+            try Self.recordHighlightDeletions(db, matching: "id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM highlights WHERE id = ?", arguments: [id])
         }
     }
@@ -2500,6 +2562,9 @@ public actor LampLibrary {
     public func deleteVerseHighlights(setID: String, reference: Int) throws {
         let queue = try openUserDatabase()
         try queue.write { db in
+            try Self.recordHighlightDeletions(
+                db, matching: "set_id = ? AND ref = ?", arguments: [setID, reference]
+            )
             try db.execute(
                 sql: "DELETE FROM highlights WHERE set_id = ? AND ref = ?",
                 arguments: [setID, reference]
@@ -2510,6 +2575,11 @@ public actor LampLibrary {
     public func deleteVerseHighlights(translationID: String, reference: Int) throws {
         let queue = try openUserDatabase()
         try queue.write { db in
+            try Self.recordHighlightDeletions(
+                db,
+                matching: "ref = ? AND set_id IN (SELECT id FROM highlight_sets WHERE translation_id = ?)",
+                arguments: [reference, translationID]
+            )
             try db.execute(sql: """
                 DELETE FROM highlights
                 WHERE ref = ? AND set_id IN (
@@ -2549,6 +2619,11 @@ public actor LampLibrary {
             var chapter: [String: Any] = ["chapter": chapterNumber]
             if let introduction = chapterNotes.first(where: { $0.verseNumber == 0 }) {
                 chapter["introduction"] = introduction.content
+                // Versions that predate this name every introduction
+                // "Introduction"; they pass over this key.
+                if let title = introduction.title?.nilIfBlank, title != Self.defaultIntroductionTitle {
+                    chapter["introductionTitle"] = title
+                }
                 if !introduction.footnotes.isEmpty {
                     chapter["footnotes"] = introduction.footnotes.map { footnote -> [String: String] in
                         var value = ["id": footnote.id, "content": footnote.content]
@@ -2691,7 +2766,12 @@ public actor LampLibrary {
         )
     }
 
-    public func importPersonalStudyData(from sourceURL: URL) throws -> LampStudyImportResult {
+    /// Imports notes or highlights from a file; `forSync` as for
+    /// `importPersonalDevotional(from:forSync:)`.
+    public func importPersonalStudyData(
+        from sourceURL: URL,
+        forSync: Bool = false
+    ) throws -> LampStudyImportResult {
         let fileExtension = sourceURL.pathExtension.lowercased()
         guard fileExtension == "json" || fileExtension == "lamp" else {
             throw LampLibraryError.invalidStudyDataExtension
@@ -2704,7 +2784,8 @@ public actor LampLibrary {
         if fileExtension == "lamp" {
             return try importPersonalStudyArchive(
                 try Data(contentsOf: sourceURL, options: [.mappedIfSafe]),
-                fallbackModuleID: sourceURL.deletingPathExtension().lastPathComponent
+                fallbackModuleID: sourceURL.deletingPathExtension().lastPathComponent,
+                forSync: forSync
             )
         }
 
@@ -2731,7 +2812,8 @@ public actor LampLibrary {
         )
         return try importPersonalStudyArchive(
             try Data(contentsOf: moduleURL, options: [.mappedIfSafe]),
-            fallbackModuleID: moduleID
+            fallbackModuleID: moduleID,
+            forSync: forSync
         )
     }
 
@@ -2806,6 +2888,15 @@ public actor LampLibrary {
             )
         }
 
+        let ledger = try personalDeletionLedger()
+        if !ledger.isEmpty {
+            let ledgerURL = destinationURL.appendingPathComponent(LampPortableBackupLayout.deletionLedgerPath)
+            try fileManager.createDirectory(
+                at: ledgerURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try ledger.encoded().write(to: ledgerURL, options: .atomic)
+        }
         let mediaSource = rootURL.appendingPathComponent("Media", isDirectory: true)
         let mediaDestination = destinationURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
         if fileManager.fileExists(atPath: mediaSource.path) {
@@ -2930,6 +3021,15 @@ public actor LampLibrary {
             from: Data(contentsOf: manifestURL)
         )
         try manifest.validate()
+        try consolidateExportedDefaultHighlightSets()
+        // Merged before any content, so content deleted elsewhere is skipped
+        // rather than imported and then removed.
+        let ledgerURL = sourceURL.appendingPathComponent(LampPortableBackupLayout.deletionLedgerPath)
+        if fileManager.fileExists(atPath: ledgerURL.path) {
+            try mergePersonalDeletionLedger(
+                LampPersonalDeletionLedger.decode(Data(contentsOf: ledgerURL))
+            )
+        }
         var installedModules = 0
         var importedStudyEntries = 0
         var importedDevotionals = 0
@@ -2941,12 +3041,12 @@ public actor LampLibrary {
         }
         let studySource = sourceURL.appendingPathComponent(LampPortableBackupLayout.studyDirectory, isDirectory: true)
         for url in backupFiles(in: studySource, extension: "json") {
-            let result = try importPersonalStudyData(from: url)
+            let result = try importPersonalStudyData(from: url, forSync: true)
             importedStudyEntries += result.importedCount
         }
         let devotionalsSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.devotionalsDirectory, isDirectory: true)
         for url in backupFiles(in: devotionalsSource, extension: "json") {
-            importedDevotionals += try importPersonalDevotional(from: url).count
+            importedDevotionals += try importPersonalDevotional(from: url, forSync: true).count
         }
 
         let mediaSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
@@ -2954,6 +3054,7 @@ public actor LampLibrary {
             let mediaDestination = rootURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
             try mergeDirectory(from: mediaSource, to: mediaDestination)
         }
+        try applyPersonalDeletionLedger()
         return LampPortableBackupImportResult(
             installedModules: installedModules,
             importedStudyEntries: importedStudyEntries,
@@ -3042,10 +3143,62 @@ public actor LampLibrary {
     }
 
     private func safeExportIdentifier(_ value: String) -> String {
+        Self.safeExportIdentifier(value)
+    }
+
+    private static func safeExportIdentifier(_ value: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
         let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : "-" }
         let identifier = String(scalars)
         return identifier.isEmpty ? "study-data" : identifier
+    }
+
+    /// The default set a translation's highlights belong to, for a set ID as
+    /// it may come back from an export.
+    static func canonicalHighlightSetID(_ setID: String, translationID: String) -> String {
+        setID == "personal-highlights-\(safeExportIdentifier(translationID))"
+            ? "personal-highlights:\(translationID)"
+            : setID
+    }
+
+    /// Earlier versions brought a translation's default highlight set back from
+    /// sync under its export name, beside the original, so every highlight in
+    /// it appeared twice. Folds such copies back into the default set; nothing
+    /// is lost, as only exact duplicates are dropped.
+    func consolidateExportedDefaultHighlightSets() throws {
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            for row in try Row.fetchAll(db, sql: "SELECT id, translation_id FROM highlight_sets") {
+                let id: String = row["id"]
+                let translationID: String = row["translation_id"]
+                let canonicalID = Self.canonicalHighlightSetID(id, translationID: translationID)
+                guard canonicalID != id else { continue }
+                try db.execute(sql: """
+                    INSERT INTO highlight_sets (id, name, description, translation_id, created, last_modified)
+                    SELECT ?, name, description, translation_id, created, last_modified
+                    FROM highlight_sets WHERE id = ?
+                    ON CONFLICT(id) DO UPDATE SET
+                        last_modified = MAX(highlight_sets.last_modified, excluded.last_modified)
+                    """, arguments: [canonicalID, id])
+                try db.execute(sql: """
+                    INSERT INTO highlights (set_id, ref, sc, ec, style, color)
+                    SELECT DISTINCT ?, h.ref, h.sc, h.ec, h.style, h.color
+                    FROM highlights h
+                    WHERE h.set_id = ? AND NOT EXISTS (
+                        SELECT 1 FROM highlights d
+                        WHERE d.set_id = ? AND d.ref = h.ref AND d.sc = h.sc AND d.ec = h.ec
+                          AND d.style = h.style AND COALESCE(d.color, '') = COALESCE(h.color, '')
+                    )
+                    """, arguments: [canonicalID, id, canonicalID])
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO highlight_themes (set_id, color, style, name, description)
+                    SELECT ?, color, style, name, description FROM highlight_themes WHERE set_id = ?
+                    """, arguments: [canonicalID, id])
+                try db.execute(sql: "DELETE FROM highlights WHERE set_id = ?", arguments: [id])
+                try db.execute(sql: "DELETE FROM highlight_themes WHERE set_id = ?", arguments: [id])
+                try db.execute(sql: "DELETE FROM highlight_sets WHERE id = ?", arguments: [id])
+            }
+        }
     }
 
     private func prettyJSONData(_ object: Any) throws -> Data {
@@ -3062,7 +3215,8 @@ public actor LampLibrary {
 
     private func importPersonalStudyArchive(
         _ compressedData: Data,
-        fallbackModuleID: String
+        fallbackModuleID: String,
+        forSync: Bool
     ) throws -> LampStudyImportResult {
         guard let databaseData = try? (compressedData as NSData).decompressed(using: .zlib) as Data else {
             throw LampLibraryError.decompressionFailed
@@ -3119,7 +3273,7 @@ public actor LampLibrary {
                     FROM note_entries
                     ORDER BY verse_id, id
                     """).map(makeVerseNote)
-                return try mergeImportedNotes(notes, moduleID: moduleID)
+                return try mergeImportedNotes(notes, moduleID: moduleID, forSync: forSync)
             }
             if declaredKind == .highlights
                 || (tables.contains("highlights")
@@ -3183,7 +3337,8 @@ public actor LampLibrary {
                     created: created,
                     lastModified: lastModified,
                     themes: themes,
-                    setMetadata: setMetadata
+                    setMetadata: setMetadata,
+                    forSync: forSync
                 )
             }
             throw LampLibraryError.unsupportedModuleSchema
@@ -3192,7 +3347,8 @@ public actor LampLibrary {
 
     private func mergeImportedNotes(
         _ notes: [LampVerseNote],
-        moduleID: String
+        moduleID: String,
+        forSync: Bool
     ) throws -> LampStudyImportResult {
         let queue = try openUserDatabase()
         let importTimestamp = Int(Date().timeIntervalSince1970)
@@ -3208,6 +3364,10 @@ public actor LampLibrary {
                 }
                 let id = "personal-notes:\(note.reference)"
                 let incomingTimestamp = Int(note.lastModified.timeIntervalSince1970)
+                if forSync, try Self.isDeleted(db, .note, id, itemModified: incomingTimestamp) {
+                    skippedCount += 1
+                    continue
+                }
                 let referencesData = try JSONEncoder().encode(note.verseReferences)
                 let referencesJSON = String(decoding: referencesData, as: UTF8.self)
                 let footnotes = note.footnotes.map { footnote -> [String: String] in
@@ -3225,15 +3385,21 @@ public actor LampLibrary {
                     FROM personal_notes WHERE id = ?
                     """, arguments: [id])
                 let existingTimestamp: Int? = existing?["last_modified"]
+                let existingTitle: String? = existing?["title"]
+                // A chapter introduction from a version that couldn't carry its
+                // title arrives with the default one; the title here stands.
+                let incomingTitle = components.verse == 0
+                    && note.title == Self.defaultIntroductionTitle
+                    && existingTitle?.nilIfBlank != nil
+                    ? existingTitle : note.title
                 if let existingTimestamp {
-                    let existingTitle: String? = existing?["title"]
                     let existingContent: String? = existing?["content"]
                     let existingReferences: String? = existing?["verse_refs_json"]
                     let existingFootnotes: String? = existing?["footnotes_json"]
                     let decision = LampSyncMerge.decide(
                         localModified: existingTimestamp,
                         incomingModified: incomingTimestamp,
-                        sameContent: existingTitle == note.title
+                        sameContent: existingTitle == incomingTitle
                             && existingContent == note.content
                             && (existingReferences ?? "[]") == referencesJSON
                             && (existingFootnotes ?? "[]") == footnotesJSON
@@ -3257,12 +3423,13 @@ public actor LampLibrary {
                         components.book,
                         components.chapter,
                         components.verse,
-                        note.title,
+                        incomingTitle,
                         note.content,
                         referencesJSON,
                         footnotesJSON,
                         incomingTimestamp > 0 ? incomingTimestamp : importTimestamp,
                     ])
+                if !forSync { try Self.recordPresence(db, .note, id) }
                 importedCount += 1
             }
         }
@@ -3282,8 +3449,36 @@ public actor LampLibrary {
         created: Int? = nil,
         lastModified: Int? = nil,
         themes: [LampHighlightTheme] = [],
-        setMetadata: [String: ImportedHighlightSetMetadata] = [:]
+        setMetadata: [String: ImportedHighlightSetMetadata] = [:],
+        forSync: Bool
     ) throws -> LampStudyImportResult {
+        // A translation's default set is exported under its module name, which
+        // can't hold the default set's colon. Read back, it's the same set.
+        var canonical: [String: String] = [:]
+        for highlight in highlights where canonical[highlight.setID] == nil {
+            canonical[highlight.setID] = Self.canonicalHighlightSetID(
+                highlight.setID, translationID: highlight.translationID
+            )
+        }
+        let highlights = highlights.map { highlight in
+            guard let setID = canonical[highlight.setID], setID != highlight.setID else { return highlight }
+            return LampVerseHighlight(
+                id: highlight.id, setID: setID, translationID: highlight.translationID,
+                reference: highlight.reference, startOffset: highlight.startOffset,
+                endOffset: highlight.endOffset, style: highlight.style, color: highlight.color
+            )
+        }
+        let themes = themes.map { theme in
+            guard let setID = canonical[theme.setID], setID != theme.setID else { return theme }
+            return LampHighlightTheme(
+                setID: setID, color: theme.color, style: theme.style,
+                name: theme.name, description: theme.description
+            )
+        }
+        let setMetadata = Dictionary(
+            setMetadata.map { (canonical[$0.key] ?? $0.key, $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let queue = try openUserDatabase()
         let now = Int(Date().timeIntervalSince1970)
         var importedCount = 0
@@ -3293,6 +3488,13 @@ public actor LampLibrary {
                 let setID = setGroup.key
                 guard let translationID = setGroup.value.first?.translationID else { continue }
                 let metadata = setMetadata[setID]
+                if forSync, try Self.isDeleted(
+                    db, .highlightSet, setID,
+                    itemModified: metadata?.lastModified ?? lastModified
+                ) {
+                    skippedCount += setGroup.value.count
+                    continue
+                }
                 try db.execute(sql: """
                     INSERT INTO highlight_sets (
                         id, name, description, translation_id, created, last_modified
@@ -3321,6 +3523,15 @@ public actor LampLibrary {
                         continue
                     }
                     let color = normalizedHighlightColor(highlight.color)
+                    let key = Self.highlightKey(
+                        setID: setID, reference: highlight.reference,
+                        start: highlight.startOffset, end: highlight.endOffset,
+                        style: highlight.style.rawValue, color: color
+                    )
+                    if forSync, try Self.isDeleted(db, .highlight, key, itemModified: nil) {
+                        skippedCount += 1
+                        continue
+                    }
                     let exists = try Bool.fetchOne(db, sql: """
                         SELECT EXISTS(
                             SELECT 1 FROM highlights
@@ -3350,9 +3561,18 @@ public actor LampLibrary {
                             highlight.style.rawValue,
                             color,
                         ])
+                    if !forSync { try Self.recordPresence(db, .highlight, key) }
                     importedCount += 1
                 }
+                if !forSync { try Self.recordPresence(db, .highlightSet, setID) }
                 for theme in themes where theme.setID == setID {
+                    let themeKey = Self.highlightThemeKey(
+                        setID: setID, color: theme.color, style: theme.style.rawValue
+                    )
+                    if forSync, try Self.isDeleted(db, .highlightTheme, themeKey, itemModified: nil) {
+                        continue
+                    }
+                    if !forSync { try Self.recordPresence(db, .highlightTheme, themeKey) }
                     try db.execute(sql: """
                         INSERT INTO highlight_themes (set_id, color, style, name, description)
                         VALUES (?, ?, ?, ?, ?)
@@ -3597,6 +3817,188 @@ public actor LampLibrary {
         return modules
     }
 
+    // MARK: - Deletion ledger
+
+    /// Every recorded save and deletion of personal content on this device,
+    /// merged with those synced from others.
+    public func personalDeletionLedger() throws -> LampPersonalDeletionLedger {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            var ledger = LampPersonalDeletionLedger()
+            for row in try Row.fetchAll(db, sql: """
+                SELECT kind, item_key, present_since, deleted_at FROM personal_sync_ledger
+                """) {
+                guard let kind = LampPersonalItemKind(rawValue: row["kind"]) else { continue }
+                ledger.set(
+                    LampPersonalDeletionLedger.Entry(
+                        presentSince: row["present_since"],
+                        deletedAt: row["deleted_at"]
+                    ),
+                    kind: kind,
+                    key: row["item_key"]
+                )
+            }
+            return ledger
+        }
+    }
+
+    /// Takes in another device's record; for each item, the later save and the
+    /// later deletion are kept.
+    public func mergePersonalDeletionLedger(_ incoming: LampPersonalDeletionLedger) throws {
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            for (kind, entries) in incoming.entries {
+                for (key, entry) in entries {
+                    try db.execute(sql: """
+                        INSERT INTO personal_sync_ledger (kind, item_key, present_since, deleted_at)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(kind, item_key) DO UPDATE SET
+                            present_since = CASE
+                                WHEN present_since IS NULL THEN excluded.present_since
+                                WHEN excluded.present_since IS NULL THEN present_since
+                                ELSE MAX(present_since, excluded.present_since) END,
+                            deleted_at = CASE
+                                WHEN deleted_at IS NULL THEN excluded.deleted_at
+                                WHEN excluded.deleted_at IS NULL THEN deleted_at
+                                ELSE MAX(deleted_at, excluded.deleted_at) END
+                        """, arguments: [kind.rawValue, key, entry.presentSince, entry.deletedAt])
+                }
+            }
+        }
+    }
+
+    /// Removes local content that the ledger records as deleted since this
+    /// device's copy was last saved. Nothing new is recorded: the deletions
+    /// are already in the ledger.
+    public func applyPersonalDeletionLedger() throws {
+        let ledger = try personalDeletionLedger()
+        guard ledger.hasDeletions else { return }
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            for row in try Row.fetchAll(db, sql: "SELECT id, last_modified FROM personal_devotionals") {
+                let id: String = row["id"]
+                if ledger.isDeleted(.devotional, id, itemModified: row["last_modified"]) {
+                    try db.execute(sql: "DELETE FROM personal_devotionals WHERE id = ?", arguments: [id])
+                }
+            }
+            for row in try Row.fetchAll(db, sql: "SELECT id, last_modified FROM personal_notes") {
+                let id: String = row["id"]
+                if ledger.isDeleted(.note, id, itemModified: row["last_modified"]) {
+                    try db.execute(sql: "DELETE FROM personal_notes WHERE id = ?", arguments: [id])
+                }
+            }
+            for row in try Row.fetchAll(db, sql: "SELECT id, last_modified FROM highlight_sets") {
+                let id: String = row["id"]
+                if ledger.isDeleted(.highlightSet, id, itemModified: row["last_modified"]) {
+                    try db.execute(sql: "DELETE FROM highlights WHERE set_id = ?", arguments: [id])
+                    try db.execute(sql: "DELETE FROM highlight_themes WHERE set_id = ?", arguments: [id])
+                    try db.execute(sql: "DELETE FROM highlight_sets WHERE id = ?", arguments: [id])
+                }
+            }
+            for row in try Row.fetchAll(db, sql: """
+                SELECT id, set_id, ref, sc, ec, style, color FROM highlights
+                """) where ledger.isDeleted(.highlight, Self.highlightKey(row), itemModified: nil) {
+                try db.execute(sql: "DELETE FROM highlights WHERE id = ?", arguments: [row["id"] as Int64])
+            }
+            for row in try Row.fetchAll(db, sql: "SELECT set_id, color, style FROM highlight_themes") {
+                let setID: String = row["set_id"], color: String = row["color"], style: Int = row["style"]
+                if ledger.isDeleted(.highlightTheme, Self.highlightThemeKey(
+                    setID: setID, color: color, style: style
+                ), itemModified: nil) {
+                    try db.execute(sql: """
+                        DELETE FROM highlight_themes WHERE set_id = ? AND color = ? AND style = ?
+                        """, arguments: [setID, color, style])
+                }
+            }
+        }
+    }
+
+    /// What every chapter introduction is called unless it has its own title.
+    static let defaultIntroductionTitle = "Introduction"
+
+    private static func nowMilliseconds() -> Int64 {
+        Int64((Date().timeIntervalSince1970 * 1_000).rounded(.down))
+    }
+
+    private static func recordPresence(
+        _ db: Database,
+        _ kind: LampPersonalItemKind,
+        _ key: String
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO personal_sync_ledger (kind, item_key, present_since) VALUES (?, ?, ?)
+            ON CONFLICT(kind, item_key) DO UPDATE SET
+                present_since = MAX(COALESCE(present_since, 0), excluded.present_since)
+            """, arguments: [kind.rawValue, key, nowMilliseconds()])
+    }
+
+    private static func recordDeletion(
+        _ db: Database,
+        _ kind: LampPersonalItemKind,
+        _ key: String
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO personal_sync_ledger (kind, item_key, deleted_at) VALUES (?, ?, ?)
+            ON CONFLICT(kind, item_key) DO UPDATE SET
+                deleted_at = MAX(COALESCE(deleted_at, 0), excluded.deleted_at)
+            """, arguments: [kind.rawValue, key, nowMilliseconds()])
+    }
+
+    private static func recordHighlightDeletions(
+        _ db: Database,
+        matching condition: String,
+        arguments: StatementArguments
+    ) throws {
+        for row in try Row.fetchAll(db, sql: """
+            SELECT set_id, ref, sc, ec, style, color FROM highlights WHERE \(condition)
+            """, arguments: arguments) {
+            try recordDeletion(db, .highlight, highlightKey(row))
+        }
+    }
+
+    /// Whether the ledger records the item as deleted since the copy at hand,
+    /// which was last modified at `itemModified` (in seconds), if known.
+    private static func isDeleted(
+        _ db: Database,
+        _ kind: LampPersonalItemKind,
+        _ key: String,
+        itemModified: Int?
+    ) throws -> Bool {
+        guard let row = try Row.fetchOne(db, sql: """
+            SELECT present_since, deleted_at FROM personal_sync_ledger
+            WHERE kind = ? AND item_key = ?
+            """, arguments: [kind.rawValue, key]) else { return false }
+        return LampPersonalDeletionLedger.Entry(
+            presentSince: row["present_since"],
+            deletedAt: row["deleted_at"]
+        ).isDeleted(itemModified: itemModified)
+    }
+
+    /// Highlights have no lasting identity of their own, so one is known by
+    /// where it is and how it looks.
+    static func highlightKey(
+        setID: String,
+        reference: Int,
+        start: Int,
+        end: Int,
+        style: Int,
+        color: String?
+    ) -> String {
+        [setID, String(reference), String(start), String(end), String(style), color ?? ""]
+            .joined(separator: "\u{1F}")
+    }
+
+    private static func highlightKey(_ row: Row) -> String {
+        highlightKey(
+            setID: row["set_id"], reference: row["ref"], start: row["sc"], end: row["ec"],
+            style: row["style"], color: row["color"]
+        )
+    }
+
+    static func highlightThemeKey(setID: String, color: String, style: Int) -> String {
+        [setID, color, String(style)].joined(separator: "\u{1F}")
+    }
+
     private func openUserDatabase() throws -> DatabaseQueue {
         try prepareDirectories()
         let queue = try DatabaseQueue(path: userDatabaseURL.path)
@@ -3605,6 +4007,13 @@ public actor LampLibrary {
                 CREATE TABLE IF NOT EXISTS selected_plans (
                     plan_id TEXT PRIMARY KEY,
                     selected_at DATETIME NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS personal_sync_ledger (
+                    kind TEXT NOT NULL,
+                    item_key TEXT NOT NULL,
+                    present_since INTEGER,
+                    deleted_at INTEGER,
+                    PRIMARY KEY (kind, item_key)
                 );
                 CREATE TABLE IF NOT EXISTS completed_readings (
                     id TEXT PRIMARY KEY,

@@ -11,6 +11,9 @@ let package = Package(
     products: [
         .library(name: "LampCore", targets: ["LampCore"]),
         .library(name: "LampModuleKit", targets: ["LampModuleKit"]),
+        // SwiftUI stays out of LampCore: the module CLI and the MCP server link
+        // it headlessly and must not pull in a UI framework.
+        .library(name: "LampPresentationUI", targets: ["LampPresentationUI"]),
         .executable(name: "lamp-module", targets: ["LampModuleCLI"]),
     ],
     dependencies: [
@@ -29,6 +32,10 @@ let package = Package(
                 "LampModuleKit",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
+        ),
+        .target(
+            name: "LampPresentationUI",
+            dependencies: ["LampCore"]
         ),
         .executableTarget(
             name: "LampModuleCLI",
