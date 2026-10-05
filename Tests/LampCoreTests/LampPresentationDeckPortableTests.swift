@@ -216,3 +216,195 @@ struct LampPresentationDeckPortableTests {
         #expect(plan.decksToSave.map(\.deck.title) == ["New"])
     }
 }
+
+@Suite("Slide labels")
+struct LampPresentationSlideLabelTests {
+    private func slide(
+        _ layout: LampPresentationSlideLayout,
+        _ blocks: [LampPresentationBlock]
+    ) -> LampPresentationSlide {
+        LampPresentationSlide(layout: layout, blocks: blocks)
+    }
+
+    @Test("A title block names the slide")
+    func prefersTitle() {
+        let subject = slide(.titleAndBody, [
+            .init(kind: .title, text: "Three Movements"),
+            .init(kind: .body, text: "A long body that should not be used as the label"),
+        ])
+        #expect(subject.displayTitle == "Three Movements")
+    }
+
+    @Test("A scripture slide is named by its citation, not its passage")
+    func prefersCitation() {
+        let subject = slide(.scripture, [
+            .init(
+                kind: .scripture,
+                text: "But while he was still a long way off, his father saw him and was filled with compassion for him."
+            ),
+            .init(kind: .citation, text: "Luke 15:20 (NIV)"),
+        ])
+        #expect(subject.displayTitle == "Luke 15:20 (NIV)")
+    }
+
+    @Test("A subtitle is used before body text")
+    func prefersSubtitle() {
+        let subject = slide(.title, [
+            .init(kind: .subtitle, text: "Evening Service"),
+            .init(kind: .body, text: "Some much longer supporting sentence goes here"),
+        ])
+        #expect(subject.displayTitle == "Evening Service")
+    }
+
+    @Test("Body text falls back to one shortened line")
+    func shortensBody() {
+        let subject = slide(.quotation, [
+            .init(
+                kind: .quotation,
+                text: "He was not received as a servant, which is what he asked for, but as a son."
+            ),
+        ])
+        let label = subject.displayTitle
+        #expect(label.hasSuffix("…"))
+        #expect(label.count <= 49)
+        #expect(!label.contains("\n"))
+        #expect(label.hasPrefix("He was not received as a servant"))
+    }
+
+    @Test("A short body is used whole, without an ellipsis")
+    func keepsShortBody() {
+        let subject = slide(.blank, [.init(kind: .body, text: "Pause here")])
+        #expect(subject.displayTitle == "Pause here")
+    }
+
+    @Test("A multi-line list collapses to one line")
+    func collapsesLists() {
+        let subject = slide(.titleAndBody, [
+            .init(kind: .body, text: "Pray\nListen\nRespond", listStyle: .ordered),
+        ])
+        #expect(subject.displayTitle == "Pray Listen Respond")
+    }
+
+    @Test("An image slide is named by its description")
+    func usesAltText() {
+        let subject = slide(.image, [
+            .init(kind: .image, assetPath: "Assets/d/photo.jpg", altText: "The father embracing his son"),
+        ])
+        #expect(subject.displayTitle == "The father embracing his son")
+    }
+
+    @Test("A slide with nothing to say falls back to its layout")
+    func fallsBackToLayout() {
+        #expect(slide(.blank, []).displayTitle == "Blank")
+        #expect(slide(.twoColumn, [.init(kind: .body, text: "   ")]).displayTitle == "Two Columns")
+    }
+}
+
+@Suite("Presentation assets")
+struct LampPresentationAssetTests {
+    private func store() -> LampPresentationDeckStore {
+        LampPresentationDeckStore(
+            rootURL: URL(fileURLWithPath: "/tmp/lamp-library-\(UUID().uuidString)")
+        )
+    }
+
+    @Test("An asset resolves beside the decks")
+    func resolvesInsideTheLibrary() {
+        let store = store()
+        let url = store.assetURL(forAssetPath: "Assets/photo.jpg")
+        #expect(url?.path == store.assetsDirectoryURL.appendingPathComponent("photo.jpg").path)
+    }
+
+    @Test("A path that climbs out of the library resolves to nothing")
+    func refusesEscapingPaths() {
+        let store = store()
+        let refused = [
+            "../../../etc/passwd",
+            "Assets/../../secrets.txt",
+            "/etc/passwd",
+            "~/secrets.txt",
+            "..",
+            "",
+            "   ",
+            "Assets//photo.jpg",
+            "Assets/.hidden.jpg",
+            "C:\\Windows\\win.ini",
+            "Assets\\photo.jpg",
+        ]
+        for path in refused {
+            #expect(store.assetURL(forAssetPath: path) == nil, "resolved \(path)")
+            #expect(!LampPresentationDeckValidator.isSafeAssetPath(path), "accepted \(path)")
+        }
+    }
+
+    @Test("A deck naming a file outside the library fails validation")
+    func validationRejectsEscapingPaths() {
+        var deck = LampPresentationDeck.starter(title: "Pictures")
+        deck.slides.append(
+            LampPresentationSlide(
+                layout: .image,
+                blocks: [
+                    LampPresentationBlock(
+                        kind: .image,
+                        assetPath: "../../../etc/passwd",
+                        altText: "Nothing good"
+                    ),
+                ]
+            )
+        )
+
+        let errors = LampPresentationDeckValidator.errors(in: deck)
+        #expect(errors.contains { $0.path.hasSuffix("assetPath") })
+
+        // And so cannot be decoded at all.
+        let encoder = JSONEncoder()
+        let data = try? encoder.encode(deck)
+        #expect(data != nil)
+        #expect((try? LampPresentationDeckStore.decode(data ?? Data())) == nil)
+    }
+
+    @Test("A well-formed image deck validates and resolves")
+    func acceptsWellFormedAssets() throws {
+        var deck = LampPresentationDeck.starter(title: "Pictures")
+        deck.slides.append(
+            LampPresentationSlide(
+                layout: .image,
+                blocks: [
+                    LampPresentationBlock(
+                        kind: .image,
+                        assetPath: "Assets/\(UUID().uuidString.lowercased()).jpg",
+                        altText: "The father embracing his son"
+                    ),
+                ]
+            )
+        )
+
+        #expect(LampPresentationDeckValidator.errors(in: deck).isEmpty)
+        let block = deck.slides.last!.blocks.first!
+        #expect(store().assetURL(for: block) != nil)
+    }
+
+    @Test("Assets are read out of a sync archive, nested paths ignored")
+    func readsAssetsFromArchive() {
+        let archive = LampSyncArchive(entries: [
+            .init(
+                path: "\(LampPresentationDeckPortableLayout.assetsDirectoryPath)/photo.jpg",
+                data: Data("image".utf8),
+                modifiedAt: Date(timeIntervalSince1970: 100)
+            ),
+            .init(
+                path: "\(LampPresentationDeckPortableLayout.assetsDirectoryPath)/nested/photo.jpg",
+                data: Data("nope".utf8),
+                modifiedAt: Date(timeIntervalSince1970: 200)
+            ),
+            .init(
+                path: "\(LampPresentationDeckPortableLayout.directoryPath)/deck.lampdeck",
+                data: Data("{}".utf8),
+                modifiedAt: Date(timeIntervalSince1970: 300)
+            ),
+        ])
+
+        let assets = archive.presentationAssetRevisions()
+        #expect(assets.map(\.name) == ["photo.jpg"])
+    }
+}

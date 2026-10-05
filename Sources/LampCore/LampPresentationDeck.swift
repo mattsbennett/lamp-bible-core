@@ -187,10 +187,52 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
         self.isHidden = isHidden
     }
 
+    /// A one-line label for this slide in an editor's list, a viewer's grid, or
+    /// a remote's slide chooser.
+    ///
+    /// Plenty of slides carry no title block — scripture and quotation slides
+    /// usually do not — so rather than spilling a whole passage into a label,
+    /// prefer the short blocks that already name the slide, and only shorten
+    /// body text when nothing better exists.
     public var displayTitle: String {
-        blocks.first { $0.kind == .title }?.text
-            ?? blocks.first { !$0.text.isEmpty }?.text
-            ?? "Untitled Slide"
+        if let title = text(of: .title) { return title }
+        if let citation = text(of: .citation) { return citation }
+        if let subtitle = text(of: .subtitle) { return subtitle }
+        if let described = blocks.lazy.compactMap(Self.label(for:)).first {
+            return Self.shortened(described)
+        }
+        return layout.displayName
+    }
+
+    private func text(of kind: LampPresentationBlockKind) -> String? {
+        blocks.lazy
+            .filter { $0.kind == kind }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    /// What a block contributes to a label. An image has no text, but its
+    /// description names it better than the layout would.
+    private static func label(for block: LampPresentationBlock) -> String? {
+        let candidate = block.kind == .image
+            ? (block.altText ?? "")
+            : block.text
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// One line, cut at a word boundary. Lists and multi-line bodies collapse
+    /// to a single line first so a label never carries a newline into a layout
+    /// that cannot show one.
+    private static func shortened(_ value: String, limit: Int = 48) -> String {
+        let collapsed = value
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        guard collapsed.count > limit else { return collapsed }
+        let clipped = collapsed.prefix(limit)
+        let cut = clipped.lastIndex(of: " ").map { clipped[..<$0] } ?? clipped
+        let trimmed = cut.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed.isEmpty ? String(clipped) : trimmed) + "…"
     }
 }
 
@@ -367,6 +409,16 @@ public enum LampPresentationDeckValidator {
                 if block.kind == .image {
                     if block.assetPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                         issue(.error, "\(blockPath).assetPath", "An image block needs an asset path.")
+                    } else if let assetPath = block.assetPath,
+                              !isSafeAssetPath(assetPath) {
+                        // Decks travel between machines, so a path that climbs
+                        // out of the presentations directory is refused here
+                        // rather than at every reader.
+                        issue(
+                            .error,
+                            "\(blockPath).assetPath",
+                            "Use a relative path inside the presentation folder, such as Assets/photo.jpg."
+                        )
                     }
                     if block.altText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                         issue(.warning, "\(blockPath).altText", "Describe the image for accessibility.")
@@ -417,6 +469,25 @@ public enum LampPresentationDeckValidator {
         validate(deck).filter { $0.severity == .error }
     }
 
+    /// A relative path that stays inside the presentations directory.
+    ///
+    /// Rejects absolute paths, Windows-style drive and UNC paths, any `..`
+    /// component, and paths with an empty or hidden component, so a deck can
+    /// only ever name a file the library actually owns.
+    public static func isSafeAssetPath(_ assetPath: String) -> Bool {
+        let value = assetPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.count <= 1_024 else { return false }
+        guard !value.hasPrefix("/"), !value.hasPrefix("~"), !value.hasPrefix("\\") else { return false }
+        guard !value.contains("\\"), !value.contains(":") else { return false }
+        guard value.unicodeScalars.allSatisfy({ $0 != "\0" }) else { return false }
+
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.isEmpty else { return false }
+        return components.allSatisfy { component in
+            !component.isEmpty && component != "." && component != ".." && !component.hasPrefix(".")
+        }
+    }
+
     private static func isHexColor(_ value: String) -> Bool {
         value.range(
             of: "^#[0-9A-Fa-f]{6}$",
@@ -439,6 +510,9 @@ public struct LampPresentationDeckStore: Sendable {
     /// portable workspaces prefix, inside a backup or sync archive.
     public static let directoryName = "Presentations"
 
+    /// Images referenced by `assetPath` live here, beside the decks.
+    public static let assetsDirectoryName = "Assets"
+
     public let rootURL: URL
 
     public init(rootURL: URL) {
@@ -447,6 +521,32 @@ public struct LampPresentationDeckStore: Sendable {
 
     public var decksDirectoryURL: URL {
         rootURL.appendingPathComponent(Self.directoryName, isDirectory: true)
+    }
+
+    public var assetsDirectoryURL: URL {
+        decksDirectoryURL.appendingPathComponent(Self.assetsDirectoryName, isDirectory: true)
+    }
+
+    /// Resolves a block's `assetPath` against this library.
+    ///
+    /// Decks arrive over sync from other machines, so a path is only ever
+    /// resolved inside the presentations directory: anything absolute, or that
+    /// climbs out with `..`, resolves to nil rather than reading a file the
+    /// deck has no business naming. `LampPresentationDeckValidator` rejects
+    /// such paths too, but a reader should not depend on having validated.
+    public func assetURL(forAssetPath assetPath: String) -> URL? {
+        guard LampPresentationDeckValidator.isSafeAssetPath(assetPath) else { return nil }
+        let resolved = decksDirectoryURL
+            .appendingPathComponent(assetPath)
+            .standardizedFileURL
+        let base = decksDirectoryURL.standardizedFileURL.path
+        guard resolved.path.hasPrefix(base.hasSuffix("/") ? base : base + "/") else { return nil }
+        return resolved
+    }
+
+    public func assetURL(for block: LampPresentationBlock) -> URL? {
+        guard let assetPath = block.assetPath else { return nil }
+        return assetURL(forAssetPath: assetPath)
     }
 
     public func decks() throws -> [LampPresentationDeck] {

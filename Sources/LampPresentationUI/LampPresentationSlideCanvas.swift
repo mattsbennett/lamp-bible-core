@@ -38,14 +38,38 @@ public struct LampPresentationSlideCanvas: View {
     /// bodies instead of shrinking them past readability.
     public var compact: Bool
 
+    /// Where an image block's `assetPath` can be read from, if anywhere.
+    ///
+    /// The canvas does not assume a library: a presentation remote renders
+    /// slides it received over the wire and has no files at all, so it passes
+    /// nothing and gets the placeholder.
+    public var assetURL: (LampPresentationBlock) -> URL?
+
     public init(
         slide: LampPresentationSlide,
         style: LampPresentationSlideStyle,
-        compact: Bool = false
+        compact: Bool = false,
+        assetURL: @escaping (LampPresentationBlock) -> URL? = { _ in nil }
     ) {
         self.slide = slide
         self.style = style
         self.compact = compact
+        self.assetURL = assetURL
+    }
+
+    /// Resolves images against the library the deck was read from.
+    public init(
+        slide: LampPresentationSlide,
+        deck: LampPresentationDeck,
+        store: LampPresentationDeckStore,
+        compact: Bool = false
+    ) {
+        self.init(
+            slide: slide,
+            style: .init(deck: deck),
+            compact: compact,
+            assetURL: { store.assetURL(for: $0) }
+        )
     }
 
     public init(
@@ -174,18 +198,7 @@ public struct LampPresentationSlideCanvas: View {
                 if let title = block(for: .title) {
                     slideBlockText(title, size: 48 * unit, weight: .bold)
                 }
-                RoundedRectangle(cornerRadius: 18 * unit)
-                    .fill(foreground.opacity(0.09))
-                    .overlay {
-                        VStack(spacing: 10 * unit) {
-                            Image(systemName: "photo.on.rectangle.angled")
-                                .font(.system(size: 70 * unit, weight: .light))
-                            Text(slide.blocks.first { $0.kind == .image }?.assetPath ?? "Image")
-                                .font(.system(size: 20 * unit))
-                                .lineLimit(1)
-                        }
-                        .foregroundStyle(foreground.opacity(0.7))
-                    }
+                imageArea(unit: unit)
                 if let caption = block(for: .caption) {
                     slideBlockText(caption, size: 22 * unit, weight: .regular, alignment: .center)
                 }
@@ -201,6 +214,37 @@ public struct LampPresentationSlideCanvas: View {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    /// The picture itself when it can be read, and an honest placeholder
+    /// naming what is missing when it cannot.
+    @ViewBuilder
+    private func imageArea(unit: CGFloat) -> some View {
+        let imageBlock = slide.blocks.first { $0.kind == .image }
+        let resolved = imageBlock.flatMap(assetURL).flatMap(
+            LampPresentationAssetImageCache.swiftUIImage(at:)
+        )
+
+        if let resolved {
+            resolved
+                .resizable()
+                .scaledToFit()
+                .clipShape(RoundedRectangle(cornerRadius: 18 * unit))
+                .accessibilityLabel(imageBlock?.altText ?? "Image")
+        } else {
+            RoundedRectangle(cornerRadius: 18 * unit)
+                .fill(foreground.opacity(0.09))
+                .overlay {
+                    VStack(spacing: 10 * unit) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 70 * unit, weight: .light))
+                        Text(imageBlock?.altText ?? imageBlock?.assetPath ?? "Image")
+                            .font(.system(size: 20 * unit))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(foreground.opacity(0.7))
+                }
         }
     }
 

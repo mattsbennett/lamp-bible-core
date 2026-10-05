@@ -20,6 +20,25 @@ public enum LampPresentationDeckPortableLayout {
         "\(directoryPath)/\(deletionsFilename)"
     }
 
+    /// Images live in one flat directory beside the decks, under generated
+    /// filenames. Flat rather than per-deck so a sync pull needs a single
+    /// listing, and because two decks may legitimately share an image.
+    public static var assetsDirectoryPath: String {
+        "\(directoryPath)/\(LampPresentationDeckStore.assetsDirectoryName)"
+    }
+
+    /// An image file directly inside the assets directory.
+    public static func isAssetPath(_ path: String) -> Bool {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 4,
+              components[0] == Substring(LampPortableBackupLayout.workspacesDirectory),
+              components[1] == Substring(LampPresentationDeckStore.directoryName),
+              components[2] == Substring(LampPresentationDeckStore.assetsDirectoryName),
+              let filename = components.last
+        else { return false }
+        return !filename.isEmpty && !filename.hasPrefix(".")
+    }
+
     /// A deck file directly inside the presentations directory. Nested paths are
     /// rejected so a deck can never be read from a subdirectory a future format
     /// version might use for something else.
@@ -157,6 +176,44 @@ public enum LampPresentationDeckPortablePull {
     }
 }
 
+public extension LampPresentationDeck {
+    /// Filenames in the assets directory this deck's image blocks point at.
+    var referencedAssetNames: Set<String> {
+        Set(
+            slides
+                .flatMap(\.blocks)
+                .compactMap(\.assetPath)
+                .filter { LampPresentationDeckValidator.isSafeAssetPath($0) }
+                .compactMap { $0.split(separator: "/").last.map(String.init) }
+        )
+    }
+}
+
+public extension Collection where Element == LampPresentationDeck {
+    /// Every asset these decks still use.
+    ///
+    /// Assets carry no deletion ledger of their own: an image is kept for as
+    /// long as some deck names it, which is what lets sync union-merge them
+    /// without a deletion racing a deck that still needs the file.
+    var referencedAssetNames: Set<String> {
+        reduce(into: Set<String>()) { $0.formUnion($1.referencedAssetNames) }
+    }
+}
+
+/// One image file travelling with the decks that reference it.
+public struct LampPresentationAssetRevision: Sendable {
+    /// Filename inside the assets directory.
+    public let name: String
+    public let data: Data
+    public let modifiedAt: Date
+
+    public init(name: String, data: Data, modifiedAt: Date) {
+        self.name = name
+        self.data = data
+        self.modifiedAt = modifiedAt
+    }
+}
+
 public extension LampSyncArchive {
     /// Deck files carried by a decoded sync archive, skipping any copy this
     /// build cannot validate rather than failing the whole sync.
@@ -167,6 +224,20 @@ public extension LampSyncArchive {
             else { return nil }
             return LampPresentationDeckRevision(
                 deck: deck,
+                data: entry.data,
+                modifiedAt: entry.modifiedAt
+            )
+        }
+    }
+
+    /// Images carried alongside the decks.
+    func presentationAssetRevisions() -> [LampPresentationAssetRevision] {
+        entries.compactMap { entry in
+            guard LampPresentationDeckPortableLayout.isAssetPath(entry.path),
+                  let name = entry.path.split(separator: "/").last
+            else { return nil }
+            return LampPresentationAssetRevision(
+                name: String(name),
                 data: entry.data,
                 modifiedAt: entry.modifiedAt
             )

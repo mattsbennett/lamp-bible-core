@@ -52,6 +52,13 @@ let package = Package(
             ]
         ),
         .testTarget(
+            name: "LampPresentationUITests",
+            dependencies: [
+                "LampPresentationUI",
+                "LampCore",
+            ]
+        ),
+        .testTarget(
             name: "LampCoreTests",
             dependencies: [
                 "LampCore",
