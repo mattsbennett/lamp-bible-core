@@ -138,35 +138,10 @@ public struct LampPresentationSlideCanvas: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case .titleAndBody:
-            VStack(alignment: .leading, spacing: 34 * unit) {
-                if let title = block(for: .title) {
-                    slideBlockText(title, size: 58 * unit, weight: .bold)
-                    Rectangle().fill(accent).frame(width: 120 * unit, height: 6 * unit)
-                }
-                if let body = block(for: .body) ?? firstContentBlock {
-                    slideBlockText(body, size: 32 * unit, weight: .regular)
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            titleAndBodySlide(unit: unit)
 
         case .scripture, .quotation:
-            VStack(alignment: .leading, spacing: 30 * unit) {
-                if let quotation = block(for: slide.layout == .scripture ? .scripture : .quotation)
-                    ?? block(for: .body) ?? firstContentBlock {
-                    slideBlockText(quotation, size: 42 * unit, weight: .regular)
-                }
-                if let citation = block(for: .citation) {
-                    slideBlockText(citation, size: 25 * unit, weight: .medium, color: accent)
-                }
-            }
-            .padding(.leading, 34 * unit)
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 3 * unit)
-                    .fill(accent)
-                    .frame(width: 6 * unit)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            quotationSlide(unit: unit)
 
         case .twoColumn:
             VStack(alignment: .leading, spacing: 28 * unit) {
@@ -202,6 +177,15 @@ public struct LampPresentationSlideCanvas: View {
                 if let caption = block(for: .caption) {
                     slideBlockText(caption, size: 22 * unit, weight: .regular, alignment: .center)
                 }
+                ForEach(blocks(of: .citation)) { citation in
+                    slideBlockText(
+                        citation,
+                        size: 20 * unit,
+                        weight: .medium,
+                        alignment: .center,
+                        color: accent
+                    )
+                }
             }
 
         case .blank:
@@ -217,11 +201,111 @@ public struct LampPresentationSlideCanvas: View {
         }
     }
 
+    /// A heading, every body block beneath it, and any citations — with a
+    /// picture beside the prose when the slide carries one.
+    @ViewBuilder
+    private func titleAndBodySlide(unit: CGFloat) -> some View {
+        let bodies = blocks(of: .body, .scripture, .quotation, .subtitle)
+        let fallback = bodies.isEmpty ? firstContentBlock.map { [$0] } ?? [] : bodies
+        VStack(alignment: .leading, spacing: 34 * unit) {
+            if let title = block(for: .title) {
+                slideBlockText(title, size: 58 * unit, weight: .bold)
+                Rectangle().fill(accent).frame(width: 120 * unit, height: 6 * unit)
+            }
+            besideImage(unit: unit) {
+                VStack(alignment: .leading, spacing: 24 * unit) {
+                    ForEach(fallback) { body in
+                        slideBlockText(body, size: 32 * unit, weight: .regular)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            ForEach(blocks(of: .citation)) { citation in
+                slideBlockText(citation, size: 24 * unit, weight: .medium, color: accent)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Every quotation on the slide, then every citation, behind the accent
+    /// rule — and beside a picture when there is one, which is what a cover
+    /// image wants rather than being pushed under a headline.
+    @ViewBuilder
+    private func quotationSlide(unit: CGFloat) -> some View {
+        let primary: LampPresentationBlockKind = slide.layout == .scripture
+            ? .scripture : .quotation
+        let quoted = blocks(of: primary, .body)
+        let fallback = quoted.isEmpty ? firstContentBlock.map { [$0] } ?? [] : quoted
+        // One quotation at full size; several share the slide, so they step
+        // down rather than overflowing it.
+        let quotationSize = (fallback.count > 1 ? 34.0 : 42.0) * unit
+        besideImage(unit: unit) {
+            VStack(alignment: .leading, spacing: 30 * unit) {
+                ForEach(fallback) { quotation in
+                    slideBlockText(quotation, size: quotationSize, weight: .regular)
+                }
+                ForEach(blocks(of: .citation)) { citation in
+                    slideBlockText(citation, size: 25 * unit, weight: .medium, color: accent)
+                }
+            }
+            .padding(.leading, 34 * unit)
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3 * unit)
+                    .fill(accent)
+                    .frame(width: 6 * unit)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Lays `content` beside the slide's picture, or returns it untouched when
+    /// there is none. Images used to draw on image-layout slides alone, which
+    /// left every other layout silently dropping one it was given.
+    @ViewBuilder
+    private func besideImage<Content: View>(
+        unit: CGFloat,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        if imageBlock == nil {
+            content()
+        } else {
+            HStack(alignment: .center, spacing: 48 * unit) {
+                content()
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                VStack(spacing: 16 * unit) {
+                    imageArea(unit: unit)
+                    // A caption belongs to the picture, not to the prose, and
+                    // these layouts used to drop it along with the image.
+                    if let caption = block(for: .caption) {
+                        slideBlockText(
+                            caption,
+                            size: 20 * unit,
+                            weight: .regular,
+                            alignment: .center
+                        )
+                    }
+                }
+                .frame(maxWidth: (style.aspectRatio == .widescreen ? 620 : 440) * unit)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var imageBlock: LampPresentationBlock? {
+        slide.blocks.first { $0.kind == .image }
+    }
+
+    /// Every block of the given kinds, in the order the deck wrote them, so a
+    /// slide carrying three verses shows three rather than only the first.
+    private func blocks(of kinds: LampPresentationBlockKind...) -> [LampPresentationBlock] {
+        slide.blocks.filter { kinds.contains($0.kind) && !$0.text.isEmpty }
+    }
+
     /// The picture itself when it can be read, and an honest placeholder
     /// naming what is missing when it cannot.
     @ViewBuilder
     private func imageArea(unit: CGFloat) -> some View {
-        let imageBlock = slide.blocks.first { $0.kind == .image }
         let resolved = imageBlock.flatMap(assetURL).flatMap(
             LampPresentationAssetImageCache.swiftUIImage(at:)
         )

@@ -31,7 +31,9 @@ struct LampSlideCanvasLayoutTests {
     private func inkFraction(
         in image: CGImage,
         fromTop: Double,
-        toTop: Double
+        toTop: Double,
+        fromLeft: Double = 0,
+        toLeft: Double = 1
     ) throws -> Double {
         let bytesPerPixel = 4
         let bytesPerRow = image.width * bytesPerPixel
@@ -53,10 +55,12 @@ struct LampSlideCanvasLayoutTests {
         let background = (r: 0x11, g: 0x18, b: 0x27)
         let first = Int(Double(image.height) * fromTop)
         let last = min(Int(Double(image.height) * toTop), image.height)
+        let firstColumn = Int(Double(image.width) * fromLeft)
+        let lastColumn = min(Int(Double(image.width) * toLeft), image.width)
         var differing = 0
         var total = 0
         for y in first..<last {
-            for x in stride(from: 0, to: image.width, by: 2) {
+            for x in stride(from: firstColumn, to: lastColumn, by: 2) {
                 let offset = y * bytesPerRow + x * bytesPerPixel
                 let distance = abs(Int(pixels[offset]) - background.r)
                     + abs(Int(pixels[offset + 1]) - background.g)
@@ -143,5 +147,114 @@ struct LampSlideCanvasLayoutTests {
         ])
         let image = try render(slide, deck: deck)
         #expect(try inkFraction(in: image, fromTop: 0.3, toTop: 0.7) > 0.05)
+    }
+
+    // MARK: - Content the renderer used to drop
+
+    @Test("A quotation slide draws every quotation, not only the first")
+    func quotationSlideDrawsEveryQuotation() throws {
+        let one = LampPresentationSlide(layout: .scripture, blocks: [
+            .init(kind: .scripture, text: "In the beginning was the Word."),
+        ])
+        let three = LampPresentationSlide(layout: .scripture, blocks: [
+            .init(kind: .scripture, text: "In the beginning was the Word."),
+            .init(kind: .scripture, text: "And the Word was with God."),
+            .init(kind: .scripture, text: "And the Word was God."),
+        ])
+        // Three verses put more ink on the slide than one. Before this, the
+        // second and third were discarded and both slides drew identically.
+        let single = try inkFraction(in: try render(one, deck: deck), fromTop: 0, toTop: 1)
+        let several = try inkFraction(in: try render(three, deck: deck), fromTop: 0, toTop: 1)
+        #expect(several > single * 1.5)
+    }
+
+    @Test("A quotation slide draws every citation")
+    func quotationSlideDrawsEveryCitation() throws {
+        let slide = LampPresentationSlide(layout: .quotation, blocks: [
+            .init(kind: .quotation, text: "A quoted sentence."),
+            .init(kind: .citation, text: "First source"),
+            .init(kind: .citation, text: "Second source"),
+        ])
+        let one = LampPresentationSlide(layout: .quotation, blocks: [
+            .init(kind: .quotation, text: "A quoted sentence."),
+            .init(kind: .citation, text: "First source"),
+        ])
+        let both = try inkFraction(in: try render(slide, deck: deck), fromTop: 0, toTop: 1)
+        let single = try inkFraction(in: try render(one, deck: deck), fromTop: 0, toTop: 1)
+        #expect(both > single)
+    }
+
+    @Test("A quotation slide draws a picture beside the quotation")
+    func quotationSlideDrawsImageBesideText() throws {
+        let slide = LampPresentationSlide(layout: .quotation, blocks: [
+            .init(kind: .quotation, text: "A quoted sentence that carries the slide."),
+            .init(kind: .citation, text: "A source"),
+            .init(kind: .image, assetPath: "Assets/missing.png", altText: "A cover"),
+        ])
+        let image = try render(slide, deck: deck)
+        // The placeholder fills its half, so the right side carries far more
+        // ink than text alone would. Images used to draw on image slides only.
+        let right = try inkFraction(in: image, fromTop: 0.2, toTop: 0.8, fromLeft: 0.62, toLeft: 0.98)
+        #expect(right > 0.3)
+        // And the quotation still holds the left.
+        let left = try inkFraction(in: image, fromTop: 0.2, toTop: 0.8, fromLeft: 0.02, toLeft: 0.5)
+        #expect(left > 0.01)
+    }
+
+    @Test("A title-and-body slide draws its citation")
+    func titleAndBodyDrawsCitation() throws {
+        let withCitation = LampPresentationSlide(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "Three Movements"),
+            .init(kind: .body, text: "Body text"),
+            .init(kind: .citation, text: "Source: a book worth naming"),
+        ])
+        let without = LampPresentationSlide(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "Three Movements"),
+            .init(kind: .body, text: "Body text"),
+        ])
+        let cited = try inkFraction(in: try render(withCitation, deck: deck), fromTop: 0, toTop: 1)
+        let plain = try inkFraction(in: try render(without, deck: deck), fromTop: 0, toTop: 1)
+        #expect(cited > plain)
+    }
+
+    @Test("A title-and-body slide draws every body block")
+    func titleAndBodyDrawsEveryBody() throws {
+        let two = LampPresentationSlide(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "Three Movements"),
+            .init(kind: .body, text: "The first movement."),
+            .init(kind: .body, text: "The second movement."),
+        ])
+        let one = LampPresentationSlide(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "Three Movements"),
+            .init(kind: .body, text: "The first movement."),
+        ])
+        let both = try inkFraction(in: try render(two, deck: deck), fromTop: 0, toTop: 1)
+        let single = try inkFraction(in: try render(one, deck: deck), fromTop: 0, toTop: 1)
+        #expect(both > single)
+    }
+
+    @Test("A title-and-body slide draws a picture beside its body")
+    func titleAndBodyDrawsImageBesideBody() throws {
+        let slide = LampPresentationSlide(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "Three Movements"),
+            .init(kind: .body, text: "The idea this slide carries."),
+            .init(kind: .image, assetPath: "Assets/missing.png", altText: "A cover"),
+        ])
+        let image = try render(slide, deck: deck)
+        let right = try inkFraction(in: image, fromTop: 0.3, toTop: 0.8, fromLeft: 0.62, toLeft: 0.98)
+        #expect(right > 0.3)
+    }
+
+    @Test("A quotation slide without a picture still fills the slide width")
+    func quotationSlideWithoutImageIsUnchanged() throws {
+        let slide = LampPresentationSlide(layout: .scripture, blocks: [
+            .init(kind: .scripture, text: String(repeating: "A long quotation. ", count: 14)),
+            .init(kind: .citation, text: "John 1:1"),
+        ])
+        let image = try render(slide, deck: deck)
+        // No image means no column reserved for one: the text reaches well
+        // past the midpoint, as it always did.
+        let reach = try inkFraction(in: image, fromTop: 0.2, toTop: 0.8, fromLeft: 0.6, toLeft: 0.95)
+        #expect(reach > 0.01)
     }
 }
