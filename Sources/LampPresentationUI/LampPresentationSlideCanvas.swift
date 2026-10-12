@@ -352,23 +352,23 @@ public struct LampPresentationSlideCanvas: View {
            block.kind == .body,
            !listItems(in: block.text).isEmpty {
             let items = listItems(in: block.text)
-            VStack(alignment: .leading, spacing: size * 0.22) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    HStack(alignment: .firstTextBaseline, spacing: size * 0.28) {
-                        Text(listMarker(for: listStyle, index: index))
-                            .font(presentationFont(size: size, weight: weight))
-                            .frame(
-                                minWidth: size * (listStyle == .ordered ? 1.05 : 0.55),
-                                alignment: .trailing
-                            )
-                        styledText(
-                            item,
-                            size: size,
-                            weight: weight,
-                            alignment: alignment,
-                            color: color ?? foreground
-                        )
-                    }
+            // One size for the whole list, chosen by what fits.
+            //
+            // Each row used to carry its own `minimumScaleFactor`, so a tight
+            // slide squeezed every row independently: beside an ordinary
+            // paragraph that kept its size, a list collapsed to little over
+            // half of it. Stepping the list as a unit keeps its rows equal to
+            // each other and comparable to the prose they sit beside.
+            ViewThatFits(in: .vertical) {
+                ForEach([1.0, 0.82, 0.68, 0.55, 0.45], id: \.self) { scale in
+                    listRows(
+                        items,
+                        listStyle: listStyle,
+                        size: size * scale,
+                        weight: weight,
+                        alignment: alignment,
+                        color: color ?? foreground
+                    )
                 }
             }
             .foregroundStyle(color ?? foreground)
@@ -383,19 +383,55 @@ public struct LampPresentationSlideCanvas: View {
         }
     }
 
+    /// One list, every row at the same size, with wrapped lines hanging under
+    /// the text rather than under the marker.
+    private func listRows(
+        _ items: [String],
+        listStyle: LampPresentationListStyle,
+        size: CGFloat,
+        weight: Font.Weight,
+        alignment: TextAlignment,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: size * 0.22) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                HStack(alignment: .firstTextBaseline, spacing: size * 0.28) {
+                    Text(listMarker(for: listStyle, index: index))
+                        .font(presentationFont(size: size, weight: weight))
+                        .frame(
+                            minWidth: size * (listStyle == .ordered ? 1.05 : 0.55),
+                            alignment: .trailing
+                        )
+                    styledText(
+                        item,
+                        size: size,
+                        weight: weight,
+                        alignment: alignment,
+                        color: color,
+                        scalesToFit: false
+                    )
+                }
+            }
+        }
+        // Measured at its natural height, so `ViewThatFits` can tell which
+        // step actually fits instead of being handed a crushed one.
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
     private func styledText(
         _ value: String,
         size: CGFloat,
         weight: Font.Weight,
         alignment: TextAlignment,
-        color: Color
+        color: Color,
+        scalesToFit: Bool = true
     ) -> some View {
         Text(value)
             .font(presentationFont(size: size, weight: weight))
             .foregroundStyle(color)
             .multilineTextAlignment(alignment)
             .lineSpacing(size * 0.12)
-            .minimumScaleFactor(0.45)
+            .minimumScaleFactor(scalesToFit ? 0.45 : 1)
             .lineLimit(compact ? 4 : nil)
     }
 

@@ -72,6 +72,49 @@ struct LampSlideCanvasLayoutTests {
         return total == 0 ? 0 : Double(differing) / Double(total)
     }
 
+    /// Heights of contiguous runs of inked rows. Each run is roughly one line
+    /// of text, so a run's height tracks the glyph size actually drawn — which
+    /// is how "the list came out smaller than the prose" becomes measurable.
+    private func inkBandHeights(in image: CGImage) throws -> [Int] {
+        let bytesPerPixel = 4
+        let bytesPerRow = image.width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: image.height * bytesPerRow)
+        let context = try #require(
+            CGContext(
+                data: &pixels,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        )
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+
+        let background = (r: 0x11, g: 0x18, b: 0x27)
+        var heights: [Int] = []
+        var run = 0
+        for y in 0..<image.height {
+            var inked = false
+            for x in stride(from: 0, to: image.width, by: 2) {
+                let offset = y * bytesPerRow + x * bytesPerPixel
+                let distance = abs(Int(pixels[offset]) - background.r)
+                    + abs(Int(pixels[offset + 1]) - background.g)
+                    + abs(Int(pixels[offset + 2]) - background.b)
+                if distance > 30 { inked = true; break }
+            }
+            if inked {
+                run += 1
+            } else if run > 0 {
+                heights.append(run)
+                run = 0
+            }
+        }
+        if run > 0 { heights.append(run) }
+        return heights
+    }
+
     private var deck: LampPresentationDeck {
         LampPresentationDeck(title: "Layout", slides: [
             LampPresentationSlide(layout: .blank, blocks: [.init(kind: .body, text: "placeholder")]),
@@ -256,5 +299,42 @@ struct LampSlideCanvasLayoutTests {
         // past the midpoint, as it always did.
         let reach = try inkFraction(in: image, fromTop: 0.2, toTop: 0.8, fromLeft: 0.6, toLeft: 0.95)
         #expect(reach > 0.01)
+    }
+
+    @Test("A list keeps its size when it shares a slide with a paragraph")
+    func listIsNotCrushedBesideAParagraph() throws {
+        let list = LampPresentationBlock(
+            kind: .body,
+            text: (1...8).map { "Point number \($0) in the sequence" }.joined(separator: "\n"),
+            listStyle: .unordered
+        )
+        let paragraph = LampPresentationBlock(
+            kind: .body,
+            text: String(repeating: "A companion paragraph that takes real room. ", count: 6)
+        )
+        let alone = LampPresentationSlide(layout: .titleAndBody, blocks: [list])
+        let shared = LampPresentationSlide(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "Heading"),
+            list,
+            paragraph,
+        ])
+
+        // Bands under 10px are rules and specks, not lines of text — the accent
+        // rule beneath a heading is one of them.
+        let aloneRow = try #require(
+            inkBandHeights(in: try render(alone, deck: deck)).filter { $0 >= 10 }.max()
+        )
+        let bands = try inkBandHeights(in: try render(shared, deck: deck)).filter { $0 >= 10 }
+        // The tallest band is the heading; the rest are list rows and paragraph
+        // lines, which should be the same order of size as the list drawn alone.
+        let smallest = try #require(bands.sorted().dropLast().min())
+
+        // Each list row used to carry its own `minimumScaleFactor`, so a shared
+        // slide squeezed the rows to little over half the size the paragraph
+        // beside them kept.
+        #expect(
+            Double(smallest) >= Double(aloneRow) * 0.9,
+            "list rows came out at \(smallest)px against \(aloneRow)px drawn alone"
+        )
     }
 }
