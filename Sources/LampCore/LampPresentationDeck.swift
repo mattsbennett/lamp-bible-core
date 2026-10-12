@@ -14,6 +14,8 @@ public struct LampPresentationDeck: Codable, Equatable, Identifiable, Sendable {
     public var aspectRatio: LampPresentationAspectRatio
     public var theme: LampPresentationTheme
     public var slides: [LampPresentationSlide]
+    /// Where each slide's speaker notes come from. Absent means `authored`.
+    public var speakerNotesSource: LampPresentationSpeakerNotesSource?
 
     public init(
         schemaVersion: Int = LampPresentationDeck.currentSchemaVersion,
@@ -22,7 +24,8 @@ public struct LampPresentationDeck: Codable, Equatable, Identifiable, Sendable {
         source: LampPresentationSource? = nil,
         aspectRatio: LampPresentationAspectRatio = .widescreen,
         theme: LampPresentationTheme = .lampDark,
-        slides: [LampPresentationSlide]
+        slides: [LampPresentationSlide],
+        speakerNotesSource: LampPresentationSpeakerNotesSource? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -31,7 +34,11 @@ public struct LampPresentationDeck: Codable, Equatable, Identifiable, Sendable {
         self.aspectRatio = aspectRatio
         self.theme = theme
         self.slides = slides
+        self.speakerNotesSource = speakerNotesSource
     }
+
+    /// Whether this deck's notes are derived from the writing it is linked to.
+    public var followsManuscript: Bool { speakerNotesSource == .manuscript }
 
     public static func starter(
         title: String = "Untitled Presentation",
@@ -64,6 +71,20 @@ public struct LampPresentationDeck: Codable, Equatable, Identifiable, Sendable {
             ]
         )
     }
+}
+
+/// Where a deck's speaker notes come from.
+public enum LampPresentationSpeakerNotesSource: String, Codable, CaseIterable, Sendable {
+    /// Written on each slide and left alone. The default when absent.
+    case authored
+    /// Derived from the writing the deck is linked to, split slide by slide at
+    /// each slide's `notesAnchor`, and re-derived whenever the prose changes.
+    case manuscript
+}
+
+/// Whether a block's words are checked against the manuscript.
+public enum LampPresentationManuscriptCheck: String, Codable, CaseIterable, Sendable {
+    case skip
 }
 
 public struct LampPresentationSource: Codable, Equatable, Sendable {
@@ -172,17 +193,24 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
     public var blocks: [LampPresentationBlock]
     public var speakerNotes: String
     public var isHidden: Bool
+    /// The opening words of the passage spoken over this slide, used when the
+    /// deck's notes follow a manuscript. A slide without one stays silent, and
+    /// the passage in progress stays with the previous anchored slide — which
+    /// is how a title slide carries no notes.
+    public var notesAnchor: String?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
         layout: LampPresentationSlideLayout,
         blocks: [LampPresentationBlock] = [],
         speakerNotes: String = "",
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        notesAnchor: String? = nil
     ) {
         self.id = id
         self.layout = layout
         self.blocks = blocks
+        self.notesAnchor = notesAnchor
         self.speakerNotes = speakerNotes
         self.isHidden = isHidden
     }
@@ -295,6 +323,10 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     public var altText: String?
     public var listStyle: LampPresentationListStyle?
     public var scriptureReference: LampPresentationScriptureReference?
+    /// Opts this block out of the check that its words still appear in the
+    /// manuscript, for a slide that deliberately shows fuller text than the
+    /// prose quotes.
+    public var manuscriptCheck: LampPresentationManuscriptCheck?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -303,7 +335,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         assetPath: String? = nil,
         altText: String? = nil,
         listStyle: LampPresentationListStyle? = nil,
-        scriptureReference: LampPresentationScriptureReference? = nil
+        scriptureReference: LampPresentationScriptureReference? = nil,
+        manuscriptCheck: LampPresentationManuscriptCheck? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -312,6 +345,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.altText = altText
         self.listStyle = listStyle
         self.scriptureReference = scriptureReference
+        self.manuscriptCheck = manuscriptCheck
     }
 }
 
@@ -397,6 +431,33 @@ public enum LampPresentationDeckValidator {
             }
         }
 
+        if deck.followsManuscript {
+            if let kind = deck.source?.kind, kind != .devotional, kind != .writing {
+                issue(
+                    .warning,
+                    "speakerNotesSource",
+                    "Notes can only follow a devotional or writing source, and this deck's "
+                        + "is \(kind.rawValue). Its notes will stay as written."
+                )
+            } else if deck.source == nil {
+                issue(
+                    .warning,
+                    "speakerNotesSource",
+                    "Notes follow the manuscript but this deck is linked to no writing."
+                )
+            }
+            if deck.slides.allSatisfy({ ($0.notesAnchor ?? "").trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty }) {
+                issue(
+                    .warning,
+                    "slides",
+                    "Notes follow the manuscript but no slide says where its passage "
+                        + "begins. Give each spoken slide a notesAnchor."
+                )
+            }
+        }
+
         let slideIDs = deck.slides.map(\.id)
         for duplicate in duplicates(in: slideIDs) {
             issue(.error, "slides", "Slide ID '\(duplicate)' is duplicated.")
@@ -464,6 +525,17 @@ public enum LampPresentationDeckValidator {
                     }
                 } else if block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     issue(.error, "\(blockPath).text", "This content block cannot be empty.")
+                }
+                if block.manuscriptCheck != nil {
+                    let checkable = block.kind == .quotation || block.kind == .scripture
+                    if !checkable {
+                        issue(
+                            .warning,
+                            "\(blockPath).manuscriptCheck",
+                            "Only quotation and scripture content is checked against the "
+                                + "manuscript, so this has no effect."
+                        )
+                    }
                 }
                 if block.listStyle != nil && block.kind != .body {
                     issue(.error, "\(blockPath).listStyle", "List formatting is supported on body content.")
@@ -800,6 +872,13 @@ public struct LampPresentationDeckStore: Sendable {
 
     public func decode(_ data: Data) throws -> LampPresentationDeck {
         try Self.decode(data)
+    }
+
+    /// Encodes a deck without refusing one that has validation errors, for a
+    /// tool whose job is to write a deck back while it is still being fixed.
+    /// Everything that stores a deck uses `encoded`, which validates first.
+    public static func encodedUnvalidated(_ deck: LampPresentationDeck) throws -> Data {
+        try encoder.encode(deck)
     }
 
     /// Decodes a deck without refusing one that has validation errors.
