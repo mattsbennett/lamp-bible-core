@@ -212,4 +212,25 @@ struct LampPresentationDeckAdviceTests {
             ]),
         ]).contains { $0.contains("Lamp adds the quotation marks") })
     }
+
+    @Test func doesNotCountAListAsAQuotation() {
+        // Slide 41's shape: a bulleted list, one quotation, its citation.
+        // Only one thing is quoted here, so there is nothing to say.
+        let messages = warnings([
+            .init(layout: .titleAndBody, blocks: [
+                .init(kind: .title, text: "The three dials"),
+                .init(
+                    kind: .body,
+                    text: "Capacity\nAttention\nRestraint",
+                    listStyle: .unordered
+                ),
+                .init(kind: .quotation, text: "A single quoted sentence from somewhere."),
+                .init(kind: .citation, text: "A source"),
+            ]),
+        ])
+        #expect(
+            !messages.contains { $0.contains("share one citation") },
+            "unexpected: \(messages)"
+        )
+    }
 }

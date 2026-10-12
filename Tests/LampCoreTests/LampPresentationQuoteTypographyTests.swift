@@ -114,4 +114,73 @@ struct LampPresentationQuoteTypographyTests {
         #expect(!LampPresentationQuoteTypography.applies(to: body, layout: .quotation))
         #expect(!LampPresentationQuoteTypography.applies(to: verbatim, layout: .quotation))
     }
+
+    @Test func curlsTheStraightMarksScriptureIsStoredWith() {
+        // An installed translation stores typewriter punctuation, and a verse
+        // inserted from Slide Studio carries it onto the slide unchanged.
+        #expect(
+            LampPresentationQuoteTypography.displayText("Cain's offering he had no regard.")
+                == "\u{201C}Cain\u{2019}s offering he had no regard.\u{201D}"
+        )
+        #expect(
+            LampPresentationQuoteTypography.displayText("And they shall not teach, 'Know the LORD,' for they shall all know me.")
+                == "\u{201C}And they shall not teach, \u{2018}Know the LORD,\u{2019} for they shall all know me.\u{201D}"
+        )
+    }
+
+    @Test func readsAStraightMarkFromWhatPrecedesIt() {
+        // Opening after a bracket, closing before one.
+        #expect(
+            LampPresentationQuoteTypography.displayText("He answered ('yes') and left.")
+                == "\u{201C}He answered (\u{2018}yes\u{2019}) and left.\u{201D}"
+        )
+        // A mark starting the text opens.
+        #expect(
+            LampPresentationQuoteTypography.displayText("'Enough,' he said.")
+                == "\u{201C}\u{2018}Enough,\u{2019} he said.\u{201D}"
+        )
+    }
+
+    @Test func leavesACurledApostropheAlone() {
+        #expect(
+            LampPresentationQuoteTypography.displayText("Cain\u{2019}s offering.")
+                == "\u{201C}Cain\u{2019}s offering.\u{201D}"
+        )
+    }
+
+    /// The new fields are optional additions to schema 1, so they have to
+    /// survive a round trip through the stored file without a custom coder.
+    @Test func theNewFieldsSurviveTheFile() throws {
+        let deck = LampPresentationDeck(
+            title: "Round trip",
+            source: .init(kind: .devotional, id: "abc"),
+            slides: [
+                .init(
+                    layout: .quotation,
+                    blocks: [
+                        .init(
+                            kind: .quotation,
+                            text: "words",
+                            manuscriptCheck: .skip,
+                            typography: .verbatim
+                        ),
+                    ],
+                    notesAnchor: "The first dial"
+                ),
+            ],
+            speakerNotesSource: .manuscript
+        )
+        let data = try LampPresentationDeckStore.encodedUnvalidated(deck)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("\"speakerNotesSource\" : \"manuscript\""))
+        #expect(json.contains("\"notesAnchor\""))
+        #expect(json.contains("\"typography\" : \"verbatim\""))
+
+        let read = try LampPresentationDeckStore.decodeUnvalidated(data)
+        #expect(read.followsManuscript)
+        #expect(read.slides.first?.notesAnchor == "The first dial")
+        #expect(read.slides.first?.blocks.first?.typography == .verbatim)
+        #expect(read.slides.first?.blocks.first?.manuscriptCheck == .skip)
+        #expect(read == deck)
+    }
 }

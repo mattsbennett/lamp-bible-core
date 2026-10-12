@@ -99,8 +99,13 @@ public enum LampPresentationQuoteTypography {
         return String(characters) + "\u{2026}" + String(tail)
     }
 
-    /// Double marks inside the quotation become single ones, so the outer pair
-    /// added in step 6 is the only double pair on the slide.
+    /// Curls the marks inside the quotation.
+    ///
+    /// Double marks step down to single ones, so the outer pair added in step 6
+    /// is the only double pair on the slide. Straight single marks curl where
+    /// they stand: an installed translation stores them straight — `Cain's`,
+    /// `'Know the LORD,'` — and a verse inserted from Slide Studio would
+    /// otherwise carry typewriter punctuation onto a slide set in curled marks.
     private static func demotingInnerMarks(_ value: String) -> String {
         var result: [Character] = []
         var previous: Character?
@@ -110,19 +115,26 @@ public enum LampPresentationQuoteTypography {
                 result.append("\u{2018}")
             case "\u{201D}":
                 result.append("\u{2019}")
-            case "\"":
+            case "\"", "'":
                 // A straight mark says nothing about which end it is, so it is
-                // read from what comes before it.
-                let opens = previous == nil
-                    || previous?.isWhitespace == true
-                    || (previous.map { openers.contains($0) } ?? false)
-                result.append(opens ? "\u{2018}" : "\u{2019}")
+                // read from what comes before it. After a letter it is an
+                // apostrophe, which is the same character as a closing mark.
+                result.append(opensQuotation(after: previous) ? "\u{2018}" : "\u{2019}")
             default:
                 result.append(character)
             }
             previous = character
         }
         return String(result)
+    }
+
+    /// Whether a straight mark here opens rather than closes.
+    private static func opensQuotation(after previous: Character?) -> Bool {
+        guard let previous else { return true }
+        if previous.isWhitespace { return true }
+        // An opening bracket or mark, but not a closing one: `('yes')` opens
+        // after the bracket and closes before it.
+        return ["(", "[", "{", "\u{2018}", "\u{201C}"].contains(previous)
     }
 
     /// Whether `block` is drawn as a quotation on `layout`.

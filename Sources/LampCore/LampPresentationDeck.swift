@@ -504,17 +504,23 @@ public enum LampPresentationDeckValidator {
 
             // Several passages sharing one attribution read as one passage with
             // a list of sources under it.
-            let quoted = plan.quoteGroups.filter { !$0.quotations.isEmpty }
+            // Only quoted matter counts. A slide with a bulleted list, one
+            // quotation and its citation has one thing quoted, not two.
+            let quoted = plan.quoteGroups
+                .map { group in
+                    group.quotations.filter { $0.kind == .quotation || $0.kind == .scripture }
+                }
+                .filter { !$0.isEmpty }
             if quoted.count == 1,
                let only = quoted.first,
-               only.quotations.count > 1,
-               only.citation != nil,
+               only.count > 1,
+               plan.quoteGroups.contains(where: { $0.citation != nil }),
                slide.layout == .scripture || slide.layout == .quotation
                    || slide.layout == .titleAndBody {
                 issue(
                     .warning,
                     "\(slidePath).blocks",
-                    "\(only.quotations.count) quotations share one citation. Give each "
+                    "\(only.count) quotations share one citation. Give each "
                         + "its own, directly after it, or join passages from the same "
                         + "place into one quotation with an ellipsis."
                 )
