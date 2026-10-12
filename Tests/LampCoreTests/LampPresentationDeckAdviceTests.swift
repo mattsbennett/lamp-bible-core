@@ -130,4 +130,86 @@ struct LampPresentationDeckAdviceTests {
         // Still only a warning: the slide renders a placeholder rather than failing.
         #expect(LampPresentationDeckValidator.errors(in: subject).isEmpty)
     }
+
+    // MARK: - Quote groups
+
+    @Test func pairsEachPassageWithTheCitationThatFollowsIt() {
+        let slide = LampPresentationSlide(layout: .scripture, blocks: [
+            .init(id: "q1", kind: .scripture, text: "then the LORD God formed the man"),
+            .init(id: "c1", kind: .citation, text: "Genesis 2:7"),
+            .init(id: "q2", kind: .scripture, text: "The first man was from the earth"),
+            .init(id: "c2", kind: .citation, text: "1 Corinthians 15:47"),
+        ])
+        let groups = slide.plan.quoteGroups
+        #expect(groups.count == 2)
+        #expect(groups[0].quotations.map(\.id) == ["q1"])
+        #expect(groups[0].citation?.id == "c1")
+        #expect(groups[1].quotations.map(\.id) == ["q2"])
+        #expect(groups[1].citation?.id == "c2")
+    }
+
+    @Test func keepsTwoPassagesUnderOneCitationTogether() {
+        // Two passages from the same place, attributed once: one group.
+        let slide = LampPresentationSlide(layout: .quotation, blocks: [
+            .init(id: "a", kind: .quotation, text: "first half"),
+            .init(id: "b", kind: .quotation, text: "second half"),
+            .init(id: "c", kind: .citation, text: "Gray, pages 1 and 2"),
+        ])
+        let groups = slide.plan.quoteGroups
+        #expect(groups.count == 1)
+        #expect(groups[0].quotations.map(\.id) == ["a", "b"])
+        #expect(groups[0].citation?.id == "c")
+    }
+
+    @Test func drawsAQuotationThatNamesNoSource() {
+        let slide = LampPresentationSlide(layout: .quotation, blocks: [
+            .init(id: "a", kind: .quotation, text: "attributed"),
+            .init(id: "c", kind: .citation, text: "A source"),
+            .init(id: "b", kind: .quotation, text: "unattributed"),
+        ])
+        let groups = slide.plan.quoteGroups
+        #expect(groups.count == 2)
+        #expect(groups[1].quotations.map(\.id) == ["b"])
+        #expect(groups[1].citation == nil, "a quotation with no source is still drawn")
+    }
+
+    @Test func namesSeveralPassagesSharingOneCitation() {
+        let messages = warnings([
+            .init(layout: .scripture, blocks: [
+                .init(kind: .scripture, text: "then the LORD God formed the man"),
+                .init(kind: .scripture, text: "The first man was from the earth"),
+                .init(kind: .citation, text: "Genesis 2:7; 1 Corinthians 15:47"),
+            ]),
+        ])
+        #expect(messages.contains { $0.contains("share one citation") })
+
+        // Paired properly, there is nothing to say.
+        #expect(!warnings([
+            .init(layout: .scripture, blocks: [
+                .init(kind: .scripture, text: "then the LORD God formed the man"),
+                .init(kind: .citation, text: "Genesis 2:7"),
+                .init(kind: .scripture, text: "The first man was from the earth"),
+                .init(kind: .citation, text: "1 Corinthians 15:47"),
+            ]),
+        ]).contains { $0.contains("share one citation") })
+    }
+
+    @Test func namesQuotationMarksTheAuthorTyped() {
+        #expect(warnings([
+            .init(layout: .quotation, blocks: [
+                .init(kind: .quotation, text: "\u{201C}A whole sentence.\u{201D}"),
+            ]),
+        ]).contains { $0.contains("Lamp adds the quotation marks") })
+
+        // Opted out, the text is drawn as stored and nothing is added.
+        #expect(!warnings([
+            .init(layout: .quotation, blocks: [
+                .init(
+                    kind: .quotation,
+                    text: "\u{201C}A whole sentence.\u{201D}",
+                    typography: .verbatim
+                ),
+            ]),
+        ]).contains { $0.contains("Lamp adds the quotation marks") })
+    }
 }

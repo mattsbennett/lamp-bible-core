@@ -25,6 +25,26 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     /// said something the slide cannot show.
     public var ignored: [LampPresentationBlock]
 
+    /// One quoted passage with the citation that attributes it.
+    ///
+    /// Two quotations from two sources are two things said, not one thing with
+    /// two sources listed beneath it, so each is drawn on its own.
+    public struct QuoteGroup: Equatable, Sendable, Identifiable {
+        public var quotations: [LampPresentationBlock]
+        public var citation: LampPresentationBlock?
+
+        public var id: String { quotations.first?.id ?? citation?.id ?? "" }
+
+        public init(quotations: [LampPresentationBlock], citation: LampPresentationBlock?) {
+            self.quotations = quotations
+            self.citation = citation
+        }
+    }
+
+    /// `prose` and `citations` read in document order, with each citation
+    /// closing the passage it follows.
+    public var quoteGroups: [QuoteGroup] = []
+
     /// Everything that reaches the slide.
     public var drawn: [LampPresentationBlock] {
         var result: [LampPresentationBlock] = []
@@ -36,6 +56,35 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
         if let image { result.append(image) }
         if let caption { result.append(caption) }
         return result
+    }
+}
+
+extension LampPresentationSlide {
+    /// Reads the slide in the order it was written and closes a group at each
+    /// citation. Quotations after the last citation form a final, unattributed
+    /// group — which is how a slide that quotes without naming a source still
+    /// draws its text.
+    static func quoteGroups(
+        in blocks: [LampPresentationBlock],
+        drawnProse: [LampPresentationBlock],
+        drawnCitations: [LampPresentationBlock]
+    ) -> [LampPresentationSlidePlan.QuoteGroup] {
+        let prose = Set(drawnProse.map(\.id))
+        let citations = Set(drawnCitations.map(\.id))
+        var groups: [LampPresentationSlidePlan.QuoteGroup] = []
+        var pending: [LampPresentationBlock] = []
+        for block in blocks {
+            if prose.contains(block.id) {
+                pending.append(block)
+            } else if citations.contains(block.id) {
+                groups.append(.init(quotations: pending, citation: block))
+                pending = []
+            }
+        }
+        if !pending.isEmpty {
+            groups.append(.init(quotations: pending, citation: nil))
+        }
+        return groups
     }
 }
 
@@ -121,6 +170,11 @@ public extension LampPresentationSlide {
         // Everything placed above was removed as it was taken, so what is left
         // is what the layout will not draw.
         plan.ignored = remaining
+        plan.quoteGroups = Self.quoteGroups(
+            in: blocks,
+            drawnProse: plan.prose,
+            drawnCitations: plan.citations
+        )
         return plan
     }
 }

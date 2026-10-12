@@ -82,6 +82,11 @@ public enum LampPresentationSpeakerNotesSource: String, Codable, CaseIterable, S
     case manuscript
 }
 
+/// Whether Lamp sets a block's text, or draws it exactly as stored.
+public enum LampPresentationTypography: String, Codable, CaseIterable, Sendable {
+    case verbatim
+}
+
 /// Whether a block's words are checked against the manuscript.
 public enum LampPresentationManuscriptCheck: String, Codable, CaseIterable, Sendable {
     case skip
@@ -327,6 +332,10 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// manuscript, for a slide that deliberately shows fuller text than the
     /// prose quotes.
     public var manuscriptCheck: LampPresentationManuscriptCheck?
+    /// Draws this block's text exactly as stored, without the quotation marks
+    /// and ellipses Lamp would otherwise add. For poetry, an excerpt opening
+    /// with a lowercase name, or a deck that wants bare scripture.
+    public var typography: LampPresentationTypography?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -336,7 +345,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         altText: String? = nil,
         listStyle: LampPresentationListStyle? = nil,
         scriptureReference: LampPresentationScriptureReference? = nil,
-        manuscriptCheck: LampPresentationManuscriptCheck? = nil
+        manuscriptCheck: LampPresentationManuscriptCheck? = nil,
+        typography: LampPresentationTypography? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -346,6 +356,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.listStyle = listStyle
         self.scriptureReference = scriptureReference
         self.manuscriptCheck = manuscriptCheck
+        self.typography = typography
     }
 }
 
@@ -491,6 +502,24 @@ public enum LampPresentationDeckValidator {
                 )
             }
 
+            // Several passages sharing one attribution read as one passage with
+            // a list of sources under it.
+            let quoted = plan.quoteGroups.filter { !$0.quotations.isEmpty }
+            if quoted.count == 1,
+               let only = quoted.first,
+               only.quotations.count > 1,
+               only.citation != nil,
+               slide.layout == .scripture || slide.layout == .quotation
+                   || slide.layout == .titleAndBody {
+                issue(
+                    .warning,
+                    "\(slidePath).blocks",
+                    "\(only.quotations.count) quotations share one citation. Give each "
+                        + "its own, directly after it, or join passages from the same "
+                        + "place into one quotation with an ellipsis."
+                )
+            }
+
             // Text scales down to 45% before it is clipped, so an over-full
             // slide passes every other check and simply becomes unreadable.
             if let crowding = crowdingMessage(for: plan, layout: slide.layout) {
@@ -525,6 +554,15 @@ public enum LampPresentationDeckValidator {
                     }
                 } else if block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     issue(.error, "\(blockPath).text", "This content block cannot be empty.")
+                }
+                if LampPresentationQuoteTypography.applies(to: block, layout: slide.layout),
+                   hasTypedOuterQuotationMarks(block.text) {
+                    issue(
+                        .warning,
+                        "\(blockPath).text",
+                        "Lamp adds the quotation marks; remove these. Set "
+                            + "\"typography\": \"verbatim\" to draw the text exactly as stored."
+                    )
                 }
                 if block.manuscriptCheck != nil {
                     let checkable = block.kind == .quotation || block.kind == .scripture
@@ -626,6 +664,20 @@ public enum LampPresentationDeckValidator {
         return components.allSatisfy { component in
             !component.isEmpty && component != "." && component != ".." && !component.hasPrefix(".")
         }
+    }
+
+    /// Whether the author wrapped the whole text in quotation marks, which Lamp
+    /// would then draw a second pair around.
+    private static func hasTypedOuterQuotationMarks(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let marks: Set<Character> = ["\"", "\u{201C}", "\u{201D}"]
+        guard trimmed.count >= 2,
+              let first = trimmed.first, marks.contains(first),
+              let last = trimmed.last, marks.contains(last)
+        else { return false }
+        // Marks at both ends with another between them belong to the text: two
+        // speakers quoted in turn, not one quotation wrapped by hand.
+        return !trimmed.dropFirst().dropLast().contains { marks.contains($0) }
     }
 
     /// Why a block went undrawn, when the reason is worth naming.

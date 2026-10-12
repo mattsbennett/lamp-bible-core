@@ -170,6 +170,10 @@ public struct LampPresentationSlideCanvas: View {
                     )
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
+                // Sized to the columns, so the divider stops where they do
+                // rather than running to the foot of the slide.
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
@@ -213,25 +217,54 @@ public struct LampPresentationSlideCanvas: View {
     /// picture beside the prose when the slide carries one.
     @ViewBuilder
     private func titleAndBodySlide(unit: CGFloat) -> some View {
-        let fallback = plan.prose
+        // A citation that follows its quotation belongs under it; one that
+        // follows nothing belongs at the foot of the slide.
+        let attributed = Set(
+            plan.quoteGroups.compactMap { group in
+                group.quotations.isEmpty ? nil : group.citation?.id
+            }
+        )
         VStack(alignment: .leading, spacing: 34 * unit) {
             if let title = plan.title {
                 slideBlockText(title, size: 58 * unit, weight: .bold)
                 Rectangle().fill(accent).frame(width: 120 * unit, height: 6 * unit)
             }
-            besideImage(unit: unit) {
-                VStack(alignment: .leading, spacing: 24 * unit) {
-                    ForEach(fallback) { body in
-                        slideBlockText(body, size: 32 * unit, weight: .regular)
+            VStack(alignment: .leading, spacing: 34 * unit) {
+                besideImage(unit: unit) {
+                    VStack(alignment: .leading, spacing: 24 * unit) {
+                        ForEach(plan.quoteGroups) { group in
+                            VStack(alignment: .leading, spacing: 10 * unit) {
+                                ForEach(group.quotations) { body in
+                                    slideBlockText(body, size: 32 * unit, weight: .regular)
+                                }
+                                if let citation = group.citation,
+                                   attributed.contains(citation.id) {
+                                    slideBlockText(
+                                        citation,
+                                        size: 24 * unit,
+                                        weight: .medium,
+                                        color: accent
+                                    )
+                                }
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                ForEach(plan.citations.filter { !attributed.contains($0.id) }) { citation in
+                    slideBlockText(citation, size: 24 * unit, weight: .medium, color: accent)
+                }
             }
-            ForEach(plan.citations) { citation in
-                slideBlockText(citation, size: 24 * unit, weight: .medium, color: accent)
-            }
-            Spacer(minLength: 0)
+            // `.leading` is leading across and centred down, so what little a
+            // sparse slide carries sits in the middle of the room left under
+            // the heading. Content taller than that space still fills from the
+            // top, because the frame grows rather than squeezing it.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
+        // A sparse slide used to sit against the title with the lower
+        // two-thirds empty. The heading stays put so it does not jump between
+        // slides; everything under it settles a little above centre, and
+        // content taller than the space still fills from the top.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -240,26 +273,41 @@ public struct LampPresentationSlideCanvas: View {
     /// image wants rather than being pushed under a headline.
     @ViewBuilder
     private func quotationSlide(unit: CGFloat) -> some View {
-        let fallback = plan.prose
         // One quotation at full size; several share the slide, so they step
         // down rather than overflowing it.
-        let quotationSize = (fallback.count > 1 ? 34.0 : 42.0) * unit
+        let quotationSize = (plan.prose.count > 1 ? 34.0 : 42.0) * unit
         besideImage(unit: unit) {
-            VStack(alignment: .leading, spacing: 30 * unit) {
-                ForEach(fallback) { quotation in
-                    slideBlockText(quotation, size: quotationSize, weight: .regular)
+            // Each passage keeps its own rule and its own attribution: two
+            // quotations from two places are two things said, not one thing
+            // with two sources listed under it.
+            VStack(alignment: .leading, spacing: 44 * unit) {
+                ForEach(plan.quoteGroups) { group in
+                    quoteGroup(group, quotationSize: quotationSize, unit: unit)
                 }
-                ForEach(plan.citations) { citation in
-                    slideBlockText(citation, size: 25 * unit, weight: .medium, color: accent)
-                }
-            }
-            .padding(.leading, 34 * unit)
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 3 * unit)
-                    .fill(accent)
-                    .frame(width: 6 * unit)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+    }
+
+    /// One quoted passage behind one accent rule, with its citation beneath it.
+    private func quoteGroup(
+        _ group: LampPresentationSlidePlan.QuoteGroup,
+        quotationSize: CGFloat,
+        unit: CGFloat
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 30 * unit) {
+            ForEach(group.quotations) { quotation in
+                slideBlockText(quotation, size: quotationSize, weight: .regular)
+            }
+            if let citation = group.citation {
+                slideBlockText(citation, size: 25 * unit, weight: .medium, color: accent)
+            }
+        }
+        .padding(.leading, 34 * unit)
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3 * unit)
+                .fill(accent)
+                .frame(width: 6 * unit)
         }
     }
 
@@ -297,6 +345,16 @@ public struct LampPresentationSlideCanvas: View {
     }
 
     private var imageBlock: LampPresentationBlock? { plan.image }
+
+    /// What this block reads as on the slide. A quotation is set in marks, with
+    /// ellipses where it starts or ends mid-sentence; everything else is drawn
+    /// as the author typed it.
+    private func displayText(of block: LampPresentationBlock) -> String {
+        guard LampPresentationQuoteTypography.applies(to: block, layout: slide.layout) else {
+            return block.text
+        }
+        return LampPresentationQuoteTypography.displayText(block.text)
+    }
 
     /// The picture itself when it can be read, and an honest placeholder
     /// naming what is missing when it cannot.
@@ -362,12 +420,14 @@ public struct LampPresentationSlideCanvas: View {
             .foregroundStyle(color ?? foreground)
         } else {
             styledText(
-                block.text,
+                displayText(of: block),
                 size: size,
                 weight: weight,
                 alignment: alignment,
                 color: color ?? foreground
             )
+            // A listener hears the words, not the marks Lamp drew around them.
+            .accessibilityLabel(block.text)
         }
     }
 
