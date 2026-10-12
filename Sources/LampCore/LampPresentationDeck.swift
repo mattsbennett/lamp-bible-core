@@ -380,6 +380,23 @@ public enum LampPresentationDeckValidator {
             issue(.error, key, "Use a six-digit hexadecimal colour such as #111827.")
         }
 
+        // A custom theme can pass every format check and still be unreadable
+        // from the back of a room.
+        for (key, value, floor, role) in [
+            ("theme.foregroundColor", deck.theme.foregroundColor, 4.5, "Body text"),
+            ("theme.accentColor", deck.theme.accentColor, 3.0, "Accent text"),
+        ] {
+            guard let ratio = contrastRatio(value, deck.theme.backgroundColor) else { continue }
+            if ratio < floor {
+                issue(
+                    .warning,
+                    key,
+                    "\(role) contrasts with the background at only "
+                        + "\(formattedRatio(ratio)):1; aim for \(formattedRatio(floor)):1 or more."
+                )
+            }
+        }
+
         let slideIDs = deck.slides.map(\.id)
         for duplicate in duplicates(in: slideIDs) {
             issue(.error, "slides", "Slide ID '\(duplicate)' is duplicated.")
@@ -395,6 +412,28 @@ public enum LampPresentationDeckValidator {
             }
             if slide.speakerNotes.count > 5_000 {
                 issue(.warning, "\(slidePath).speakerNotes", "Speaker notes exceed 5,000 characters.")
+            }
+
+            // Blocks a layout will never draw. The deck is still valid — an
+            // older deck should not stop opening — but the author has said
+            // something the slide cannot show, and silence here is what sent
+            // deck authors reading the renderer to find out.
+            let plan = slide.plan
+            for ignored in plan.ignored {
+                let index = slide.blocks.firstIndex(of: ignored).map(String.init) ?? "?"
+                issue(
+                    .warning,
+                    "\(slidePath).blocks[\(index)]",
+                    "A \(slide.layout.rawValue) slide does not draw \(ignored.kind.rawValue) "
+                        + "content\(ignoredHint(for: ignored, layout: slide.layout)). "
+                        + "Move it to another slide or change the layout."
+                )
+            }
+
+            // Text scales down to 45% before it is clipped, so an over-full
+            // slide passes every other check and simply becomes unreadable.
+            if let crowding = crowdingMessage(for: plan, layout: slide.layout) {
+                issue(.warning, "\(slidePath).blocks", crowding)
             }
 
             let blockIDs = slide.blocks.map(\.id)
@@ -465,6 +504,35 @@ public enum LampPresentationDeckValidator {
         return issues
     }
 
+    /// Validates a deck and additionally checks that every image it names is
+    /// really there, which the pure format check cannot know.
+    ///
+    /// `assetExists` is asked for each safe `assetPath`, relative to the
+    /// presentation folder. A named file that is absent renders as a
+    /// placeholder on every platform, so it is reported rather than fatal.
+    public static func validate(
+        _ deck: LampPresentationDeck,
+        assetExists: (String) -> Bool
+    ) -> [LampPresentationDeckIssue] {
+        var issues = validate(deck)
+        for (slideIndex, slide) in deck.slides.enumerated() {
+            for (blockIndex, block) in slide.blocks.enumerated() {
+                guard block.kind == .image,
+                      let assetPath = block.assetPath,
+                      isSafeAssetPath(assetPath),
+                      !assetExists(assetPath)
+                else { continue }
+                issues.append(.init(
+                    severity: .warning,
+                    path: "slides[\(slideIndex)].blocks[\(blockIndex)].assetPath",
+                    message: "No file at '\(assetPath)'. The slide renders a placeholder "
+                        + "until the image is delivered beside the deck."
+                ))
+            }
+        }
+        return issues
+    }
+
     public static func errors(in deck: LampPresentationDeck) -> [LampPresentationDeckIssue] {
         validate(deck).filter { $0.severity == .error }
     }
@@ -486,6 +554,82 @@ public enum LampPresentationDeckValidator {
         return components.allSatisfy { component in
             !component.isEmpty && component != "." && component != ".." && !component.hasPrefix(".")
         }
+    }
+
+    /// Why a block went undrawn, when the reason is worth naming.
+    private static func ignoredHint(
+        for block: LampPresentationBlock,
+        layout: LampPresentationSlideLayout
+    ) -> String {
+        switch (layout, block.kind) {
+        case (.scripture, .title), (.quotation, .title):
+            return " — these layouts are set without a heading"
+        case (.title, _), (.closing, _):
+            return " beyond its heading and one line beneath it"
+        case (.twoColumn, .body):
+            return " beyond its first two columns"
+        case (_, .caption):
+            return " without an image to caption"
+        case (_, .image):
+            return " more than once"
+        default:
+            return ""
+        }
+    }
+
+    /// Whether a slide is carrying more than it can show at a readable size.
+    ///
+    /// This is an estimate from character counts, not a measurement: the
+    /// renderer is the only thing that can say for certain, and it is not
+    /// available here. The thresholds are deliberately generous so that only a
+    /// slide well past full is named.
+    private static func crowdingMessage(
+        for plan: LampPresentationSlidePlan,
+        layout: LampPresentationSlideLayout
+    ) -> String? {
+        let prose = (plan.prose + plan.columns + plan.citations)
+            .reduce(0) { $0 + $1.text.count }
+        guard prose > 0 else { return nil }
+        // A picture takes about half the slide, so the prose beside it has
+        // roughly half the room.
+        let ceiling = plan.image == nil ? 900 : 450
+        guard prose > ceiling else { return nil }
+        let shape = plan.image == nil
+            ? "this slide"
+            : "the half of this slide left by its image"
+        return "About \(prose) characters of text for \(shape). Text shrinks to fit "
+            + "before it is clipped, so split this across slides to keep it readable."
+    }
+
+    /// WCAG relative-luminance contrast between two deck colours, or nil when
+    /// either is not a colour this format accepts.
+    static func contrastRatio(_ first: String, _ second: String) -> Double? {
+        guard let a = relativeLuminance(first), let b = relativeLuminance(second) else {
+            return nil
+        }
+        let lighter = max(a, b)
+        let darker = min(a, b)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    private static func relativeLuminance(_ value: String) -> Double? {
+        var hex = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if hex.hasPrefix("#") { hex.removeFirst() }
+        guard hex.count == 6, let rgb = UInt64(hex, radix: 16) else { return nil }
+        let channels = [
+            Double((rgb >> 16) & 0xff) / 255,
+            Double((rgb >> 8) & 0xff) / 255,
+            Double(rgb & 0xff) / 255,
+        ].map { channel -> Double in
+            channel <= 0.039_28
+                ? channel / 12.92
+                : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+    }
+
+    private static func formattedRatio(_ value: Double) -> String {
+        String(format: "%.1f", value)
     }
 
     private static func isHexColor(_ value: String) -> Bool {
@@ -584,6 +728,69 @@ public struct LampPresentationDeckStore: Sendable {
         return destination
     }
 
+    /// Copies the images a deck names from a folder delivered beside it into
+    /// this library's asset directory, and reports what arrived.
+    ///
+    /// An agent writing a deck cannot put files in the library — it is told not
+    /// to, and the path is not its to know — so it leaves them in an `Assets`
+    /// folder next to the deck and Lamp brings them in. Only paths the deck
+    /// actually references are copied, and only safe ones, so the folder cannot
+    /// be used to write anywhere else.
+    @discardableResult
+    public func importAssets(
+        from directory: URL,
+        referencedBy deck: LampPresentationDeck,
+        fileManager: FileManager = .default
+    ) throws -> (imported: [String], missing: [String]) {
+        let referenced = Set(
+            deck.slides
+                .flatMap(\.blocks)
+                .compactMap(\.assetPath)
+                .filter(LampPresentationDeckValidator.isSafeAssetPath)
+        ).sorted()
+        guard !referenced.isEmpty else { return ([], []) }
+
+        var imported: [String] = []
+        var missing: [String] = []
+        let base = directory.standardizedFileURL
+        for assetPath in referenced {
+            let source = base.appendingPathComponent(assetPath).standardizedFileURL
+            let root = base.path.hasSuffix("/") ? base.path : base.path + "/"
+            // `isSafeAssetPath` already refuses `..`, but a symbolic link in the
+            // delivered folder could still point outside it.
+            let isSymbolicLink = (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]))?
+                .isSymbolicLink == true
+            guard source.path.hasPrefix(root),
+                  !isSymbolicLink,
+                  fileManager.fileExists(atPath: source.path),
+                  let destination = assetURL(forAssetPath: assetPath)
+            else {
+                if assetURL(forAssetPath: assetPath).map({
+                    !fileManager.fileExists(atPath: $0.path)
+                }) ?? true {
+                    missing.append(assetPath)
+                }
+                continue
+            }
+            try fileManager.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if fileManager.fileExists(atPath: destination.path) {
+                // Same name, new bytes: the deck's own reference is the record
+                // of which image belongs to it, so the newer file wins.
+                guard (try? Data(contentsOf: destination)) != (try? Data(contentsOf: source)) else {
+                    imported.append(assetPath)
+                    continue
+                }
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.copyItem(at: source, to: destination)
+            imported.append(assetPath)
+        }
+        return (imported, missing)
+    }
+
     public func delete(id: String) throws {
         let url = deckFileURL(for: id)
         if FileManager.default.fileExists(atPath: url.path) {
@@ -593,6 +800,16 @@ public struct LampPresentationDeckStore: Sendable {
 
     public func decode(_ data: Data) throws -> LampPresentationDeck {
         try Self.decode(data)
+    }
+
+    /// Decodes a deck without refusing one that has validation errors.
+    ///
+    /// Everything that stores or presents a deck goes through `decode`, which
+    /// refuses a malformed one. A tool that exists to show an author what they
+    /// have written needs the opposite: a deck mid-repair is exactly the one
+    /// worth looking at, and its problems are reported rather than hidden.
+    public static func decodeUnvalidated(_ data: Data) throws -> LampPresentationDeck {
+        try decoder.decode(LampPresentationDeck.self, from: data)
     }
 
     /// Decoding and validation need no library root, so readers that only

@@ -117,15 +117,20 @@ public struct LampPresentationSlideCanvas: View {
         return spoken.isEmpty ? slide.displayTitle : spoken.joined(separator: ". ")
     }
 
+    /// What this slide's layout will draw. The canvas renders the plan rather
+    /// than reaching into `blocks`, so the validator's account of what a layout
+    /// leaves out stays true of what actually happens here.
+    private var plan: LampPresentationSlidePlan { slide.plan }
+
     @ViewBuilder
     private func slideContent(unit: CGFloat) -> some View {
         switch slide.layout {
         case .title, .closing:
             VStack(spacing: 24 * unit) {
-                if let title = block(for: .title) {
+                if let title = plan.title {
                     slideBlockText(title, size: 76 * unit, weight: .bold, alignment: .center)
                 }
-                if let subtitle = block(for: .subtitle) ?? block(for: .body) {
+                if let subtitle = plan.subtitle {
                     slideBlockText(
                         subtitle,
                         size: 32 * unit,
@@ -145,10 +150,10 @@ public struct LampPresentationSlideCanvas: View {
 
         case .twoColumn:
             VStack(alignment: .leading, spacing: 28 * unit) {
-                if let title = block(for: .title) {
+                if let title = plan.title {
                     slideBlockText(title, size: 52 * unit, weight: .bold)
                 }
-                let columns = slide.blocks.filter { $0.kind == .body && !$0.text.isEmpty }
+                let columns = plan.columns
                 HStack(alignment: .top, spacing: 50 * unit) {
                     slideBlockText(
                         columns.first ?? LampPresentationBlock(kind: .body, text: "First idea"),
@@ -170,14 +175,14 @@ public struct LampPresentationSlideCanvas: View {
 
         case .image:
             VStack(spacing: 22 * unit) {
-                if let title = block(for: .title) {
+                if let title = plan.title {
                     slideBlockText(title, size: 48 * unit, weight: .bold)
                 }
                 imageArea(unit: unit)
-                if let caption = block(for: .caption) {
+                if let caption = plan.caption {
                     slideBlockText(caption, size: 22 * unit, weight: .regular, alignment: .center)
                 }
-                ForEach(blocks(of: .citation)) { citation in
+                ForEach(plan.citations) { citation in
                     slideBlockText(
                         citation,
                         size: 20 * unit,
@@ -189,15 +194,18 @@ public struct LampPresentationSlideCanvas: View {
             }
 
         case .blank:
-            VStack(alignment: .leading, spacing: 18 * unit) {
-                ForEach(slide.blocks) { block in
-                    if block.kind != .image {
+            besideImage(unit: unit) {
+                VStack(alignment: .leading, spacing: 18 * unit) {
+                    ForEach(plan.prose) { block in
                         slideBlockText(block, size: 31 * unit, weight: .regular)
                     }
+                    ForEach(plan.citations) { citation in
+                        slideBlockText(citation, size: 24 * unit, weight: .medium, color: accent)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -205,10 +213,9 @@ public struct LampPresentationSlideCanvas: View {
     /// picture beside the prose when the slide carries one.
     @ViewBuilder
     private func titleAndBodySlide(unit: CGFloat) -> some View {
-        let bodies = blocks(of: .body, .scripture, .quotation, .subtitle)
-        let fallback = bodies.isEmpty ? firstContentBlock.map { [$0] } ?? [] : bodies
+        let fallback = plan.prose
         VStack(alignment: .leading, spacing: 34 * unit) {
-            if let title = block(for: .title) {
+            if let title = plan.title {
                 slideBlockText(title, size: 58 * unit, weight: .bold)
                 Rectangle().fill(accent).frame(width: 120 * unit, height: 6 * unit)
             }
@@ -220,7 +227,7 @@ public struct LampPresentationSlideCanvas: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            ForEach(blocks(of: .citation)) { citation in
+            ForEach(plan.citations) { citation in
                 slideBlockText(citation, size: 24 * unit, weight: .medium, color: accent)
             }
             Spacer(minLength: 0)
@@ -233,10 +240,7 @@ public struct LampPresentationSlideCanvas: View {
     /// image wants rather than being pushed under a headline.
     @ViewBuilder
     private func quotationSlide(unit: CGFloat) -> some View {
-        let primary: LampPresentationBlockKind = slide.layout == .scripture
-            ? .scripture : .quotation
-        let quoted = blocks(of: primary, .body)
-        let fallback = quoted.isEmpty ? firstContentBlock.map { [$0] } ?? [] : quoted
+        let fallback = plan.prose
         // One quotation at full size; several share the slide, so they step
         // down rather than overflowing it.
         let quotationSize = (fallback.count > 1 ? 34.0 : 42.0) * unit
@@ -245,7 +249,7 @@ public struct LampPresentationSlideCanvas: View {
                 ForEach(fallback) { quotation in
                     slideBlockText(quotation, size: quotationSize, weight: .regular)
                 }
-                ForEach(blocks(of: .citation)) { citation in
+                ForEach(plan.citations) { citation in
                     slideBlockText(citation, size: 25 * unit, weight: .medium, color: accent)
                 }
             }
@@ -277,7 +281,7 @@ public struct LampPresentationSlideCanvas: View {
                     imageArea(unit: unit)
                     // A caption belongs to the picture, not to the prose, and
                     // these layouts used to drop it along with the image.
-                    if let caption = block(for: .caption) {
+                    if let caption = plan.caption {
                         slideBlockText(
                             caption,
                             size: 20 * unit,
@@ -292,15 +296,7 @@ public struct LampPresentationSlideCanvas: View {
         }
     }
 
-    private var imageBlock: LampPresentationBlock? {
-        slide.blocks.first { $0.kind == .image }
-    }
-
-    /// Every block of the given kinds, in the order the deck wrote them, so a
-    /// slide carrying three verses shows three rather than only the first.
-    private func blocks(of kinds: LampPresentationBlockKind...) -> [LampPresentationBlock] {
-        slide.blocks.filter { kinds.contains($0.kind) && !$0.text.isEmpty }
-    }
+    private var imageBlock: LampPresentationBlock? { plan.image }
 
     /// The picture itself when it can be read, and an honest placeholder
     /// naming what is missing when it cannot.
@@ -330,14 +326,6 @@ public struct LampPresentationSlideCanvas: View {
                     .foregroundStyle(foreground.opacity(0.7))
                 }
         }
-    }
-
-    private func block(for kind: LampPresentationBlockKind) -> LampPresentationBlock? {
-        slide.blocks.first { $0.kind == kind && !$0.text.isEmpty }
-    }
-
-    private var firstContentBlock: LampPresentationBlock? {
-        slide.blocks.first { ![.title, .subtitle, .image].contains($0.kind) && !$0.text.isEmpty }
     }
 
     @ViewBuilder
