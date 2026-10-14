@@ -61,6 +61,71 @@ struct LampPresentationDeckAdviceTests {
         #expect(caption.contains { $0.contains("without an image to caption") })
     }
 
+    // MARK: - Two columns
+
+    @Test func readsAHeadingProseAndCitationIntoEachColumn() {
+        let slide = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .title, text: "Two searches"),
+            .init(kind: .subtitle, text: "The Preacher"),
+            .init(kind: .scripture, text: "to seek wisdom and the scheme of things"),
+            .init(kind: .citation, text: "Ecclesiastes 7:25"),
+            .init(kind: .subtitle, text: "Mankind"),
+            .init(kind: .scripture, text: "they have sought out many schemes."),
+            .init(kind: .body, text: "The same Hebrew root."),
+            .init(kind: .citation, text: "Ecclesiastes 7:29"),
+        ])
+        let columns = slide.plan.columnGroups
+        #expect(columns.count == 2)
+        #expect(columns.first?.heading?.text == "The Preacher")
+        #expect(columns.first?.prose.map(\.text) == ["to seek wisdom and the scheme of things"])
+        #expect(columns.first?.citation?.text == "Ecclesiastes 7:25")
+        #expect(columns.last?.heading?.text == "Mankind")
+        #expect(columns.last?.prose.count == 2)
+        #expect(columns.last?.citation?.text == "Ecclesiastes 7:29")
+        #expect(slide.plan.ignored.isEmpty)
+        #expect(warnings([slide]).isEmpty, "unexpected warnings: \(warnings([slide]))")
+    }
+
+    @Test func keepsTwoBareBodiesAsTwoColumns() {
+        // The older shape of a two-column slide, which decks already use.
+        let slide = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .title, text: "Two ideas"),
+            .init(kind: .body, text: "First"),
+            .init(kind: .citation, text: "A source for the first"),
+            .init(kind: .body, text: "Second"),
+        ])
+        let columns = slide.plan.columnGroups
+        #expect(columns.map { $0.prose.map(\.text) } == [["First"], ["Second"]])
+        #expect(columns.first?.heading == nil)
+        #expect(columns.first?.citation?.text == "A source for the first")
+        #expect(columns.last?.citation == nil)
+        #expect(slide.plan.ignored.isEmpty)
+    }
+
+    @Test func namesAThirdHeadedColumnAndACitationWithNothingToAttribute() {
+        let third = warnings([
+            .init(layout: .twoColumn, blocks: [
+                .init(kind: .subtitle, text: "One"),
+                .init(kind: .body, text: "First"),
+                .init(kind: .subtitle, text: "Two"),
+                .init(kind: .body, text: "Second"),
+                .init(kind: .subtitle, text: "Three"),
+                .init(kind: .body, text: "Third"),
+            ]),
+        ])
+        #expect(third.filter { $0.contains("beyond its first two columns") }.count == 2)
+
+        let stranded = warnings([
+            .init(layout: .twoColumn, blocks: [
+                .init(kind: .title, text: "Two ideas"),
+                .init(kind: .citation, text: "A source before anything it could attribute"),
+                .init(kind: .body, text: "First"),
+                .init(kind: .body, text: "Second"),
+            ]),
+        ])
+        #expect(stranded.contains { $0.contains("directly follows the column it attributes") })
+    }
+
     @Test func leavesAWellFormedSlideAlone() {
         let messages = warnings([
             .init(layout: .titleAndBody, blocks: [

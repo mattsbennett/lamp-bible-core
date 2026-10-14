@@ -108,8 +108,10 @@ struct LampPresentationQuoteTypographyTests {
         #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .quotation))
         #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .scripture))
         #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .titleAndBody))
+        // A quotation in a column is still a quotation.
+        #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .twoColumn))
         // Where an author types what they mean, nothing is added.
-        #expect(!LampPresentationQuoteTypography.applies(to: quotation, layout: .twoColumn))
+        #expect(!LampPresentationQuoteTypography.applies(to: body, layout: .twoColumn))
         #expect(!LampPresentationQuoteTypography.applies(to: quotation, layout: .blank))
         #expect(!LampPresentationQuoteTypography.applies(to: body, layout: .quotation))
         #expect(!LampPresentationQuoteTypography.applies(to: verbatim, layout: .quotation))

@@ -75,7 +75,15 @@ struct LampSlideCanvasLayoutTests {
     /// Heights of contiguous runs of inked rows. Each run is roughly one line
     /// of text, so a run's height tracks the glyph size actually drawn — which
     /// is how "the list came out smaller than the prose" becomes measurable.
-    private func inkBandHeights(in image: CGImage) throws -> [Int] {
+    ///
+    /// `fromLeft` and `toLeft` narrow the columns read, which keeps a vertical
+    /// rule — a quotation's accent bar, the divider between two columns — from
+    /// joining every line beside it into one tall run.
+    private func inkBandHeights(
+        in image: CGImage,
+        fromLeft: Double = 0,
+        toLeft: Double = 1
+    ) throws -> [Int] {
         let bytesPerPixel = 4
         let bytesPerRow = image.width * bytesPerPixel
         var pixels = [UInt8](repeating: 0, count: image.height * bytesPerRow)
@@ -93,11 +101,13 @@ struct LampSlideCanvasLayoutTests {
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
 
         let background = (r: 0x11, g: 0x18, b: 0x27)
+        let firstColumn = Int(Double(image.width) * fromLeft)
+        let lastColumn = min(Int(Double(image.width) * toLeft), image.width)
         var heights: [Int] = []
         var run = 0
         for y in 0..<image.height {
             var inked = false
-            for x in stride(from: 0, to: image.width, by: 2) {
+            for x in stride(from: firstColumn, to: lastColumn, by: 2) {
                 let offset = y * bytesPerRow + x * bytesPerPixel
                 let distance = abs(Int(pixels[offset]) - background.r)
                     + abs(Int(pixels[offset + 1]) - background.g)
@@ -312,7 +322,6 @@ struct LampSlideCanvasLayoutTests {
             kind: .body,
             text: String(repeating: "A companion paragraph that takes real room. ", count: 6)
         )
-        let alone = LampPresentationSlide(layout: .titleAndBody, blocks: [list])
         let shared = LampPresentationSlide(layout: .titleAndBody, blocks: [
             .init(kind: .title, text: "Heading"),
             list,
@@ -320,21 +329,131 @@ struct LampSlideCanvasLayoutTests {
         ])
 
         // Bands under 10px are rules and specks, not lines of text — the accent
-        // rule beneath a heading is one of them.
-        let aloneRow = try #require(
-            inkBandHeights(in: try render(alone, deck: deck)).filter { $0 >= 10 }.max()
-        )
+        // rule beneath a heading is one of them. The tallest band is the
+        // heading; the rest are list rows and paragraph lines.
         let bands = try inkBandHeights(in: try render(shared, deck: deck)).filter { $0 >= 10 }
-        // The tallest band is the heading; the rest are list rows and paragraph
-        // lines, which should be the same order of size as the list drawn alone.
-        let smallest = try #require(bands.sorted().dropLast().min())
+        let lines = bands.sorted().dropLast()
+        let smallest = try #require(lines.min())
+        let largest = try #require(lines.max())
 
         // Each list row used to carry its own `minimumScaleFactor`, so a shared
         // slide squeezed the rows to little over half the size the paragraph
-        // beside them kept.
+        // beside them kept. The slide now chooses one size for everything on
+        // it, so a row and a line of the paragraph differ only by which
+        // letters they happen to hold. The list drawn alone is no longer the
+        // measure: a slide with less on it is set larger.
         #expect(
-            Double(smallest) >= Double(aloneRow) * 0.9,
-            "list rows came out at \(smallest)px against \(aloneRow)px drawn alone"
+            Double(smallest) >= Double(largest) * 0.7,
+            "lines came out between \(smallest)px and \(largest)px on one slide"
         )
+    }
+
+    // MARK: - Type sized to what the slide carries
+
+    private func rows(_ count: Int) -> LampPresentationBlock {
+        LampPresentationBlock(
+            kind: .body,
+            text: (1...count).map { "Point number \($0) in the sequence" }.joined(separator: "\n"),
+            listStyle: .unordered
+        )
+    }
+
+    private func tallestLine(
+        of slide: LampPresentationSlide,
+        fromLeft: Double = 0,
+        toLeft: Double = 1
+    ) throws -> Int {
+        try #require(
+            inkBandHeights(in: try render(slide, deck: deck), fromLeft: fromLeft, toLeft: toLeft)
+                .filter { $0 >= 10 }
+                .max()
+        )
+    }
+
+    @Test("A slide with little on it sets its body larger than a full one")
+    func sparseBodyIsSetLarger() throws {
+        // No heading on either, so every band is a row of the list.
+        let sparse = try tallestLine(of: .init(layout: .titleAndBody, blocks: [rows(2)]))
+        let full = try tallestLine(of: .init(layout: .titleAndBody, blocks: [rows(12)]))
+        // Both used to be drawn at the one size chosen for a full slide, which
+        // left two lines small in the middle of an empty one.
+        #expect(
+            Double(sparse) >= Double(full) * 1.2,
+            "two rows came out at \(sparse)px against \(full)px for twelve"
+        )
+    }
+
+    @Test("A short quotation is set larger than a long one")
+    func shortQuotationIsSetLarger() throws {
+        // Read to the right of the accent rule, which runs the height of the
+        // passage and would otherwise be measured instead of its lines.
+        let short = try tallestLine(of: .init(layout: .quotation, blocks: [
+            .init(kind: .quotation, text: "A long quotation."),
+        ]), fromLeft: 0.1)
+        let long = try tallestLine(of: .init(layout: .quotation, blocks: [
+            .init(kind: .quotation, text: String(repeating: "A long quotation. ", count: 30)),
+        ]), fromLeft: 0.1)
+        #expect(
+            Double(short) >= Double(long) * 1.2,
+            "one sentence came out at \(short)px against \(long)px for thirty"
+        )
+    }
+
+    @Test("Both columns of a two-column slide are set at one size")
+    func columnsShareOneSize() throws {
+        // The left column only, clear of the divider between the two.
+        let besideLong = try tallestLine(of: .init(layout: .twoColumn, blocks: [
+            .init(kind: .body, text: "Point number 1 in the sequence"),
+            .init(
+                kind: .body,
+                text: (1...20).map { "Point number \($0) in the sequence" }.joined(separator: " ")
+            ),
+        ]), toLeft: 0.45)
+        let besideShort = try tallestLine(of: .init(layout: .twoColumn, blocks: [
+            .init(kind: .body, text: "Point number 1 in the sequence"),
+            .init(kind: .body, text: "Point number 2 in the sequence"),
+        ]), toLeft: 0.45)
+        // Beside another short column the line is set large. Beside a long one
+        // it takes the long one's size, so neither column reads as the lesser.
+        #expect(
+            besideLong < besideShort,
+            "\(besideLong)px beside a long column, \(besideShort)px beside a short one"
+        )
+    }
+
+    @Test("A column heading is drawn heavier than the prose under it")
+    func columnHeadingIsHeavier() throws {
+        let headed = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .subtitle, text: "The first search"),
+            .init(kind: .body, text: "What was sought"),
+            .init(kind: .subtitle, text: "The second search"),
+            .init(kind: .body, text: "What was found"),
+        ])
+        // The same words with each heading typed as a line of its body, which
+        // is how a heading had to be written before a column could carry one.
+        let typed = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .body, text: "The first search\nWhat was sought"),
+            .init(kind: .body, text: "The second search\nWhat was found"),
+        ])
+        let bold = try inkFraction(in: try render(headed, deck: deck), fromTop: 0, toTop: 1)
+        let plain = try inkFraction(in: try render(typed, deck: deck), fromTop: 0, toTop: 1)
+        #expect(bold > plain * 1.08, "headed \(bold) against typed \(plain)")
+    }
+
+    @Test("A column draws its citation")
+    func columnDrawsItsCitation() throws {
+        let cited = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .body, text: "What was sought"),
+            .init(kind: .citation, text: "Ecclesiastes 7:25"),
+            .init(kind: .body, text: "What was found"),
+            .init(kind: .citation, text: "Ecclesiastes 7:29"),
+        ])
+        let bare = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .body, text: "What was sought"),
+            .init(kind: .body, text: "What was found"),
+        ])
+        let with = try inkFraction(in: try render(cited, deck: deck), fromTop: 0, toTop: 1)
+        let without = try inkFraction(in: try render(bare, deck: deck), fromTop: 0, toTop: 1)
+        #expect(with > without)
     }
 }

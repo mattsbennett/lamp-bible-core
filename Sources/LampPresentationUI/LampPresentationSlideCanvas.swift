@@ -133,7 +133,7 @@ public struct LampPresentationSlideCanvas: View {
                 if let subtitle = plan.subtitle {
                     slideBlockText(
                         subtitle,
-                        size: 32 * unit,
+                        size: 40 * unit,
                         weight: .regular,
                         alignment: .center,
                         color: accent
@@ -149,33 +149,7 @@ public struct LampPresentationSlideCanvas: View {
             quotationSlide(unit: unit)
 
         case .twoColumn:
-            VStack(alignment: .leading, spacing: 28 * unit) {
-                if let title = plan.title {
-                    slideBlockText(title, size: 52 * unit, weight: .bold)
-                }
-                let columns = plan.columns
-                HStack(alignment: .top, spacing: 50 * unit) {
-                    slideBlockText(
-                        columns.first ?? LampPresentationBlock(kind: .body, text: "First idea"),
-                        size: 29 * unit,
-                        weight: .regular
-                    )
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                    Rectangle().fill(accent.opacity(0.45)).frame(width: 2 * unit)
-                    slideBlockText(
-                        columns.dropFirst().first
-                            ?? LampPresentationBlock(kind: .body, text: "Second idea"),
-                        size: 29 * unit,
-                        weight: .regular
-                    )
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                // Sized to the columns, so the divider stops where they do
-                // rather than running to the foot of the slide.
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            twoColumnSlide(unit: unit)
 
         case .image:
             VStack(spacing: 22 * unit) {
@@ -231,25 +205,34 @@ public struct LampPresentationSlideCanvas: View {
             }
             VStack(alignment: .leading, spacing: 34 * unit) {
                 besideImage(unit: unit) {
-                    VStack(alignment: .leading, spacing: 24 * unit) {
-                        ForEach(plan.quoteGroups) { group in
-                            VStack(alignment: .leading, spacing: 10 * unit) {
-                                ForEach(group.quotations) { body in
-                                    slideBlockText(body, size: 32 * unit, weight: .regular)
-                                }
-                                if let citation = group.citation,
-                                   attributed.contains(citation.id) {
-                                    slideBlockText(
-                                        citation,
-                                        size: 24 * unit,
-                                        weight: .medium,
-                                        color: accent
-                                    )
+                    fitted(unit: unit, largest: Self.largestBody, settled: 32, air: 56) { size in
+                        let step = size / 32
+                        VStack(alignment: .leading, spacing: 24 * unit * step) {
+                            ForEach(plan.quoteGroups) { group in
+                                VStack(alignment: .leading, spacing: 10 * unit * step) {
+                                    ForEach(group.quotations) { body in
+                                        slideBlockText(
+                                            body,
+                                            size: size * unit,
+                                            weight: .regular,
+                                            stepsDown: false
+                                        )
+                                    }
+                                    if let citation = group.citation,
+                                       attributed.contains(citation.id) {
+                                        slideBlockText(
+                                            citation,
+                                            size: Self.citationSize(beside: size) * unit,
+                                            weight: .medium,
+                                            color: accent,
+                                            stepsDown: false
+                                        )
+                                    }
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 ForEach(plan.citations.filter { !attributed.contains($0.id) }) { citation in
                     slideBlockText(citation, size: 24 * unit, weight: .medium, color: accent)
@@ -268,22 +251,130 @@ public struct LampPresentationSlideCanvas: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// A heading over two columns, each with what it is called, what it says
+    /// and where that comes from.
+    @ViewBuilder
+    private func twoColumnSlide(unit: CGFloat) -> some View {
+        let columns = plan.columnGroups
+        let first = columns.first
+            ?? .init(prose: [LampPresentationBlock(kind: .body, text: "First idea")])
+        let second = columns.dropFirst().first
+            ?? .init(prose: [LampPresentationBlock(kind: .body, text: "Second idea")])
+        VStack(alignment: .leading, spacing: 34 * unit) {
+            // The same heading as a title-and-body slide, so it does not change
+            // size or lose its rule when the deck moves between the two.
+            if let title = plan.title {
+                slideBlockText(title, size: 58 * unit, weight: .bold)
+                Rectangle().fill(accent).frame(width: 120 * unit, height: 6 * unit)
+            }
+            // Both columns take one size, so neither reads as the lesser.
+            fitted(unit: unit, largest: Self.largestBody, settled: 32, air: 56) { size in
+                HStack(alignment: .top, spacing: 50 * unit) {
+                    column(first, size: size, unit: unit)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    Rectangle().fill(accent.opacity(0.45)).frame(width: 2 * unit)
+                    column(second, size: size, unit: unit)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                // Sized to the columns, so the divider stops where they do
+                // rather than running to the foot of the slide.
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// One column: its heading in a heavier weight, its prose, and its
+    /// citation in the accent colour, as a citation is drawn everywhere else.
+    private func column(
+        _ column: LampPresentationSlidePlan.Column,
+        size: CGFloat,
+        unit: CGFloat
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0.44 * size * unit) {
+            if let heading = column.heading {
+                slideBlockText(heading, size: size * unit, weight: .bold, stepsDown: false)
+            }
+            ForEach(column.prose) { block in
+                slideBlockText(block, size: size * unit, weight: .regular, stepsDown: false)
+            }
+            if let citation = column.citation {
+                slideBlockText(
+                    citation,
+                    size: Self.citationSize(beside: size) * unit,
+                    weight: .medium,
+                    color: accent,
+                    stepsDown: false
+                )
+            }
+        }
+    }
+
+    /// Every size prose may be set at, on the 900-high design grid.
+    ///
+    /// Type used only to step down, so a slide with two short lines was set at
+    /// the size chosen for a slide with six and left most of itself empty. A
+    /// slide now takes the largest of these that fits it.
+    static let proseSizes: [CGFloat] = [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 17, 14.5]
+
+    /// Body type stays under the 58-unit heading above it.
+    static let largestBody: CGFloat = 48
+    /// A quotation has the slide to itself, so it may be set larger.
+    static let largestQuotation: CGFloat = 60
+
+    /// A citation follows its passage down, and only a little way up: it is a
+    /// reference, and should read much the same on every slide.
+    static func citationSize(beside size: CGFloat) -> CGFloat {
+        min(max(size * 0.62, 14), 30)
+    }
+
+    /// Draws `content` at the largest prose size that fits the room it is
+    /// given, with every block inside it at that one size.
+    ///
+    /// A size above `settled` must also leave `air` above and below itself.
+    /// Without that a slide grows until it touches its heading and its foot,
+    /// which is full rather than easy to read.
+    private func fitted<Content: View>(
+        unit: CGFloat,
+        largest: CGFloat,
+        settled: CGFloat,
+        air: CGFloat,
+        @ViewBuilder content: @escaping (_ size: CGFloat) -> Content
+    ) -> some View {
+        ViewThatFits(in: .vertical) {
+            ForEach(Self.proseSizes.filter { $0 <= largest }, id: \.self) { size in
+                content(size)
+                    // Measured at its natural height, so `ViewThatFits` can
+                    // tell which size fits instead of being handed a crushed
+                    // one.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, size > settled ? air * unit : 0)
+            }
+        }
+    }
+
     /// Every quotation on the slide, then every citation, behind the accent
     /// rule — and beside a picture when there is one, which is what a cover
     /// image wants rather than being pushed under a headline.
     @ViewBuilder
     private func quotationSlide(unit: CGFloat) -> some View {
-        // One quotation at full size; several share the slide, so they step
-        // down rather than overflowing it.
-        let quotationSize = (plan.prose.count > 1 ? 34.0 : 42.0) * unit
         besideImage(unit: unit) {
             // Each passage keeps its own rule and its own attribution: two
             // quotations from two places are two things said, not one thing
             // with two sources listed under it.
-            VStack(alignment: .leading, spacing: 44 * unit) {
-                ForEach(plan.quoteGroups) { group in
-                    quoteGroup(group, quotationSize: quotationSize, unit: unit)
+            fitted(
+                unit: unit,
+                largest: Self.largestQuotation,
+                settled: 34,
+                air: 96
+            ) { size in
+                VStack(alignment: .leading, spacing: 44 * unit * min(size / 34, 1.3)) {
+                    ForEach(plan.quoteGroups) { group in
+                        quoteGroup(group, size: size, unit: unit)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
@@ -292,15 +383,21 @@ public struct LampPresentationSlideCanvas: View {
     /// One quoted passage behind one accent rule, with its citation beneath it.
     private func quoteGroup(
         _ group: LampPresentationSlidePlan.QuoteGroup,
-        quotationSize: CGFloat,
+        size: CGFloat,
         unit: CGFloat
     ) -> some View {
-        VStack(alignment: .leading, spacing: 30 * unit) {
+        VStack(alignment: .leading, spacing: 30 * unit * min(size / 42, 1)) {
             ForEach(group.quotations) { quotation in
-                slideBlockText(quotation, size: quotationSize, weight: .regular)
+                slideBlockText(quotation, size: size * unit, weight: .regular, stepsDown: false)
             }
             if let citation = group.citation {
-                slideBlockText(citation, size: 25 * unit, weight: .medium, color: accent)
+                slideBlockText(
+                    citation,
+                    size: Self.citationSize(beside: size) * unit,
+                    weight: .medium,
+                    color: accent,
+                    stepsDown: false
+                )
             }
         }
         .padding(.leading, 34 * unit)
@@ -392,9 +489,24 @@ public struct LampPresentationSlideCanvas: View {
         size: CGFloat,
         weight: Font.Weight,
         alignment: TextAlignment = .leading,
-        color: Color? = nil
+        color: Color? = nil,
+        stepsDown: Bool = true
     ) -> some View {
         if let listStyle = block.listStyle,
+           block.kind == .body,
+           !listItems(in: block.text).isEmpty,
+           !stepsDown {
+            // The slide has already chosen one step for everything on it.
+            listRows(
+                listItems(in: block.text),
+                listStyle: listStyle,
+                size: size,
+                weight: weight,
+                alignment: alignment,
+                color: color ?? foreground
+            )
+            .foregroundStyle(color ?? foreground)
+        } else if let listStyle = block.listStyle,
            block.kind == .body,
            !listItems(in: block.text).isEmpty {
             let items = listItems(in: block.text)
@@ -424,7 +536,8 @@ public struct LampPresentationSlideCanvas: View {
                 size: size,
                 weight: weight,
                 alignment: alignment,
-                color: color ?? foreground
+                color: color ?? foreground,
+                scalesToFit: stepsDown
             )
             // A listener hears the words, not the marks Lamp drew around them.
             .accessibilityLabel(block.text)
@@ -480,7 +593,10 @@ public struct LampPresentationSlideCanvas: View {
             .multilineTextAlignment(alignment)
             .lineSpacing(size * 0.12)
             .minimumScaleFactor(scalesToFit ? 0.45 : 1)
-            .lineLimit(compact ? 4 : nil)
+            // Text the slide has already sized is not cut short in a thumbnail:
+            // a truncated passage measures shorter, and the thumbnail would
+            // then choose a larger size than the slide it stands for.
+            .lineLimit(compact && scalesToFit ? 4 : nil)
     }
 
     private func presentationFont(size: CGFloat, weight: Font.Weight) -> Font {

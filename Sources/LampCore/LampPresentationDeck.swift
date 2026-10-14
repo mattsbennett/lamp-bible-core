@@ -696,8 +696,11 @@ public enum LampPresentationDeckValidator {
             return " — these layouts are set without a heading"
         case (.title, _), (.closing, _):
             return " beyond its heading and one line beneath it"
-        case (.twoColumn, .body):
+        case (.twoColumn, .body), (.twoColumn, .subtitle),
+             (.twoColumn, .scripture), (.twoColumn, .quotation):
             return " beyond its first two columns"
+        case (.twoColumn, .citation):
+            return " unless it directly follows the column it attributes"
         case (_, .caption):
             return " without an image to caption"
         case (_, .image):

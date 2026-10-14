@@ -139,8 +139,8 @@ public enum LampPresentationQuoteTypography {
 
     /// Whether `block` is drawn as a quotation on `layout`.
     ///
-    /// Body, caption and citation blocks are left alone wherever they appear,
-    /// and so are two-column bodies: there an author types what they mean.
+    /// Body, caption and citation blocks are left alone wherever they appear:
+    /// there an author types what they mean.
     public static func applies(
         to block: LampPresentationBlock,
         layout: LampPresentationSlideLayout
@@ -148,8 +148,8 @@ public enum LampPresentationQuoteTypography {
         guard block.typography != .verbatim else { return false }
         guard block.kind == .quotation || block.kind == .scripture else { return false }
         switch layout {
-        case .quotation, .scripture, .titleAndBody: return true
-        case .title, .closing, .twoColumn, .image, .blank: return false
+        case .quotation, .scripture, .titleAndBody, .twoColumn: return true
+        case .title, .closing, .image, .blank: return false
         }
     }
 }

@@ -15,7 +15,7 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     public var prose: [LampPresentationBlock]
     /// Every citation the slide carries.
     public var citations: [LampPresentationBlock]
-    /// The two side-by-side blocks of a two-column slide.
+    /// Every block a two-column slide draws in its columns, in slide order.
     public var columns: [LampPresentationBlock]
     /// The picture, which most layouts place beside their prose.
     public var image: LampPresentationBlock?
@@ -44,6 +44,38 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     /// `prose` and `citations` read in document order, with each citation
     /// closing the passage it follows.
     public var quoteGroups: [QuoteGroup] = []
+
+    /// One side of a two-column slide: what it is called, what it says, and
+    /// where that comes from.
+    ///
+    /// A column used to be a single body block, so a heading and a reference
+    /// could only be typed in as further lines of it and were drawn as body
+    /// text like the rest.
+    public struct Column: Equatable, Sendable, Identifiable {
+        public var heading: LampPresentationBlock?
+        public var prose: [LampPresentationBlock]
+        public var citation: LampPresentationBlock?
+
+        public var id: String { heading?.id ?? prose.first?.id ?? citation?.id ?? "" }
+
+        /// Everything the column draws, top to bottom.
+        public var blocks: [LampPresentationBlock] {
+            (heading.map { [$0] } ?? []) + prose + (citation.map { [$0] } ?? [])
+        }
+
+        public init(
+            heading: LampPresentationBlock? = nil,
+            prose: [LampPresentationBlock] = [],
+            citation: LampPresentationBlock? = nil
+        ) {
+            self.heading = heading
+            self.prose = prose
+            self.citation = citation
+        }
+    }
+
+    /// The two sides of a two-column slide, in the order the deck wrote them.
+    public var columnGroups: [Column] = []
 
     /// Everything that reaches the slide.
     public var drawn: [LampPresentationBlock] {
@@ -85,6 +117,44 @@ extension LampPresentationSlide {
             groups.append(.init(quotations: pending, citation: nil))
         }
         return groups
+    }
+}
+
+extension LampPresentationSlide {
+    /// Reads a two-column slide's blocks into columns.
+    ///
+    /// A `subtitle` opens a column and names it; the prose after it is that
+    /// column's, until a citation closes it or the next subtitle opens another.
+    /// A slide with no subtitles keeps the older reading, in which every prose
+    /// block is a column of its own. Either way a citation attributes the
+    /// column it follows.
+    static func columnGroups(
+        in blocks: [LampPresentationBlock]
+    ) -> [LampPresentationSlidePlan.Column] {
+        let usesHeadings = blocks.contains { $0.kind == .subtitle }
+        var columns: [LampPresentationSlidePlan.Column] = []
+        for block in blocks {
+            switch block.kind {
+            case .subtitle:
+                columns.append(.init(heading: block))
+            case .body, .scripture, .quotation:
+                if usesHeadings, let last = columns.indices.last,
+                   columns[last].citation == nil {
+                    columns[last].prose.append(block)
+                } else {
+                    columns.append(.init(prose: [block]))
+                }
+            case .citation:
+                if let last = columns.indices.last,
+                   columns[last].citation == nil,
+                   !columns[last].prose.isEmpty {
+                    columns[last].citation = block
+                }
+            case .title, .image, .caption:
+                break
+            }
+        }
+        return columns
     }
 }
 
@@ -154,11 +224,13 @@ public extension LampPresentationSlide {
 
         case .twoColumn:
             plan.title = take(.title)
-            let bodies = takeAll(.body)
-            plan.columns = Array(bodies.prefix(2))
-            // Anything past the second column has nowhere to go, so it goes
-            // back to be reported rather than quietly discarded.
-            remaining.append(contentsOf: bodies.dropFirst(2))
+            plan.columnGroups = Array(Self.columnGroups(in: remaining).prefix(2))
+            // Anything the two columns did not take — a third column, a
+            // citation with nothing to attribute — stays behind to be reported
+            // rather than quietly discarded.
+            let placed = Set(plan.columnGroups.flatMap(\.blocks).map(\.id))
+            plan.columns = remaining.filter { placed.contains($0.id) }
+            remaining.removeAll { placed.contains($0.id) }
 
         case .image:
             plan.title = take(.title)
