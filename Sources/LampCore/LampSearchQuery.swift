@@ -43,11 +43,17 @@ public struct LampSearchQuery: Equatable, Sendable {
 
     /// FTS5 MATCH argument. Exact quoted terms stay phrases; unquoted terms
     /// use iOS's prefix match rule. Every term is escaped before interpolation.
+    ///
+    /// A hyphen separates rather than disappears. FTS5 tokenizes "self-control"
+    /// in the text as the two tokens `self` and `control`, so deleting the
+    /// hyphen asked for a single token `selfcontrol` that no verse contains,
+    /// and searching for a hyphenated word found nothing at all. Keeping it as
+    /// a space asks for the two tokens together, which is what was typed.
     public var fts5Query: String {
         terms.compactMap { term -> String? in
             var escaped = term.text
                 .replacingOccurrences(of: "*", with: "")
-                .replacingOccurrences(of: "-", with: "")
+                .replacingOccurrences(of: "-", with: " ")
                 .replacingOccurrences(of: "^", with: "")
                 .replacingOccurrences(of: ":", with: "")
                 .replacingOccurrences(of: "(", with: "")
