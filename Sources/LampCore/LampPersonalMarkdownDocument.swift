@@ -3,6 +3,66 @@ import Foundation
 /// Markdown document framing shared by the personal-content importers. The
 /// body parser remains free to interpret notes or devotionals differently.
 public enum LampPersonalMarkdownDocument {
+    /// Legacy inline definitions and Obsidian callouts. Preserve their IDs so
+    /// repeated markers keep pointing to the same definition after import.
+    public static func extractInlineFootnotes(
+        in content: String
+    ) -> (body: String, footnotes: [LampVerseFootnote]) {
+        let lines = content.components(separatedBy: "\n")
+        let definition = try! NSRegularExpression(pattern: #"^\[\^([^\]]+)\]:\s*(.*)$"#)
+        let callout = try! NSRegularExpression(pattern: #"^>\s*\[!footnote\]\s*(\S+)\s*$"#)
+        var body: [String] = []
+        var footnotes: [LampVerseFootnote] = []
+        var seen = Set<String>()
+        var fence = LampMarkdownCodeFence()
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            if fence.contains(line) {
+                body.append(line)
+                index += 1
+                continue
+            }
+            let range = NSRange(line.startIndex..., in: line)
+            let quote = callout.firstMatch(in: line, range: range)
+            let standard = definition.firstMatch(in: line, range: range)
+            guard let match = quote ?? standard,
+                  let identifierRange = Range(match.range(at: 1), in: line) else {
+                body.append(line)
+                index += 1
+                continue
+            }
+            let identifier = String(line[identifierRange])
+            var definitionLines: [String] = []
+            if standard != nil, let textRange = Range(match.range(at: 2), in: line) {
+                definitionLines.append(String(line[textRange]))
+            }
+            index += 1
+            while index < lines.count {
+                let next = lines[index]
+                if quote != nil, next.hasPrefix(">") {
+                    if callout.firstMatch(in: next, range: NSRange(next.startIndex..., in: next)) != nil {
+                        break
+                    }
+                    definitionLines.append(String(next.dropFirst(next.hasPrefix("> ") ? 2 : 1)))
+                } else if quote == nil, next.hasPrefix("    ") || next.hasPrefix("\t") {
+                    definitionLines.append(String(next.dropFirst(next.hasPrefix("\t") ? 1 : 4)))
+                } else {
+                    break
+                }
+                index += 1
+            }
+            if seen.insert(identifier).inserted {
+                footnotes.append(LampVerseFootnote(
+                    id: identifier,
+                    content: definitionLines.joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                ))
+            }
+        }
+        return (body.joined(separator: "\n"), footnotes)
+    }
+
     public static func frontmatterLines(in markdown: String) -> [String]? {
         let lines = markdown.components(separatedBy: "\n")
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
@@ -115,6 +175,30 @@ public enum LampPersonalMarkdownDocument {
             return (["[^\(identifier)]: \(definitionLines.first ?? "")"] + continuation).joined(separator: "\n")
         }
         return lines.isEmpty ? content : content + "\n\n---\n\n" + lines.joined(separator: "\n")
+    }
+}
+
+/// Tracks Markdown fences while importers interpret structural lines. Examples
+/// inside a code block must never become note headings or footnote definitions.
+struct LampMarkdownCodeFence {
+    private var marker: Character?
+    private var length = 0
+
+    mutating func contains(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first, first == "`" || first == "~" else {
+            return marker != nil
+        }
+        let run = trimmed.prefix { $0 == first }
+        guard run.count >= 3 else { return marker != nil }
+        if marker == nil {
+            marker = first
+            length = run.count
+        } else if marker == first, run.count >= length,
+                  trimmed.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty {
+            marker = nil
+        }
+        return true
     }
 }
 

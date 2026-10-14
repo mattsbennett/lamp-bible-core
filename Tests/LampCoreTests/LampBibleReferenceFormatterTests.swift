@@ -123,6 +123,18 @@ struct LampBibleReferenceFormatterTests {
 /// to another Bible app when the reader asks to open a passage there. A wrong
 /// one does not fail — it opens that app at the wrong passage.
 struct LampExternalBibleLinkFormatTests {
+    @Test func installedBookMetadataCanOverrideCanonicalCatalog() {
+        let link = LampExternalBibleApplication.accordance.url(
+            startReference: 43_003_016, endReference: 43_003_018
+        ) { number in
+            LampExternalBibleBook(number: number, name: "John", osisID: "Jn")
+        }
+        #expect(link?.absoluteString == "accord://read/Jn_3:16-Jn_3:18")
+        #expect(LampExternalBibleApplication.logos.url(
+            startReference: 43_003_016
+        ) { _ in nil } == nil)
+    }
+
     @Test func accordanceTakesBothEndsOfTheRange() {
         #expect(
             LampExternalBibleApplication.accordance.url(

@@ -488,7 +488,7 @@ public actor LampLibrary {
                 arguments: arguments
             )
             return texts.reduce(into: 0) { count, text in
-                count += text.split(whereSeparator: { $0.isWhitespace }).count
+                count += LampReadingTimeEstimator.wordCount(in: text)
             }
         }
     }

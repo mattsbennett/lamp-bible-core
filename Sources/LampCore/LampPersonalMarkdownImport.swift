@@ -84,12 +84,48 @@ public extension LampLibrary {
 }
 
 public enum LampPersonalMarkdownParser {
-    struct NoteDraft {
-        let reference: Int
-        let verseReferences: [Int]
-        let title: String?
-        let content: String
-        let footnotes: [LampVerseFootnote]
+    public struct NoteDraft: Equatable, Sendable {
+        public let reference: Int
+        public let verseReferences: [Int]
+        public let title: String?
+        public let content: String
+        public let footnotes: [LampVerseFootnote]
+
+        /// iOS displays local footnotes as numbers. Rewrite each marker once so
+        /// overlapping old and new IDs cannot cascade into one another.
+        public func withNumberedFootnotes() -> NoteDraft {
+            let expression = try! NSRegularExpression(pattern: #"\[\^([^\]]+)\]"#)
+            let matches = expression.matches(in: content, range: NSRange(content.startIndex..., in: content))
+            var definitions: [String: LampVerseFootnote] = [:]
+            for footnote in footnotes where definitions[footnote.id] == nil {
+                definitions[footnote.id] = footnote
+            }
+            var seen = Set<String>()
+            let markerIDs = matches.compactMap { match in
+                Range(match.range(at: 1), in: content).map { String(content[$0]) }
+            }
+            let orderedIDs = (markerIDs + footnotes.map(\.id)).filter {
+                definitions[$0] != nil && seen.insert($0).inserted
+            }
+            var identifiers: [String: String] = [:]
+            var numbered: [LampVerseFootnote] = []
+            for id in orderedIDs {
+                guard let footnote = definitions[id] else { continue }
+                let identifier = String(numbered.count + 1)
+                identifiers[footnote.id] = identifier
+                numbered.append(LampVerseFootnote(
+                    id: identifier, content: footnote.content
+                ))
+            }
+            let rewritten = NSMutableString(string: content)
+            for match in matches.reversed() {
+                guard let range = Range(match.range(at: 1), in: content),
+                      let identifier = identifiers[String(content[range])] else { continue }
+                rewritten.replaceCharacters(in: match.range, with: "[^\(identifier)]")
+            }
+            return NoteDraft(reference: reference, verseReferences: verseReferences,
+                title: title, content: rewritten as String, footnotes: numbered)
+        }
     }
 
     public struct DevotionalDraft {
@@ -107,14 +143,18 @@ public enum LampPersonalMarkdownParser {
         public let footnotes: String?
     }
 
-    static func notes(from markdown: String, filename: String) throws -> [NoteDraft] {
+    public static func notes(from markdown: String, filename: String) throws -> [NoteDraft] {
         let (metadata, body) = frontmatter(in: markdown)
         let extracted = LampPersonalMarkdownDocument.extractFootnoteDefinitions(in: body)
         var currentBook = metadata["book"] ?? bookName(from: filename)
+        if let number = metadata["booknumber"].flatMap(Int.init), (1...66).contains(number) {
+            currentBook = LampBibleReferenceFormatter.bookName(number)
+        }
         var currentChapter: Int?
         var currentRange: LampAgentReferenceRange?
         var contentLines: [String] = []
         var drafts: [NoteDraft] = []
+        var fence = LampMarkdownCodeFence()
 
         func flush() {
             guard let range = currentRange else {
@@ -164,6 +204,10 @@ public enum LampPersonalMarkdownParser {
         }
 
         for line in extracted.body.components(separatedBy: .newlines) {
+            if fence.contains(line) {
+                if currentRange != nil { contentLines.append(line) }
+                continue
+            }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let heading = markdownHeading(trimmed)
             let candidate = heading?.text ?? bracketedReference(trimmed)
@@ -175,6 +219,10 @@ public enum LampPersonalMarkdownParser {
                 currentChapter = range.start.chapter
                 currentRange = range
                 continue
+            }
+
+            if let candidate, looksLikeVerseReference(candidate, currentBook: currentBook) {
+                throw LampLibraryError.invalidPersonalContent("Invalid note reference: \(candidate)")
             }
 
             if let heading {
@@ -230,17 +278,23 @@ public enum LampPersonalMarkdownParser {
     private static func noteContent(
         _ raw: String, definitions: [String: String]
     ) -> (title: String?, body: String, footnotes: [LampVerseFootnote]) {
-        var lines = raw.components(separatedBy: "\n")
+        let inline = LampPersonalMarkdownDocument.extractInlineFootnotes(in: raw)
+        var lines = inline.body.components(separatedBy: "\n")
         var title: String?
         if let first = lines.first, first.hasPrefix("**Title:**") {
             title = String(first.dropFirst("**Title:**".count))
                 .trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
             lines.removeFirst()
         }
-        var footnotes: [LampVerseFootnote] = []
-        if let heading = lines.lastIndex(where: {
-            $0.trimmingCharacters(in: .whitespaces) == "### Footnotes"
-        }) {
+        var footnotes = inline.footnotes
+        var fence = LampMarkdownCodeFence()
+        var footnoteHeading: Int?
+        for index in lines.indices where !fence.contains(lines[index]) {
+            if lines[index].trimmingCharacters(in: .whitespaces) == "### Footnotes" {
+                footnoteHeading = index
+            }
+        }
+        if let heading = footnoteHeading {
             var parsed: [LampVerseFootnote] = []
             for line in lines[(heading + 1)...] {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -456,9 +510,11 @@ public enum LampPersonalMarkdownParser {
 
     private static func frontmatter(in markdown: String) -> ([String: String], String) {
         let document = LampPersonalMarkdownDocument.frontmatter(in: markdown)
-        return (Dictionary(uniqueKeysWithValues: document.metadata.map {
-            ($0.key.lowercased(), $0.value)
-        }), document.body)
+        var metadata: [String: String] = [:]
+        for key in document.metadata.keys.sorted() {
+            metadata[key.lowercased()] = document.metadata[key]
+        }
+        return (metadata, document.body)
     }
 
     private static func parseInlineMetadata(
@@ -515,6 +571,17 @@ public enum LampPersonalMarkdownParser {
         return range
     }
 
+    private static func looksLikeVerseReference(_ candidate: String, currentBook: String?) -> Bool {
+        if currentBook != nil,
+           candidate.range(of: #"^\d+:\d+.*$"#, options: .regularExpression) != nil {
+            return true
+        }
+        guard let book = candidate.firstMatch(for: #"^(.+?)\s+\d+:\d+.*$"#)?.first else {
+            return false
+        }
+        return LampReferenceParser.bookNumber(for: book) != nil
+    }
+
     private static func recognizedBookName(_ candidate: String) -> String? {
         let cleaned = candidate
             .replacingOccurrences(of: #"\s+Notes$"#, with: "", options: [.regularExpression, .caseInsensitive])
@@ -529,7 +596,7 @@ public enum LampPersonalMarkdownParser {
 
     private static func labeledNumber(_ label: String, in value: String) -> Int? {
         let pattern = "^\(label)\\s+(\\d+)$"
-        guard let match = value.firstMatch(for: pattern), match.count == 1 else { return nil }
+        guard let match = value.firstMatch(for: pattern, caseInsensitive: true), match.count == 1 else { return nil }
         return Int(match[0])
     }
 

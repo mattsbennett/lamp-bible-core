@@ -9,6 +9,20 @@ public struct LampNavigationStack<Location: Codable & Equatable & Sendable>: Cod
     public private(set) var forwardStack: [Location]
     public let capacity: Int
 
+    private enum CodingKeys: String, CodingKey {
+        case backStack, current, forwardStack, capacity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            backStack: try container.decodeIfPresent([Location].self, forKey: .backStack) ?? [],
+            current: try container.decodeIfPresent(Location.self, forKey: .current),
+            forwardStack: try container.decodeIfPresent([Location].self, forKey: .forwardStack) ?? [],
+            capacity: try container.decodeIfPresent(Int.self, forKey: .capacity) ?? 100
+        )
+    }
+
     public init(
         backStack: [Location] = [],
         current: Location? = nil,

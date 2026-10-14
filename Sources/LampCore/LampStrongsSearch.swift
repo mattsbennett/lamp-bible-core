@@ -23,12 +23,11 @@ public enum LampStrongsSearch {
         } else {
             return text
         }
-        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let length = text.count
         let ranges = annotations.compactMap { annotation -> (start: Int, end: Int)? in
             let value = (annotation["data"] as? [String: Any])?["strongs"]
                 ?? annotation["strongs"]
-            guard let strongs = value as? String, strongs.uppercased() == normalized,
+            guard let strongs = value as? String, LampStrongsKey.matches(strongs, key),
                   let start = annotation["start"] as? Int,
                   let end = annotation["end"] as? Int,
                   start >= 0, end > start, end <= length else { return nil }

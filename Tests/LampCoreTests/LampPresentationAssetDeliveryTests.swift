@@ -122,4 +122,20 @@ struct LampPresentationAssetDeliveryTests {
         #expect(result.imported.isEmpty)
         #expect(result.missing == ["Assets/link.txt"])
     }
+
+    @Test func doesNotReadThroughASymbolicLinkInAnAssetParent() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let outside = fixture.root.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("private".utf8).write(to: outside.appendingPathComponent("photo.jpg"))
+        let assets = fixture.delivery.appendingPathComponent("Assets")
+        try FileManager.default.removeItem(at: assets)
+        try FileManager.default.createSymbolicLink(at: assets, withDestinationURL: outside)
+        let result = try fixture.store.importAssets(
+            from: fixture.delivery, referencedBy: deck(referencing: ["Assets/photo.jpg"])
+        )
+        #expect(result.imported.isEmpty)
+        #expect(result.missing == ["Assets/photo.jpg"])
+    }
 }

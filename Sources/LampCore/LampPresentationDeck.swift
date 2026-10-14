@@ -816,8 +816,9 @@ public struct LampPresentationDeckStore: Sendable {
         let resolved = decksDirectoryURL
             .appendingPathComponent(assetPath)
             .standardizedFileURL
-        let base = decksDirectoryURL.standardizedFileURL.path
-        guard resolved.path.hasPrefix(base.hasSuffix("/") ? base : base + "/") else { return nil }
+        let base = decksDirectoryURL.standardizedFileURL.resolvingSymlinksInPath().path
+        guard resolved.resolvingSymlinksInPath().path.hasPrefix(base.hasSuffix("/") ? base : base + "/")
+        else { return nil }
         return resolved
     }
 
@@ -894,6 +895,9 @@ public struct LampPresentationDeckStore: Sendable {
             let isSymbolicLink = (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]))?
                 .isSymbolicLink == true
             guard source.path.hasPrefix(root),
+                  source.resolvingSymlinksInPath().path.hasPrefix(
+                    base.resolvingSymlinksInPath().path + "/"
+                  ),
                   !isSymbolicLink,
                   fileManager.fileExists(atPath: source.path),
                   let destination = assetURL(forAssetPath: assetPath)

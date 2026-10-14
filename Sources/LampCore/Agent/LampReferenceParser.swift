@@ -8,7 +8,7 @@ public enum LampReferenceParser {
             .replacingOccurrences(of: "—", with: "-")
         guard !normalized.isEmpty else { throw LampAgentError.invalidReference(source) }
 
-        let pieces = normalized.split(separator: "-", maxSplits: 1).map {
+        let pieces = normalized.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false).map {
             String($0).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         let start = try parseCompletePoint(pieces[0], source: source)
@@ -28,11 +28,18 @@ public enum LampReferenceParser {
         let captures = try match(#"^(.+?)\s+(\d+)(?::(\d+))?$"#, in: value)
         guard captures.count == 3,
               let book = bookNumber(for: captures[0]),
-              let chapter = Int(captures[1]), chapter > 0 else {
+              let chapter = Int(captures[1]), (1...999).contains(chapter) else {
             throw LampAgentError.invalidReference(source)
         }
-        let verse = captures[2].isEmpty ? nil : Int(captures[2])
-        guard verse == nil || verse! > 0 else { throw LampAgentError.invalidReference(source) }
+        let verse: Int?
+        if captures[2].isEmpty {
+            verse = nil
+        } else {
+            guard let value = Int(captures[2]), (1...999).contains(value) else {
+                throw LampAgentError.invalidReference(source)
+            }
+            verse = value
+        }
         return LampAgentReferencePoint(book: book, chapter: chapter, verse: verse)
     }
 
@@ -47,13 +54,13 @@ public enum LampReferenceParser {
         if let colon = value.firstIndex(of: ":") {
             let chapterText = value[..<colon].trimmingCharacters(in: .whitespaces)
             let verseText = value[value.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            guard let chapter = Int(chapterText), chapter > 0,
-                  let verse = Int(verseText), verse > 0 else {
+            guard let chapter = Int(chapterText), (1...999).contains(chapter),
+                  let verse = Int(verseText), (1...999).contains(verse) else {
                 throw LampAgentError.invalidReference(source)
             }
             return LampAgentReferencePoint(book: start.book, chapter: chapter, verse: verse)
         }
-        guard let number = Int(value), number > 0 else {
+        guard let number = Int(value), (1...999).contains(number) else {
             throw LampAgentError.invalidReference(source)
         }
         return start.verse == nil
@@ -78,7 +85,7 @@ public enum LampReferenceParser {
         point.book * 1_000_000 + point.chapter * 1_000 + (point.verse ?? missingVerse)
     }
 
-    private static func bookNumber(for value: String) -> Int? {
+    public static func bookNumber(for value: String) -> Int? {
         aliases[normalizeBook(value)]
     }
 
@@ -96,18 +103,23 @@ public enum LampReferenceParser {
             result[normalizeBook(LampBibleReferenceFormatter.bookAbbreviation(number))] = number
         }
         let extras: [Int: [String]] = [
-            1: ["Ge"], 2: ["Ex"], 3: ["Le"], 4: ["Nu"], 5: ["Dt"],
-            7: ["Jdg"], 9: ["1 Sa", "I Samuel"], 10: ["2 Sa", "II Samuel"],
-            11: ["1 Ki", "I Kings"], 12: ["2 Ki", "II Kings"],
-            13: ["1 Ch", "I Chronicles"], 14: ["2 Ch", "II Chronicles"],
-            19: ["Psalm"], 22: ["Song of Solomon", "Canticles"],
-            40: ["Mt"], 41: ["Mr", "Mk"], 42: ["Lk"], 43: ["Jn"],
-            45: ["Ro"], 46: ["1 Co", "I Corinthians"], 47: ["2 Co", "II Corinthians"],
-            52: ["1 Th", "I Thessalonians"], 53: ["2 Th", "II Thessalonians"],
-            54: ["1 Ti", "I Timothy"], 55: ["2 Ti", "II Timothy"],
-            60: ["1 Pe", "I Peter"], 61: ["2 Pe", "II Peter"],
-            62: ["1 Jn", "I John"], 63: ["2 Jn", "II John"], 64: ["3 Jn", "III John"],
-            66: ["Apocalypse"],
+            1: ["Ge"], 2: ["Ex", "Exo"], 3: ["Le"], 4: ["Nu"], 5: ["Dt", "Deu"],
+            6: ["Jos"], 7: ["Jdg"], 8: ["Rut"], 9: ["1 Sa", "I Samuel", "Samuel"], 10: ["2 Sa", "II Samuel"],
+            11: ["1 Ki", "I Kings", "Kings"], 12: ["2 Ki", "II Kings"],
+            13: ["1 Ch", "I Chronicles", "Chronicles"], 14: ["2 Ch", "II Chronicles"],
+            15: ["Ezr"], 17: ["Est"], 19: ["Psalm", "Psa"], 20: ["Pro"],
+            21: ["Eccles", "Ecc"], 22: ["Song of Solomon", "Canticles", "Sos", "Sng"],
+            26: ["Eze"], 29: ["Joe"], 30: ["Amo"], 31: ["Oba"], 32: ["Jon"],
+            36: ["Zep"], 38: ["Zec"],
+            40: ["Mt", "Mat"], 41: ["Mr", "Mk", "Mrk", "Mar"], 42: ["Lk", "Luk"],
+            43: ["Jn", "Joh", "Jhn"], 44: ["Act"],
+            45: ["Ro"], 46: ["1 Co", "I Corinthians", "Corinthians"], 47: ["2 Co", "II Corinthians"], 50: ["Php"],
+            52: ["1 Th", "I Thessalonians", "Thessalonians"], 53: ["2 Th", "II Thessalonians"],
+            54: ["1 Ti", "I Timothy", "Timothy"], 55: ["2 Ti", "II Timothy"],
+            56: ["Tit"], 57: ["Phm"], 59: ["Jam"],
+            60: ["1 Pe", "I Peter", "Peter"], 61: ["2 Pe", "II Peter"],
+            62: ["1 Jn", "1 Jo", "I John"], 63: ["2 Jn", "2 Jo", "II John"],
+            64: ["3 Jn", "3 Jo", "III John"], 65: ["Jud"], 66: ["Apocalypse", "Revelations"],
         ]
         for (number, names) in extras {
             for name in names { result[normalizeBook(name)] = number }
