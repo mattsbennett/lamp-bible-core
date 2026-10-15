@@ -167,6 +167,66 @@ struct LampModuleCompilerTests {
         }
     }
 
+    @Test func compilesSourceOrderedCommentaryBlocksAndScopedNotes() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("source_commentary.lamp")
+        let result = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta":{"schemaVersion":"2.2","seriesAbbrev":"NIC","seriesFull":"NIC","title":"Genesis"},
+              "book":"Gen","bookNumber":1,"extraction":{"sourceTracked":true},
+              "footnotes":[{"id":"1","label":"a","content":{"text":"Scoped note"}}],
+              "chapters":[
+                {"chapter":1,"pericopae":[{"id":"later","sourceOrder":20,"title":"Later in source","sv":1001001,"ev":1001002,"footnoteIds":["1"],"content":[
+                  {"type":"commentary","sv":1001001,"ev":1001002,"content":{"text":"See Genesis 1:1,3","annotations":[{"type":"scripture","start":4,"end":17,"text":"Genesis 1:1,3","data":{"refs":[{"sv":1001001},{"sv":1001003}]}}],"footnote_refs":[{"id":"1","offset":17}]}}
+                ]}]},
+                {"chapter":2,"pericopae":[{"id":"earlier","sourceOrder":10,"title":"Earlier in source","sv":1002001,"content":[
+                  {"type":"translation","content":{"text":"Translated second chapter"}}
+                ]}]}
+              ]
+            }
+            """#.utf8), sourceFilename: "source_commentary.json", destinationURL: outputURL
+        )
+        #expect(result.tableCounts["commentary_units"] == 4)
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            #expect(try String.fetchOne(db, sql: "SELECT title FROM commentary_units ORDER BY order_index LIMIT 1") == "Earlier in source")
+            let commentary = try String.fetchOne(db, sql: "SELECT commentary_json FROM commentary_units WHERE commentary_json IS NOT NULL")
+            #expect(commentary?.contains("footnote_refs") == true)
+            #expect(commentary?.contains("refs") == true)
+            let note = try String.fetchOne(db, sql: "SELECT footnotes_json FROM commentary_units WHERE commentary_json IS NOT NULL")
+            #expect(note?.contains("Scoped note") == true)
+        }
+    }
+
+    @Test func commentaryProjectionUsesScalarOffsetsAndKeepsHeadingLinks() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("projection.lamp")
+        _ = try LampModuleCompiler().compile(data: Data(#"""
+        {"meta":{"schemaVersion":"2.2","seriesAbbrev":"NIC","seriesFull":"NIC","title":"Genesis"},"book":"Gen","bookNumber":1,
+         "footnotes":[{"id":"1","content":{"text":"Note"}}],"chapters":[{"chapter":1,"pericopae":[
+           {"sv":1001001,"title":"Passage","content":[
+             {"type":"commentary","sv":1001001,"displayPrefixLength":2,"content":{"text":"1 θεός Genesis 1:1","annotations":[{"start":8,"end":19,"text":"Genesis 1:1","type":"scripture","data":{"sv":1001001}}],"footnote_refs":[{"id":"1","offset":19}]}},
+             {"type":"heading","content":{"text":"Linked heading","footnote_refs":[{"id":"1","offset":14}]}},
+             {"type":"index","content":{"text":"Printed indexes are not last-verse commentary"}}
+           ]}
+         ]}]}
+        """#.utf8), sourceFilename: "projection.json", destinationURL: outputURL)
+        try fixture.openLamp(outputURL).read { db in
+            let values = try String.fetchAll(db, sql: "SELECT commentary_json FROM commentary_units WHERE commentary_json IS NOT NULL ORDER BY order_index")
+            #expect(values.count == 2)
+            let content = try #require(JSONSerialization.jsonObject(with: Data(values[0].utf8)) as? [String: Any])
+            #expect(content["text"] as? String == "θεός Genesis 1:1")
+            let annotations = try #require(content["annotations"] as? [[String: Any]])
+            #expect(annotations[0]["start"] as? Int == 6)
+            let references = try #require(content["footnote_refs"] as? [[String: Any]])
+            #expect(references[0]["offset"] as? Int == 17)
+            #expect(values[1].contains("footnote_refs"))
+        }
+    }
+
     @Test func compilesReadingPlan() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }

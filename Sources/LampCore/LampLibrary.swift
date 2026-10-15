@@ -4281,6 +4281,17 @@ public actor LampLibrary {
                     compressedByteCount: compressedByteCount
                 )
             }
+            if tables.contains("series_meta"),
+               let row = try Row.fetchOne(db, sql: "SELECT * FROM series_meta LIMIT 1") {
+                return LampInstalledModule(
+                    id: formatID ?? row["id"],
+                    kind: declaredKind ?? .commentary,
+                    name: row["name"],
+                    abbreviation: row["abbreviation"],
+                    language: row["language"],
+                    compressedByteCount: compressedByteCount
+                )
+            }
             if tables.contains("commentary_books"),
                let row = try Row.fetchOne(db, sql: "SELECT * FROM commentary_books LIMIT 1") {
                 let moduleID: String? = row.hasColumn("module_id") ? row["module_id"] : nil

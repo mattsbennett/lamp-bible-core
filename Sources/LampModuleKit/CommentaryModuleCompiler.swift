@@ -15,7 +15,12 @@ extension LampModuleCompiler {
             path: "/meta/title"
         )
         let queue = try makeDatabaseQueue(at: databaseURL)
-        var builder = CommentaryUnitBuilder(moduleID: moduleID, bookNumber: bookNumber)
+        var builder = CommentaryUnitBuilder(
+            moduleID: moduleID,
+            bookNumber: bookNumber,
+            footnotes: JSONSupport.array(root["footnotes"]) ?? [],
+            sourceOrdered: JSONSupport.object(root["extraction"])?["sourceTracked"] as? Bool == true
+        )
         try builder.append(chapters: chapters)
 
         try queue.write { db in
@@ -155,13 +160,38 @@ private struct CommentaryUnitBuilder {
     let bookNumber: Int
     private(set) var units: [CommentaryUnitRow] = []
     private var orderIndex = 0
+    private let footnotesByID: [String: Any]
+    private let sourceOrdered: Bool
 
-    init(moduleID: String, bookNumber: Int) {
+    init(moduleID: String, bookNumber: Int, footnotes: [Any] = [], sourceOrdered: Bool = false) {
         self.moduleID = moduleID
         self.bookNumber = bookNumber
+        self.sourceOrdered = sourceOrdered
+        var definitions: [String: Any] = [:]
+        for value in footnotes {
+            if let note = JSONSupport.object(value), let id = JSONSupport.string(note["id"]) {
+                definitions[id] = value
+            }
+        }
+        self.footnotesByID = definitions
     }
 
     mutating func append(chapters: [Any]) throws {
+        if sourceOrdered {
+            var ordered: [(order: Int, chapter: Int, pericope: [String: Any])] = []
+            for value in chapters {
+                let chapter = try JSONSupport.requiredObject(value, path: "/chapters")
+                let number = try JSONSupport.requiredInteger(chapter["chapter"], path: "/chapters/chapter")
+                for value in JSONSupport.array(chapter["pericopae"]) ?? [] {
+                    let pericope = try JSONSupport.requiredObject(value, path: "/chapters/pericopae")
+                    ordered.append((JSONSupport.integer(pericope["sourceOrder"]) ?? ordered.count, number, pericope))
+                }
+            }
+            for item in ordered.sorted(by: { $0.order < $1.order }) {
+                try appendPericope(item.pericope, chapter: item.chapter, parentID: nil)
+            }
+            return
+        }
         for (chapterIndex, chapterValue) in chapters.enumerated() {
             let path = "/chapters/\(chapterIndex)"
             let chapter = try JSONSupport.requiredObject(chapterValue, path: path)
@@ -240,7 +270,11 @@ private struct CommentaryUnitBuilder {
         let id = "\(moduleID):\(bookNumber):pericope:\(chapter):\(orderIndex)"
         let introduction = meaningful(pericope["introduction"])
         let translation = meaningful(pericope["translation"])
-        let footnotes = meaningful(pericope["footnotes"])
+        let scopedNotes = (JSONSupport.array(pericope["footnoteIds"]) ?? []).compactMap { value in
+            JSONSupport.string(value).flatMap { footnotesByID[$0] }
+        }
+        let scopedNotesValue: Any? = scopedNotes.isEmpty ? nil : scopedNotes
+        let footnotes = meaningful(pericope["footnotes"]) ?? scopedNotesValue
         appendRow(
             id: id,
             chapter: chapter,
@@ -256,10 +290,86 @@ private struct CommentaryUnitBuilder {
             searchText: makeSearchText(JSONSupport.string(pericope["title"]), introduction, translation, nil)
         )
 
+        if let content = JSONSupport.array(pericope["content"]) {
+            let parentStart = JSONSupport.integer(pericope["sv"]) ?? defaultStartVerse(chapter: chapter)
+            for (index, value) in content.enumerated() {
+                let block = try JSONSupport.requiredObject(value, path: "/pericopae/content/\(index)")
+                let role = try JSONSupport.requiredString(block["type"], path: "/pericopae/content/type")
+                // Printed indexes belong to indices_json, not the last passage.
+                if role == "index" { continue }
+                let sourceText = try JSONSupport.requiredObject(block["content"], path: "/pericopae/content/content")
+                let text = displayContent(sourceText, prefixLength: JSONSupport.integer(block["displayPrefixLength"]) ?? 0)
+                let start = JSONSupport.integer(block["sv"]) ?? parentStart
+                let end = JSONSupport.integer(block["ev"]) ?? JSONSupport.integer(pericope["ev"])
+                let blockChapter = (start / 1_000) % 1_000
+                var seenNotes = Set<String>()
+                let scoped = (JSONSupport.array(text["footnote_refs"]) ?? []).compactMap { value -> Any? in
+                    guard let reference = JSONSupport.object(value), let id = JSONSupport.string(reference["id"]) else { return nil }
+                    guard seenNotes.insert(id).inserted else { return nil }
+                    return footnotesByID[id]
+                }
+                let heading = role == "heading"
+                    && (JSONSupport.array(text["annotations"]) ?? []).isEmpty
+                    && (JSONSupport.array(text["footnote_refs"]) ?? []).isEmpty
+                let isTranslation = role == "translation"
+                let kind = heading ? "section" : (role == "commentary" && JSONSupport.integer(block["sv"]) != nil ? "verse" : "pericope")
+                appendRow(
+                    id: "\(moduleID):\(bookNumber):\(kind):\(blockChapter):\(orderIndex)",
+                    chapter: blockChapter,
+                    startVerse: start,
+                    endVerse: end,
+                    unitType: kind,
+                    level: heading ? 2 : 1,
+                    parentID: id,
+                    title: heading ? JSONSupport.string(text["text"]) : nil,
+                    translation: isTranslation ? text : nil,
+                    commentary: !heading && !isTranslation ? text : nil,
+                    footnotes: scoped.isEmpty ? nil : scoped,
+                    searchText: makeSearchText(heading ? JSONSupport.string(text["text"]) : nil, nil, isTranslation ? text : nil, !heading && !isTranslation ? text : nil)
+                )
+            }
+            return
+        }
+
         for verseValue in JSONSupport.array(pericope["verses"]) ?? [] {
             let verse = try JSONSupport.requiredObject(verseValue, path: "/chapters/pericopae/verses")
             try appendVerse(verse, chapter: chapter, parentID: id, parentFootnotes: footnotes)
         }
+    }
+
+    /// Canonical blocks retain printed verse labels for source verification.
+    /// The reader projection removes that label, adjusting Python/code-point
+    /// offsets (not Swift grapheme-cluster or UTF-16 offsets) at the same time.
+    private func displayContent(_ original: [String: Any], prefixLength: Int) -> [String: Any] {
+        guard prefixLength > 0, let originalText = JSONSupport.string(original["text"]) else { return original }
+        let scalars = Array(originalText.unicodeScalars)
+        let trim = min(prefixLength, scalars.count)
+        let text = String(String.UnicodeScalarView(scalars.dropFirst(trim)))
+        var result = original
+        result["text"] = text
+        if let annotations = JSONSupport.array(original["annotations"]) {
+            result["annotations"] = annotations.compactMap { value -> [String: Any]? in
+                guard var annotation = JSONSupport.object(value),
+                      let start = JSONSupport.integer(annotation["start"]),
+                      let end = JSONSupport.integer(annotation["end"]), end > trim else { return nil }
+                let newStart = max(0, start - trim)
+                let newEnd = end - trim
+                annotation["start"] = newStart
+                annotation["end"] = newEnd
+                if annotation["text"] != nil, newEnd <= scalars.count - trim {
+                    annotation["text"] = String(String.UnicodeScalarView(scalars[(newStart + trim)..<(newEnd + trim)]))
+                }
+                return annotation
+            }
+        }
+        if let references = JSONSupport.array(original["footnote_refs"]) {
+            result["footnote_refs"] = references.compactMap { value -> [String: Any]? in
+                guard var reference = JSONSupport.object(value), let offset = JSONSupport.integer(reference["offset"]) else { return nil }
+                reference["offset"] = max(0, offset - trim)
+                return reference
+            }
+        }
+        return result
     }
 
     private mutating func appendVerse(

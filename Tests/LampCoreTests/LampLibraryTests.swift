@@ -5,6 +5,41 @@ import LampModuleKit
 import Testing
 
 struct LampLibraryTests {
+    @Test func commentarySeriesUsesItsOwnNameInsteadOfTheFirstBookTitle() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-series-metadata-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("TEST_SERIES.lamp")
+        _ = try LampModuleCompiler().compile(data: Data(#"""
+        {"meta":{"schemaVersion":"2.2","seriesAbbrev":"NIC","seriesFull":"New International Commentary","title":"Commentary on Genesis"},
+         "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,"verses":[{"sv":1001001,"commentary":{"text":"A comment"}}]}]}
+        """#.utf8), sourceFilename: "TEST_SERIES.json", destinationURL: archiveURL)
+        let databaseURL = root.appendingPathComponent("source.sqlite")
+        let data = try (Data(contentsOf: archiveURL) as NSData).decompressed(using: .zlib) as Data
+        try data.write(to: databaseURL)
+        let queue = try DatabaseQueue(path: databaseURL.path)
+        try await queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE series_meta (
+                    id TEXT, name TEXT, abbreviation TEXT, description TEXT, editor TEXT,
+                    publisher TEXT, testament TEXT, language TEXT, website TEXT,
+                    editor_preface_json TEXT, introduction_json TEXT, abbreviations_json TEXT,
+                    bibliography_json TEXT, volumes_json TEXT
+                );
+                INSERT INTO series_meta (id,name,abbreviation,language)
+                VALUES ('TEST_SERIES','New International Commentary','NIC','english');
+                """)
+        }
+        try ((Data(contentsOf: databaseURL) as NSData).compressed(using: .zlib) as Data).write(to: archiveURL)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let module = try await library.install(from: archiveURL)
+        #expect(module.id == "TEST_SERIES")
+        #expect(module.name == "New International Commentary")
+        #expect(module.abbreviation == "NIC")
+        #expect(try await library.commentary(bookNumber: 1, chapterNumber: 1).count == 1)
+    }
+
     @Test func installsLegacyCompactHighlightsWithoutUsingSetIDAsModuleID() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-legacy-highlight-install-\(UUID().uuidString)", isDirectory: true)
