@@ -5085,6 +5085,7 @@ public actor LampLibrary {
         guard let object = value as? [String: Any] else { return }
 
         let parentText = stringValue(object["text"])
+        var parentOffsets: CharacterOffsets?
         if let annotations = object["annotations"] as? [Any] {
             for annotationValue in annotations {
                 guard let annotation = annotationValue as? [String: Any] else { continue }
@@ -5096,15 +5097,17 @@ public actor LampLibrary {
                         ?? annotation["key"]
                 )?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !key.isEmpty else { continue }
-                let startOffset = integerValue(annotation["start"])
-                let endOffset = integerValue(annotation["end"])
-                let derivedText = startOffset.flatMap { start in
-                    endOffset.flatMap { end in
-                        parentText.flatMap { substring(of: $0, from: start, to: end) }
-                    }
+                var text = stringValue(annotation["text"])
+                if text == nil,
+                   let parentText,
+                   let start = integerValue(annotation["start"]),
+                   let end = integerValue(annotation["end"]) {
+                    let offsets = parentOffsets ?? CharacterOffsets(parentText)
+                    parentOffsets = offsets
+                    text = offsets.substring(from: start, to: end)
                 }
                 links.append(LampDictionaryLink(
-                    text: stringValue(annotation["text"]) ?? derivedText,
+                    text: text,
                     key: key
                 ))
             }
@@ -5117,6 +5120,7 @@ public actor LampLibrary {
 
     private func verseAnnotations(from json: String?, verseText: String) -> [LampVerseAnnotation] {
         guard let values = jsonArray(from: json) else { return [] }
+        var offsets: CharacterOffsets?
         return values.compactMap { value in
             guard let object = value as? [String: Any],
                   let kind = stringValue(object["type"] ?? object["kind"]),
@@ -5125,12 +5129,17 @@ public actor LampLibrary {
                 return nil
             }
             let data = object["data"] as? [String: Any]
+            var text = stringValue(object["text"])
+            if text == nil {
+                let verseOffsets = offsets ?? CharacterOffsets(verseText)
+                offsets = verseOffsets
+                text = verseOffsets.substring(from: start, to: end)
+            }
             return LampVerseAnnotation(
                 kind: kind,
                 startOffset: start,
                 endOffset: end,
-                text: stringValue(object["text"])
-                    ?? substring(of: verseText, from: start, to: end),
+                text: text,
                 strongs: stringValue(data?["strongs"] ?? object["strongs"]),
                 morphology: stringValue(data?["morphology"] ?? object["morphology"]),
                 lemma: stringValue(data?["lemma"] ?? object["lemma"]),
@@ -5140,11 +5149,31 @@ public actor LampLibrary {
         }
     }
 
-    private func substring(of text: String, from start: Int, to end: Int) -> String? {
-        guard start >= 0, end > start, end <= text.count else { return nil }
-        let lowerBound = text.index(text.startIndex, offsetBy: start)
-        let upperBound = text.index(text.startIndex, offsetBy: end)
-        return String(text[lowerBound..<upperBound])
+    /// One parent text's characters, counted once.
+    ///
+    /// Annotation offsets are character offsets into a single parent text, and a
+    /// dictionary entry carries dozens of them — every scripture reference in a
+    /// definition is one. Resolving each through `String.index(_:offsetBy:)`
+    /// walks the text from its start again, and `text.count` walks it a third
+    /// time, so the work grows with annotations times length. These strings come
+    /// from `JSONSerialization`, which hands back lazily bridged `NSString`s
+    /// whose every character step is an Objective-C call, and that turned one
+    /// BDB entry into tens of milliseconds. A hundred of them was the two and a
+    /// half seconds a dictionary search took.
+    ///
+    /// Built on demand, because an annotation that carries its own text needs
+    /// nothing from the parent.
+    private struct CharacterOffsets {
+        private let characters: [Character]
+
+        init(_ text: String) {
+            characters = Array(text)
+        }
+
+        func substring(from start: Int, to end: Int) -> String? {
+            guard start >= 0, end > start, end <= characters.count else { return nil }
+            return String(characters[start..<end])
+        }
     }
 
     private func verseFootnotes(from json: String?) -> [LampVerseFootnote] {
@@ -5214,6 +5243,7 @@ public actor LampLibrary {
         guard let object = value as? [String: Any] else { return }
 
         let parentText = stringValue(object["text"])
+        var parentOffsets: CharacterOffsets?
         if let annotations = object["annotations"] as? [Any] {
             for annotationValue in annotations {
                 guard let annotation = annotationValue as? [String: Any],
@@ -5225,15 +5255,20 @@ public actor LampLibrary {
                 guard let startReference = integerValue(annotationData?["sv"] ?? annotation["sv"]) else {
                     continue
                 }
-                let startOffset = integerValue(annotation["start"])
-                let endOffset = integerValue(annotation["end"])
-                let derivedText = startOffset.flatMap { start in
-                    endOffset.flatMap { end in
-                        parentText.flatMap { substring(of: $0, from: start, to: end) }
-                    }
+                // Only an annotation without its own text needs cutting out of
+                // the parent, so neither the offsets nor the cut is paid for
+                // until one asks.
+                var text = stringValue(annotation["text"])
+                if text == nil,
+                   let parentText,
+                   let start = integerValue(annotation["start"]),
+                   let end = integerValue(annotation["end"]) {
+                    let offsets = parentOffsets ?? CharacterOffsets(parentText)
+                    parentOffsets = offsets
+                    text = offsets.substring(from: start, to: end)
                 }
                 links.append(LampScriptureLink(
-                    text: stringValue(annotation["text"]) ?? derivedText,
+                    text: text,
                     startReference: startReference,
                     endReference: integerValue(annotationData?["ev"] ?? annotation["ev"])
                 ))
