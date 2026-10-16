@@ -210,6 +210,12 @@ public enum LampPortableModuleInspector {
             if let id = try firstID("commentary_books", column: "module_id") {
                 return try checked(id, .commentary)
             }
+            // A series carries its identity in its own row and nowhere else:
+            // its books are volumes of the series, keyed by book number, so
+            // `commentary_books` has no owning module column to read.
+            if tables.contains("commentary_units"), let id = try firstID("series_meta") {
+                return try checked(id, .commentary)
+            }
             if let id = try firstID("book_modules") {
                 return try checked(id, .book)
             }
@@ -448,7 +454,8 @@ public enum LampPortableModuleInspector {
             case .dictionary:
                 return [("module_metadata", "id"), ("dictionary_entries", "module_id")]
             case .commentary:
-                return [("commentary_books", "module_id"), ("commentary_units", "module_id")]
+                return [("series_meta", "id"), ("commentary_books", "module_id"),
+                        ("commentary_units", "module_id")]
             case .book:
                 return [("book_modules", "id"), ("book_sections", "module_id")]
             case .devotional:

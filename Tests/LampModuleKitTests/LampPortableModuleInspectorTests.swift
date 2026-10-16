@@ -38,6 +38,61 @@ struct LampPortableModuleInspectorTests {
         }
     }
 
+    /// A commentary series is the one module whose books are volumes rather
+    /// than owned rows: `commentary_books` is keyed by book number and has no
+    /// owning module column, so the series' own row is the only identity in
+    /// the file. Sync refused to import one until it was read.
+    @Test func aCommentarySeriesIsIdentifiedByItsOwnRow() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-inspector-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let queue = try DatabaseQueue(path: url.path)
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE series_meta (id TEXT, name TEXT, abbreviation TEXT);
+                CREATE TABLE commentary_books (
+                    id TEXT, book_number INTEGER, title TEXT, author TEXT
+                );
+                CREATE TABLE commentary_units (id TEXT, book INTEGER, chapter INTEGER);
+                INSERT INTO series_meta VALUES ('NIC', 'New International Commentary', 'NIC');
+                INSERT INTO commentary_books VALUES ('NIC-GEN', 1, 'Genesis', 'Hamilton');
+                INSERT INTO commentary_units VALUES ('u1', 1, 1);
+                """)
+        }
+        let body = try Data(contentsOf: url)
+        let descriptor = try LampPortableModuleInspector.inspect(databaseData: body)
+        #expect(descriptor == LampPortableModuleDescriptor(id: "NIC", kind: .commentary))
+
+        // And it arrives over sync under its canonical name, where the
+        // filename is never allowed to stand in for an identity.
+        let archive = try (body as NSData).compressed(using: .zlib) as Data
+        #expect(try LampPortableModuleInspector.inspectRemote(
+            data: archive, filename: "NIC.lamp", fallbackID: "NIC", expectedKind: .commentary
+        ) == LampPortableModuleDescriptor(id: "NIC", kind: .commentary))
+    }
+
+    /// The series row is an owner like any other: a file carrying two of them
+    /// is two modules in a trenchcoat.
+    @Test func aSecondSeriesRowIsRejectedAsForeign() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-inspector-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let queue = try DatabaseQueue(path: url.path)
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE series_meta (id TEXT, name TEXT, abbreviation TEXT);
+                CREATE TABLE commentary_books (id TEXT, book_number INTEGER, title TEXT);
+                CREATE TABLE commentary_units (id TEXT, book INTEGER, chapter INTEGER);
+                INSERT INTO series_meta VALUES ('NIC', 'New International Commentary', 'NIC');
+                INSERT INTO series_meta VALUES ('WBC', 'Word Biblical Commentary', 'WBC');
+                INSERT INTO commentary_units VALUES ('u1', 1, 1);
+                """)
+        }
+        #expect(throws: LampPortableModuleInspector.InspectionError.foreignRows("series_meta")) {
+            try LampPortableModuleInspector.inspect(databaseData: Data(contentsOf: url))
+        }
+    }
+
     @Test func dictionaryPreflightChecksCopiedColumns() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-inspector-\(UUID().uuidString).sqlite")
