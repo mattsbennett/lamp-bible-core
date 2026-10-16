@@ -1157,7 +1157,13 @@ public actor LampLibrary {
                             summary: plainText(fromJSONString: summaryJSON),
                             content: LampPortableDevotionalContent.plainText(from: contentJSON)
                                 ?? contentJSON,
-                            contentJSON: contentJSON,
+                            // Only blocks are a structured representation. A
+                            // client that flattens on the way out sends the
+                            // body back in this column, and claiming it as
+                            // blocks rewrites the local row — at an unchanged
+                            // change time — into something no other device has.
+                            contentJSON: LampPortableDevotionalContent.isStructured(contentJSON)
+                                ? contentJSON : nil,
                             footnotes: plainText(fromJSONString: footnotesJSON),
                             mediaJSON: columns.contains("media_json") ? row["media_json"] : nil,
                             created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
@@ -5754,7 +5760,8 @@ public actor LampLibrary {
                     summary: plainText(fromJSONString: summaryJSON),
                     content: LampPortableDevotionalContent.plainText(from: contentJSON)
                         ?? contentJSON,
-                    contentJSON: contentJSON,
+                    contentJSON: LampPortableDevotionalContent.isStructured(contentJSON)
+                        ? contentJSON : nil,
                     footnotes: plainText(fromJSONString: footnotesJSON),
                     mediaJSON: columns.contains("media_json") ? row["media_json"] : nil,
                     created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },

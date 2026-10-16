@@ -4,6 +4,23 @@ import Foundation
 /// The JSON remains the source of truth; this Markdown is for clients whose
 /// reader already renders Markdown. Unknown fields are left in the JSON.
 public enum LampPortableDevotionalContent {
+    /// Whether the column holds structured blocks at all.
+    ///
+    /// A client that flattens on the way out puts the authored body in this
+    /// same column, so its contents are not always JSON. Reading plain
+    /// Markdown back as though it were a structured representation writes the
+    /// body into a field meant for blocks, and a record that disagrees with
+    /// itself is how two devices come to differ at one change time.
+    public static func isStructured(_ contentJSON: String) -> Bool {
+        guard let value = try? JSONSerialization.jsonObject(
+            with: Data(contentJSON.utf8)
+        ) else { return false }
+        if value is [[String: Any]] { return true }
+        guard let object = value as? [String: Any] else { return false }
+        return object["introduction"] != nil || object["sections"] != nil
+            || object["conclusion"] != nil
+    }
+
     public static func markdown(from contentJSON: String) -> String? {
         if let plain = LampPortableDevotionalMedia.plainMarkdown(from: contentJSON) {
             return plain
