@@ -1244,3 +1244,35 @@ public enum LampLibraryError: Error, LocalizedError, Equatable, Sendable {
         }
     }
 }
+
+public extension LampDevotional {
+    /// The same writing, stamped at another moment.
+    ///
+    /// Resolving a sync conflict keeps one of two versions and has to date it
+    /// later than both, so the choice travels rather than meeting the same
+    /// disagreement on the next device.
+    func withLastModified(_ date: Date) -> LampDevotional {
+        LampDevotional(
+            id: id,
+            moduleID: moduleID,
+            moduleName: moduleName,
+            title: title,
+            subtitle: subtitle,
+            author: author,
+            date: self.date,
+            tags: tags,
+            category: category,
+            seriesName: seriesName,
+            seriesOrder: seriesOrder,
+            keyScriptures: keyScriptures,
+            summary: summary,
+            content: content,
+            contentJSON: contentJSON,
+            footnotes: footnotes,
+            mediaJSON: mediaJSON,
+            created: created,
+            lastModified: date,
+            isEditable: isEditable
+        )
+    }
+}

@@ -1460,7 +1460,17 @@ public actor LampLibrary {
                             || devotional.mediaJSON == nil)
                 )
                 if decision == .conflict {
-                    throw LampLibraryError.syncConflict("devotional \(devotional.id)")
+                    // On a sync run, keep this device's copy and set the other
+                    // aside: one writing two devices disagree about is not a
+                    // reason to stop a library syncing, and the person is the
+                    // only one who can say which version they meant. An import
+                    // they asked for still stops and says so, because there is
+                    // someone right there to tell.
+                    guard forSync else {
+                        throw LampLibraryError.syncConflict("devotional \(devotional.id)")
+                    }
+                    try stashConflict(devotional, kind: .devotional)
+                    return nil
                 }
                 guard decision == .incoming else { return nil }
             }
@@ -1472,6 +1482,182 @@ public actor LampLibrary {
             }
         }
         return imported
+    }
+
+    // MARK: - Sync conflicts
+
+    /// Conflicts still waiting for someone to choose a version.
+    ///
+    /// Only this device's copy is read live, from the table it already lives
+    /// in, so a conflict reflects any editing done since it was raised. A
+    /// conflict whose record has since been deleted here is dropped: there is
+    /// no longer a version to choose between.
+    public func pendingSyncConflicts() throws -> [LampSyncConflict] {
+        let queue = try openUserDatabase()
+        return try queue.write { db in
+            var conflicts: [LampSyncConflict] = []
+            var resolved: [String] = []
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM sync_conflicts WHERE kind = ? ORDER BY detected",
+                arguments: [LampSyncConflict.Kind.devotional.rawValue]
+            )
+            for row in rows {
+                let incoming = makePersonalDevotional(row)
+                let detected: Int = row["detected"]
+                guard let localRow = try Row.fetchOne(
+                    db, sql: "SELECT * FROM personal_devotionals WHERE id = ?",
+                    arguments: [incoming.id]
+                ) else {
+                    resolved.append(incoming.id)
+                    continue
+                }
+                let local = makePersonalDevotional(localRow)
+                conflicts.append(LampSyncConflict(
+                    id: LampSyncConflict.identifier(kind: .devotional, itemKey: incoming.id),
+                    kind: .devotional,
+                    itemKey: incoming.id,
+                    title: local.title,
+                    thisDeviceModified: local.lastModified,
+                    otherDeviceModified: incoming.lastModified,
+                    thisDevicePreview: LampSyncConflictPreview.text(local.content),
+                    otherDevicePreview: LampSyncConflictPreview.text(incoming.content),
+                    detected: Date(timeIntervalSince1970: TimeInterval(detected))
+                ))
+            }
+            for identifier in resolved {
+                try db.execute(
+                    sql: "DELETE FROM sync_conflicts WHERE kind = ? AND id = ?",
+                    arguments: [LampSyncConflict.Kind.devotional.rawValue, identifier]
+                )
+            }
+            return conflicts
+        }
+    }
+
+    /// Keep one version and let it win everywhere.
+    ///
+    /// The kept version is stamped later than both copies, so the next sync
+    /// publishes it as the newer one and no other device raises this same
+    /// equal-time disagreement again.
+    @discardableResult
+    public func resolveSyncConflict(
+        id: String,
+        keeping side: LampSyncConflict.Side
+    ) throws -> LampDevotional? {
+        let queue = try openUserDatabase()
+        let itemKey = String(id.drop(while: { $0 != ":" }).dropFirst())
+        guard !itemKey.isEmpty else { return nil }
+        let stashed = try queue.read { db in
+            try Row.fetchOne(
+                db, sql: "SELECT * FROM sync_conflicts WHERE kind = ? AND id = ?",
+                arguments: [LampSyncConflict.Kind.devotional.rawValue, itemKey]
+            )
+        }
+        guard let stashed else { return nil }
+        let incoming = makePersonalDevotional(stashed)
+        let local = try queue.read { db in
+            try Row.fetchOne(
+                db, sql: "SELECT * FROM personal_devotionals WHERE id = ?",
+                arguments: [itemKey]
+            )
+        }.map(makePersonalDevotional)
+
+        guard let resolvedTimestamp = LampSyncMerge.resolutionTimestamp(
+            localModified: local?.lastModified.map { Int($0.timeIntervalSince1970) },
+            incomingModified: incoming.lastModified.map { Int($0.timeIntervalSince1970) },
+            now: Int(Date().timeIntervalSince1970)
+        ) else {
+            throw LampLibraryError.syncConflict("devotional \(itemKey)")
+        }
+
+        let chosen: LampDevotional? = switch side {
+        case .thisDevice: local
+        case .otherDevice: incoming
+        }
+        guard var chosen else { return nil }
+        chosen = chosen.withLastModified(
+            Date(timeIntervalSince1970: TimeInterval(resolvedTimestamp))
+        )
+        let saved = try savePersonalDevotional(chosen, preserveLastModified: true)
+        try discardSyncConflict(id: id)
+        return saved
+    }
+
+    /// Forget a conflict without choosing, leaving this device's copy as it is.
+    public func discardSyncConflict(id: String) throws {
+        let itemKey = String(id.drop(while: { $0 != ":" }).dropFirst())
+        guard !itemKey.isEmpty else { return }
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try db.execute(
+                sql: "DELETE FROM sync_conflicts WHERE kind = ? AND id = ?",
+                arguments: [LampSyncConflict.Kind.devotional.rawValue, itemKey]
+            )
+        }
+    }
+
+    /// Set the incoming copy aside, whole, so a choice made days later still
+    /// has something to choose from.
+    private func stashConflict(_ devotional: LampDevotional, kind: LampSyncConflict.Kind) throws {
+        let queue = try openUserDatabase()
+        let tagsJSON = String(decoding: try JSONEncoder().encode(devotional.tags), as: UTF8.self)
+        let scriptures = devotional.keyScriptures.map { scripture -> [String: Any] in
+            var value: [String: Any] = ["sv": scripture.startReference]
+            if let end = scripture.endReference { value["ev"] = end }
+            if let text = scripture.text { value["label"] = text }
+            return value
+        }
+        let scripturesJSON = String(decoding: try JSONSerialization.data(
+            withJSONObject: scriptures, options: [.sortedKeys]
+        ), as: UTF8.self)
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO sync_conflicts (
+                    kind, id, detected, title, subtitle, author, devotional_date,
+                    tags_json, category, series_name, series_order, key_scriptures_json,
+                    summary, content, content_json, footnotes, media_json, created, last_modified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(kind, id) DO UPDATE SET
+                    detected = excluded.detected,
+                    title = excluded.title,
+                    subtitle = excluded.subtitle,
+                    author = excluded.author,
+                    devotional_date = excluded.devotional_date,
+                    tags_json = excluded.tags_json,
+                    category = excluded.category,
+                    series_name = excluded.series_name,
+                    series_order = excluded.series_order,
+                    key_scriptures_json = excluded.key_scriptures_json,
+                    summary = excluded.summary,
+                    content = excluded.content,
+                    content_json = excluded.content_json,
+                    footnotes = excluded.footnotes,
+                    media_json = excluded.media_json,
+                    last_modified = excluded.last_modified
+                """, arguments: [
+                    kind.rawValue,
+                    devotional.id,
+                    Int(Date().timeIntervalSince1970),
+                    devotional.title,
+                    devotional.subtitle,
+                    devotional.author,
+                    devotional.date,
+                    tagsJSON,
+                    devotional.category,
+                    devotional.seriesName,
+                    devotional.seriesOrder,
+                    scripturesJSON,
+                    devotional.summary,
+                    devotional.content,
+                    devotional.contentJSON,
+                    devotional.footnotes,
+                    devotional.mediaJSON,
+                    Int((devotional.created ?? Date()).timeIntervalSince1970),
+                    Int((devotional.lastModified ?? Date()).timeIntervalSince1970),
+                ]
+            )
+        }
     }
 
     public func storePersonalDevotionalMedia(
@@ -4063,6 +4249,28 @@ public actor LampLibrary {
                 );
                 CREATE INDEX IF NOT EXISTS idx_personal_devotionals_date
                     ON personal_devotionals(devotional_date, last_modified);
+                CREATE TABLE IF NOT EXISTS sync_conflicts (
+                    kind TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    detected INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    subtitle TEXT,
+                    author TEXT,
+                    devotional_date TEXT,
+                    tags_json TEXT NOT NULL,
+                    category TEXT,
+                    series_name TEXT,
+                    series_order INTEGER,
+                    key_scriptures_json TEXT NOT NULL,
+                    summary TEXT,
+                    content TEXT NOT NULL,
+                    content_json TEXT,
+                    footnotes TEXT,
+                    media_json TEXT,
+                    created INTEGER NOT NULL,
+                    last_modified INTEGER NOT NULL,
+                    PRIMARY KEY (kind, id)
+                );
                 CREATE TABLE IF NOT EXISTS highlight_sets (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
