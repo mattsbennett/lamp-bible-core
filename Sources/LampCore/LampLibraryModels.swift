@@ -1276,3 +1276,23 @@ public extension LampDevotional {
         )
     }
 }
+
+public extension LampVerseNote {
+    /// The same note, stamped at another moment.
+    ///
+    /// Resolving a sync conflict keeps one of two versions and has to date it
+    /// later than both, so the choice travels rather than meeting the same
+    /// disagreement on the next device.
+    func withLastModified(_ date: Date) -> LampVerseNote {
+        LampVerseNote(
+            id: id,
+            moduleID: moduleID,
+            reference: reference,
+            title: title,
+            content: content,
+            verseReferences: verseReferences,
+            footnotes: footnotes,
+            lastModified: date
+        )
+    }
+}

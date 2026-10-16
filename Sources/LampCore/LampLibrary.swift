@@ -1469,7 +1469,11 @@ public actor LampLibrary {
                     guard forSync else {
                         throw LampLibraryError.syncConflict("devotional \(devotional.id)")
                     }
-                    try stashConflict(devotional, kind: .devotional)
+                    try stashConflict(
+                        kind: .devotional,
+                        itemKey: devotional.id,
+                        payload: LampSyncConflictPayload.encode(devotional)
+                    )
                     return nil
                 }
                 guard decision == .incoming else { return nil }
@@ -1496,43 +1500,101 @@ public actor LampLibrary {
         let queue = try openUserDatabase()
         return try queue.write { db in
             var conflicts: [LampSyncConflict] = []
-            var resolved: [String] = []
+            var settled: [(kind: String, itemKey: String)] = []
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT * FROM sync_conflicts WHERE kind = ? ORDER BY detected",
-                arguments: [LampSyncConflict.Kind.devotional.rawValue]
+                sql: "SELECT kind, id, detected, payload_json FROM sync_conflicts ORDER BY detected"
             )
             for row in rows {
-                let incoming = makePersonalDevotional(row)
-                let detected: Int = row["detected"]
-                guard let localRow = try Row.fetchOne(
-                    db, sql: "SELECT * FROM personal_devotionals WHERE id = ?",
-                    arguments: [incoming.id]
-                ) else {
-                    resolved.append(incoming.id)
-                    continue
+                let rawKind: String = row["kind"]
+                let itemKey: String = row["id"]
+                let payload: String = row["payload_json"]
+                let detectedTimestamp: Int = row["detected"]
+                let detected = Date(timeIntervalSince1970: TimeInterval(detectedTimestamp))
+                let conflict: LampSyncConflict? = switch LampSyncConflict.Kind(rawValue: rawKind) {
+                case .devotional:
+                    try devotionalConflict(db, itemKey: itemKey, payload: payload, detected: detected)
+                case .note:
+                    try noteConflict(db, itemKey: itemKey, payload: payload, detected: detected)
+                case nil:
+                    nil
                 }
-                let local = makePersonalDevotional(localRow)
-                conflicts.append(LampSyncConflict(
-                    id: LampSyncConflict.identifier(kind: .devotional, itemKey: incoming.id),
-                    kind: .devotional,
-                    itemKey: incoming.id,
-                    title: local.title,
-                    thisDeviceModified: local.lastModified,
-                    otherDeviceModified: incoming.lastModified,
-                    thisDevicePreview: LampSyncConflictPreview.text(local.content),
-                    otherDevicePreview: LampSyncConflictPreview.text(incoming.content),
-                    detected: Date(timeIntervalSince1970: TimeInterval(detected))
-                ))
+                if let conflict {
+                    conflicts.append(conflict)
+                } else {
+                    settled.append((rawKind, itemKey))
+                }
             }
-            for identifier in resolved {
+            for row in settled {
                 try db.execute(
                     sql: "DELETE FROM sync_conflicts WHERE kind = ? AND id = ?",
-                    arguments: [LampSyncConflict.Kind.devotional.rawValue, identifier]
+                    arguments: [row.kind, row.itemKey]
                 )
             }
             return conflicts
         }
+    }
+
+    private func devotionalConflict(
+        _ db: Database,
+        itemKey: String,
+        payload: String,
+        detected: Date
+    ) throws -> LampSyncConflict? {
+        guard let incoming = LampSyncConflictPayload.devotional(from: payload),
+              let localRow = try Row.fetchOne(
+                  db, sql: "SELECT * FROM personal_devotionals WHERE id = ?",
+                  arguments: [itemKey]
+              ) else { return nil }
+        let local = makePersonalDevotional(localRow)
+        return LampSyncConflict(
+            id: LampSyncConflict.identifier(kind: .devotional, itemKey: itemKey),
+            kind: .devotional,
+            itemKey: itemKey,
+            title: local.title,
+            thisDeviceModified: local.lastModified,
+            otherDeviceModified: incoming.lastModified,
+            thisDevicePreview: LampSyncConflictPreview.text(local.content),
+            otherDevicePreview: LampSyncConflictPreview.text(incoming.content),
+            detected: detected
+        )
+    }
+
+    /// A note is named by the verse it is attached to when it has no title of
+    /// its own, which most notes do not.
+    private func noteConflict(
+        _ db: Database,
+        itemKey: String,
+        payload: String,
+        detected: Date
+    ) throws -> LampSyncConflict? {
+        guard let incoming = LampSyncConflictPayload.note(from: payload),
+              let localRow = try Row.fetchOne(
+                  db, sql: "SELECT * FROM personal_notes WHERE id = ?",
+                  arguments: [itemKey]
+              ) else { return nil }
+        let local = makeVerseNote(localRow)
+        // A chapter introduction is filed at verse zero, which has no verse to
+        // name; it belongs to the chapter.
+        let parts = LampBibleReferenceFormatter.components(of: local.reference)
+        let reference = parts.verse == 0
+            ? "\(LampBibleReferenceFormatter.bookName(parts.book)) \(parts.chapter)"
+            : LampBibleReferenceFormatter.describeRange(
+                from: local.reference, to: local.reference
+            )
+        let title = local.title?.nilIfBlank ?? incoming.title?.nilIfBlank
+        return LampSyncConflict(
+            id: LampSyncConflict.identifier(kind: .note, itemKey: itemKey),
+            kind: .note,
+            itemKey: itemKey,
+            title: title ?? reference,
+            subtitle: title == nil ? nil : reference,
+            thisDeviceModified: local.lastModified,
+            otherDeviceModified: incoming.lastModified,
+            thisDevicePreview: LampSyncConflictPreview.text(local.content),
+            otherDevicePreview: LampSyncConflictPreview.text(incoming.content),
+            detected: detected
+        )
     }
 
     /// Keep one version and let it win everywhere.
@@ -1544,120 +1606,148 @@ public actor LampLibrary {
     public func resolveSyncConflict(
         id: String,
         keeping side: LampSyncConflict.Side
-    ) throws -> LampDevotional? {
+    ) throws -> LampSyncConflictResolution? {
+        guard let (kind, itemKey) = LampSyncConflict.parse(id: id) else { return nil }
         let queue = try openUserDatabase()
-        let itemKey = String(id.drop(while: { $0 != ":" }).dropFirst())
-        guard !itemKey.isEmpty else { return nil }
-        let stashed = try queue.read { db in
+        let payload = try queue.read { db in
             try Row.fetchOne(
-                db, sql: "SELECT * FROM sync_conflicts WHERE kind = ? AND id = ?",
-                arguments: [LampSyncConflict.Kind.devotional.rawValue, itemKey]
-            )
+                db, sql: "SELECT payload_json FROM sync_conflicts WHERE kind = ? AND id = ?",
+                arguments: [kind.rawValue, itemKey]
+            ).map { $0["payload_json"] as String }
         }
-        guard let stashed else { return nil }
-        let incoming = makePersonalDevotional(stashed)
+        guard let payload else { return nil }
+        let resolution: LampSyncConflictResolution? = switch kind {
+        case .devotional:
+            try resolveDevotionalConflict(itemKey: itemKey, payload: payload, keeping: side)
+        case .note:
+            try resolveNoteConflict(itemKey: itemKey, payload: payload, keeping: side)
+        }
+        guard let resolution else { return nil }
+        try discardSyncConflict(id: id)
+        return resolution
+    }
+
+    private func resolveDevotionalConflict(
+        itemKey: String,
+        payload: String,
+        keeping side: LampSyncConflict.Side
+    ) throws -> LampSyncConflictResolution? {
+        guard let incoming = LampSyncConflictPayload.devotional(from: payload) else { return nil }
+        let queue = try openUserDatabase()
         let local = try queue.read { db in
             try Row.fetchOne(
                 db, sql: "SELECT * FROM personal_devotionals WHERE id = ?",
                 arguments: [itemKey]
             )
         }.map(makePersonalDevotional)
-
-        guard let resolvedTimestamp = LampSyncMerge.resolutionTimestamp(
-            localModified: local?.lastModified.map { Int($0.timeIntervalSince1970) },
-            incomingModified: incoming.lastModified.map { Int($0.timeIntervalSince1970) },
-            now: Int(Date().timeIntervalSince1970)
-        ) else {
-            throw LampLibraryError.syncConflict("devotional \(itemKey)")
-        }
-
+        let stamp = try resolutionDate(
+            local: local?.lastModified,
+            incoming: incoming.lastModified,
+            kind: .devotional,
+            itemKey: itemKey
+        )
         let chosen: LampDevotional? = switch side {
         case .thisDevice: local
         case .otherDevice: incoming
         }
-        guard var chosen else { return nil }
-        chosen = chosen.withLastModified(
-            Date(timeIntervalSince1970: TimeInterval(resolvedTimestamp))
+        guard let chosen else { return nil }
+        let saved = try savePersonalDevotional(
+            chosen.withLastModified(stamp), preserveLastModified: true
         )
-        let saved = try savePersonalDevotional(chosen, preserveLastModified: true)
-        try discardSyncConflict(id: id)
-        return saved
+        return .devotional(saved)
+    }
+
+    private func resolveNoteConflict(
+        itemKey: String,
+        payload: String,
+        keeping side: LampSyncConflict.Side
+    ) throws -> LampSyncConflictResolution? {
+        guard let incoming = LampSyncConflictPayload.note(from: payload) else { return nil }
+        let queue = try openUserDatabase()
+        let local = try queue.read { db in
+            try Row.fetchOne(
+                db, sql: "SELECT * FROM personal_notes WHERE id = ?",
+                arguments: [itemKey]
+            )
+        }.map(makeVerseNote)
+        let stamp = try resolutionDate(
+            local: local?.lastModified,
+            incoming: incoming.lastModified,
+            kind: .note,
+            itemKey: itemKey
+        )
+        let chosen: LampVerseNote? = switch side {
+        case .thisDevice: local
+        case .otherDevice: incoming
+        }
+        guard let chosen else { return nil }
+        let saved = chosen.withLastModified(stamp)
+        try saveVerseNote(saved)
+        return .note(saved)
+    }
+
+    private func resolutionDate(
+        local: Date?,
+        incoming: Date?,
+        kind: LampSyncConflict.Kind,
+        itemKey: String
+    ) throws -> Date {
+        guard let timestamp = LampSyncMerge.resolutionTimestamp(
+            localModified: local.map { Int($0.timeIntervalSince1970) },
+            incomingModified: incoming.map { Int($0.timeIntervalSince1970) },
+            now: Int(Date().timeIntervalSince1970)
+        ) else {
+            throw LampLibraryError.syncConflict("\(kind.rawValue) \(itemKey)")
+        }
+        return Date(timeIntervalSince1970: TimeInterval(timestamp))
     }
 
     /// Forget a conflict without choosing, leaving this device's copy as it is.
     public func discardSyncConflict(id: String) throws {
-        let itemKey = String(id.drop(while: { $0 != ":" }).dropFirst())
-        guard !itemKey.isEmpty else { return }
+        guard let (kind, itemKey) = LampSyncConflict.parse(id: id) else { return }
         let queue = try openUserDatabase()
         try queue.write { db in
             try db.execute(
                 sql: "DELETE FROM sync_conflicts WHERE kind = ? AND id = ?",
-                arguments: [LampSyncConflict.Kind.devotional.rawValue, itemKey]
+                arguments: [kind.rawValue, itemKey]
             )
         }
     }
 
     /// Set the incoming copy aside, whole, so a choice made days later still
     /// has something to choose from.
-    private func stashConflict(_ devotional: LampDevotional, kind: LampSyncConflict.Kind) throws {
+    private func stashConflict(
+        kind: LampSyncConflict.Kind,
+        itemKey: String,
+        payload: String
+    ) throws {
         let queue = try openUserDatabase()
-        let tagsJSON = String(decoding: try JSONEncoder().encode(devotional.tags), as: UTF8.self)
-        let scriptures = devotional.keyScriptures.map { scripture -> [String: Any] in
-            var value: [String: Any] = ["sv": scripture.startReference]
-            if let end = scripture.endReference { value["ev"] = end }
-            if let text = scripture.text { value["label"] = text }
-            return value
-        }
-        let scripturesJSON = String(decoding: try JSONSerialization.data(
-            withJSONObject: scriptures, options: [.sortedKeys]
-        ), as: UTF8.self)
         try queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO sync_conflicts (
-                    kind, id, detected, title, subtitle, author, devotional_date,
-                    tags_json, category, series_name, series_order, key_scriptures_json,
-                    summary, content, content_json, footnotes, media_json, created, last_modified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(kind, id) DO UPDATE SET
-                    detected = excluded.detected,
-                    title = excluded.title,
-                    subtitle = excluded.subtitle,
-                    author = excluded.author,
-                    devotional_date = excluded.devotional_date,
-                    tags_json = excluded.tags_json,
-                    category = excluded.category,
-                    series_name = excluded.series_name,
-                    series_order = excluded.series_order,
-                    key_scriptures_json = excluded.key_scriptures_json,
-                    summary = excluded.summary,
-                    content = excluded.content,
-                    content_json = excluded.content_json,
-                    footnotes = excluded.footnotes,
-                    media_json = excluded.media_json,
-                    last_modified = excluded.last_modified
-                """, arguments: [
-                    kind.rawValue,
-                    devotional.id,
-                    Int(Date().timeIntervalSince1970),
-                    devotional.title,
-                    devotional.subtitle,
-                    devotional.author,
-                    devotional.date,
-                    tagsJSON,
-                    devotional.category,
-                    devotional.seriesName,
-                    devotional.seriesOrder,
-                    scripturesJSON,
-                    devotional.summary,
-                    devotional.content,
-                    devotional.contentJSON,
-                    devotional.footnotes,
-                    devotional.mediaJSON,
-                    Int((devotional.created ?? Date()).timeIntervalSince1970),
-                    Int((devotional.lastModified ?? Date()).timeIntervalSince1970),
-                ]
-            )
+            try Self.stashConflict(db, kind: kind, itemKey: itemKey, payload: payload)
         }
+    }
+
+    /// The same, for a caller already inside a write — importing notes stashes
+    /// one disagreement and carries on with the rest in the same transaction.
+    private static func stashConflict(
+        _ db: Database,
+        kind: LampSyncConflict.Kind,
+        itemKey: String,
+        payload: String
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO sync_conflicts (kind, id, detected, payload_json)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(kind, id) DO UPDATE SET
+                detected = excluded.detected,
+                payload_json = excluded.payload_json
+            """, arguments: [
+                kind.rawValue,
+                itemKey,
+                Int(Date().timeIntervalSince1970),
+                payload,
+            ]
+        )
     }
 
     public func storePersonalDevotionalMedia(
@@ -3591,7 +3681,35 @@ public actor LampLibrary {
                             && (existingFootnotes ?? "[]") == footnotesJSON
                     )
                     if decision == .conflict {
-                        throw LampLibraryError.syncConflict("note \(note.reference)")
+                        // Set aside rather than thrown, for the same reason a
+                        // writing is: one verse two devices disagree about is
+                        // not a reason to stop the rest of a library syncing.
+                        // An import someone asked for still stops and says so.
+                        guard forSync else {
+                            throw LampLibraryError.syncConflict("note \(note.reference)")
+                        }
+                        try Self.stashConflict(
+                            db,
+                            kind: .note,
+                            itemKey: id,
+                            // Keyed and titled as it would have been written,
+                            // not as the document carried it, so choosing it
+                            // later replaces the note rather than joining it.
+                            payload: LampSyncConflictPayload.encode(
+                                LampVerseNote(
+                                    id: id,
+                                    moduleID: note.moduleID,
+                                    reference: note.reference,
+                                    title: incomingTitle,
+                                    content: note.content,
+                                    verseReferences: note.verseReferences,
+                                    footnotes: note.footnotes,
+                                    lastModified: note.lastModified
+                                )
+                            )
+                        )
+                        skippedCount += 1
+                        continue
                     }
                     if decision != .incoming {
                         skippedCount += 1
@@ -4249,28 +4367,6 @@ public actor LampLibrary {
                 );
                 CREATE INDEX IF NOT EXISTS idx_personal_devotionals_date
                     ON personal_devotionals(devotional_date, last_modified);
-                CREATE TABLE IF NOT EXISTS sync_conflicts (
-                    kind TEXT NOT NULL,
-                    id TEXT NOT NULL,
-                    detected INTEGER NOT NULL,
-                    title TEXT NOT NULL,
-                    subtitle TEXT,
-                    author TEXT,
-                    devotional_date TEXT,
-                    tags_json TEXT NOT NULL,
-                    category TEXT,
-                    series_name TEXT,
-                    series_order INTEGER,
-                    key_scriptures_json TEXT NOT NULL,
-                    summary TEXT,
-                    content TEXT NOT NULL,
-                    content_json TEXT,
-                    footnotes TEXT,
-                    media_json TEXT,
-                    created INTEGER NOT NULL,
-                    last_modified INTEGER NOT NULL,
-                    PRIMARY KEY (kind, id)
-                );
                 CREATE TABLE IF NOT EXISTS highlight_sets (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -4314,9 +4410,32 @@ public actor LampLibrary {
             if !devotionalColumns.contains("content_json") {
                 try db.execute(sql: "ALTER TABLE personal_devotionals ADD COLUMN content_json TEXT")
             }
+            try db.execute(sql: Self.syncConflictsTable)
+            // The stash only ever holds a copy the other device still has, so a
+            // layout from before it stopped being devotional-shaped is dropped
+            // rather than migrated: the next run offers the same disagreement
+            // again, and nothing a person decided is lost.
+            let conflictColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(sync_conflicts)")
+                .compactMap { $0["name"] as String? }
+            if !conflictColumns.contains("payload_json") {
+                try db.execute(sql: "DROP TABLE sync_conflicts")
+                try db.execute(sql: Self.syncConflictsTable)
+            }
         }
         return queue
     }
+
+    /// Narrow on purpose: everything that tells two versions apart lives in the
+    /// payload, so a new kind of conflicted record needs no column of its own.
+    private static let syncConflictsTable = """
+        CREATE TABLE IF NOT EXISTS sync_conflicts (
+            kind TEXT NOT NULL,
+            id TEXT NOT NULL,
+            detected INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY (kind, id)
+        );
+        """
 
     private func makeVerseNote(_ row: Row) -> LampVerseNote {
         let referencesJSON: String? = row["verse_refs_json"]
