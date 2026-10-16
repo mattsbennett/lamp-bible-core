@@ -16,6 +16,39 @@ public struct LampSyncConflict: Identifiable, Equatable, Sendable {
         case note
     }
 
+    /// A part of a record the two versions disagree about.
+    ///
+    /// Named for what someone wrote rather than for the column it lives in,
+    /// and decided with the same comparisons the merge itself used — a reason
+    /// that does not match the decision is worse than no reason at all.
+    public enum Difference: String, Sendable, CaseIterable {
+        case title, subtitle, author, date, tags, category, series
+        case keyScriptures, summary, body, footnotes, verses
+        /// Structured blocks behind the same words.
+        case formatting
+        /// Images and audio carried with the record.
+        case attachments
+
+        public var label: String {
+            switch self {
+            case .title: "title"
+            case .subtitle: "subtitle"
+            case .author: "author"
+            case .date: "date"
+            case .tags: "tags"
+            case .category: "category"
+            case .series: "series"
+            case .keyScriptures: "key scriptures"
+            case .summary: "summary"
+            case .body: "the text"
+            case .footnotes: "footnotes"
+            case .verses: "the verses it covers"
+            case .formatting: "formatting"
+            case .attachments: "attachments"
+            }
+        }
+    }
+
     /// Which version of the record to keep.
     public enum Side: String, Sendable {
         /// What this device already had.
@@ -38,6 +71,9 @@ public struct LampSyncConflict: Identifiable, Equatable, Sendable {
     /// either one.
     public let thisDevicePreview: String
     public let otherDevicePreview: String
+    /// What the two versions actually disagree about, in the order a reader
+    /// meets it. Empty only if the disagreement has since been edited away.
+    public let differences: [Difference]
     public let detected: Date
 
     public init(
@@ -50,6 +86,7 @@ public struct LampSyncConflict: Identifiable, Equatable, Sendable {
         otherDeviceModified: Date?,
         thisDevicePreview: String,
         otherDevicePreview: String,
+        differences: [Difference] = [],
         detected: Date
     ) {
         self.id = id
@@ -61,13 +98,28 @@ public struct LampSyncConflict: Identifiable, Equatable, Sendable {
         self.otherDeviceModified = otherDeviceModified
         self.thisDevicePreview = thisDevicePreview
         self.otherDevicePreview = otherDevicePreview
+        self.differences = differences
         self.detected = detected
     }
 
-    /// True when the two versions differ by more than their body text, so a
-    /// caller can say that choosing a side also drops the other's title or date.
+    /// True when the two versions read the same but disagree elsewhere, so a
+    /// caller can say that choosing a side also drops the other's title or
+    /// date rather than show two panes that look identical.
+    ///
+    /// Read from the differences rather than by comparing previews: a preview
+    /// stops at a few hundred characters, and two long writings that part
+    /// company after the cut are not the same writing.
     public var differsBeyondBody: Bool {
-        thisDevicePreview == otherDevicePreview
+        !differences.isEmpty && !differences.contains(.body)
+    }
+
+    /// The differences as a sentence fragment: "the text", "a title and a
+    /// date", "a title, a date and footnotes".
+    public var differenceSummary: String {
+        let labels = differences.map(\.label)
+        guard let last = labels.last else { return "something this device can no longer see" }
+        guard labels.count > 1 else { return last }
+        return labels.dropLast().joined(separator: ", ") + " and " + last
     }
 
     public static func identifier(kind: Kind, itemKey: String) -> String {
@@ -251,4 +303,59 @@ enum LampSyncConflictPayload {
     private static func object(from payload: String) -> [String: Any]? {
         (try? JSONSerialization.jsonObject(with: Data(payload.utf8))) as? [String: Any]
     }
+}
+
+/// Why the two versions could not be reconciled.
+///
+/// Every test here is the one the merge used to reach `.conflict`. An empty
+/// field and a missing one count as the same, because export leaves empty
+/// fields out and a record has to match its own copy coming back. An incoming
+/// record with nothing to say about its blocks or attachments is not
+/// disagreeing about them.
+extension LampSyncConflict {
+    static func differences(
+        between local: LampDevotional,
+        and incoming: LampDevotional
+    ) -> [Difference] {
+        var differences: [Difference] = []
+        if local.title != incoming.title { differences.append(.title) }
+        if !same(local.subtitle, incoming.subtitle) { differences.append(.subtitle) }
+        if !same(local.author, incoming.author) { differences.append(.author) }
+        if !same(local.date, incoming.date) { differences.append(.date) }
+        if local.tags != incoming.tags { differences.append(.tags) }
+        if !same(local.category, incoming.category) { differences.append(.category) }
+        if !same(local.seriesName, incoming.seriesName)
+            || local.seriesOrder != incoming.seriesOrder { differences.append(.series) }
+        if local.keyScriptures != incoming.keyScriptures { differences.append(.keyScriptures) }
+        if !same(local.summary, incoming.summary) { differences.append(.summary) }
+        if local.content != incoming.content { differences.append(.body) }
+        if !same(local.footnotes, incoming.footnotes) { differences.append(.footnotes) }
+        if incoming.contentJSON != nil,
+           local.contentJSON != incoming.contentJSON { differences.append(.formatting) }
+        if incoming.mediaJSON != nil,
+           local.mediaJSON != incoming.mediaJSON { differences.append(.attachments) }
+        return differences
+    }
+
+    static func differences(
+        between local: LampVerseNote,
+        and incoming: LampVerseNote
+    ) -> [Difference] {
+        var differences: [Difference] = []
+        if !same(local.title, incoming.title) { differences.append(.title) }
+        if local.content != incoming.content { differences.append(.body) }
+        if local.verseReferences != incoming.verseReferences { differences.append(.verses) }
+        if local.footnotes != incoming.footnotes { differences.append(.footnotes) }
+        return differences
+    }
+}
+
+/// Trimmed, with an empty field and a missing one treated alike — the same
+/// test the merge applies, because export leaves empty fields out.
+private func same(_ a: String?, _ b: String?) -> Bool {
+    func trimmed(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty ?? true) ? nil : trimmed
+    }
+    return trimmed(a) == trimmed(b)
 }

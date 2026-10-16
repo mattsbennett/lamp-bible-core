@@ -326,6 +326,67 @@ struct LampSyncConflictTests {
         #expect(try await devices.a.personalDevotionals().map(\.content) == ["Writing here"])
     }
 
+    // MARK: - Why it could not be reconciled
+
+    /// The reason a conflict was raised has to name the field that raised it,
+    /// or it sends someone looking in the wrong place.
+    @Test func aWritingConflictNamesWhatActuallyDiffers() async throws {
+        let devices = try Devices()
+        defer { devices.remove() }
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        try await devices.a.savePersonalDevotional(
+            writing("w", title: "Shared", body: "Same words", modified: moment),
+            preserveLastModified: true
+        )
+        try await devices.b.savePersonalDevotional(
+            LampDevotional(
+                id: "w", moduleID: "personal-devotionals", moduleName: "My Writing",
+                title: "A different title", subtitle: "Added later",
+                content: "Same words", created: moment, lastModified: moment
+            ),
+            preserveLastModified: true
+        )
+        let file = devices.root.appendingPathComponent("w.json")
+        try await devices.b.personalDevotionalDocument(id: "w").jsonData.write(to: file)
+        _ = try await devices.a.importPersonalDevotional(from: file, forSync: true)
+
+        let conflict = try #require(try await devices.a.pendingSyncConflicts().first)
+        #expect(conflict.differences == [.title, .subtitle])
+        #expect(conflict.differenceSummary == "title and subtitle")
+        // The words are the same, so say so rather than show two equal panes.
+        #expect(conflict.differsBeyondBody)
+    }
+
+    @Test func aNoteConflictNamesItsText() async throws {
+        let devices = try Devices()
+        defer { devices.remove() }
+        let file = try await collideNotes(devices, here: "Written here", there: "Written there")
+        _ = try await devices.a.importPersonalStudyData(from: file, forSync: true)
+
+        let conflict = try #require(try await devices.a.pendingSyncConflicts().first)
+        #expect(conflict.differences == [.body])
+        #expect(conflict.differenceSummary == "the text")
+        #expect(!conflict.differsBeyondBody)
+    }
+
+    /// Two long writings that agree for the first few hundred characters and
+    /// part company after them are not the same writing. The old test for this
+    /// compared the previews, which stop at the cut.
+    @Test func aDifferenceBeyondThePreviewIsStillADifference() async throws {
+        let devices = try Devices()
+        defer { devices.remove() }
+        let shared = String(repeating: "The same opening. ", count: 40)
+        let file = try await collide(
+            devices, here: shared + "ends here", there: shared + "ends there"
+        )
+        _ = try await devices.a.importPersonalDevotional(from: file, forSync: true)
+
+        let conflict = try #require(try await devices.a.pendingSyncConflicts().first)
+        #expect(conflict.thisDevicePreview == conflict.otherDevicePreview)
+        #expect(conflict.differences == [.body])
+        #expect(!conflict.differsBeyondBody)
+    }
+
     // MARK: - The stash itself
 
     /// The stash was devotional-shaped before notes could land in it. It only

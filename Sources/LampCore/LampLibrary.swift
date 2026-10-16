@@ -1562,6 +1562,7 @@ public actor LampLibrary {
             otherDeviceModified: incoming.lastModified,
             thisDevicePreview: LampSyncConflictPreview.text(local.content),
             otherDevicePreview: LampSyncConflictPreview.text(incoming.content),
+            differences: LampSyncConflict.differences(between: local, and: incoming),
             detected: detected
         )
     }
@@ -1599,6 +1600,7 @@ public actor LampLibrary {
             otherDeviceModified: incoming.lastModified,
             thisDevicePreview: LampSyncConflictPreview.text(local.content),
             otherDevicePreview: LampSyncConflictPreview.text(incoming.content),
+            differences: LampSyncConflict.differences(between: local, and: incoming),
             detected: detected
         )
     }
@@ -5677,6 +5679,11 @@ public actor LampLibrary {
             withJSONObject: contentValue, options: [.sortedKeys, .fragmentsAllowed]
         ), as: UTF8.self)
         let content = LampPortableDevotionalContent.plainText(from: contentJSON) ?? ""
+        // Export wraps a writing that has no blocks in a single paragraph so
+        // iOS can read it. Reading that wrapper back as structure would store
+        // the body twice and leave this copy differing from every other
+        // device's at an unchanged change time.
+        let isWrappedBody = LampPortableDevotionalMedia.plainMarkdown(from: contentJSON) != nil
         let tags = (meta["tags"] as? [Any])?.compactMap(stringValue) ?? []
         let series = meta["series"] as? [String: Any]
         let scripturesData = try JSONSerialization.data(
@@ -5716,7 +5723,7 @@ public actor LampLibrary {
             keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
             summary: plainText(from: root["summary"]),
             content: content,
-            contentJSON: contentJSON,
+            contentJSON: isWrappedBody ? nil : contentJSON,
             footnotes: plainText(from: root["footnotes"]),
             mediaJSON: mediaJSON,
             created: created,

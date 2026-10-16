@@ -103,6 +103,35 @@ struct LampDevotionalSyncRoundTripTests {
         #expect(onTheWire.contentJSON == nil)
     }
 
+    /// The single-writing JSON document is the other way a copy comes home.
+    /// Export wraps a body with no blocks in one paragraph so iOS can read it;
+    /// reading that wrapper back as structure is what rewrote the record in
+    /// place, with its change time left alone.
+    @Test func readingOurOwnPublishedDocumentBackChangesNothing() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = library(root.appendingPathComponent("Library"))
+        try await library.savePersonalDevotional(
+            writing(body, modified: 1_788_132_249), preserveLastModified: true
+        )
+        let before = try #require(try await library.personalDevotionals().first)
+
+        let document = root.appendingPathComponent("writing.json")
+        try await library.personalDevotionalDocument(id: "W1").jsonData.write(to: document)
+        let incoming = try #require(
+            try await library.personalDevotionalCandidates(from: document).first
+        )
+        #expect(incoming.content == body)
+        #expect(incoming.contentJSON == nil)
+
+        _ = try await library.importPersonalDevotional(from: document, forSync: true)
+        let after = try #require(try await library.personalDevotionals().first)
+        #expect(after.content == before.content)
+        #expect(after.contentJSON == nil)
+        #expect(after.lastModified == before.lastModified)
+        #expect(try await library.pendingSyncConflicts().isEmpty)
+    }
+
     /// Genuine rich content from a client that has it still arrives as blocks;
     /// the fix must not throw structure away.
     @Test func realBlocksAreStillCarriedAsBlocks() async throws {
