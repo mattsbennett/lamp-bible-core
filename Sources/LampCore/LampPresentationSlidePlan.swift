@@ -19,7 +19,11 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     public var columns: [LampPresentationBlock]
     /// The picture, which most layouts place beside their prose.
     public var image: LampPresentationBlock?
+    /// A picture filling the slide behind everything else. Every layout can
+    /// carry one, and it is never the picture beside the prose.
+    public var background: LampPresentationBlock?
     /// A caption, which belongs to the picture and is only drawn with one.
+    /// With no picture beside the prose, it credits the one behind the slide.
     public var caption: LampPresentationBlock?
     /// Blocks this layout will not draw. A deck that lists any of these has
     /// said something the slide cannot show.
@@ -80,6 +84,7 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     /// Everything that reaches the slide.
     public var drawn: [LampPresentationBlock] {
         var result: [LampPresentationBlock] = []
+        if let background { result.append(background) }
         if let title { result.append(title) }
         if let subtitle { result.append(subtitle) }
         result.append(contentsOf: prose)
@@ -193,6 +198,16 @@ public extension LampPresentationSlide {
             ignored: []
         )
 
+        // A picture behind the slide is taken before the layout reads the
+        // rest, so no layout mistakes it for the picture beside its prose. A
+        // second one has nowhere to go and is reported.
+        var spareBackgrounds: [LampPresentationBlock] = []
+        if let first = remaining.firstIndex(where: \.isBackground) {
+            plan.background = remaining.remove(at: first)
+            spareBackgrounds = remaining.filter(\.isBackground)
+            remaining.removeAll(where: \.isBackground)
+        }
+
         switch layout {
         case .title, .closing:
             // Deliberately sparing: a heading and one line beneath it.
@@ -239,9 +254,22 @@ public extension LampPresentationSlide {
             plan.citations = takeAll(.citation)
         }
 
+        // A picture behind the slide is credited in small type at its foot,
+        // whatever the layout, unless a picture beside the prose has already
+        // claimed the caption.
+        if plan.background != nil, plan.image == nil, plan.caption == nil {
+            plan.caption = take(.caption)
+        }
+
         // Everything placed above was removed as it was taken, so what is left
         // is what the layout will not draw.
-        plan.ignored = remaining
+        let order = Dictionary(
+            blocks.enumerated().map { ($1.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        plan.ignored = (remaining + spareBackgrounds).sorted {
+            order[$0.id, default: 0] < order[$1.id, default: 0]
+        }
         plan.quoteGroups = Self.quoteGroups(
             in: blocks,
             drawnProse: plan.prose,

@@ -134,4 +134,62 @@ struct LampSyncCompatibilityPublisherTests {
         #expect(await directories.all().isEmpty)
         #expect(await store.attempts().isEmpty)
     }
+
+    // MARK: - Carrying on past a refusal
+
+    /// One file the server will not take must not stop the others. Before
+    /// this, a single refused module ended the pass, so the library, the
+    /// settings and every other module stopped syncing with it — and the
+    /// refused file was no more published for the company.
+    @Test func aRefusedFileIsReportedAndTheRestStillPublish() async throws {
+        let store = CompatibilityBatchStore()
+        await store.failNextWrite(to: "Notes/notes.lamp")
+
+        let attempt = try await LampSyncCompatibilityPublisher.publishReportingRefusals(
+            [
+                .init(remotePath: "Highlights/a.lamp", data: Data("a".utf8), condition: .ifAbsent),
+                .init(remotePath: "Notes/notes.lamp", data: Data("n".utf8), condition: .ifAbsent),
+                .init(remotePath: "Devotionals/d.lamp", data: Data("d".utf8), condition: .ifAbsent),
+            ],
+            in: store
+        )
+
+        #expect(attempt.refused == ["Notes/notes.lamp"])
+        #expect(attempt.revisions["Highlights/a.lamp"] != nil)
+        // The one after the refusal is the point: it was attempted, not
+        // skipped, and it landed.
+        #expect(attempt.revisions["Devotionals/d.lamp"] != nil)
+        let published = try await store.read(path: "Devotionals/d.lamp")
+        let missing = try await store.read(path: "Notes/notes.lamp")
+        #expect(published != nil)
+        #expect(missing == nil)
+    }
+
+    /// A dropped connection is not a disagreement about one file: it will
+    /// meet every remaining write too, so it stops the batch as before
+    /// rather than being collected once per file.
+    @Test func aFailureThatIsNotARefusalStillStops() async {
+        let store = UnreachableStore()
+
+        await #expect(throws: URLError.self) {
+            try await LampSyncCompatibilityPublisher.publishReportingRefusals(
+                [.init(remotePath: "Notes/notes.lamp", data: Data("n".utf8), condition: .ifAbsent)],
+                in: store
+            )
+        }
+    }
+}
+
+/// A store that cannot be reached at all.
+private actor UnreachableStore: LampSyncRemoteStore {
+    func list(directory: String) async throws -> [LampSyncRemoteEntry]? { [] }
+    func read(path: String) async throws -> LampSyncRemoteFile? { nil }
+    func revision(path: String) async throws -> String? { nil }
+    func write(
+        _ data: Data,
+        to path: String,
+        condition: LampSyncWriteCondition
+    ) async throws -> String? {
+        throw URLError(.networkConnectionLost)
+    }
 }

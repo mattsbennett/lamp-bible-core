@@ -92,6 +92,13 @@ public enum LampPresentationManuscriptCheck: String, Codable, CaseIterable, Send
     case skip
 }
 
+/// Where an image is drawn. Absent means beside the prose, as images always
+/// have been.
+public enum LampPresentationImagePlacement: String, Codable, CaseIterable, Sendable {
+    /// Fills the whole slide behind everything else on it.
+    case background
+}
+
 public struct LampPresentationSource: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, CaseIterable, Sendable {
         case devotional
@@ -336,6 +343,11 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// and ellipses Lamp would otherwise add. For poetry, an excerpt opening
     /// with a lowercase name, or a deck that wants bare scripture.
     public var typography: LampPresentationTypography?
+    /// Puts an image behind the slide instead of beside its prose.
+    ///
+    /// Lamp chooses the colour of the words over it, and darkens or lightens
+    /// the picture behind them only as far as they need to be read.
+    public var placement: LampPresentationImagePlacement?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -346,7 +358,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         listStyle: LampPresentationListStyle? = nil,
         scriptureReference: LampPresentationScriptureReference? = nil,
         manuscriptCheck: LampPresentationManuscriptCheck? = nil,
-        typography: LampPresentationTypography? = nil
+        typography: LampPresentationTypography? = nil,
+        placement: LampPresentationImagePlacement? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -357,7 +370,11 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.scriptureReference = scriptureReference
         self.manuscriptCheck = manuscriptCheck
         self.typography = typography
+        self.placement = placement
     }
+
+    /// An image that fills the slide behind everything else.
+    public var isBackground: Bool { kind == .image && placement == .background }
 }
 
 public struct LampPresentationDeckIssue: Codable, Equatable, Identifiable, Sendable {
@@ -584,6 +601,9 @@ public enum LampPresentationDeckValidator {
                 if block.listStyle != nil && block.kind != .body {
                     issue(.error, "\(blockPath).listStyle", "List formatting is supported on body content.")
                 }
+                if block.placement != nil && block.kind != .image {
+                    issue(.error, "\(blockPath).placement", "Placement is supported on image content.")
+                }
                 if let reference = block.scriptureReference {
                     if block.kind != .scripture {
                         issue(
@@ -691,6 +711,9 @@ public enum LampPresentationDeckValidator {
         for block: LampPresentationBlock,
         layout: LampPresentationSlideLayout
     ) -> String {
+        if block.isBackground {
+            return " behind it more than once"
+        }
         switch (layout, block.kind) {
         case (.scripture, .title), (.quotation, .title):
             return " — these layouts are set without a heading"
@@ -746,19 +769,7 @@ public enum LampPresentationDeckValidator {
     }
 
     private static func relativeLuminance(_ value: String) -> Double? {
-        var hex = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if hex.hasPrefix("#") { hex.removeFirst() }
-        guard hex.count == 6, let rgb = UInt64(hex, radix: 16) else { return nil }
-        let channels = [
-            Double((rgb >> 16) & 0xff) / 255,
-            Double((rgb >> 8) & 0xff) / 255,
-            Double(rgb & 0xff) / 255,
-        ].map { channel -> Double in
-            channel <= 0.039_28
-                ? channel / 12.92
-                : pow((channel + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+        LampPresentationColor(hex: value)?.luminance
     }
 
     private static func formattedRatio(_ value: Double) -> String {

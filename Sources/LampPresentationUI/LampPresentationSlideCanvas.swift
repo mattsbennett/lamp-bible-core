@@ -45,16 +45,31 @@ public struct LampPresentationSlideCanvas: View {
     /// nothing and gets the placeholder.
     public var assetURL: (LampPresentationBlock) -> URL?
 
+    /// Told how the words were set over the picture behind the slide, for a
+    /// tool that reports on what it drew. Called while the slide is drawn.
+    public var reportsBackdrop: ((LampPresentationBackdrop.Treatment) -> Void)?
+
+    /// The colours chosen for the words over a picture, in place of the
+    /// theme's own.
+    private var ink: Ink?
+
+    private struct Ink {
+        var text: Color
+        var accent: Color
+    }
+
     public init(
         slide: LampPresentationSlide,
         style: LampPresentationSlideStyle,
         compact: Bool = false,
-        assetURL: @escaping (LampPresentationBlock) -> URL? = { _ in nil }
+        assetURL: @escaping (LampPresentationBlock) -> URL? = { _ in nil },
+        reportsBackdrop: ((LampPresentationBackdrop.Treatment) -> Void)? = nil
     ) {
         self.slide = slide
         self.style = style
         self.compact = compact
         self.assetURL = assetURL
+        self.reportsBackdrop = reportsBackdrop
     }
 
     /// Resolves images against the library the deck was read from.
@@ -80,8 +95,12 @@ public struct LampPresentationSlideCanvas: View {
         self.init(slide: slide, style: .init(deck: deck), compact: compact)
     }
 
-    private var foreground: Color { Color(lampDeckHex: style.theme.foregroundColor) ?? .white }
-    private var accent: Color { Color(lampDeckHex: style.theme.accentColor) ?? .orange }
+    private var foreground: Color {
+        ink?.text ?? Color(lampDeckHex: style.theme.foregroundColor) ?? .white
+    }
+    private var accent: Color {
+        ink?.accent ?? Color(lampDeckHex: style.theme.accentColor) ?? .orange
+    }
     private var background: Color { Color(lampDeckHex: style.theme.backgroundColor) ?? .black }
 
     public var body: some View {
@@ -90,17 +109,164 @@ public struct LampPresentationSlideCanvas: View {
                 geometry.size.width / (style.aspectRatio == .widescreen ? 1_600 : 1_200),
                 geometry.size.height / 900
             )
+            let pictureURL = plan.background.flatMap(assetURL)
             ZStack {
                 background
-                slideContent(unit: unit)
-                    .padding(.horizontal, 96 * unit)
-                    .padding(.vertical, 72 * unit)
+                if let picture = pictureURL.flatMap(LampPresentationAssetImageCache.swiftUIImage(at:)) {
+                    picture
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                }
+                words(
+                    unit: unit,
+                    over: pictureURL.flatMap { url in
+                        LampPresentationAssetImageCache
+                            .backdrop(at: url, aspectRatio: style.aspectRatio)
+                            .map { _ in url }
+                    }
+                )
             }
             .clipped()
         }
         .background(background)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityDescription)
+    }
+
+    /// Everything on the slide but the picture behind it.
+    private func page(unit: CGFloat) -> some View {
+        slideContent(unit: unit)
+            .padding(.horizontal, 96 * unit)
+            .padding(.vertical, 72 * unit)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottomTrailing) {
+                if let caption = plan.caption, plan.image == nil, plan.background != nil {
+                    // A credit, not a caption to read aloud: small, and out of
+                    // the way of everything the slide is for.
+                    slideBlockText(caption, size: 18 * unit, weight: .regular, alignment: .trailing)
+                        .frame(maxWidth: 1_000 * unit, alignment: .trailing)
+                        .padding(.trailing, 40 * unit)
+                        .padding(.bottom, 26 * unit)
+                }
+            }
+    }
+
+    /// The slide's words, set to be read over the picture at `backdrop` when
+    /// there is one that can be read.
+    ///
+    /// Where the words fall is only known once they are laid out, and their
+    /// colour depends on what is under them. So the page is laid out once,
+    /// hidden, to find where each block landed; the picture is read under
+    /// those places; and the page is drawn again on top in the colours that
+    /// reading chose. Colour never changes layout, so the two agree.
+    @ViewBuilder
+    private func words(unit: CGFloat, over backdrop: URL?) -> some View {
+        if let backdrop {
+            page(unit: unit)
+                .hidden()
+                .overlayPreferenceValue(LampSlideTextBounds.self) { anchors in
+                    GeometryReader { proxy in
+                        let frames = anchors.map { proxy[$0] }
+                        if let treatment = LampPresentationAssetImageCache.treatment(
+                            for: frames.map { Self.fraction($0, of: proxy.size) },
+                            over: backdrop,
+                            aspectRatio: style.aspectRatio,
+                            theme: style.theme
+                        ) {
+                            let _ = reportsBackdrop?(treatment)
+                            ZStack(alignment: .topLeading) {
+                                scrim(treatment, behind: frames, in: proxy.size, unit: unit)
+                                inked(treatment).page(unit: unit)
+                            }
+                        } else {
+                            page(unit: unit)
+                        }
+                    }
+                }
+        } else {
+            page(unit: unit)
+        }
+    }
+
+    /// This canvas drawing its words in the colours `treatment` chose.
+    private func inked(_ treatment: LampPresentationBackdrop.Treatment) -> Self {
+        var copy = self
+        copy.ink = Ink(
+            text: Color(lampDeckHex: treatment.text) ?? foreground,
+            accent: Color(lampDeckHex: treatment.accent) ?? accent
+        )
+        return copy
+    }
+
+    /// The picture darkened or lightened behind the words, in bands the width
+    /// of the slide that fade out above and below them. The rest of the
+    /// picture is left as it is.
+    private func scrim(
+        _ treatment: LampPresentationBackdrop.Treatment,
+        behind frames: [CGRect],
+        in size: CGSize,
+        unit: CGFloat
+    ) -> some View {
+        let color = Color(lampDeckHex: treatment.scrim) ?? background
+        let feather = 90 * unit
+        let bands = treatment.scrimOpacity > 0
+            ? Self.bands(around: frames, pad: 36 * unit, feather: feather)
+            : []
+        return ZStack(alignment: .topLeading) {
+            ForEach(Array(bands.enumerated()), id: \.offset) { _, band in
+                let height = band.upperBound - band.lowerBound + 2 * feather
+                let edge = feather / height
+                LinearGradient(
+                    stops: [
+                        .init(color: color.opacity(0), location: 0),
+                        .init(color: color.opacity(treatment.scrimOpacity), location: edge),
+                        .init(color: color.opacity(treatment.scrimOpacity), location: 1 - edge),
+                        .init(color: color.opacity(0), location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(width: size.width, height: height)
+                .offset(y: band.lowerBound - feather)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    /// The spans down the slide that need the scrim at full strength: every
+    /// block's words with `pad` around them, run together where the fades
+    /// between them would otherwise overlap.
+    static func bands(
+        around frames: [CGRect],
+        pad: CGFloat,
+        feather: CGFloat
+    ) -> [ClosedRange<CGFloat>] {
+        let spans = frames
+            .filter { !$0.isNull && !$0.isEmpty }
+            .map { ($0.minY - pad)...($0.maxY + pad) }
+            .sorted { $0.lowerBound < $1.lowerBound }
+        var merged: [ClosedRange<CGFloat>] = []
+        for span in spans {
+            if let last = merged.last, span.lowerBound - last.upperBound < 2 * feather {
+                merged[merged.count - 1] = last.lowerBound...max(last.upperBound, span.upperBound)
+            } else {
+                merged.append(span)
+            }
+        }
+        return merged
+    }
+
+    /// `rect` as a fraction of `size`, from its top left.
+    private static func fraction(_ rect: CGRect, of size: CGSize) -> CGRect {
+        guard size.width > 0, size.height > 0 else { return .null }
+        return CGRect(
+            x: rect.minX / size.width,
+            y: rect.minY / size.height,
+            width: rect.width / size.width,
+            height: rect.height / size.height
+        )
     }
 
     /// Spoken as the slide reads: its title, then the content beneath it, so a
@@ -152,12 +318,19 @@ public struct LampPresentationSlideCanvas: View {
             twoColumnSlide(unit: unit)
 
         case .image:
+            // A picture behind an image slide is the slide's picture: the
+            // heading sits over it at the top rather than above a placeholder.
+            let framesPicture = plan.image != nil || plan.background == nil
             VStack(spacing: 22 * unit) {
                 if let title = plan.title {
                     slideBlockText(title, size: 48 * unit, weight: .bold)
                 }
-                imageArea(unit: unit)
-                if let caption = plan.caption {
+                if framesPicture {
+                    imageArea(unit: unit)
+                } else {
+                    Spacer(minLength: 0)
+                }
+                if let caption = plan.caption, framesPicture {
                     slideBlockText(caption, size: 22 * unit, weight: .regular, alignment: .center)
                 }
                 ForEach(plan.citations) { citation in
@@ -483,7 +656,7 @@ public struct LampPresentationSlideCanvas: View {
         }
     }
 
-    @ViewBuilder
+    /// One block's words, which also say where on the slide they landed.
     private func slideBlockText(
         _ block: LampPresentationBlock,
         size: CGFloat,
@@ -491,6 +664,26 @@ public struct LampPresentationSlideCanvas: View {
         alignment: TextAlignment = .leading,
         color: Color? = nil,
         stepsDown: Bool = true
+    ) -> some View {
+        blockText(
+            block,
+            size: size,
+            weight: weight,
+            alignment: alignment,
+            color: color,
+            stepsDown: stepsDown
+        )
+        .anchorPreference(key: LampSlideTextBounds.self, value: .bounds) { [$0] }
+    }
+
+    @ViewBuilder
+    private func blockText(
+        _ block: LampPresentationBlock,
+        size: CGFloat,
+        weight: Font.Weight,
+        alignment: TextAlignment,
+        color: Color?,
+        stepsDown: Bool
     ) -> some View {
         if let listStyle = block.listStyle,
            block.kind == .body,
@@ -624,6 +817,16 @@ public struct LampPresentationSlideCanvas: View {
         case .unordered: "•"
         case .ordered: "\(index + 1)."
         }
+    }
+}
+
+/// Where each block's words landed on the slide, so a picture behind them is
+/// read where it matters and not everywhere.
+struct LampSlideTextBounds: PreferenceKey {
+    static var defaultValue: [Anchor<CGRect>] { [] }
+
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
+        value.append(contentsOf: nextValue())
     }
 }
 
