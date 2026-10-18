@@ -63,11 +63,21 @@ public enum LampSyncArchiveRemote {
         _ = try archive.compatibilityManifest()
         _ = try LampSyncSettingsArchive.legacyManifest(in: archive)
         let condition = try snapshot?.writeCondition ?? .ifAbsent
-        return try await LampSyncConditionalWrite.writeAndConfirm(
+        let revision = try await LampSyncConditionalWrite.writeAndConfirm(
             archive.compressedData(),
             to: LampSyncLayout.archivePath,
             in: store,
             condition: condition
         )
+        // Every writer goes through here, so maintaining the index here is
+        // what keeps it worth reading. It describes the revision just
+        // written, and a reader checks that before believing it, so losing
+        // this write costs the next reader a fetch it would have made anyway
+        // — not correctness. That is why it cannot fail the publish: the
+        // archive is already safely written at this point.
+        try? await LampSyncArchiveIndex.publish(
+            describing: archive, at: revision, in: store
+        )
+        return revision
     }
 }

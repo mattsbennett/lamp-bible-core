@@ -84,14 +84,15 @@ struct LampSyncSettingsArchiveTests {
         _ = try await LampSyncSettingsArchive.publish(
             Data("first".utf8), replacing: empty, observedLegacy: nil, in: store
         )
-        #expect(await store.lastCondition() == .ifAbsent)
+        #expect(await store.condition(forPath: LampSyncLayout.archivePath) == .ifAbsent)
         let first = try await LampSyncSettingsArchive.read(from: store)
         #expect(first.data == Data("first".utf8))
 
         _ = try await LampSyncSettingsArchive.publish(
             Data("second".utf8), replacing: first, observedLegacy: nil, in: store
         )
-        #expect(await store.lastCondition() == .ifRevision("\"revision-1\""))
+        #expect(await store.condition(forPath: LampSyncLayout.archivePath)
+            == .ifRevision("\"revision-1\""))
         let second = try await LampSyncSettingsArchive.read(from: store)
         #expect(second.data == Data("second".utf8))
 
@@ -256,18 +257,35 @@ private actor SettingsPairStore: LampSyncRemoteStore {
 private actor SettingsArchiveStore: LampSyncRemoteStore {
     private var remote: LampSyncRemoteFile?
     private var condition: LampSyncWriteCondition?
+    private var conditions: [String: LampSyncWriteCondition] = [:]
+    private var sidecars: [String: LampSyncRemoteFile] = [:]
     private var version = 0
 
     func lastCondition() -> LampSyncWriteCondition? { condition }
+    /// The archive is published with an index beside it, so "the last write"
+    /// is no longer the archive's. Ask about the write you mean.
+    func condition(forPath path: String) -> LampSyncWriteCondition? {
+        conditions[path]
+    }
     func list(directory: String) async throws -> [LampSyncRemoteEntry]? { [] }
-    func read(path: String) async throws -> LampSyncRemoteFile? { remote }
-    func revision(path: String) async throws -> String? { remote?.revision }
+    func read(path: String) async throws -> LampSyncRemoteFile? {
+        path == LampSyncLayout.archivePath ? remote : sidecars[path]
+    }
+    func revision(path: String) async throws -> String? {
+        path == LampSyncLayout.archivePath ? remote?.revision : sidecars[path]?.revision
+    }
     func write(
         _ data: Data,
         to path: String,
         condition: LampSyncWriteCondition
     ) async throws -> String? {
         self.condition = condition
+        conditions[path] = condition
+        // The index beside the archive is a separate object.
+        guard path == LampSyncLayout.archivePath else {
+            sidecars[path] = LampSyncRemoteFile(data: data, revision: "\"\(path)\"")
+            return nil
+        }
         switch condition {
         case .ifAbsent where remote != nil:
             throw LampSyncConditionalWrite.WriteError.conflict

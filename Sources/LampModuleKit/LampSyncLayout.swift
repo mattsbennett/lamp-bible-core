@@ -14,6 +14,9 @@ public enum LampSyncContentKind: String, CaseIterable, Codable, Sendable {
 
 public enum LampSyncLayout {
     public static let archivePath = "lamp-bible.lampsync"
+    /// Describes `archivePath`'s entries so a client can tell what changed
+    /// without fetching it. Advisory: absent or stale means read the archive.
+    public static let archiveIndexPath = "lamp-bible.lampsync.index.json"
     public static let userSettingsPath = "UserData/user-settings.db"
 }
 

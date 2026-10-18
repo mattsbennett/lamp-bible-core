@@ -54,7 +54,8 @@ struct LampSyncArchiveRemoteTests {
             updated, replacing: snapshot, in: store
         )
         #expect(revision == "\"next\"")
-        #expect(await store.lastCondition() == .ifRevision("\"first\""))
+        #expect(await store.condition(forPath: LampSyncLayout.archivePath)
+            == .ifRevision("\"first\""))
         let saved = try #require(await LampSyncArchiveRemote.read(from: store))
         #expect(saved.archive.entries.first { $0.path == "Modules/book.lamp" }?.data == Data("module".utf8))
         #expect(saved.archive.entries.first {
@@ -71,7 +72,7 @@ struct LampSyncArchiveRemoteTests {
         let store = ArchiveStore(remote: nil)
         #expect(try await LampSyncArchiveRemote.read(from: store) == nil)
         _ = try await LampSyncArchiveRemote.publish(archive, replacing: nil, in: store)
-        #expect(await store.lastCondition() == .ifAbsent)
+        #expect(await store.condition(forPath: LampSyncLayout.archivePath) == .ifAbsent)
 
         let remote = LampSyncRemoteFile(data: try archive.compressedData(), revision: nil)
         let unversioned = ArchiveStore(remote: remote)
@@ -105,20 +106,29 @@ struct LampSyncArchiveRemoteTests {
 private actor ArchiveStore: LampSyncRemoteStore {
     private var remote: LampSyncRemoteFile?
     private var condition: LampSyncWriteCondition?
+    private var conditions: [String: LampSyncWriteCondition] = [:]
+    private var sidecars: [String: LampSyncRemoteFile] = [:]
     private var reads = 0
     private var revisions = 0
 
     init(remote: LampSyncRemoteFile?) { self.remote = remote }
 
     func lastCondition() -> LampSyncWriteCondition? { condition }
+    /// The archive is published with an index beside it, so "the last write"
+    /// is no longer the archive's. Ask about the write you mean.
+    func condition(forPath path: String) -> LampSyncWriteCondition? {
+        conditions[path]
+    }
     func readCount() -> Int { reads }
     func revisionCount() -> Int { revisions }
     func list(directory: String) async throws -> [LampSyncRemoteEntry]? { [] }
     func read(path: String) async throws -> LampSyncRemoteFile? {
+        guard path == LampSyncLayout.archivePath else { return sidecars[path] }
         reads += 1
         return remote
     }
     func revision(path: String) async throws -> String? {
+        guard path == LampSyncLayout.archivePath else { return sidecars[path]?.revision }
         revisions += 1
         return remote?.revision
     }
@@ -129,6 +139,13 @@ private actor ArchiveStore: LampSyncRemoteStore {
         condition: LampSyncWriteCondition
     ) async throws -> String? {
         self.condition = condition
+        conditions[path] = condition
+        // The index published beside the archive is a separate object and
+        // must not stand in for it.
+        guard path == LampSyncLayout.archivePath else {
+            sidecars[path] = LampSyncRemoteFile(data: data, revision: "\"\(path)\"")
+            return nil
+        }
         switch condition {
         case .ifAbsent where remote != nil:
             throw LampSyncConditionalWrite.WriteError.conflict
