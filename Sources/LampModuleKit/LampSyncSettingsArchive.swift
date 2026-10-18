@@ -97,10 +97,27 @@ public enum LampSyncSettingsArchive {
         )
     }
 
+    /// Resolve the settings sources, optionally against an archive the caller
+    /// has already read.
+    ///
+    /// The archive is one object holding every module body, so fetching it
+    /// costs the whole library inflated in memory. A pass that has already
+    /// paid that for its module import has the settings entry in hand too,
+    /// and passing it here is the difference between reading the library once
+    /// a pass and twice. Reuse is conditional on the revision still matching,
+    /// so what comes back is what a fresh read would have returned.
     public static func readWithLegacy(
-        from store: any LampSyncRemoteStore
+        from store: any LampSyncRemoteStore,
+        reusing candidate: LampSyncArchiveRemote.Snapshot? = nil
     ) async throws -> ResolvedRemoteSnapshot? {
-        let archived = try await read(from: store)
+        let archived: RemoteSnapshot
+        if let candidate, let revision = candidate.revision,
+           LampWebDAVStorage.isStrongETag(revision),
+           try await store.revision(path: LampSyncLayout.archivePath) == revision {
+            archived = try snapshot(of: candidate)
+        } else {
+            archived = try await read(from: store)
+        }
         let legacy = try await store.read(path: path)
         if let data = archived.data {
             let state = try classifyLegacy(
@@ -131,6 +148,18 @@ public enum LampSyncSettingsArchive {
 
     /// Both remote files can change independently. Skip their GETs only when
     /// both HEADs still match strong revisions saved with the applied state.
+    /// The settings view of an archive already in hand, built exactly as a
+    /// read of that archive would have built it.
+    private static func snapshot(
+        of archive: LampSyncArchiveRemote.Snapshot
+    ) throws -> RemoteSnapshot {
+        RemoteSnapshot(
+            archive: archive,
+            data: try data(in: archive.archive),
+            legacyManifest: try legacyManifest(in: archive.archive)
+        )
+    }
+
     public static func canSkipUnchangedPoll(
         expectedArchiveToken: String?,
         expectedLegacyRevision: String?,
