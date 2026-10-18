@@ -75,6 +75,19 @@ public enum LampSyncConditionalWrite {
     }
 
     /// The iOS settings cache stores an ETag without HTTP quote delimiters.
+    /// Whether two revisions name the same body.
+    ///
+    /// One may have come from a PROPFIND and the other from a GET, and a
+    /// server is free to spell the same ETag differently between them —
+    /// quoted in one, bare or weak in the other. Compared as written, such a
+    /// pair reads as the body having changed when nothing has, which is why
+    /// everything here compares tokens rather than text. Two absent
+    /// revisions name nothing and so name the same nothing; one absent and
+    /// one present do not.
+    public static func namesSameRevision(_ one: String?, _ other: String?) -> Bool {
+        one.map(token(for:)) == other.map(token(for:))
+    }
+
     public static func token(for revision: String) -> String {
         var value = revision
         if value.hasPrefix("W/") { value.removeFirst(2) }

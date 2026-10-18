@@ -84,6 +84,24 @@ struct LampSyncConditionalWriteTests {
             )
         }
     }
+
+    /// The device failure this came from: a pass compared the revision a
+    /// PROPFIND gave it against the one a GET gave it, as written, and
+    /// concluded on every launch that the archive had moved underneath it.
+    @Test func aRevisionNamesTheSameBodyHoweverItIsSpelled() {
+        #expect(LampSyncConditionalWrite.namesSameRevision("\"abc\"", "abc"))
+        #expect(LampSyncConditionalWrite.namesSameRevision("abc", "\"abc\""))
+        #expect(LampSyncConditionalWrite.namesSameRevision("W/\"abc\"", "\"abc\""))
+        #expect(LampSyncConditionalWrite.namesSameRevision("\"abc\"", "\"abc\""))
+        #expect(LampSyncConditionalWrite.namesSameRevision(nil, nil))
+    }
+
+    @Test func differentBodiesStillDiffer() {
+        #expect(!LampSyncConditionalWrite.namesSameRevision("\"abc\"", "\"abd\""))
+        #expect(!LampSyncConditionalWrite.namesSameRevision("\"abc\"", nil))
+        #expect(!LampSyncConditionalWrite.namesSameRevision(nil, "abc"))
+    }
+
 }
 
 private actor ConditionalStore: LampSyncRemoteStore {
