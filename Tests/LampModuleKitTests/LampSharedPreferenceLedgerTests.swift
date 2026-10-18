@@ -140,4 +140,67 @@ struct LampSharedPreferenceLedgerTests {
             storedIn: registeredSuite
         ).isEmpty)
     }
+    // MARK: - A client that has recorded nothing yet
+
+    /// The deadlock this replaced. With no baseline, every local value looks
+    /// new, so any difference from the server read as two people editing at
+    /// once. The merge refused, nothing was recorded, and the next pass had
+    /// no baseline either — silently, for good, with the client's
+    /// preferences never syncing.
+    @Test func aClientWithNoBaselineAdoptsTheServersValue() throws {
+        let remote = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(19), revision: UUID().uuidString),
+        ])
+
+        let merged = try LampSharedPreferenceLedger.merge(
+            local: ["reader.fontSize": .number(18)], base: nil, remote: remote
+        )
+
+        #expect(merged.fields["reader.fontSize"]?.value == .number(19))
+    }
+
+    /// A value only this client holds is contributed, not dropped: the server
+    /// has nothing to say about it, so there is nothing to defer to.
+    @Test func aClientWithNoBaselineContributesWhatTheServerLacks() throws {
+        let remote = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(19), revision: UUID().uuidString),
+        ])
+
+        let merged = try LampSharedPreferenceLedger.merge(
+            local: ["reader.fontSize": .number(18), "reader.showStrongsHints": .boolean(true)],
+            base: nil,
+            remote: remote
+        )
+
+        #expect(merged.fields["reader.fontSize"]?.value == .number(19))
+        #expect(merged.fields["reader.showStrongsHints"]?.value == .boolean(true))
+    }
+
+    @Test func theFirstClientOfAllKeepsItsOwnValues() throws {
+        let merged = try LampSharedPreferenceLedger.merge(
+            local: ["reader.fontSize": .number(18)], base: nil, remote: nil
+        )
+
+        #expect(merged.fields["reader.fontSize"]?.value == .number(18))
+    }
+
+    /// With a baseline, a genuine simultaneous edit is still a conflict:
+    /// both sides moved the same field away from what they agreed, and
+    /// nothing here can say which was meant.
+    @Test func aRealSimultaneousEditIsStillAConflict() throws {
+        let agreed = UUID().uuidString
+        let base = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(18), revision: agreed),
+        ])
+        let remote = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(20), revision: UUID().uuidString),
+        ])
+
+        #expect(throws: LampSharedPreferenceLedger.LedgerError.self) {
+            try LampSharedPreferenceLedger.merge(
+                local: ["reader.fontSize": .number(19)], base: base, remote: remote
+            )
+        }
+    }
+
 }

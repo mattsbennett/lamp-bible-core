@@ -168,6 +168,26 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
             let previous = base?.fields[key]
             let incoming = remote?.fields[key] ?? previous
             let localValue = local[key]
+
+            guard base != nil else {
+                // Nothing has been agreed yet, so "changed" has no meaning
+                // here: against an absent baseline every local value looks
+                // new, and so every difference looked like two people
+                // editing at once. Refusing it left a client unable to
+                // record the baseline that would have given the word
+                // meaning — it failed the same way on every pass, silently,
+                // and its preferences never synced at all.
+                //
+                // These two have simply never met. The server's value stands
+                // where it has one, since a local value may be nothing more
+                // than this client's default; a value only this client holds
+                // is contributed rather than dropped.
+                if incoming == nil, let localValue {
+                    fields[key] = Field(value: localValue)
+                }
+                continue
+            }
+
             let localChanged = localValue != previous?.value
             let remoteChanged = incoming?.revision != previous?.revision
 
