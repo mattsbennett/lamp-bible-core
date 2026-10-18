@@ -143,14 +143,16 @@ public enum LampPortableModuleInspector {
         requireImportSchema: Bool = false,
         fileManager: FileManager = .default
     ) throws -> LampPortableModuleDescriptor {
-        guard let databaseData = try? (compressedData as NSData).decompressed(using: .zlib) as Data else {
+        // Unpacked straight to disk: a large module unpacked in memory, on top
+        // of the sync archive holding it, is more than iOS allows an app.
+        let databaseURL = temporaryDatabaseURL(fileManager)
+        defer { try? fileManager.removeItem(at: databaseURL) }
+        do {
+            try LampZlib.decompress(compressedData, to: databaseURL)
+        } catch {
             throw InspectionError.invalidArchive
         }
-        return try inspect(
-            databaseData: databaseData,
-            requireImportSchema: requireImportSchema,
-            fileManager: fileManager
-        )
+        return try inspect(databaseAt: databaseURL, requireImportSchema: requireImportSchema)
     }
 
     /// Inspect a legacy uncompressed .db body using the same identity rules.
@@ -159,12 +161,22 @@ public enum LampPortableModuleInspector {
         requireImportSchema: Bool = false,
         fileManager: FileManager = .default
     ) throws -> LampPortableModuleDescriptor {
-        let databaseURL = fileManager.temporaryDirectory
-            .appendingPathComponent("lamp-module-inspect-\(UUID().uuidString)")
-            .appendingPathExtension("sqlite")
+        let databaseURL = temporaryDatabaseURL(fileManager)
         try databaseData.write(to: databaseURL, options: .atomic)
         defer { try? fileManager.removeItem(at: databaseURL) }
+        return try inspect(databaseAt: databaseURL, requireImportSchema: requireImportSchema)
+    }
 
+    private static func temporaryDatabaseURL(_ fileManager: FileManager) -> URL {
+        fileManager.temporaryDirectory
+            .appendingPathComponent("lamp-module-inspect-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+    }
+
+    private static func inspect(
+        databaseAt databaseURL: URL,
+        requireImportSchema: Bool
+    ) throws -> LampPortableModuleDescriptor {
         var configuration = Configuration()
         configuration.readonly = true
         let queue = try DatabaseQueue(path: databaseURL.path, configuration: configuration)
