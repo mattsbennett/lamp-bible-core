@@ -82,7 +82,8 @@ struct LampSyncSettingsPlannerTests {
             localSettings: "local", localRevision: 3,
             localReadings: remote,
             remoteSettings: "remote", remoteRevision: 2,
-            remoteReadings: remote
+            remoteReadings: remote,
+            revision: \.time
         )
         #expect(localWins.settingsDecision == .local)
         #expect(localWins.readings == remote)
@@ -92,7 +93,8 @@ struct LampSyncSettingsPlannerTests {
             localSettings: "local", localRevision: 1,
             localReadings: remote,
             remoteSettings: "remote", remoteRevision: 2,
-            remoteReadings: remote
+            remoteReadings: remote,
+            revision: \.time
         )
         #expect(remoteWins.settingsDecision == .remote)
         #expect(!remoteWins.needsPublish)
@@ -102,17 +104,81 @@ struct LampSyncSettingsPlannerTests {
                 localSettings: "local", localRevision: 2,
                 localReadings: remote,
                 remoteSettings: "remote", remoteRevision: 2,
-                remoteReadings: remote
+                remoteReadings: remote,
+                revision: \.time
             )
         }
 
-        #expect(throws: LampSyncSettingsPlanner.MergeError.concurrentReading) {
-            try LampSyncSettingsPlanner.planWithoutBase(
-                localSettings: "same", localRevision: 2,
-                localReadings: ["local": Reading(time: 1, metadata: "local")],
-                remoteSettings: "same", remoteRevision: 2,
-                remoteReadings: remote
-            )
-        }
+    }
+
+    /// Refusing a baseless merge because the two sides differ was a dead end:
+    /// nothing about the refusal changed the next attempt's inputs, so a
+    /// client could never earn the baseline that would resolve it.
+    @Test func bootstrapKeepsRowsOnlyOneSideHolds() throws {
+        let plan = try LampSyncSettingsPlanner.planWithoutBase(
+            localSettings: "same", localRevision: 2,
+            localReadings: ["mine": Reading(time: 1, metadata: "local")],
+            remoteSettings: "same", remoteRevision: 2,
+            remoteReadings: ["theirs": Reading(time: 1, metadata: "remote")],
+            revision: \.time
+        )
+
+        #expect(plan.readingIDs == ["mine", "theirs"])
+        // The remote has not seen "mine" yet, so this has to go up.
+        #expect(plan.needsPublish)
+    }
+
+    /// A row both sides hold is not ambiguous — they agree it exists — so the
+    /// newer copy wins, the same rule a baseline merge would apply.
+    @Test func bootstrapTakesTheNewerOfARowBothSidesHold() throws {
+        let localNewer = try LampSyncSettingsPlanner.planWithoutBase(
+            localSettings: "same", localRevision: 2,
+            localReadings: ["one": Reading(time: 9, metadata: "local")],
+            remoteSettings: "same", remoteRevision: 2,
+            remoteReadings: ["one": Reading(time: 4, metadata: "remote")],
+            revision: \.time
+        )
+        #expect(localNewer.readings["one"]?.metadata == "local")
+        #expect(localNewer.needsPublish)
+
+        let remoteNewer = try LampSyncSettingsPlanner.planWithoutBase(
+            localSettings: "same", localRevision: 2,
+            localReadings: ["one": Reading(time: 4, metadata: "local")],
+            remoteSettings: "same", remoteRevision: 2,
+            remoteReadings: ["one": Reading(time: 9, metadata: "remote")],
+            revision: \.time
+        )
+        #expect(remoteNewer.readings["one"]?.metadata == "remote")
+        #expect(!remoteNewer.needsPublish)
+    }
+
+    /// An exact tie keeps the remote, deterministically: this client is the
+    /// one joining, and the alternative is publishing over what it just read.
+    @Test func bootstrapKeepsTheRemoteCopyOnAnExactTie() throws {
+        let plan = try LampSyncSettingsPlanner.planWithoutBase(
+            localSettings: "same", localRevision: 2,
+            localReadings: ["one": Reading(time: 5, metadata: "local")],
+            remoteSettings: "same", remoteRevision: 2,
+            remoteReadings: ["one": Reading(time: 5, metadata: "remote")],
+            revision: \.time
+        )
+
+        #expect(plan.readings["one"]?.metadata == "remote")
+        #expect(!plan.needsPublish)
+    }
+
+    /// Agreeing on every row still leaves nothing to publish.
+    @Test func bootstrapPublishesNothingWhenBothSidesAgree() throws {
+        let rows = ["one": Reading(time: 1, metadata: "same")]
+        let plan = try LampSyncSettingsPlanner.planWithoutBase(
+            localSettings: "same", localRevision: 1,
+            localReadings: rows,
+            remoteSettings: "same", remoteRevision: 2,
+            remoteReadings: rows,
+            revision: \.time
+        )
+
+        #expect(!plan.needsPublish)
+        #expect(plan.readings == rows)
     }
 }
