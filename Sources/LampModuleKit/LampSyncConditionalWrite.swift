@@ -105,3 +105,46 @@ public enum LampSyncConditionalWrite {
         return token(for: revision)
     }
 }
+
+public extension LampSyncConditionalWrite {
+    /// Whether a write landed, judged afterwards from the server's revision.
+    ///
+    /// `writeAndConfirm` raises the same refusal when the server rejected a
+    /// write and when it accepted one and then answered with a revision too
+    /// weak to confirm it by. Only the first leaves the file unpublished, and
+    /// a client that cannot tell them apart will either claim a file is
+    /// missing when it is not, or lose one silently.
+    enum Landing: Equatable, Sendable {
+        case wrote
+        case didNotWrite
+        /// The revision cannot settle it, and only the bytes can.
+        case undecidable
+    }
+
+    /// Judge a write by what the server holds now.
+    ///
+    /// A write that landed moved the file off the revision it was
+    /// conditioned on, so the condition and the revision afterwards are
+    /// enough — except for one case, which says so rather than guessing.
+    static func landing(
+        condition: LampSyncWriteCondition,
+        serverRevision: String?
+    ) -> Landing {
+        switch condition {
+        case .unconditional:
+            // Nothing was asserted, so nothing could be refused: a failure
+            // here came from confirming, after the write had gone through.
+            .wrote
+        case .ifRevision(let expected):
+            // Still the revision we expected to replace means it was not
+            // replaced. Compared as tokens, since a server may spell the
+            // same ETag differently between a PROPFIND and a PUT.
+            namesSameRevision(expected, serverRevision) ? .didNotWrite : .wrote
+        case .ifAbsent:
+            // Absent still: not written. Present: either this write put it
+            // there or something else did, and the revision cannot say
+            // which.
+            serverRevision == nil ? .didNotWrite : .undecidable
+        }
+    }
+}

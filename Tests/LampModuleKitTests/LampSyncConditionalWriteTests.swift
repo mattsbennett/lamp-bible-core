@@ -102,6 +102,57 @@ struct LampSyncConditionalWriteTests {
         #expect(!LampSyncConditionalWrite.namesSameRevision(nil, "abc"))
     }
 
+
+    // MARK: - Judging a write after it failed
+
+    /// The case that matters for what a user is told: the write was refused,
+    /// so the file really is not on the server.
+    @Test func aFileStillAtItsConditionWasNotWritten() {
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .ifRevision("\"abc\""), serverRevision: "\"abc\""
+        ) == .didNotWrite)
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .ifAbsent, serverRevision: nil
+        ) == .didNotWrite)
+    }
+
+    /// The write landed and confirming it is what failed, so telling the user
+    /// the file is missing would be wrong.
+    @Test func aFileThatMovedOffItsConditionWasWritten() {
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .ifRevision("\"abc\""), serverRevision: "\"def\""
+        ) == .wrote)
+    }
+
+    /// Nothing was asserted, so nothing could be refused on a precondition:
+    /// a failure came from confirming, after the write went through.
+    @Test func anUnconditionalWriteCannotHaveBeenRefused() {
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .unconditional, serverRevision: nil
+        ) == .wrote)
+    }
+
+    /// A server may spell the same ETag differently between a PROPFIND and a
+    /// PUT. Compared as text, an unchanged file reads as a written one, and
+    /// a refused write would be reported to the user as a success.
+    @Test func theSameRevisionSpeltTwoWaysIsStillTheSameFile() {
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .ifRevision("\"abc\""), serverRevision: "W/\"abc\""
+        ) == .didNotWrite)
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .ifRevision("abc"), serverRevision: "\"abc\""
+        ) == .didNotWrite)
+    }
+
+    /// An if-absent write to a path that now holds something is genuinely
+    /// ambiguous — this write may have put it there, or what is there may be
+    /// what refused the write — and saying so is better than guessing.
+    @Test func anIfAbsentWriteOntoSomethingPresentCannotBeJudged() {
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .ifAbsent, serverRevision: "\"abc\""
+        ) == .undecidable)
+    }
+
 }
 
 private actor ConditionalStore: LampSyncRemoteStore {
