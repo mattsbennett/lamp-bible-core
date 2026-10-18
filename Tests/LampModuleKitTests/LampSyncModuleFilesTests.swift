@@ -20,6 +20,21 @@ struct LampSyncModuleFilesTests {
         ))
     }
 
+    /// The revision kept after an upload is the bare token; the listing
+    /// quotes the same ETag. They are one revision, not a remote change.
+    @Test func aQuotedListingMatchesTheBareTokenAnUploadRecorded() {
+        #expect(!LampSyncModuleFiles.needsImport(
+            isNew: false,
+            installedPath: "esvs-highlights.lamp", remotePath: "esvs-highlights.lamp",
+            installedRevision: "26b-64f4d39ff05a8", remoteRevision: "\"26b-64f4d39ff05a8\""
+        ))
+        #expect(LampSyncModuleFiles.needsImport(
+            isNew: false,
+            installedPath: "esvs-highlights.lamp", remotePath: "esvs-highlights.lamp",
+            installedRevision: "26b-64f4d39ff05a8", remoteRevision: "\"27c-64f4d39ff05a8\""
+        ))
+    }
+
     @Test func canonicalFormatWinsAndInstalledPathBreaksTies() {
         let paths = ["notes.json", "notes.lamp", "notes.db.zlib"]
         #expect(LampSyncModuleFiles.preferredPath(

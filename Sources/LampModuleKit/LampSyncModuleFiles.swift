@@ -44,6 +44,11 @@ public enum LampSyncModuleFiles {
 
     /// A missing remote revision is not evidence of unchanged content.
     /// Providers without a stable revision must fetch the module again.
+    ///
+    /// Revisions compare as tokens. A folder listing reports an ETag in
+    /// quotes, while the revision recorded after this device's own upload
+    /// comes back without them; compared as written, a module this device
+    /// published looked changed on every pass and was imported again.
     public static func needsImport(
         isNew: Bool,
         installedPath: String?,
@@ -51,8 +56,10 @@ public enum LampSyncModuleFiles {
         installedRevision: String?,
         remoteRevision: String?
     ) -> Bool {
-        isNew || installedPath != remotePath || remoteRevision == nil
-            || installedRevision != remoteRevision
+        guard let remoteRevision else { return true }
+        return isNew || installedPath != remotePath
+            || installedRevision.map(LampSyncConditionalWrite.token(for:))
+                != LampSyncConditionalWrite.token(for: remoteRevision)
     }
 
     public static func preferredPath(
