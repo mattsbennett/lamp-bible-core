@@ -26,7 +26,6 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
         case unsupportedVersion(Int)
         case invalidRevision(String)
         case invalidValue(String)
-        case conflictingField(String)
 
         public var errorDescription: String? {
             switch self {
@@ -36,8 +35,6 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
                 "Shared preference has an invalid revision: \(key)."
             case .invalidValue(let key):
                 "Shared preference has an invalid value: \(key)."
-            case .conflictingField(let key):
-                "Shared preference changed on both devices: \(key)."
             }
         }
     }
@@ -151,18 +148,45 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
         return values
     }
 
+    /// The result of a merge, kept apart because a field the two devices
+    /// disagree about belongs in a different place in each.
+    public struct Merge: Equatable, Sendable {
+        /// What the server should hold. A disputed field keeps the server's
+        /// own value, so publishing this changes nothing for it and the
+        /// other device's edit survives.
+        public let publishable: LampSharedPreferenceLedger
+        /// What to apply here. A disputed field is left out, so this device
+        /// keeps what its user set rather than having it overwritten.
+        public let applicable: LampSharedPreferenceLedger
+        /// What to record as agreed. A disputed field keeps the value the
+        /// two devices last agreed on, so the disagreement is still visible
+        /// next time instead of being quietly settled in someone's favour.
+        public let baseline: LampSharedPreferenceLedger
+        /// Fields each device changed differently since they last agreed.
+        public let disputed: [String]
+    }
+
     /// Merge local values against the version this device last applied.
-    /// Concurrent edits to the same field report a conflict; edits to separate
-    /// fields are retained. Unknown remote fields survive an older client.
+    ///
+    /// Edits to separate fields are retained, and unknown remote fields
+    /// survive an older client. A field both devices changed differently
+    /// used to throw, which aborted the whole sync — on the Mac that meant
+    /// one disputed translation name stopped the library, the modules and
+    /// everything else from syncing at all, with no way to resolve it and
+    /// nothing that could. A disagreement about one preference is not a
+    /// reason to stop carrying everything else, so it is reported and set
+    /// aside: neither value is published, neither is overwritten, and the
+    /// two devices settle it by being given the same value once more.
     public static func merge(
         local: [String: Value],
         base: Self?,
         remote: Self?
-    ) throws -> Self {
+    ) throws -> Merge {
         try base?.validate()
         try remote?.validate()
         var fields = base?.fields ?? [:]
         fields.merge(remote?.fields ?? [:]) { _, incoming in incoming }
+        var disputed: [String] = []
 
         for key in sharedKeys {
             let previous = base?.fields[key]
@@ -192,7 +216,8 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
             let remoteChanged = incoming?.revision != previous?.revision
 
             if localChanged && remoteChanged && localValue != incoming?.value {
-                throw LedgerError.conflictingField(key)
+                disputed.append(key)
+                continue
             }
             if localChanged && !remoteChanged {
                 fields[key] = Field(value: localValue)
@@ -202,7 +227,34 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
         }
         let merged = Self(fields: fields)
         try merged.validate()
-        return merged
+        guard !disputed.isEmpty else {
+            return Merge(
+                publishable: merged, applicable: merged,
+                baseline: merged, disputed: []
+            )
+        }
+        var applicableFields = merged.fields
+        var baselineFields = merged.fields
+        for key in disputed {
+            // Publishing keeps the server's value, which `fields` already
+            // holds; applying leaves this device alone; the baseline keeps
+            // what both last agreed, so the disagreement persists until the
+            // two are given the same value.
+            applicableFields.removeValue(forKey: key)
+            if let agreed = base?.fields[key] {
+                baselineFields[key] = agreed
+            } else {
+                baselineFields.removeValue(forKey: key)
+            }
+        }
+        let applicable = Self(fields: applicableFields)
+        let baseline = Self(fields: baselineFields)
+        try applicable.validate()
+        try baseline.validate()
+        return Merge(
+            publishable: merged, applicable: applicable,
+            baseline: baseline, disputed: disputed.sorted()
+        )
     }
 
     public func apply(to defaults: UserDefaults) throws {

@@ -58,16 +58,16 @@ struct LampSharedPreferenceLedgerTests {
             base: base,
             remote: remote
         )
-        #expect(merged.fields["reader.fontSize"] == remote.fields["reader.fontSize"])
-        #expect(merged.fields["reader.defaultTranslationID"]?.value == .string("KJV"))
-        #expect(merged.fields["reader.defaultTranslationID"]?.revision != base.fields["reader.defaultTranslationID"]?.revision)
-        #expect(merged.fields["future.preference"] == remote.fields["future.preference"])
+        #expect(merged.publishable.fields["reader.fontSize"] == remote.fields["reader.fontSize"])
+        #expect(merged.publishable.fields["reader.defaultTranslationID"]?.value == .string("KJV"))
+        #expect(merged.publishable.fields["reader.defaultTranslationID"]?.revision != base.fields["reader.defaultTranslationID"]?.revision)
+        #expect(merged.publishable.fields["future.preference"] == remote.fields["future.preference"])
 
         let roundTrip = try JSONDecoder().decode(
             LampSharedPreferenceLedger.self,
-            from: JSONEncoder().encode(merged)
+            from: JSONEncoder().encode(merged.publishable)
         )
-        #expect(roundTrip == merged)
+        #expect(roundTrip == merged.publishable)
     }
 
     @Test func reportsConcurrentEditToOneField() throws {
@@ -77,19 +77,30 @@ struct LampSharedPreferenceLedgerTests {
         let remote = LampSharedPreferenceLedger(fields: [
             "reader.fontSize": .init(value: .number(20), revision: "00000000-0000-0000-0000-000000000002"),
         ])
-        #expect(throws: LampSharedPreferenceLedger.LedgerError.self) {
-            try LampSharedPreferenceLedger.merge(
-                local: ["reader.fontSize": .number(22)],
-                base: base,
-                remote: remote
-            )
-        }
+        // Both devices moved this field away from what they agreed, and
+        // nothing here can say which was meant. It is set aside rather than
+        // refused: the rest of the sync is not held hostage to one number.
+        let disputed = try LampSharedPreferenceLedger.merge(
+            local: ["reader.fontSize": .number(22)],
+            base: base,
+            remote: remote
+        )
+        #expect(disputed.disputed == ["reader.fontSize"])
+        // Published: the server's own value, so publishing changes nothing
+        // for it and the other device's edit survives.
+        #expect(disputed.publishable.fields["reader.fontSize"] == remote.fields["reader.fontSize"])
+        // Applied: nothing, so this device keeps what its user set.
+        #expect(disputed.applicable.fields["reader.fontSize"] == nil)
+        // Recorded: what they last agreed, so it is still disputed next time
+        // rather than quietly settled in someone's favour.
+        #expect(disputed.baseline.fields["reader.fontSize"] == base.fields["reader.fontSize"])
         let sameValue = try LampSharedPreferenceLedger.merge(
             local: ["reader.fontSize": .number(20)],
             base: base,
             remote: remote
         )
-        #expect(sameValue.fields["reader.fontSize"] == remote.fields["reader.fontSize"])
+        #expect(sameValue.publishable.fields["reader.fontSize"] == remote.fields["reader.fontSize"])
+        #expect(sameValue.disputed.isEmpty)
         #expect(throws: LampSharedPreferenceLedger.LedgerError.self) {
             try LampSharedPreferenceLedger(fields: [
                 "plans.reminder.hour": .init(value: .integer(28)),
@@ -110,9 +121,9 @@ struct LampSharedPreferenceLedgerTests {
         let merged = try LampSharedPreferenceLedger.merge(
             local: [:], base: base, remote: base
         )
-        #expect(merged.fields["reader.defaultTranslationID"]?.value == nil)
+        #expect(merged.publishable.fields["reader.defaultTranslationID"]?.value == nil)
         defaults.set("BSBs", forKey: "reader.defaultTranslationID")
-        try merged.apply(to: defaults)
+        try merged.applicable.apply(to: defaults)
         #expect(defaults.object(forKey: "reader.defaultTranslationID") == nil)
     }
 
@@ -156,7 +167,7 @@ struct LampSharedPreferenceLedgerTests {
             local: ["reader.fontSize": .number(18)], base: nil, remote: remote
         )
 
-        #expect(merged.fields["reader.fontSize"]?.value == .number(19))
+        #expect(merged.publishable.fields["reader.fontSize"]?.value == .number(19))
     }
 
     /// A value only this client holds is contributed, not dropped: the server
@@ -172,8 +183,8 @@ struct LampSharedPreferenceLedgerTests {
             remote: remote
         )
 
-        #expect(merged.fields["reader.fontSize"]?.value == .number(19))
-        #expect(merged.fields["reader.showStrongsHints"]?.value == .boolean(true))
+        #expect(merged.publishable.fields["reader.fontSize"]?.value == .number(19))
+        #expect(merged.publishable.fields["reader.showStrongsHints"]?.value == .boolean(true))
     }
 
     @Test func theFirstClientOfAllKeepsItsOwnValues() throws {
@@ -181,13 +192,15 @@ struct LampSharedPreferenceLedgerTests {
             local: ["reader.fontSize": .number(18)], base: nil, remote: nil
         )
 
-        #expect(merged.fields["reader.fontSize"]?.value == .number(18))
+        #expect(merged.publishable.fields["reader.fontSize"]?.value == .number(18))
     }
 
-    /// With a baseline, a genuine simultaneous edit is still a conflict:
-    /// both sides moved the same field away from what they agreed, and
-    /// nothing here can say which was meant.
-    @Test func aRealSimultaneousEditIsStillAConflict() throws {
+    /// With a baseline, a genuine simultaneous edit is still a disagreement
+    /// — both sides moved the same field away from what they agreed, and
+    /// nothing here can say which was meant — but it is set aside rather
+    /// than refused. Refusing aborted the entire sync over one scalar, with
+    /// nothing anywhere able to resolve it.
+    @Test func aRealSimultaneousEditIsSetAsideRatherThanRefused() throws {
         let agreed = UUID().uuidString
         let base = LampSharedPreferenceLedger(fields: [
             "reader.fontSize": .init(value: .number(18), revision: agreed),
@@ -196,11 +209,42 @@ struct LampSharedPreferenceLedgerTests {
             "reader.fontSize": .init(value: .number(20), revision: UUID().uuidString),
         ])
 
-        #expect(throws: LampSharedPreferenceLedger.LedgerError.self) {
-            try LampSharedPreferenceLedger.merge(
-                local: ["reader.fontSize": .number(19)], base: base, remote: remote
-            )
-        }
+        let merged = try LampSharedPreferenceLedger.merge(
+            local: ["reader.fontSize": .number(19)], base: base, remote: remote
+        )
+
+        #expect(merged.disputed == ["reader.fontSize"])
+        #expect(merged.publishable.fields["reader.fontSize"]?.value == .number(20))
+        #expect(merged.applicable.fields["reader.fontSize"] == nil)
+        #expect(merged.baseline.fields["reader.fontSize"]?.value == .number(18))
+    }
+
+    /// Everything else still syncs while one field is in dispute, which is
+    /// the whole point: a disagreement about a font size stopped a library.
+    @Test func otherFieldsStillMergeAroundADisputedOne() throws {
+        let agreed = UUID().uuidString
+        let base = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(18), revision: agreed),
+            "reader.defaultTranslationID": .init(value: .string("BSBs"), revision: agreed),
+        ])
+        let remote = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(20), revision: UUID().uuidString),
+            "reader.defaultTranslationID": .init(value: .string("BSBs"), revision: agreed),
+        ])
+
+        let merged = try LampSharedPreferenceLedger.merge(
+            local: [
+                "reader.fontSize": .number(19),
+                "reader.defaultTranslationID": .string("ESVs"),
+            ],
+            base: base,
+            remote: remote
+        )
+
+        #expect(merged.disputed == ["reader.fontSize"])
+        // Only this device touched the translation, so it goes up as usual.
+        #expect(merged.publishable.fields["reader.defaultTranslationID"]?.value == .string("ESVs"))
+        #expect(merged.applicable.fields["reader.defaultTranslationID"]?.value == .string("ESVs"))
     }
 
 }
