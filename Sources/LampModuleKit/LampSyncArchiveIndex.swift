@@ -88,13 +88,53 @@ public extension LampSyncArchiveIndex {
     /// decide whether the library has to be fetched at all. Anything doubtful
     /// returns nil, which means "read the archive", the behaviour that
     /// predates this.
+    /// What the server has, and when it is of no use, why.
+    ///
+    /// The reasons are worth keeping apart: an absent index means nobody has
+    /// published since this existed, one keyed to another revision means a
+    /// writer that does not maintain it has been through, and both are
+    /// temporary in a way that a malformed one is not.
+    enum Availability: Equatable, Sendable {
+        case current(LampSyncArchiveIndex)
+        /// Nothing published at the index path.
+        case absent
+        /// Published, but describing a body the server no longer holds.
+        case staleRevision(describing: String, server: String)
+        /// Written by a client that knows a shape this one does not.
+        case unsupportedVersion(Int)
+        /// Present and unreadable.
+        case malformed
+        /// The server's revision cannot stand for a body, so nothing can be
+        /// keyed to it.
+        case unusableRevision(String?)
+
+        public var index: LampSyncArchiveIndex? {
+            if case .current(let index) = self { return index }
+            return nil
+        }
+
+        /// A phrase fit for a log line, saying what is wrong.
+        public var reason: String {
+            switch self {
+            case .current: "current"
+            case .absent: "no index published"
+            case .staleRevision(let describing, let server):
+                "index describes \(describing), server holds \(server)"
+            case .unsupportedVersion(let version): "index format version \(version)"
+            case .malformed: "index unreadable"
+            case .unusableRevision(let revision):
+                "server revision \(revision ?? "absent") cannot identify a body"
+            }
+        }
+    }
+
     static func current(
         in store: any LampSyncRemoteStore
     ) async -> LampSyncArchiveIndex? {
-        await current(
+        await availability(
             in: store,
             knownRevision: try? await store.revision(path: LampSyncLayout.archivePath)
-        )
+        ).index
     }
 
     /// The same, for a caller that has already asked what the revision is.
@@ -102,15 +142,30 @@ public extension LampSyncArchiveIndex {
         in store: any LampSyncRemoteStore,
         knownRevision: String?
     ) async -> LampSyncArchiveIndex? {
+        await availability(in: store, knownRevision: knownRevision).index
+    }
+
+    static func availability(
+        in store: any LampSyncRemoteStore,
+        knownRevision: String?
+    ) async -> Availability {
         guard let revision = knownRevision,
-              LampWebDAVStorage.isStrongETag(revision),
-              let file = try? await store.read(path: LampSyncLayout.archiveIndexPath),
-              let index = try? JSONDecoder().decode(Self.self, from: file.data),
-              index.isSupported,
-              index.archiveRevision == revision else {
-            return nil
+              LampWebDAVStorage.isStrongETag(revision) else {
+            return .unusableRevision(knownRevision)
         }
-        return index
+        guard let file = try? await store.read(path: LampSyncLayout.archiveIndexPath) else {
+            return .absent
+        }
+        guard let index = try? JSONDecoder().decode(Self.self, from: file.data) else {
+            return .malformed
+        }
+        guard index.isSupported else {
+            return .unsupportedVersion(index.formatVersion)
+        }
+        guard index.archiveRevision == revision else {
+            return .staleRevision(describing: index.archiveRevision, server: revision)
+        }
+        return .current(index)
     }
 
     /// Publish an index for the archive just written.

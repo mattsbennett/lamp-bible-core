@@ -144,12 +144,19 @@ struct LampSyncArchiveIndexTests {
         await store.setArchiveRevision("\"r2\"")
 
         #expect(await LampSyncArchiveIndex.current(in: store) == nil)
+        let availability = await LampSyncArchiveIndex.availability(
+            in: store, knownRevision: "\"r2\""
+        )
+        #expect(availability == .staleRevision(describing: "\"r1\"", server: "\"r2\""))
     }
 
     @Test func noIndexAtAllReadsAsAbsent() async {
         let store = IndexStore(archiveRevision: "\"r1\"")
 
         #expect(await LampSyncArchiveIndex.current(in: store) == nil)
+        #expect(await LampSyncArchiveIndex.availability(
+            in: store, knownRevision: "\"r1\""
+        ) == .absent)
     }
 
     /// A weak revision cannot stand for a body, so an index keyed to one is
@@ -163,6 +170,9 @@ struct LampSyncArchiveIndexTests {
         )
 
         #expect(await LampSyncArchiveIndex.current(in: store) == nil)
+        #expect(await LampSyncArchiveIndex.availability(
+            in: store, knownRevision: "W/\"r1\""
+        ) == .unusableRevision("W/\"r1\""))
     }
 
     /// An index written by a newer client, in a shape this one does not know,
@@ -181,6 +191,9 @@ struct LampSyncArchiveIndexTests {
         )
 
         #expect(await LampSyncArchiveIndex.current(in: store) == nil)
+        #expect(await LampSyncArchiveIndex.availability(
+            in: store, knownRevision: "\"r1\""
+        ) == .unsupportedVersion(LampSyncArchiveIndex.currentFormatVersion + 1))
     }
 
     @Test func rubbishWhereTheIndexShouldBeIsIgnored() async throws {
@@ -192,6 +205,9 @@ struct LampSyncArchiveIndexTests {
         )
 
         #expect(await LampSyncArchiveIndex.current(in: store) == nil)
+        #expect(await LampSyncArchiveIndex.availability(
+            in: store, knownRevision: "\"r1\""
+        ) == .malformed)
     }
 }
 
