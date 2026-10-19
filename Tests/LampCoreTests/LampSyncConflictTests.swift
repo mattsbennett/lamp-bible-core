@@ -55,6 +55,41 @@ struct LampSyncConflictTests {
         return file
     }
 
+    /// The other client spells the same footnote with its keys in a
+    /// different order — it encodes in declaration order where this package
+    /// sorts them. Compared as text that reads as both devices having
+    /// edited the entry, so the person is shown a conflict over something
+    /// neither of them touched. Five of the user's notes were reported this
+    /// way on 2026-10-18.
+    ///
+    /// It also invites a loop: each client adopts or republishes its own
+    /// spelling of an entry the other just published, every pass, forever.
+    @Test func theOtherClientsSpellingOfTheSameFootnoteIsNoDisagreement() async throws {
+        let devices = try Devices()
+        defer { devices.remove() }
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        func entry(footnotes: String) -> LampDevotional {
+            LampDevotional(
+                id: "w", moduleID: "personal-devotionals", moduleName: "My Writing",
+                title: "Shared", content: "Body",
+                footnotes: footnotes, created: moment, lastModified: moment
+            )
+        }
+        try await devices.a.savePersonalDevotional(
+            entry(footnotes: #"[{"id":"a","text":"A note"}]"#), preserveLastModified: true
+        )
+        try await devices.b.savePersonalDevotional(
+            entry(footnotes: #"[{"text":"A note","id":"a"}]"#), preserveLastModified: true
+        )
+        let file = devices.root.appendingPathComponent("w-\(UUID().uuidString).json")
+        try await devices.b.personalDevotionalDocument(id: "w").jsonData.write(to: file)
+
+        _ = try await devices.a.importPersonalDevotional(from: file, forSync: true)
+
+        #expect(try await devices.a.pendingSyncConflicts().isEmpty)
+        #expect(try await devices.a.personalDevotionals().map(\.content) == ["Body"])
+    }
+
     @Test func anEqualTimeDisagreementIsSetAsideRatherThanStoppingTheRun() async throws {
         let devices = try Devices()
         defer { devices.remove() }

@@ -1447,7 +1447,9 @@ public actor LampLibrary {
                     && local.keyScriptures == devotional.keyScriptures
                     && same(local.summary, devotional.summary)
                     && local.content == devotional.content
-                    && same(local.footnotes, devotional.footnotes)
+                    && LampSyncJSONComparison.sameValue(
+                        local.footnotes, devotional.footnotes
+                    )
                 if sameCore,
                    (local.mediaJSON == nil && devotional.mediaJSON != nil
                     || local.contentJSON == nil && devotional.contentJSON != nil) {
@@ -1460,10 +1462,12 @@ public actor LampLibrary {
                     localModified: local.lastModified.map { Int($0.timeIntervalSince1970) },
                     incomingModified: devotional.lastModified.map { Int($0.timeIntervalSince1970) },
                     sameContent: sameCore
-                        && (local.contentJSON == devotional.contentJSON
-                            || devotional.contentJSON == nil)
-                        && (local.mediaJSON == devotional.mediaJSON
-                            || devotional.mediaJSON == nil)
+                        && (LampSyncJSONComparison.sameValue(
+                                local.contentJSON, devotional.contentJSON
+                            ) || devotional.contentJSON == nil)
+                        && (LampSyncJSONComparison.sameValue(
+                                local.mediaJSON, devotional.mediaJSON
+                            ) || devotional.mediaJSON == nil)
                 )
                 if decision == .conflict {
                     // On a sync run, keep this device's copy and set the other
@@ -3685,8 +3689,12 @@ public actor LampLibrary {
                         incomingModified: incomingTimestamp,
                         sameContent: existingTitle == incomingTitle
                             && existingContent == note.content
-                            && (existingReferences ?? "[]") == referencesJSON
-                            && (existingFootnotes ?? "[]") == footnotesJSON
+                            && LampSyncJSONComparison.sameValue(
+                                existingReferences, referencesJSON
+                            )
+                            && LampSyncJSONComparison.sameValue(
+                                existingFootnotes, footnotesJSON
+                            )
                     )
                     if decision == .conflict {
                         // Set aside rather than thrown, for the same reason a
