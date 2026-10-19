@@ -115,8 +115,8 @@ struct LampPresentationDeckAdviceTests {
             .init(kind: .scripture, text: "We will not walk in it."),
             .init(kind: .citation, text: "Jeremiah 6:16"),
             .init(kind: .subtitle, text: "Expectancy"),
-            .init(kind: .quotation, text: "Yet I will look again."),
-            .init(kind: .citation, text: "Jonah"),
+            .init(kind: .quotation, text: "yet I shall again look upon your holy temple."),
+            .init(kind: .citation, text: "Jonah 2:4"),
             .init(kind: .scripture, text: "and you will find rest for your souls."),
             .init(kind: .citation, text: "Jeremiah 6:16"),
         ])
@@ -125,7 +125,8 @@ struct LampPresentationDeckAdviceTests {
         #expect(columns.map(\.groups.count) == [2, 2])
         #expect(columns.first?.groups.first?.citation?.text == "Beckett")
         #expect(columns.first?.groups.last?.citation?.text == "Jeremiah 6:16")
-        #expect(columns.last?.groups.first?.quotations.map(\.text) == ["Yet I will look again."])
+        #expect(columns.last?.groups.first?.quotations.map(\.text)
+            == ["yet I shall again look upon your holy temple."])
         #expect(columns.last?.groups.last?.citation?.text == "Jeremiah 6:16")
         // Every block reaches the slide, so neither validator has anything to say.
         #expect(slide.plan.ignored.isEmpty)

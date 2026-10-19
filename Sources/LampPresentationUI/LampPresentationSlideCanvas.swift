@@ -464,17 +464,26 @@ public struct LampPresentationSlideCanvas: View {
     ///
     /// Two passages under one heading are two things said, so each keeps its
     /// own citation rather than both being credited by one line at the foot.
+    ///
+    /// A column carrying more than one has to show which citation belongs to
+    /// which, and spacing alone did not: a citation sat barely closer to its
+    /// own passage than to the next one. Each passage is therefore drawn the
+    /// way the quotation layout draws a group — its citation held close
+    /// beneath it, a clear gap to the next, and an accent rule down the side
+    /// tying the two together. A column carrying one passage keeps the rule
+    /// off, which would only cost it width it has no use for.
     private func column(
         _ column: LampPresentationSlidePlan.Column,
         size: CGFloat,
         unit: CGFloat
     ) -> some View {
-        VStack(alignment: .leading, spacing: 0.44 * size * unit) {
+        let grouped = column.groups.count > 1
+        return VStack(alignment: .leading, spacing: (grouped ? 0.62 : 0.44) * size * unit) {
             if let heading = column.heading {
                 slideBlockText(heading, size: size * unit, weight: .bold, stepsDown: false)
             }
             ForEach(column.groups) { group in
-                VStack(alignment: .leading, spacing: 0.3 * size * unit) {
+                VStack(alignment: .leading, spacing: 0.26 * size * unit) {
                     ForEach(group.quotations) { block in
                         slideBlockText(
                             block,
@@ -491,6 +500,17 @@ public struct LampPresentationSlideCanvas: View {
                             color: accent,
                             stepsDown: false
                         )
+                    }
+                }
+                // Lighter than the quotation layout's rule: a column is half
+                // the width, and the same 6-unit bar and 34-unit indent would
+                // read as a quotation slide squeezed into one side.
+                .padding(.leading, grouped ? 22 * unit : 0)
+                .overlay(alignment: .leading) {
+                    if grouped {
+                        RoundedRectangle(cornerRadius: 2 * unit)
+                            .fill(accent.opacity(0.8))
+                            .frame(width: 4 * unit)
                     }
                 }
             }

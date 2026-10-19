@@ -125,6 +125,58 @@ struct LampSlideCanvasLayoutTests {
         return heights
     }
 
+    /// Heights of the uninked runs *between* inked ones, in reading order —
+    /// the gaps. A run's height says how big the type is; a gap's says what
+    /// belongs with what.
+    private func gapHeights(
+        in image: CGImage,
+        fromLeft: Double = 0,
+        toLeft: Double = 1
+    ) throws -> [Int] {
+        let bytesPerPixel = 4
+        let bytesPerRow = image.width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: image.height * bytesPerRow)
+        let context = try #require(
+            CGContext(
+                data: &pixels,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        )
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+
+        let background = (r: 0x11, g: 0x18, b: 0x27)
+        let firstColumn = Int(Double(image.width) * fromLeft)
+        let lastColumn = min(Int(Double(image.width) * toLeft), image.width)
+        var gaps: [Int] = []
+        var gap = 0
+        var seenInk = false
+        for y in 0..<image.height {
+            var inked = false
+            for x in stride(from: firstColumn, to: lastColumn, by: 2) {
+                let offset = y * bytesPerRow + x * bytesPerPixel
+                let distance = abs(Int(pixels[offset]) - background.r)
+                    + abs(Int(pixels[offset + 1]) - background.g)
+                    + abs(Int(pixels[offset + 2]) - background.b)
+                if distance > 30 { inked = true; break }
+            }
+            if inked {
+                // Only the gaps between inked runs count, so the empty margin
+                // above the first line and below the last is not one.
+                if seenInk, gap > 0 { gaps.append(gap) }
+                seenInk = true
+                gap = 0
+            } else if seenInk {
+                gap += 1
+            }
+        }
+        return gaps
+    }
+
     private var deck: LampPresentationDeck {
         LampPresentationDeck(title: "Layout", slides: [
             LampPresentationSlide(layout: .blank, blocks: [.init(kind: .body, text: "placeholder")]),
@@ -283,7 +335,7 @@ struct LampSlideCanvasLayoutTests {
             .init(kind: .scripture, text: "We will not walk in it."),
             .init(kind: .citation, text: "Jeremiah 6:16"),
             .init(kind: .subtitle, text: "Expectancy"),
-            .init(kind: .quotation, text: "Yet I will look again."),
+            .init(kind: .quotation, text: "yet I shall again look upon your holy temple."),
             .init(kind: .citation, text: "Jonah 2:4"),
             .init(kind: .scripture, text: "and find rest for your souls."),
             .init(kind: .citation, text: "Jeremiah 6:16"),
@@ -294,7 +346,7 @@ struct LampSlideCanvasLayoutTests {
             .init(kind: .quotation, text: "Nothing to be done."),
             .init(kind: .citation, text: "Beckett"),
             .init(kind: .subtitle, text: "Expectancy"),
-            .init(kind: .quotation, text: "Yet I will look again."),
+            .init(kind: .quotation, text: "yet I shall again look upon your holy temple."),
             .init(kind: .citation, text: "Jonah 2:4"),
         ])
         let image = try render(paired, deck: deck)
@@ -310,6 +362,62 @@ struct LampSlideCanvasLayoutTests {
             )
             #expect(both > one)
         }
+    }
+
+    @Test("A column with two passages ties each to its own citation")
+    func twoColumnRulesEachPassageWhenAColumnCarriesSeveral() throws {
+        /// Spacing alone did not say which citation belonged to which passage:
+        /// a citation sat barely closer to its own passage than to the next.
+        /// Each passage is now ruled down its side, as a quotation slide rules
+        /// its groups.
+        let paired = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .subtitle, text: "Resignation"),
+            .init(kind: .quotation, text: "Nothing to be done."),
+            .init(kind: .citation, text: "Beckett"),
+            .init(kind: .scripture, text: "We will not walk in it."),
+            .init(kind: .citation, text: "Jeremiah 6:16"),
+            .init(kind: .subtitle, text: "Expectancy"),
+            .init(kind: .quotation, text: "I will look again."),
+            .init(kind: .citation, text: "Jonah"),
+        ])
+        let single = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .subtitle, text: "Resignation"),
+            .init(kind: .quotation, text: "Nothing to be done."),
+            .init(kind: .citation, text: "Beckett"),
+            .init(kind: .subtitle, text: "Expectancy"),
+            .init(kind: .quotation, text: "I will look again."),
+            .init(kind: .citation, text: "Jonah"),
+        ])
+        // The first column's prose, clear of the rule down its leading edge so
+        // the rule cannot join every line into one run.
+        let gaps = try gapHeights(
+            in: try render(paired, deck: deck),
+            fromLeft: 0.08,
+            toLeft: 0.40
+        )
+        // Reading down: heading, quotation, its citation, the next quotation,
+        // its citation — so the gaps either side of the second quotation are
+        // what say which citation belongs to which passage.
+        #expect(gaps.count == 4, "unexpected lines in the column: \(gaps)")
+        let withinFirst = gaps[1]
+        let betweenPassages = gaps[2]
+        let withinSecond = gaps[3]
+        // Half as far again at least, or the reader is guessing.
+        #expect(Double(betweenPassages) > Double(withinFirst) * 1.5)
+        #expect(Double(betweenPassages) > Double(withinSecond) * 1.5)
+
+        // And the rule is drawn beside a column that carries two passages, but
+        // not beside one that carries a single passage, where it would only
+        // cost width.
+        let ruled = try inkFraction(
+            in: try render(paired, deck: deck),
+            fromTop: 0.3, toTop: 0.9, fromLeft: 0.058, toLeft: 0.074
+        )
+        let plain = try inkFraction(
+            in: try render(single, deck: deck),
+            fromTop: 0.3, toTop: 0.9, fromLeft: 0.058, toLeft: 0.074
+        )
+        #expect(ruled > plain)
     }
 
     @Test("A title-and-body slide draws every body block")
