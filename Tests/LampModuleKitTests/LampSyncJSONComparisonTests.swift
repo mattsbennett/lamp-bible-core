@@ -52,4 +52,25 @@ struct LampSyncJSONComparisonTests {
         // One side JSON and the other not is a difference.
         #expect(!LampSyncJSONComparison.sameValue(#"["a"]"#, "a"))
     }
+
+    /// Whitespace decides only whether a column holds anything; it is not
+    /// normalised away from a value that does. Leading spaces make a
+    /// Markdown code block, so an edit that only indented a line must not
+    /// read as no edit — losing a change is far worse than republishing
+    /// one needlessly.
+    @Test func whitespaceInsideAValueIsNotNormalised() {
+        #expect(!LampSyncJSONComparison.sameValue("    indented", "indented"))
+        #expect(!LampSyncJSONComparison.sameValue("text\n", "text"))
+        // But whitespace alone still holds nothing.
+        #expect(LampSyncJSONComparison.sameValue("   \n  ", nil))
+    }
+
+    /// Inside JSON, whitespace between tokens is not content, so the same
+    /// document pretty-printed and compact is the same document.
+    @Test func whitespaceAroundJSONTokensIsStillIgnored() {
+        #expect(LampSyncJSONComparison.sameValue(
+            #"[{"id": "a"}]"#,
+            "\n[{\"id\":\"a\"}]\n"
+        ))
+    }
 }

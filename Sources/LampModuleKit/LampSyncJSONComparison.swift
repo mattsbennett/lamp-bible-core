@@ -35,14 +35,23 @@ public enum LampSyncJSONComparison {
     }
 
     private static func canonical(_ stored: String?) -> Canonical {
-        guard let trimmed = stored?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let stored,
+              let trimmed = Optional(
+                  stored.trimmingCharacters(in: .whitespacesAndNewlines)
+              ),
               !trimmed.isEmpty, trimmed != "null" else {
             return .nothing
         }
         guard let parsed = try? JSONSerialization.jsonObject(
             with: Data(trimmed.utf8), options: [.fragmentsAllowed]
         ) else {
-            return .text(trimmed)
+            // Exactly as stored, including surrounding whitespace. Trimming
+            // it here would be a normalisation of something whose meaning
+            // this type does not know: leading spaces make a Markdown code
+            // block, and an edit that only indented a line would read as no
+            // edit at all. Comparing text exactly can at worst cost a
+            // needless republish; normalising it can drop someone's change.
+            return .text(stored)
         }
         if let array = parsed as? [Any], array.isEmpty { return .nothing }
         if let object = parsed as? [String: Any], object.isEmpty { return .nothing }
