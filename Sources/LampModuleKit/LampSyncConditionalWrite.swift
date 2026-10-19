@@ -138,9 +138,15 @@ public extension LampSyncConditionalWrite {
 
     /// Judge a write by what the server holds now.
     ///
-    /// A write that landed moved the file off the revision it was
-    /// conditioned on, so the condition and the revision afterwards are
-    /// enough — except for one case, which says so rather than guessing.
+    /// The revision afterwards can show a write did not land — the file is
+    /// still where the condition left it — but not that it did. A file that
+    /// moved off its condition moved because something wrote it, and a
+    /// conditional write is refused precisely when another device wrote
+    /// first: the server then holds that device's revision, which is not the
+    /// expected one either. Only the bytes can tell this write from that one,
+    /// so every such case says it is undecidable rather than guessing.
+    /// (`Verification/SyncMerge.lean`: `refusedWriteCanLookWritten` is the
+    /// case the revision alone got wrong; `landingIsSound` the rule now.)
     static func landing(
         condition: LampSyncWriteCondition,
         serverRevision: String?
@@ -153,8 +159,10 @@ public extension LampSyncConditionalWrite {
         case .ifRevision(let expected):
             // Still the revision we expected to replace means it was not
             // replaced. Compared as tokens, since a server may spell the
-            // same ETag differently between a PROPFIND and a PUT.
-            namesSameRevision(expected, serverRevision) ? .didNotWrite : .wrote
+            // same ETag differently between a PROPFIND and a PUT. Any other
+            // revision was written by this write or by the one that refused
+            // it, and the revision cannot say which.
+            namesSameRevision(expected, serverRevision) ? .didNotWrite : .undecidable
         case .ifAbsent:
             // Absent still: not written. Present: either this write put it
             // there or something else did, and the revision cannot say

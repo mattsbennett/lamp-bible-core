@@ -116,12 +116,18 @@ struct LampSyncConditionalWriteTests {
         ) == .didNotWrite)
     }
 
-    /// The write landed and confirming it is what failed, so telling the user
-    /// the file is missing would be wrong.
-    @Test func aFileThatMovedOffItsConditionWasWritten() {
+    /// A file that moved off its condition was written by something: by
+    /// this write, whose confirmation then failed, or by another device,
+    /// whose write is why this one was refused. Both leave the server on a
+    /// revision that is not the expected one, so calling it written would
+    /// tell the user a refused file was published. Only the bytes can say.
+    @Test func aFileThatMovedOffItsConditionCannotBeJudgedByRevision() {
         #expect(LampSyncConditionalWrite.landing(
             condition: .ifRevision("\"abc\""), serverRevision: "\"def\""
-        ) == .wrote)
+        ) == .undecidable)
+        #expect(LampSyncConditionalWrite.landing(
+            condition: .ifRevision("\"abc\""), serverRevision: nil
+        ) == .undecidable)
     }
 
     /// Nothing was asserted, so nothing could be refused on a precondition:

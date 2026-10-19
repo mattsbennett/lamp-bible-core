@@ -1469,24 +1469,27 @@ public actor LampLibrary {
                                 local.mediaJSON, devotional.mediaJSON
                             ) || devotional.mediaJSON == nil)
                 )
-                if decision == .conflict {
-                    // On a sync run, keep this device's copy and set the other
-                    // aside: one writing two devices disagree about is not a
-                    // reason to stop a library syncing, and the person is the
-                    // only one who can say which version they meant. An import
-                    // they asked for still stops and says so, because there is
-                    // someone right there to tell.
-                    guard forSync else {
-                        throw LampLibraryError.syncConflict("devotional \(devotional.id)")
-                    }
+                // On a sync run, keep this device's copy and set the other
+                // aside: one writing two devices disagree about is not a
+                // reason to stop a library syncing, and the person is the
+                // only one who can say which version they meant. An import
+                // they asked for still stops and says so, because there is
+                // someone right there to tell.
+                switch LampSyncMerge.importOutcome(decision, forSync: forSync) {
+                case .stop:
+                    throw LampLibraryError.syncConflict("devotional \(devotional.id)")
+                case .setAside:
                     try stashConflict(
                         kind: .devotional,
                         itemKey: devotional.id,
                         payload: LampSyncConflictPayload.encode(devotional)
                     )
                     return nil
+                case .keepLocal:
+                    return nil
+                case .takeIncoming:
+                    break
                 }
-                guard decision == .incoming else { return nil }
             }
             return try savePersonalDevotional(devotional, preserveLastModified: true)
         }
@@ -3696,14 +3699,15 @@ public actor LampLibrary {
                                 existingFootnotes, footnotesJSON
                             )
                     )
-                    if decision == .conflict {
-                        // Set aside rather than thrown, for the same reason a
-                        // writing is: one verse two devices disagree about is
-                        // not a reason to stop the rest of a library syncing.
-                        // An import someone asked for still stops and says so.
-                        guard forSync else {
-                            throw LampLibraryError.syncConflict("note \(note.reference)")
-                        }
+                    let outcome = LampSyncMerge.importOutcome(decision, forSync: forSync)
+                    // Set aside rather than thrown, for the same reason a
+                    // writing is: one verse two devices disagree about is not
+                    // a reason to stop the rest of a library syncing. An
+                    // import someone asked for still stops and says so.
+                    if outcome == .stop {
+                        throw LampLibraryError.syncConflict("note \(note.reference)")
+                    }
+                    if outcome == .setAside {
                         try Self.stashConflict(
                             db,
                             kind: .note,
@@ -3727,7 +3731,7 @@ public actor LampLibrary {
                         skippedCount += 1
                         continue
                     }
-                    if decision != .incoming {
+                    if outcome != .takeIncoming {
                         skippedCount += 1
                         continue
                     }

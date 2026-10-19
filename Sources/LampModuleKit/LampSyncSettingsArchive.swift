@@ -111,9 +111,10 @@ public enum LampSyncSettingsArchive {
         reusing candidate: LampSyncArchiveRemote.Snapshot? = nil
     ) async throws -> ResolvedRemoteSnapshot? {
         let archived: RemoteSnapshot
-        if let candidate, let revision = candidate.revision,
-           LampWebDAVStorage.isStrongETag(revision),
-           try await store.revision(path: LampSyncLayout.archivePath) == revision {
+        if let candidate, mayReuse(
+            candidateRevision: candidate.revision,
+            serverRevision: try await store.revision(path: LampSyncLayout.archivePath)
+        ) {
             archived = try snapshot(of: candidate)
         } else {
             archived = try await read(from: store)
@@ -148,6 +149,16 @@ public enum LampSyncSettingsArchive {
 
     /// Both remote files can change independently. Skip their GETs only when
     /// both HEADs still match strong revisions saved with the applied state.
+    /// Whether an archive already in hand may stand in for a fresh read: only
+    /// while the server still holds that strong revision, so what it returns
+    /// is what a fresh read would. (`Verification/SyncMerge.lean`: `reuseArchive`.)
+    public static func mayReuse(candidateRevision: String?, serverRevision: String?) -> Bool {
+        guard let candidateRevision, LampWebDAVStorage.isStrongETag(candidateRevision) else {
+            return false
+        }
+        return serverRevision == candidateRevision
+    }
+
     /// The settings view of an archive already in hand, built exactly as a
     /// read of that archive would have built it.
     private static func snapshot(

@@ -9,6 +9,35 @@ public enum LampSyncMergeDecision: Equatable, Sendable {
     case conflict
 }
 
+/// What an import does with one record once `LampSyncMerge.decide` has
+/// spoken. (`Verification/SyncMerge.lean`: `portableImportOutcome`.)
+public enum LampSyncImportOutcome: Equatable, Sendable {
+    case keepLocal
+    case takeIncoming
+    /// Keep this device's copy, set the other aside for the person to choose
+    /// from, and carry on with the rest of the import.
+    case setAside
+    /// Stop the import and say why.
+    case stop
+}
+
+public extension LampSyncMerge {
+    /// A sync run sets an equal-time disagreement aside rather than stopping:
+    /// one record two devices disagree about is no reason to stop a library
+    /// syncing, and only the person can say which version they meant. An
+    /// import they asked for still stops, because they are there to be told.
+    static func importOutcome(
+        _ decision: LampSyncMergeDecision,
+        forSync: Bool
+    ) -> LampSyncImportOutcome {
+        switch decision {
+        case .incoming: .takeIncoming
+        case .local: .keepLocal
+        case .conflict: forSync ? .setAside : .stop
+        }
+    }
+}
+
 public struct LampSyncRecordConflict<Key: Hashable, Record> {
     public let key: Key
     public let local: Record

@@ -28,4 +28,23 @@ public enum LampSyncSettingsBootstrap {
         }
         return .merge
     }
+
+    /// Whether a guarded first upload may write before it merges: only while
+    /// the server still holds the revision this device last observed, which
+    /// an unknown revision on either side cannot show.
+    ///
+    /// Otherwise the merge runs on its own and reconciles through
+    /// `LampSyncSettingsPlanner.planWithoutBase`. Refusing instead settled
+    /// nothing — the inputs were unchanged by the refusal, so every later
+    /// poll failed the same way and the device never earned a baseline.
+    /// (`Verification/SyncMerge.lean`: `uploadsBeforeMerge`.)
+    public static func uploadsBeforeMerge(
+        action: Action,
+        observedToken: String?,
+        remoteToken: String?
+    ) -> Bool {
+        guard action == .guardedFirstUpload,
+              let observedToken, let remoteToken else { return false }
+        return LampSyncConditionalWrite.namesSameRevision(observedToken, remoteToken)
+    }
 }

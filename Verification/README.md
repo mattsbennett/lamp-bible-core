@@ -1,10 +1,102 @@
 # Sync verification
 
-Run the proof checker from this repository:
+`SyncMerge.lean` is a Lean 4 model of the decisions Lamp's sync makes, with
+proofs of the properties those decisions are meant to have. It models the
+decisions — not the Swift runtime, the databases, the filesystem or the
+network. Each area's boundary is described below and recorded in
+`coverage.json`.
+
+## Running it
+
+`swift test` in this repository checks the proofs as part of the core suite
+(`SyncModelConformanceTests`). Lean comes from elan, pinned by
+`lean-toolchain`:
 
 ```sh
+brew install elan-init                       # once
 elan run leanprover/lean4:v4.34.0 lean Verification/SyncMerge.lean
 ```
+
+A clean run prints only the conformance tables (lines starting
+`CONFORMANCE`). Anything else — an error, or a warning such as a `sorry` —
+fails the suite. On a machine without elan, `LAMP_SKIP_LEAN=1 swift test`
+skips the Lean-backed tests by name rather than letting them pass.
+
+## Keeping the model and the code together
+
+Three checks run with the core suite, so the model cannot quietly fall behind
+the code it describes:
+
+- **The proofs check.** `theModelChecks` runs Lean on the model and fails on
+  any error or warning.
+- **The model and Swift answer alike.** The model's last section prints a table
+  for each decision that has a Swift counterpart: its inputs and the model's
+  answer, 445 cases across 15 decisions. `SyncModelConformanceTests` asks the
+  shipped Swift decision every one of those questions. A decision changed on one
+  side and not the other fails the suite and names the case that differs. So
+  does a table with no Swift check, or a check with no table.
+- **Every sync source is accounted for.** `coverage.json` names each shared
+  sync source (by the patterns it lists), the Lean rules that model it, the
+  conformance tables that hold it, and what is deliberately not modelled.
+  `SyncVerificationCoverageTests` fails on a new sync source with no entry, an
+  entry for a file that is gone, or a rule the model does not define. The Mac
+  and iOS files that make sync decisions are listed too, and are checked when
+  those repositories are checked out beside this one.
+
+When you change a sync decision, change the model in the same commit, update
+its conformance table if it has one, and give any new sync source a
+`coverage.json` entry. A decision that lives only in an app cannot be held to
+the model from here. Move its pure decision into core, as
+`LampSyncPassRetry`, `LampSyncSettingsBootstrap.uploadsBeforeMerge` and
+`LampSyncArchiveIndex.mayAdvanceWithoutFetch` were.
+
+## What the review on 19 October 2026 found
+
+The model was last written on 24 September, and about forty sync changes landed
+after it. Comparing the two found the following.
+
+**Drift — the model described behaviour the code no longer had:**
+
+- Equal-time disagreements over a note or a writing no longer stop a sync run.
+  They are set aside for the person to choose (`portableImportOutcome`), but the
+  model and this README still said they stopped publication.
+- A settings merge with no baseline no longer refuses different reading rows.
+  It keeps every row and takes the newer copy (`baselessReading`). The old
+  `differentReadingsWithoutBaseReject` is gone. Its cost — a deletion this
+  device never saw comes back once — is now a proved counterexample,
+  `baselessMergeRevivesAnUnseenDeletion`.
+- Shared preferences no longer stop the sync over a disputed field, and a
+  client with no baseline meets the server rather than refusing
+  (`preferenceMerge`).
+- A guarded first settings upload whose token has moved merges instead of
+  refusing (`uploadsBeforeMerge`).
+- Module revisions now compare as tokens. The weak-ETag rule still holds, but
+  only because the WebDAV adapters drop weak tags before `needsImport` sees
+  them. The model now says so (`needsImportByToken`, `webDAVAdapterRevision`).
+
+**A bug the model exposed:**
+
+- `LampSyncConditionalWrite.landing` judged a write conditioned on revision
+  *e* to have landed whenever the server no longer held *e*. But a conditional
+  write is refused precisely when another device wrote first, and that also
+  leaves the server off *e* (`refusedWriteCanLookWritten`). The Mac then told
+  the user a refused file was published. Such a write is now undecidable and
+  settled by its bytes (`landingIsSound`, `settleByBytes`).
+
+**Behaviour that was never modelled, now covered:**
+
+- deletion ledgers for personal content, decks and workspace files, and the
+  deck pull plan;
+- files refused within a batch;
+- confirming a write by reading it back twice;
+- revision tokens and stored-JSON sameness;
+- the archive index, and skipping a fetch by it;
+- reusing an archive already read;
+- starting a pass again after losing a race.
+
+See "Coverage added in October" below.
+
+## Model notes by area
 
 `SyncMerge.lean` models the shared record merge decision, the fixed
 millisecond file ordering in `Sources/LampModuleKit/LampSyncMerge.swift`,
@@ -164,10 +256,16 @@ different row data; `chooseReading` models those decisions in Lean. The
 uploaded SQLite copy omits device-local sync provider configuration. An older
 installation without a baseline uses a guarded first
 upload only when the remote token still matches its last observation.
-`staleSnapshotCannotUpload` models that check, and `chooseWithoutBase`
-models its timestamp choice for settings. If reading rows still differ without
-a baseline, `differentReadingsWithoutBaseReject` shows the plan stops rather
-than guessing whether a row was added or deleted. WebDAV sends an atomic HTTP precondition on
+`staleSnapshotCannotUpload` and `uploadsBeforeMerge` model that check; when the
+token has moved, or either token is unknown, the merge runs on its own instead
+of refusing (`movedRevisionMergesInsteadOfRefusing`). `chooseWithoutBase`
+models the timestamp choice for settings, which still refuses an equal-time
+disagreement. Reading rows without a baseline are merged rather than refused:
+every row either side holds is kept, and a row both hold takes the newer copy,
+the remote's on a tie (`baselessReading`, `baselessMergeKeepsEveryRow`). A row
+only one side holds may be an addition here or a deletion there, so a deletion
+this device never saw comes back once (`baselessMergeRevivesAnUnseenDeletion`);
+from the next merge on there is a baseline. WebDAV sends an atomic HTTP precondition on
 the write; `staleConditionalWriteRejected`, `createOnlyWriteCannotOverwrite`,
 and `observedRemoteDeletionCannotRecreate` model the server-side revision rule.
 The shared WebDAV adapter validates one complete strong entity-tag before
@@ -358,8 +456,16 @@ with a missing stage or unrelated edits needs repair before sync can resume.
 The marker does not
 make writes atomic for older clients that do not check it or prove provider
 propagation order.
-The shared preference ledger's per-field choice is modeled in Lean and tested
-in Swift. Mac staging reads only explicitly stored settings from the app's
+The shared preference ledger's per-field choice is modeled in Lean
+(`choosePreference`) and tested in Swift. A field both devices changed
+differently is set aside rather than stopping the sync: the server keeps its
+value, so the other device's edit survives; this device keeps what its user
+set; and the baseline keeps what the two last agreed, so the dispute shows
+again until they hold one value (`preferenceMerge`,
+`disputedPreferenceKeepsTheServersValue`, `disputePersistsWhileTheValuesDiffer`).
+A client with no baseline meets the server: the server's value stands, and a
+value only this client holds is contributed (`firstMeetingKeepsTheServersValue`,
+`firstMeetingContributesALocalOnlyValue`). Mac staging reads only explicitly stored settings from the app's
 persistent domain; registered UI defaults do not become local sync edits.
 `registeredDefaultWithoutStoredPreferenceIsNotAnEdit` models that extraction,
 and a Mac Swift test covers a fresh domain. The proof
@@ -416,7 +522,12 @@ The iOS WebDAV module adapter now exposes only strong ETags as module
 revisions and reads a fresh body with its GET revision for single-module sync
 instead of reusing an earlier listing cache. `LampSyncModuleFiles.needsImport` forces a
 download whenever the remote revision is missing, even if the stored revision
-is also missing. `missingRemoteRevisionRequiresImport` and
+is also missing. Revisions compare as tokens, so a quoted listing tag matches
+the bare revision recorded after this device's own upload
+(`quotedListingOfOwnUploadMaySkip`). A weak tag still cannot skip an import,
+because the WebDAV adapters pass on only strong revisions
+(`weakListingCannotSkipThroughTheAdapter`); iCloud passes a content digest.
+`missingRemoteRevisionRequiresImport` and
 `weakETagCannotSkipModuleImport` model the import gate; a Swift integration
 test imports a changed module when both revision fields are nil. Weak or
 combined ETags also cannot become stored settings change tokens.
@@ -536,17 +647,95 @@ The importer also checks the schema type and ID before writing. Local
 translation-file revisions use the shared content digest.
 `wrongTranslationSchemaTypeCannotImport` and
 `invalidTranslationSchemaIDCannotImport` model the preflight checks.
-Mac's portable note and devotional import now propagates the shared
-equal-time conflict decision as an import error, which stops archive or folder
-publication. It compares note payloads and devotional content before treating
-an equal-time import as an unchanged duplicate. The Lean `decide` rule models
-the conflict decision; Swift tests cover the payload comparison and stop.
+Portable note and devotional import compares payloads before treating an
+equal-time import as an unchanged duplicate, with JSON columns compared by
+meaning (`sameColumn`). A disagreement that remains is set aside on a sync run:
+this device's copy stays, the other is stashed for the person to choose, and
+the import carries on (`portableImportOutcome`, `syncImportNeverStops`). An
+import someone asked for still stops with an error
+(`requestedImportStopsOnDisagreement`). The Lean `decide` rule models the
+conflict decision; Swift tests cover the payload comparison.
 `LampSyncSettingsBootstrap` now selects the five iOS settings entry cases in
 core. The ordinary merge uses `LampSyncEngine` for pull, publish, and
 completion. The `settingsBootstrap` theorems prove that a required missing
 remote cannot be created, fresh adoption precedes local upload, and a dirty
 no-base state uses the guarded path. Provider writes, SQLite import, and
 compatibility mirror recovery remain Swift and provider boundaries.
+
+## Coverage added in October
+
+**Disagreements set aside.** `LampSyncMerge.importOutcome` turns a record
+decision into keep, take, set aside or stop; both personal import paths in
+`LampLibrary` use it. Choosing a version later stamps it past both copies, so
+the device that chose prefers it, and so does the other
+(`resolvedChoiceWinsWhereItWasMade`, `resolvedChoiceWinsOnTheOtherDevice`).
+Neither raises the same disagreement again.
+
+**Deletion ledgers.** Personal content, decks and workspace files keep one
+ledger shape: per item, the latest save and the latest deletion, merged by
+keeping the later of each. `later` and `mergeTombstone` are commutative,
+associative and idempotent, so two devices reach one verdict whatever order
+they exchange ledgers in (`exchangedLedgersAgree`). A deletion no earlier than
+the last save deletes, and an equal time favours the deletion
+(`equalTimeFavoursDeletion`). An edit or save after a deletion survives it
+(`editAfterDeletionSurvives`, `saveAfterDeletionSurvives`). A workspace
+document's deletion is stamped with the version this Mac last had, so an edit
+made elsewhere after that survives (`documentDeletionSparesALaterEdit`). The
+deck pull keeps the greatest undeleted copy in the shared file order and never
+keeps a deleted deck (`deckPullNeverKeepsADeletedDeck`), whatever order copies
+arrive in (`deckPullIgnoresArrivalOrder`).
+
+**Refused files.** `publishReportingRefusals` attempts every file and collects
+the refused ones (`refusalsDoNotStopTheBatch`, `everyFileIsAccountedFor`). Any
+other failure stops the batch at that file (`aFailureStopsTheBatch`).
+
+**Did a refused write land?** `landing` now claims "not written" only while the
+server still satisfies the write's condition, and "written" only for a write
+that asserted nothing (`landingIsSound`). Everything else is undecidable, and
+the Mac settles it by comparing bytes (`settleByBytes`). `writeAndConfirm` names
+a revision only from a read returning this write's bytes, asking twice
+(`settlingServerConfirmsOnTheSecondRead`,
+`anotherDevicesBytesNeverConfirm`, `aThirdReadIsNeverMade`).
+
+**Revisions and JSON.** `namesSameRevision` treats quoted, bare and weak
+spellings of one tag as one revision, and absent and present as different
+(`spellingsOfOneTagNameOneRevision`, `namesSameRevision_symm`).
+`LampSyncJSONComparison` compares stored JSON by meaning; `sameColumn` is an
+equivalence, and text that is not JSON never matches JSON or an absence
+(`sameColumn_trans`, `textIsNeverTheSameAsJSONOrNothing`). Classifying a string
+is left to Swift.
+
+**Archive index.** A reader trusts the index only when it names the server's
+current strong revision (`trustedIndexDescribesTheServersRevision`). An index
+a slow publisher left for an older revision is never trusted
+(`lateIndexForAnOlderRevisionIsNotTrusted`), and neither is any index under a
+weak or unknown revision. Advancing past a moved archive without fetching
+requires the trusted index's importable entries to be exactly those last
+installed (`advancingWithoutFetchMissesNothingInstallable`). The fingerprint is
+a SHA-256 of the sorted entries, and its collision resistance is assumed.
+Settings resolution reuses an archive already read only while the server still
+holds that strong revision (`reusedArchiveIsTheServersCurrentRevision`).
+
+**Starting a pass again.** `LampSyncPassRetry` runs one more pass after an
+archive write loses to another device's publish, and never more than two in
+all (`aSyncRunsAtMostTwoPasses`). A succeeded pass is not repeated, and neither
+is a failure that left the revision where it was
+(`anUnmovedRevisionIsNotRepeated`). An archive that appeared since the read
+counts as a lost race (`anArchiveThatAppearedIsALostRace`).
+
+**Still outside the model.**
+
+- iOS serialises settings syncs — one in flight, later requests wait. That is
+  Swift concurrency, not a decision.
+- iOS's settings first upload and its archive skip now call
+  `uploadsBeforeMerge` and `mayAdvanceWithoutFetch`, which the conformance
+  tables hold. When those call sites are reached is covered by iOS's own
+  tests, not by Lean; `testAGuardedFirstUploadWritesFirstWhileTheServerIsUnchanged`,
+  `testAGuardedFirstUploadMergesWhenTheServerHasMoved` and
+  `testAGuardedFirstUploadMergesWhenNeitherRevisionIsKnown` drive the first
+  upload end to end.
+- Presentation assets carry no deletion ledger. An image is kept while any deck
+  names it, by design.
 
 ## Implementation map
 
@@ -555,18 +744,22 @@ phase-boundary cancellation checks alongside `runTrace`.
 
 | Path | Shared implementation | Lean rules | Remaining verification boundary |
 | --- | --- | --- | --- |
-| iOS and macOS shared preferences | `LampSharedPreferenceLedger`, `LampSyncPreferenceState` for archive encoding and source-keyed saved bases | `choosePreference`, `failedPreferencePublishKeepsEveryBase`, `publishedPreferenceUpdatesItsSource`, `publishedPreferenceKeepsAnotherSource` | UserDefaults persistence and each app's local preference mapping |
-| iOS WebDAV modules | `LampSyncEngine`, `LampSyncArchiveRemote`, `LampSyncMerge`, `LampSyncObservedWrite`, `LampSyncModuleFolder`, `LampSyncModuleFiles`, `LampSyncModuleRead`, `LampPortableModuleInspector`, `LampWebDAVStorage`, durable conflict and publication ledgers | `runTrace`, `failedEditablePullCannotStartForegroundPublication`, `failedArchivePullStopsAllModulePublication`, `failedModuleTypePullStopsBatchPublication`, `failedModulePullPreventsSettingsPublication`, `moduleFolderListing`, `duplicateSupersededPathChoosesActiveOccurrence`, `webDAVPresence`, `decide`, `mergeFile`, `observedModuleWrite`, `pendingModuleConflictBlocksExport`, `failedModuleWriteRetainsPublication`, `canonicalFileWinsOverInstalledLegacy`, `supersededCanonicalCannotHideActiveLegacy`, `missingRemoteRevisionRequiresImport`, `pairedModuleImport`, `replaceReadOnlyRows`, `sqliteImportAllowed`, `sqliteReplacementResult`, `missingLaterImportColumnCannotInstallPrefix`, `lateIOSArchiveSQLFailureKeepsInstalled` | Archive module changes share one local SQLite transaction; settings, preferences, media, and module uploads remain separate writes; filesystem and live server behavior |
+| iOS and macOS shared preferences | `LampSharedPreferenceLedger`, `LampSyncPreferenceState` for archive encoding and source-keyed saved bases | `choosePreference`, `preferenceMerge` (conformance), `disputedPreferenceKeepsTheServersValue`, `firstMeetingKeepsTheServersValue`, `failedPreferencePublishKeepsEveryBase`, `publishedPreferenceUpdatesItsSource`, `publishedPreferenceKeepsAnotherSource` | UserDefaults persistence and each app's local preference mapping |
+| iOS WebDAV modules | `LampSyncEngine`, `LampSyncArchiveRemote`, `LampSyncMerge`, `LampSyncObservedWrite`, `LampSyncModuleFolder`, `LampSyncModuleFiles`, `LampSyncModuleRead`, `LampPortableModuleInspector`, `LampWebDAVStorage`, durable conflict and publication ledgers | `runTrace`, `failedEditablePullCannotStartForegroundPublication`, `failedArchivePullStopsAllModulePublication`, `failedModuleTypePullStopsBatchPublication`, `failedModulePullPreventsSettingsPublication`, `moduleFolderListing`, `duplicateSupersededPathChoosesActiveOccurrence`, `webDAVPresence`, `decide`, `mergeFile`, `observedModuleWrite`, `pendingModuleConflictBlocksExport`, `failedModuleWriteRetainsPublication`, `canonicalFileWinsOverInstalledLegacy`, `supersededCanonicalCannotHideActiveLegacy`, `missingRemoteRevisionRequiresImport`, `needsImportByToken` (conformance), `weakListingCannotSkipThroughTheAdapter`, `mayAdvanceWithoutFetch` (conformance), `indexTrusted` (conformance), `pairedModuleImport`, `replaceReadOnlyRows`, `sqliteImportAllowed`, `sqliteReplacementResult`, `missingLaterImportColumnCannotInstallPrefix`, `lateIOSArchiveSQLFailureKeepsInstalled` | Archive module changes share one local SQLite transaction; settings, preferences, media, and module uploads remain separate writes; filesystem and live server behavior |
 | iOS local translation JSON | `LampSyncContentRevision` for the file revision; one GRDB transaction for metadata, books, verses, and headings | `translationSchemaAllowed`, `failedTranslationSchemaReplacementKeepsInstalled`, `foreignImportKeyCollisionKeepsInstalled` | JSON decoding and SQLite execution |
 | iOS iCloud modules | `LampSyncEngine`, `LampSyncMerge`, `LampSyncModuleFiles`, `LampSyncModuleRead`, `LampSyncContentRevision`, durable conflict and publication ledgers | `runTrace`, `failedEditablePullCannotStartForegroundPublication`, `failedModuleTypePullStopsBatchPublication`, `failedModulePullPreventsSettingsPublication`, `decide`, `pendingModuleConflictBlocksExport`, `failedModuleWriteRetainsPublication`, `changedBodyInsideCoordinationIsRejected`, `contentModuleImport`, `laterRemoteUploadDoesNotChangeExportRevision`, `sqliteImportAllowed`, `sqliteReplacementResult` | Settings and module uploads are separate writes; a coordinated hash check cannot stop a later remote upload |
 | iOS WebDAV media | `LampSyncReferencedMedia`, `LampSyncObservedWrite`, `LampSyncContentRevision`, `LampSyncConditionalWrite`, durable publication gate | `observedModuleWrite`, `unbasedContentWriteAllowed`, `conditionalWrite`, `unchangedModuleRetriesMissingMedia`, `failedMediaTransferBlocksCompletion`, `failedMediaUploadRetainsPublication`, `pendingLocalMediaUploadWaitsForPublish` | Server must honor strong ETag preconditions; media has no merge base |
 | iOS iCloud media | `LampSyncReferencedMedia`, `LampSyncContentRevision`, guarded coordinated file write, durable publication gate | `unbasedContentWriteAllowed`, `coordinatedGenericFileWriteAllowed`, `unchangedModuleRetriesMissingMedia`, `failedMediaTransferBlocksCompletion`, `failedMediaUploadRetainsPublication`, `pendingLocalMediaUploadWaitsForPublish` | A later remote upload can supersede the locally checked write; media has no merge base |
-| iOS WebDAV settings | `LampSyncEngine`, `LampSyncSettingsBootstrap`, `LampSyncSettingsArchive`, `LampSyncSettingsPlanner`, `LampSyncConditionalWrite`, `LampSyncCompatibilityPublisher` | `settingsBootstrap`, `runTrace`, `mergeMembership`, `chooseWholeValue`, `resolveSettingsSource`, `classifyLegacySettings`, `maySkipArchivePoll`, `conditionalWrite` | SQLite serialization and the separate compatibility mirror |
-| iOS iCloud settings | `LampSyncEngine`, `LampSyncSettingsBootstrap`, `LampSyncContentRevision`, `LampSyncStableRead`, `LampSyncSettingsPlanner` | `settingsBootstrap`, `contentRevision`, `stableRead`, `chooseWholeValue`, `runTrace`, `changedBodyInsideCoordinationIsRejected`, the post-read race counterexample | No server-side precondition against a later remote upload |
-| macOS WebDAV library | `LampSyncEngine`, `LampSyncArchiveRemote`, `LampSyncCompatibilityPublisher`, `LampSyncPersonalExport`, `LampSyncModuleFolder`, `LampSyncModuleFiles`, `LampSharedPreferenceLedger`, shared record conflict decision | `runTrace`, `moduleFolderListing`, `duplicateSupersededPathChoosesActiveOccurrence`, `decide`, `macArchivePublish`, `mirrorAttempts`, `choosePreference`, `aggregateJSONKeepsUnshadowedModule`, `supersededCanonicalCannotHideActiveLegacy`, `failedMacHighlightExportStopsArchivePublish` | Local library export and separate compatibility writes |
+| iOS WebDAV settings | `LampSyncEngine`, `LampSyncSettingsBootstrap`, `LampSyncSettingsArchive`, `LampSyncSettingsPlanner`, `LampSyncConditionalWrite`, `LampSyncCompatibilityPublisher` | `settingsBootstrap`, `uploadsBeforeMerge` (conformance), `baselessReading` (conformance), `reuseArchive` (conformance), `runTrace`, `mergeMembership`, `chooseWholeValue`, `resolveSettingsSource`, `classifyLegacySettings`, `maySkipArchivePoll`, `conditionalWrite` | SQLite serialization and the separate compatibility mirror |
+| iOS iCloud settings | `LampSyncEngine`, `LampSyncSettingsBootstrap`, `LampSyncContentRevision`, `LampSyncStableRead`, `LampSyncSettingsPlanner` | `settingsBootstrap`, `uploadsBeforeMerge`, `baselessReading`, `contentRevision`, `stableRead`, `chooseWholeValue`, `runTrace`, `changedBodyInsideCoordinationIsRejected`, the post-read race counterexample | No server-side precondition against a later remote upload |
+| macOS WebDAV library | `LampSyncEngine`, `LampSyncArchiveRemote`, `LampSyncArchiveIndex`, `LampSyncCompatibilityPublisher`, `LampSyncConditionalWrite`, `LampSyncPassRetry`, `LampSyncPersonalExport`, `LampSyncModuleFolder`, `LampSyncModuleFiles`, `LampSharedPreferenceLedger`, shared record conflict decision | `runTrace`, `shouldRunAgain` and `lostRace` (conformance), `aSyncRunsAtMostTwoPasses`, `publishReportingRefusals`, `landing` (conformance), `landingIsSound`, `settleByBytes`, `confirmWrite`, `portableImportOutcome` (conformance), `preferenceMerge`, `moduleFolderListing`, `duplicateSupersededPathChoosesActiveOccurrence`, `decide`, `macArchivePublish`, `mirrorAttempts`, `choosePreference`, `aggregateJSONKeepsUnshadowedModule`, `supersededCanonicalCannotHideActiveLegacy`, `failedMacHighlightExportStopsArchivePublish` | Local library export and separate compatibility writes |
 | Cross-platform devotional media | `LampDevotionalMediaReference`, `LampPortableDevotionalMedia`, `LampPortableDevotionalContent`, `LampSyncReferencedMedia`, `LampSyncDevotionalMedia`, staged `LampLibrary.importPortableBackup`, iOS archive import | `hiddenMediaAttachmentSurvivesPortableRoundTrip`, `richDevotionalBlocksKeepTheirContent`, `unchangedRichDevotionalBlockIsExact`, `editedRichDevotionalBlockKeepsOpaqueFields`, `movedRichSectionKeepsIdentity`, `movedRichSectionKeepsOpaqueFields`, `changedRichOutlineKeepsRootFields`, `iosRichEditStoresRevisedBlocks`, `iosPlainEditKeepsAuthoredMarkdown`, `bracketedMarkdownWithoutBlockSchemaKeepsMarkdown`, `existingMediaMetadataIsPreserved`, `missingPortableAttachmentStopsCommit`, `missingPortableMediaForcesArchiveRead`, `macImportEnrichesMissingMetadata`, `macMetadataEditKeepsStructuredBlocks`, `failedDevotionalMediaStopsModuleMirror`, `identicalDevotionalMediaNeedsNoWrite`, `conflictingDevotionalMediaCannotPublish`, `missingIOSMediaStopsMacPull` | Old archives without a compatible devotional module still leave personal JSON outside iOS import; deleted sections are removed; local media files and SQLite rows are separate writes |
 | macOS folder library | `LampSyncEngine`, `LampSyncFolderPublisher`, `LampPortableModuleInspector`, staged local library import and settings recovery, shared record and file ordering | `runTrace`, `folderPreflight`, `folderFileWrite`, `folderSealAccepts`, `folderRecoveryStep`, `mergeFile`, `ownedSQLiteRows`, `stagedBackupImport`, `guardedStagedBackupCommit`, `commitMacPull`, `recoverMacSettings` | Cross-device and multi-file atomicity, OS durability of library and UserDefaults writes, repair when the stage is missing or another writer changed a file |
 | iOS backend switching | `LampSyncBackendTransition`, `LampSyncMigrationCopy`, local recovery record | `deferredBackendWipe`, `backendActivationOccurs`, `pendingBackendMarker`, `migrationCopyAction` | Two local databases remain separate; sync is suspended until a failed rollback can be recovered; iCloud remote uploads can race the local create check |
+| Personal deletions (notes, writing, highlights, themes, sets) | `LampPersonalDeletionLedger`, `LampLibrary` ledger merge and apply | `tombstoneDeletes` and `mergeTombstone` (conformance), `mergeTombstone_comm`, `mergeTombstone_assoc`, `mergeTombstone_idem`, `exchangedLedgersAgree`, `editAfterDeletionSurvives`, `equalTimeFavoursDeletion` | Device clocks are assumed comparable; the SQL upsert is the Swift `merged(with:)` rule |
+| Slide decks | `LampPresentationDeckDeletionLedger`, `LampPresentationDeckPortablePull`, macOS `PresentationDeckSyncSupport` | `tombstoneDeletes` (conformance), `deckPull`, `deckPullNeverKeepsADeletedDeck`, `deckPullIgnoresArrivalOrder` | Assets have no ledger and are kept while any deck names them |
+| Workspace files (macOS) | `WorkspaceSyncLedger` in `SyncSupport.swift`, shared file order | `tombstoneDeletes`, `workspaceDeletionTime`, `documentDeletionSparesALaterEdit`, `mergeFile` | Context files' deletions use the time they were noticed, not a comparable modification time |
+| Conflicts set aside and resolved | `LampSyncMerge.importOutcome`, `LampSyncConflict`, `LampLibrary.resolveSyncConflict` | `portableImportOutcome` (conformance), `syncImportNeverStops`, `resolvedChoiceWinsWhereItWasMade`, `resolvedChoiceWinsOnTheOtherDevice`, `sameColumn` | Choosing in the UI and the stored payload are Swift; JSON classification is JSONSerialization's |
 
 The listed Lean rules prove properties of models that correspond to shared
 Swift decisions. Swift tests exercise each shared implementation with the

@@ -330,22 +330,65 @@ theorem equalCompletionDifferentRowsConflict (time deviceRow remoteRow : Nat)
   simp [chooseReading, h]
 
 -- The upgrade path has no membership base. Its caller guards a pending upload
--- with the last observed remote token and then takes the remote reading set.
--- Settings use the old timestamp rule, refusing an equal-time disagreement.
+-- with the last observed remote token (`uploadsBeforeMerge`). Settings use the
+-- old timestamp rule, refusing an equal-time disagreement.
 def chooseWithoutBase (deviceTime remoteTime : Nat) (sameSettings : Bool) : ThreeWayChoice :=
   if deviceTime = remoteTime && !sameSettings then .conflict
   else if remoteTime > deviceTime then .remote
   else .local
 
-def planWithoutBase (sameReadings : Bool) (deviceTime remoteTime : Nat)
-    (sameSettings : Bool) : Option ThreeWayChoice :=
-  if sameReadings then some (chooseWithoutBase deviceTime remoteTime sameSettings)
-  else none
+-- Readings without a baseline: a row only one side holds is either an addition
+-- here or a deletion there, and nothing says which. Refusing the merge then
+-- changed nothing, so it refused forever and the device never earned the
+-- baseline that would tell the two apart. `planWithoutBase` now keeps every
+-- row, takes the newer copy of a row both sides hold, and keeps the remote's
+-- on a tie because this device is the one joining. A row is (revision, body).
+def baselessReading (device remote : Option (Nat × Nat)) : Option (Nat × Nat) :=
+  match device, remote with
+  | none, r => r
+  | some d, none => some d
+  | some d, some r => if d.1 > r.1 then some d else some r
 
-theorem differentReadingsWithoutBaseReject (deviceTime remoteTime : Nat)
-    (sameSettings : Bool) :
-    planWithoutBase false deviceTime remoteTime sameSettings = none := by
-  simp [planWithoutBase]
+theorem baselessMergeKeepsEveryRow (device remote : Option (Nat × Nat))
+    (h : device.isSome = true ∨ remote.isSome = true) :
+    (baselessReading device remote).isSome = true := by
+  cases device with
+  | none =>
+    cases remote with
+    | none => simp at h
+    | some r => rfl
+  | some d =>
+    cases remote with
+    | none => rfl
+    | some r => simp only [baselessReading]; split <;> rfl
+
+theorem baselessNewerDeviceRowWins (d r : Nat × Nat) (h : d.1 > r.1) :
+    baselessReading (some d) (some r) = some d := by
+  simp [baselessReading, h]
+
+theorem baselessTiedOrNewerRemoteRowWins (d r : Nat × Nat) (h : ¬ d.1 > r.1) :
+    baselessReading (some d) (some r) = some r := by
+  simp [baselessReading, h]
+
+theorem baselessMergeOfAgreeingSidesChangesNothing (row : Option (Nat × Nat)) :
+    baselessReading row row = row := by
+  cases row with
+  | none => rfl
+  | some r => simp [baselessReading]
+
+-- The stated cost: a reading deleted elsewhere before this device held any
+-- baseline comes back, once. From the next merge on there is a baseline.
+theorem baselessMergeRevivesAnUnseenDeletion :
+    baselessReading (some (1, 7)) none = some (1, 7) := rfl
+
+-- The plan publishes when its rows differ from the remote's, or when this
+-- device's settings win and differ.
+def baselessNeedsPublish (rowsDiffer settingsLocal settingsDiffer : Bool) : Bool :=
+  rowsDiffer || (settingsLocal && settingsDiffer)
+
+theorem agreeingBaselessSidesNeedNoPublish (settingsLocal : Bool) :
+    baselessNeedsPublish false settingsLocal false = false := by
+  cases settingsLocal <;> rfl
 
 theorem equalTimeDifferentSettingsConflict (time : Nat) :
     chooseWithoutBase time time false = .conflict := by
@@ -2332,5 +2375,826 @@ theorem unrelatedFolderEditCannotBeOverwritten
     (notOld : current ≠ old) (notIntended : current ≠ intended) :
     folderRecoveryStep true old intended current = none := by
   simp [folderRecoveryStep, notOld, notIntended]
+
+/-! ## Disagreements set aside
+
+Since 15 October a sync run no longer stops on an equal-time disagreement over
+a note or a writing. `LampLibrary`'s personal import keeps this device's copy,
+stashes the other device's whole for the person to choose from, and carries on
+with the rest; an import someone asked for still stops, because someone is
+there to tell. Choosing later stamps the kept copy past both
+(`resolvedRecordRevision`), so neither device raises the same disagreement
+again. -/
+
+inductive ImportOutcome where
+  | keepLocal | takeIncoming | setAside | stop
+  deriving DecidableEq, Repr
+
+def portableImportOutcome (forSync : Bool) (current incoming : Int)
+    (sameContent : Bool) : ImportOutcome :=
+  match decide current incoming sameContent with
+  | .incoming => .takeIncoming
+  | .local => .keepLocal
+  | .conflict => if forSync then .setAside else .stop
+
+theorem syncImportNeverStops (current incoming : Int) (same : Bool) :
+    portableImportOutcome true current incoming same ≠ .stop := by
+  unfold portableImportOutcome
+  split <;> simp
+
+theorem syncSetsEqualTimeDisagreementAside (t : Int) :
+    portableImportOutcome true t t false = .setAside := by
+  simp [portableImportOutcome, decide]
+
+theorem requestedImportStopsOnDisagreement (t : Int) :
+    portableImportOutcome false t t false = .stop := by
+  simp [portableImportOutcome, decide]
+
+theorem setAsideNeverTakesTheIncomingCopy (current incoming : Int) (same : Bool) :
+    portableImportOutcome true current incoming same = .setAside →
+    decide current incoming same = .conflict := by
+  unfold portableImportOutcome
+  split <;> simp_all
+
+theorem resolvedChoiceWinsWhereItWasMade (device incoming now : Nat) (same : Bool) :
+    decide (resolvedRecordRevision device incoming now) incoming same = .local := by
+  have h := (resolvedRecordRevisionExceedsBoth device incoming now).2
+  apply newerLocalWins
+  exact_mod_cast h
+
+theorem resolvedChoiceWinsOnTheOtherDevice (device incoming now : Nat) (same : Bool) :
+    decide incoming (resolvedRecordRevision device incoming now) same = .incoming := by
+  have h := (resolvedRecordRevisionExceedsBoth device incoming now).2
+  apply newerIncomingWins
+  exact_mod_cast h
+
+/-! ## Preferences: disputes set aside, first meetings
+
+`LampSharedPreferenceLedger.merge` returns what to publish, what to apply and
+what to remember as agreed. A field both devices changed differently is set
+aside: the server keeps its value, so the other device's edit survives; this
+device keeps what its user set; the baseline keeps what the two last agreed, so
+the dispute shows again until they hold one value. With no baseline at all the
+two have never met: the server's value stands, and a value only this device
+holds is contributed. `choosePreference` above is the per-field classification
+when a baseline exists. -/
+
+structure PrefField where
+  value : Option Nat
+  revision : Nat
+  deriving DecidableEq, Repr
+
+structure PreferenceOutcome where
+  published : Option PrefField
+  applies : Bool
+  baseline : Option PrefField
+  disputed : Bool
+  deriving DecidableEq, Repr
+
+-- `fresh` is the new revision Swift mints for a value this device publishes.
+def preferenceMerge (hasBase : Bool) (previous remote : Option PrefField)
+    (localValue : Option Nat) (fresh : Nat) : PreferenceOutcome :=
+  let incoming := remote <|> previous
+  if !hasBase then
+    let published := match incoming, localValue with
+      | none, some v => some ⟨some v, fresh⟩
+      | i, _ => i
+    ⟨published, true, published, false⟩
+  else
+    let localChanged := localValue != previous.bind (·.value)
+    let remoteChanged := incoming.map (·.revision) != previous.map (·.revision)
+    if localChanged && remoteChanged && localValue != incoming.bind (·.value) then
+      ⟨incoming, false, previous, true⟩
+    else if localChanged && !remoteChanged then
+      let mine := some ⟨localValue, fresh⟩
+      ⟨mine, true, mine, false⟩
+    else
+      ⟨incoming, true, incoming, false⟩
+
+theorem disputedPreferenceKeepsTheServersValue
+    (previous remote : Option PrefField) (localValue : Option Nat) (fresh : Nat)
+    (h : (preferenceMerge true previous remote localValue fresh).disputed = true) :
+    (preferenceMerge true previous remote localValue fresh).published = (remote <|> previous) ∧
+    (preferenceMerge true previous remote localValue fresh).applies = false ∧
+    (preferenceMerge true previous remote localValue fresh).baseline = previous := by
+  unfold preferenceMerge at *
+  simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at *
+  split at h
+  · simp_all
+  · split at h <;> simp at h
+
+theorem agreeingPreferenceIsNeverDisputed
+    (previous remote : Option PrefField) (fresh : Nat)
+    (value : Option Nat) (h : value = (remote <|> previous).bind (·.value)) :
+    (preferenceMerge true previous remote value fresh).disputed = false := by
+  unfold preferenceMerge
+  simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+  split
+  · next hd => simp_all
+  · split <;> rfl
+
+theorem firstMeetingNeverDisputes
+    (previous remote : Option PrefField) (localValue : Option Nat) (fresh : Nat) :
+    (preferenceMerge false previous remote localValue fresh).disputed = false := by
+  simp [preferenceMerge]
+
+theorem firstMeetingKeepsTheServersValue
+    (field : PrefField) (localValue : Option Nat) (fresh : Nat) :
+    (preferenceMerge false none (some field) localValue fresh).published = some field := by
+  cases localValue <;> rfl
+
+theorem firstMeetingContributesALocalOnlyValue (value fresh : Nat) :
+    (preferenceMerge false none none (some value) fresh).published =
+      some ⟨some value, fresh⟩ := rfl
+
+theorem disputePersistsWhileTheValuesDiffer :
+    (preferenceMerge true (some ⟨some 1, 10⟩) (some ⟨some 2, 11⟩) (some 3) 12).disputed = true ∧
+    (preferenceMerge true (some ⟨some 1, 10⟩) (some ⟨some 2, 11⟩) (some 3) 12).baseline =
+      some ⟨some 1, 10⟩ := by
+  decide
+
+/-! ## Deletion ledgers
+
+Personal content (`LampPersonalDeletionLedger`), slide decks
+(`LampPresentationDeckDeletionLedger`) and workspace files (macOS
+`WorkspaceSyncLedger`) keep ledgers of one shape: per item, the latest recorded
+save and the latest recorded deletion. Two ledgers merge by keeping the later
+of each, which is what the SQL upsert in `mergePersonalDeletionLedger` does.
+An item is deleted when its deletion is no earlier than the later of its
+recorded save and the copy in hand; an equal time favours the deletion.
+Absent times read as zero, as Swift's `Int64.min` stand-in does. -/
+
+def later : Option Nat → Option Nat → Option Nat
+  | some a, some b => some (max a b)
+  | some a, none => some a
+  | none, b => b
+
+theorem later_comm (a b : Option Nat) : later a b = later b a := by
+  cases a <;> cases b <;> simp [later, Nat.max_comm]
+
+theorem later_assoc (a b c : Option Nat) :
+    later (later a b) c = later a (later b c) := by
+  cases a <;> cases b <;> cases c <;> simp [later, Nat.max_assoc]
+
+theorem later_idem (a : Option Nat) : later a a = a := by
+  cases a <;> simp [later]
+
+structure Tombstone where
+  presentSince : Option Nat
+  deletedAt : Option Nat
+  deriving DecidableEq, Repr
+
+def mergeTombstone (a b : Tombstone) : Tombstone :=
+  ⟨later a.presentSince b.presentSince, later a.deletedAt b.deletedAt⟩
+
+def tombstoneDeletes (t : Tombstone) (copyModified : Option Nat) : Bool :=
+  match t.deletedAt with
+  | none => false
+  | some d => Decidable.decide ((later t.presentSince copyModified).getD 0 ≤ d)
+
+theorem mergeTombstone_comm (a b : Tombstone) :
+    mergeTombstone a b = mergeTombstone b a := by
+  simp [mergeTombstone, later_comm]
+
+theorem mergeTombstone_assoc (a b c : Tombstone) :
+    mergeTombstone (mergeTombstone a b) c = mergeTombstone a (mergeTombstone b c) := by
+  simp [mergeTombstone, later_assoc]
+
+theorem mergeTombstone_idem (a : Tombstone) : mergeTombstone a a = a := by
+  simp [mergeTombstone, later_idem]
+
+-- Whatever order two devices exchange ledgers in, they reach one verdict.
+theorem exchangedLedgersAgree (a b : Tombstone) (copy : Option Nat) :
+    tombstoneDeletes (mergeTombstone a b) copy = tombstoneDeletes (mergeTombstone b a) copy := by
+  rw [mergeTombstone_comm]
+
+theorem noDeletionNeverDeletes (presentSince copy : Option Nat) :
+    tombstoneDeletes ⟨presentSince, none⟩ copy = false := rfl
+
+theorem deletionAfterLastSaveDeletes (saved deleted : Nat) (h : saved ≤ deleted) :
+    tombstoneDeletes ⟨some saved, some deleted⟩ none = true := by
+  simp [tombstoneDeletes, later, h]
+
+theorem editAfterDeletionSurvives (presentSince : Option Nat) (deleted edited : Nat)
+    (h : deleted < edited) :
+    tombstoneDeletes ⟨presentSince, some deleted⟩ (some edited) = false := by
+  show Decidable.decide ((later presentSince (some edited)).getD 0 ≤ deleted) = false
+  apply decide_eq_false
+  cases presentSince with
+  | none => simp [later]; omega
+  | some p => simp [later]; omega
+
+theorem saveAfterDeletionSurvives (saved deleted : Nat) (h : deleted < saved) :
+    tombstoneDeletes ⟨some saved, some deleted⟩ none = false := by
+  show Decidable.decide ((later (some saved) none).getD 0 ≤ deleted) = false
+  apply decide_eq_false
+  simp [later]; omega
+
+theorem equalTimeFavoursDeletion (t : Nat) :
+    tombstoneDeletes ⟨some t, some t⟩ (some t) = true := by
+  simp [tombstoneDeletes, later]
+
+-- A workspace document's deletion is stamped with the last version this Mac
+-- had, so an edit made elsewhere after that survives it. A context file's
+-- times are not comparable across Macs, so its deletion is stamped when the
+-- deletion was noticed.
+def workspaceDeletionTime (isContext : Bool) (lastSeenModified noticed : Nat) : Nat :=
+  if isContext then noticed else lastSeenModified
+
+theorem documentDeletionRemovesTheVersionSeen (seen noticed : Nat) :
+    tombstoneDeletes ⟨none, some (workspaceDeletionTime false seen noticed)⟩ (some seen) = true := by
+  simp [tombstoneDeletes, workspaceDeletionTime, later]
+
+theorem documentDeletionSparesALaterEdit (seen noticed edited : Nat) (h : seen < edited) :
+    tombstoneDeletes ⟨none, some (workspaceDeletionTime false seen noticed)⟩ (some edited) = false := by
+  show Decidable.decide
+    ((later none (some edited)).getD 0 ≤ workspaceDeletionTime false seen noticed) = false
+  apply decide_eq_false
+  simp [later, workspaceDeletionTime]; omega
+
+/-! ### Deck pull
+
+`LampPresentationDeckPortablePull.plan` keeps, per deck, the greatest copy in
+the shared file order (`mergeFile`) among those the ledger does not delete,
+then deletes the result if the ledger deletes it. -/
+
+def deckKeep (deleted : FileVersion → Bool) (acc : Option FileVersion)
+    (candidate : FileVersion) : Option FileVersion :=
+  if deleted candidate then acc else
+    match acc with
+    | none => some candidate
+    | some current => some (mergeFile current candidate)
+
+def deckFinal (deleted : FileVersion → Bool) : Option FileVersion → Option FileVersion
+  | some kept => if deleted kept then none else some kept
+  | none => none
+
+def deckPull (deleted : FileVersion → Bool) (installed : Option FileVersion)
+    (incoming : List FileVersion) : Option FileVersion :=
+  deckFinal deleted (incoming.foldl (deckKeep deleted) installed)
+
+theorem deckPullNeverKeepsADeletedDeck (deleted : FileVersion → Bool)
+    (installed : Option FileVersion) (incoming : List FileVersion) (k : FileVersion)
+    (h : deckPull deleted installed incoming = some k) : deleted k = false := by
+  unfold deckPull at h
+  generalize incoming.foldl (deckKeep deleted) installed = kept at h
+  cases kept with
+  | none => simp [deckFinal] at h
+  | some x =>
+    simp only [deckFinal] at h
+    cases hx : deleted x <;> simp_all
+
+theorem mergeFile_right_comm (v a b : FileVersion) :
+    mergeFile (mergeFile v a) b = mergeFile (mergeFile v b) a := by
+  rw [mergeFile_assoc, mergeFile_comm a b, ← mergeFile_assoc]
+
+theorem deckPullIgnoresArrivalOrder (deleted : FileVersion → Bool)
+    (installed : Option FileVersion) (a b : FileVersion) :
+    deckPull deleted installed [a, b] = deckPull deleted installed [b, a] := by
+  unfold deckPull
+  cases ha : deleted a <;> cases hb : deleted b <;> cases installed <;>
+    simp only [List.foldl, deckKeep, ha, hb, Bool.false_eq_true, ↓reduceIte] <;>
+    first | rfl | rw [mergeFile_right_comm] | rw [mergeFile_comm]
+
+/-! ## Refused files
+
+`LampSyncCompatibilityPublisher.publishReportingRefusals` attempts every file
+and collects the ones the server refuses: a refusal is about one file. Any
+other failure — a dropped connection, a rejected credential — will meet every
+later write too, so it stops the batch. -/
+
+inductive WriteResult where
+  | wrote | refused | failed
+  deriving DecidableEq, Repr
+
+def publishReportingRefusals : List WriteResult → Option (List Bool)
+  | [] => some []
+  | .failed :: _ => none
+  | r :: rest => (publishReportingRefusals rest).map (fun tail => (r == .refused) :: tail)
+
+theorem refusalsDoNotStopTheBatch (results : List WriteResult)
+    (h : ∀ r ∈ results, r ≠ .failed) :
+    (publishReportingRefusals results).isSome = true := by
+  induction results with
+  | nil => rfl
+  | cons r rest ih =>
+    have hr : r ≠ .failed := h r (by simp)
+    have hrest : ∀ x ∈ rest, x ≠ .failed := fun x hx => h x (by simp [hx])
+    cases r with
+    | failed => exact absurd rfl hr
+    | wrote => simp [publishReportingRefusals, Option.isSome_map, ih hrest]
+    | refused => simp [publishReportingRefusals, Option.isSome_map, ih hrest]
+
+theorem everyFileIsAccountedFor (results : List WriteResult) (flags : List Bool)
+    (h : publishReportingRefusals results = some flags) : flags.length = results.length := by
+  induction results generalizing flags with
+  | nil => simp [publishReportingRefusals] at h; subst h; rfl
+  | cons r rest ih =>
+    cases r with
+    | failed => simp [publishReportingRefusals] at h
+    | wrote =>
+      simp [publishReportingRefusals] at h
+      obtain ⟨tail, htail, rfl⟩ := h
+      simp [ih tail htail]
+    | refused =>
+      simp [publishReportingRefusals] at h
+      obtain ⟨tail, htail, rfl⟩ := h
+      simp [ih tail htail]
+
+theorem aFailureStopsTheBatch (before after : List WriteResult)
+    (h : ∀ r ∈ before, r ≠ .failed) :
+    publishReportingRefusals (before ++ .failed :: after) = none := by
+  induction before with
+  | nil => rfl
+  | cons r rest ih =>
+    have hr : r ≠ .failed := h r (by simp)
+    have hrest : ∀ x ∈ rest, x ≠ .failed := fun x hx => h x (by simp [hx])
+    cases r with
+    | failed => exact absurd rfl hr
+    | wrote => simp [publishReportingRefusals, ih hrest]
+    | refused => simp [publishReportingRefusals, ih hrest]
+
+/-! ## Did a refused write land?
+
+`LampSyncConditionalWrite.landing` judges, after a write reported failure,
+whether it landed. The server revision afterwards can show a write did not
+land — the file is still where its condition left it — but not that it did: a
+conditional write is refused precisely when another device wrote first, which
+moves the file off the condition just as an accepted write would. The rule
+before 19 October said such a file was written. -/
+
+inductive WriteCondition where
+  | unconditional | ifAbsent | ifRevision (expected : Nat)
+  deriving DecidableEq, Repr
+
+inductive Landing where
+  | wrote | didNotWrite | undecidable
+  deriving DecidableEq, Repr
+
+def landingBefore : WriteCondition → Option Nat → Landing
+  | .unconditional, _ => .wrote
+  | .ifRevision e, s => if s == some e then .didNotWrite else .wrote
+  | .ifAbsent, s => if s.isNone then .didNotWrite else .undecidable
+
+def landing : WriteCondition → Option Nat → Landing
+  | .unconditional, _ => .wrote
+  | .ifRevision e, s => if s == some e then .didNotWrite else .undecidable
+  | .ifAbsent, s => if s.isNone then .didNotWrite else .undecidable
+
+-- Whether the server still satisfies the condition the write carried.
+def stillSatisfies : WriteCondition → Option Nat → Bool
+  | .unconditional, _ => true
+  | .ifAbsent, s => s.isNone
+  | .ifRevision e, s => s == some e
+
+-- The old rule, wrong: this write was refused because another device wrote
+-- revision 2 over the expected 1, and the rule called it written.
+theorem refusedWriteCanLookWritten :
+    landingBefore (.ifRevision 1) (some 2) = .wrote := rfl
+
+-- The rule now claims "not written" only while the server still satisfies the
+-- condition — which an accepted write always moves it off — and "written"
+-- only for a write that asserted nothing and so could not be refused.
+theorem landingIsSound (c : WriteCondition) (s : Option Nat) :
+    (landing c s = .didNotWrite → stillSatisfies c s = true) ∧
+    (landing c s = .wrote → c = .unconditional) := by
+  cases c with
+  | unconditional => simp [landing, stillSatisfies]
+  | ifAbsent => cases s <;> simp [landing, stillSatisfies]
+  | ifRevision e =>
+    constructor
+    · intro h
+      simp only [landing] at h
+      split at h
+      · simp_all [stillSatisfies]
+      · simp at h
+    · intro h
+      simp only [landing] at h
+      split at h <;> simp at h
+
+-- An undecidable case is settled by the bytes the server now holds.
+def settleByBytes (serverBytes : Option Nat) (sent : Nat) : Landing :=
+  if serverBytes == some sent then .wrote else .didNotWrite
+
+theorem anotherDevicesBytesMeanNotWritten (theirs sent : Nat) (h : theirs ≠ sent) :
+    settleByBytes (some theirs) sent = .didNotWrite := by
+  simp [settleByBytes, h]
+
+-- `writeAndConfirm` names the revision a write produced from a read that
+-- returns this write's bytes with a strong revision, asking twice: a server
+-- still settling a large body answers once with the version before it.
+def confirmWrite (sent : Nat) (reads : List (Option (Nat × Option Nat))) : Option Nat :=
+  (reads.take 2).findSome? fun r =>
+    match r with
+    | some (bytes, some revision) => if bytes == sent then some revision else none
+    | _ => none
+
+theorem settlingServerConfirmsOnTheSecondRead :
+    confirmWrite 5 [some (4, some 1), some (5, some 2)] = some 2 := rfl
+
+theorem oneReadWouldHaveCalledItLost :
+    confirmWrite 5 [some (4, some 1)] = none := rfl
+
+theorem anotherDevicesBytesNeverConfirm (theirs sent r1 r2 : Nat) (h : theirs ≠ sent) :
+    confirmWrite sent [some (theirs, some r1), some (theirs, some r2)] = none := by
+  simp [confirmWrite, List.findSome?, h]
+
+theorem aThirdReadIsNeverMade :
+    confirmWrite 5 [none, none, some (5, some 3)] = none := rfl
+
+/-! ## Revision tokens
+
+A server may spell one ETag differently between a PROPFIND and a GET: quoted,
+bare or weak. `LampSyncConditionalWrite.token` keeps only the tag, and
+`namesSameRevision` compares tokens; two absent revisions name the same
+nothing, one absent and one present do not. -/
+
+structure SpelledRevision where
+  weak : Bool
+  quoted : Bool
+  tag : Nat
+  deriving DecidableEq, Repr
+
+def revisionToken (r : SpelledRevision) : Nat := r.tag
+
+def namesSameRevision (a b : Option SpelledRevision) : Bool :=
+  a.map revisionToken == b.map revisionToken
+
+theorem spellingsOfOneTagNameOneRevision (tag : Nat) (w1 q1 w2 q2 : Bool) :
+    namesSameRevision (some ⟨w1, q1, tag⟩) (some ⟨w2, q2, tag⟩) = true := by
+  simp [namesSameRevision, revisionToken]
+
+theorem absentAndPresentNameDifferentRevisions (r : SpelledRevision) :
+    namesSameRevision none (some r) = false := by
+  simp [namesSameRevision]
+
+theorem namesSameRevision_symm (a b : Option SpelledRevision) :
+    namesSameRevision a b = namesSameRevision b a := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [namesSameRevision, beq_iff_eq]
+  exact eq_comm
+
+-- `LampSyncModuleFiles.needsImport` compares tokens. The WebDAV adapters pass
+-- on only strong revisions, so a weak listing tag arrives as no revision at
+-- all and forces the import; iCloud passes a content digest.
+def webDAVAdapterRevision (r : SpelledRevision) : Option SpelledRevision :=
+  if r.weak then none else some r
+
+def needsImportByToken (isNew samePath : Bool) (installed : Option Nat)
+    (remote : Option SpelledRevision) : Bool :=
+  match remote with
+  | none => true
+  | some r => isNew || !samePath || installed != some (revisionToken r)
+
+theorem quotedListingOfOwnUploadMaySkip (tag : Nat) :
+    needsImportByToken false true (some tag) (some ⟨false, true, tag⟩) = false := by
+  simp [needsImportByToken, revisionToken]
+
+theorem weakListingCannotSkipThroughTheAdapter (tag : Nat) (quoted : Bool) :
+    needsImportByToken false true (some tag) (webDAVAdapterRevision ⟨true, quoted, tag⟩) = true := by
+  simp [needsImportByToken, webDAVAdapterRevision]
+
+theorem changedTokenRequiresImport (installed tag : Nat) (w q : Bool) (h : installed ≠ tag) :
+    needsImportByToken false true (some installed) (some ⟨w, q, tag⟩) = true := by
+  simp [needsImportByToken, revisionToken, h]
+
+/-! ## Stored JSON sameness
+
+`LampSyncJSONComparison.sameValue` compares stored JSON columns by meaning:
+nothing, `null` and an empty list or object are one absence; JSON compares by
+its sorted-key encoding; anything that is not JSON compares exactly as
+written, whitespace included, since leading spaces in Markdown are meaning.
+Classifying a string is Swift's (tested there); the comparison is this. -/
+
+inductive StoredColumn where
+  | nothing | json (canonical : Nat) | text (raw : Nat)
+  deriving DecidableEq, Repr
+
+def sameColumn : StoredColumn → StoredColumn → Bool
+  | .nothing, .nothing => true
+  | .json a, .json b => a == b
+  | .text a, .text b => a == b
+  | _, _ => false
+
+theorem sameColumn_refl (c : StoredColumn) : sameColumn c c = true := by
+  cases c <;> simp [sameColumn]
+
+theorem sameColumn_symm (a b : StoredColumn) : sameColumn a b = sameColumn b a := by
+  cases a <;> cases b <;>
+    (apply Bool.eq_iff_iff.mpr; simp only [sameColumn, beq_iff_eq]; try exact eq_comm)
+
+theorem sameColumn_trans (a b c : StoredColumn)
+    (hab : sameColumn a b = true) (hbc : sameColumn b c = true) : sameColumn a c = true := by
+  cases a <;> cases b <;> cases c <;> simp_all [sameColumn]
+
+theorem textIsNeverTheSameAsJSONOrNothing (raw canonical : Nat) :
+    sameColumn (.text raw) (.json canonical) = false ∧ sameColumn (.text raw) .nothing = false := by
+  simp [sameColumn]
+
+/-! ## Archive index
+
+`LampSyncArchiveIndex` lists each archive entry's digest beside the archive
+revision it describes. It is written after the archive, unconditionally, so a
+slow publisher can leave an index for an older revision; a reader trusts an
+index only when it names the server's current strong revision, and otherwise
+fetches the archive as it would have anyway. -/
+
+structure ArchiveIndexFile where
+  describes : Nat
+  supported : Bool
+  deriving DecidableEq, Repr
+
+-- `serverStrong` is the server's revision when it is a strong entity tag.
+def indexTrusted (serverStrong : Option Nat) (index : Option ArchiveIndexFile) : Bool :=
+  match serverStrong, index with
+  | some r, some i => i.supported && i.describes == r
+  | _, _ => false
+
+theorem trustedIndexDescribesTheServersRevision (r : Nat) (i : ArchiveIndexFile)
+    (h : indexTrusted (some r) (some i) = true) : i.describes = r := by
+  simp [indexTrusted] at h
+  exact h.2
+
+theorem lateIndexForAnOlderRevisionIsNotTrusted (older newer : Nat) (h : older ≠ newer) :
+    indexTrusted (some newer) (some ⟨older, true⟩) = false := by
+  simp [indexTrusted, h]
+
+theorem weakOrUnknownRevisionTrustsNoIndex (i : Option ArchiveIndexFile) :
+    indexTrusted none i = false := by
+  cases i <;> rfl
+
+theorem unsupportedIndexIsNotTrusted (r : Nat) :
+    indexTrusted (some r) (some ⟨r, false⟩) = false := rfl
+
+-- A pass may take a moved archive revision as applied without fetching it
+-- when the trusted index's importable entries are exactly those last
+-- installed. Entries are (path, digest) pairs; the Swift fingerprint is a
+-- digest of their sorted list, whose collision resistance is assumed.
+def mayAdvanceWithoutFetch (cacheUsable : Bool) (applied : Option (List (Nat × Nat)))
+    (trustedIndex : Option (List (Nat × Nat))) : Bool :=
+  match applied, trustedIndex with
+  | some a, some i => cacheUsable && a == i
+  | _, _ => false
+
+theorem advancingWithoutFetchMissesNothingInstallable (cacheUsable : Bool)
+    (applied current : List (Nat × Nat))
+    (h : mayAdvanceWithoutFetch cacheUsable (some applied) (some current) = true) :
+    applied = current := by
+  simp [mayAdvanceWithoutFetch] at h
+  exact h.2
+
+theorem untrustedIndexAlwaysFetches (cacheUsable : Bool) (applied : Option (List (Nat × Nat))) :
+    mayAdvanceWithoutFetch cacheUsable applied none = false := by
+  cases applied <;> rfl
+
+theorem unusableCacheAlwaysFetches (applied current : List (Nat × Nat)) :
+    mayAdvanceWithoutFetch false (some applied) (some current) = false := by
+  simp [mayAdvanceWithoutFetch]
+
+-- Settings resolution may reuse an archive the pass already read, but only
+-- while the server still holds that strong revision: what it reuses is then
+-- what a fresh read would return (a strong revision names one body).
+def reuseArchive (candidate : Option Nat) (candidateStrong : Bool) (serverNow : Option Nat) : Bool :=
+  match candidate, serverNow with
+  | some c, some s => candidateStrong && c == s
+  | _, _ => false
+
+theorem reusedArchiveIsTheServersCurrentRevision (c s : Nat) (strong : Bool)
+    (h : reuseArchive (some c) strong (some s) = true) : c = s := by
+  simp [reuseArchive] at h
+  exact h.2
+
+theorem movedArchiveIsReadAgain (c s : Nat) (strong : Bool) (h : c ≠ s) :
+    reuseArchive (some c) strong (some s) = false := by
+  simp [reuseArchive, h]
+
+theorem weakCandidateIsReadAgain (c : Nat) :
+    reuseArchive (some c) false (some c) = false := rfl
+
+/-! ## Starting a pass again
+
+`LampSyncPassRetry`: a pass whose archive write lost to another device's
+publish — the server's revision moved off the one the pass read — runs once
+more from what won. Only once: a library someone keeps publishing to is
+reported rather than chased. -/
+
+def lostRace (read now : Option Nat) : Bool := read != now
+
+def shouldRunAgain (passesRun : Nat) (succeeded lost : Bool) : Bool :=
+  !succeeded && lost && passesRun < 2
+
+-- Passes run by one request, given each pass's (succeeded, lostRace).
+def passesRun : Nat → List (Bool × Bool) → Nat
+  | n, [] => n
+  | n, (ok, lost) :: rest =>
+    if shouldRunAgain (n + 1) ok lost then passesRun (n + 1) rest else n + 1
+
+theorem aSyncRunsAtMostTwoPasses (outcomes : List (Bool × Bool)) :
+    passesRun 0 outcomes ≤ 2 := by
+  match outcomes with
+  | [] => simp [passesRun]
+  | [(ok, lost)] =>
+    simp only [passesRun]
+    split <;> simp
+  | (ok, lost) :: (ok2, lost2) :: rest =>
+    simp only [passesRun]
+    split
+    · simp [shouldRunAgain]
+    · simp
+
+theorem aSucceededPassIsNotRepeated (n : Nat) (lost : Bool) :
+    shouldRunAgain n true lost = false := by
+  simp [shouldRunAgain]
+
+theorem anUnmovedRevisionIsNotRepeated (n : Nat) (read : Option Nat) :
+    shouldRunAgain n false (lostRace read read) = false := by
+  simp [shouldRunAgain, lostRace]
+
+theorem anArchiveThatAppearedIsALostRace (now : Nat) :
+    lostRace none (some now) = true := rfl
+
+/-! ## A first settings upload
+
+`LampSyncSettingsBootstrap.uploadsBeforeMerge`: a guarded first upload writes
+before merging only while the server still holds the revision this device last
+observed — which an unknown revision on either side cannot show. Otherwise the
+merge runs alone (`baselessReading`); it used to refuse, which changed nothing
+and so refused on every poll. `staleSnapshotCannotUpload` is the same guard. -/
+
+def uploadsBeforeMerge (guarded : Bool) (observed remote : Option Nat) : Bool :=
+  match observed, remote with
+  | some o, some r => guarded && o == r
+  | _, _ => false
+
+theorem uploadFirstOnlyOverTheObservedRevision (guarded : Bool) (o r : Nat)
+    (h : uploadsBeforeMerge guarded (some o) (some r) = true) : o = r := by
+  simp [uploadsBeforeMerge] at h
+  exact h.2
+
+theorem movedRevisionMergesInsteadOfRefusing (o r : Nat) (h : o ≠ r) :
+    uploadsBeforeMerge true (some o) (some r) = false := by
+  simp [uploadsBeforeMerge, h]
+
+theorem unknownRevisionNeverUploadsFirst (guarded : Bool) (r : Option Nat) :
+    uploadsBeforeMerge guarded none r = false ∧ uploadsBeforeMerge guarded r none = false := by
+  cases r <;> simp [uploadsBeforeMerge]
+
+/-! ## Conformance tables
+
+Each line below names a model decision, its inputs and its answer. Swift's
+`SyncModelConformanceTests` runs this file, reads every `CONFORMANCE` line, and
+asks the shipped Swift decision the same question. A decision changed on one
+side and not the other fails the suite, so the model cannot quietly drift from
+the code it describes. The Swift tests read these inputs and print nothing
+else: an unknown rule name, or a rule with no lines, fails too. -/
+
+def conformanceLine (rule : String) (fields : List String) : String :=
+  "CONFORMANCE " ++ rule ++ " " ++ " ".intercalate fields
+
+def optNat : Option Nat → String
+  | none => "-"
+  | some n => toString n
+
+def decisionName : Decision → String
+  | .local => "local" | .incoming => "incoming" | .conflict => "conflict"
+
+def importOutcomeName : ImportOutcome → String
+  | .keepLocal => "keepLocal" | .takeIncoming => "takeIncoming"
+  | .setAside => "setAside" | .stop => "stop"
+
+def landingName : Landing → String
+  | .wrote => "wrote" | .didNotWrite => "didNotWrite" | .undecidable => "undecidable"
+
+def conditionName : WriteCondition → String
+  | .unconditional => "unconditional" | .ifAbsent => "ifAbsent"
+  | .ifRevision e => "ifRevision:" ++ toString e
+
+def rowName : Option (Nat × Nat) → String
+  | none => "-"
+  | some (rev, body) => toString rev ++ ":" ++ toString body
+
+def spelledName : Option SpelledRevision → String
+  | none => "-"
+  | some r => (if r.weak then "w" else if r.quoted then "q" else "b") ++ toString r.tag
+
+def fieldName (fresh : Nat) : Option PrefField → String
+  | none => "-"
+  | some f => optNat f.value ++ "@" ++ (if f.revision == fresh then "fresh" else toString f.revision)
+
+def indexName : Option ArchiveIndexFile → String
+  | none => "-"
+  | some i => toString i.describes ++ (if i.supported then "s" else "u")
+
+def entriesName : Option (List (Nat × Nat)) → String
+  | none => "-"
+  | some [(1, 1)] => "A"
+  | some _ => "B"
+
+def entriesFor : String → Option (List (Nat × Nat))
+  | "A" => some [(1, 1)]
+  | "B" => some [(1, 2)]
+  | _ => none
+
+#eval show IO Unit from do
+  for c in [0, 1, 2] do
+    for i in [0, 1, 2] do
+      for same in [true, false] do
+        IO.println <| conformanceLine "decide"
+          [toString c, toString i, toString same,
+           decisionName (decide (Int.ofNat c) (Int.ofNat i) same)]
+        for forSync in [true, false] do
+          IO.println <| conformanceLine "importOutcome"
+            [toString forSync, toString c, toString i, toString same,
+             importOutcomeName (portableImportOutcome forSync (Int.ofNat c) (Int.ofNat i) same)]
+
+#eval show IO Unit from do
+  for c in [WriteCondition.unconditional, .ifAbsent, .ifRevision 1] do
+    for s in [none, some 1, some 2] do
+      IO.println <| conformanceLine "landing" [conditionName c, optNat s, landingName (landing c s)]
+
+#eval show IO Unit from do
+  let times := [none, some 0, some 1, some 2]
+  for p in times do
+    for d in times do
+      for c in times do
+        IO.println <| conformanceLine "tombstone"
+          [optNat p, optNat d, optNat c, toString (tombstoneDeletes ⟨p, d⟩ c)]
+  let few := [none, some 1, some 2]
+  for ap in few do
+    for ad in few do
+      for bp in few do
+        for bd in few do
+          let m := mergeTombstone ⟨ap, ad⟩ ⟨bp, bd⟩
+          IO.println <| conformanceLine "tombstoneMerge"
+            [optNat ap, optNat ad, optNat bp, optNat bd, optNat m.presentSince, optNat m.deletedAt]
+
+#eval show IO Unit from do
+  for d in [none, some (1, 10), some (2, 20)] do
+    for r in [none, some (1, 11), some (2, 21)] do
+      IO.println <| conformanceLine "baselessReading"
+        [rowName d, rowName r, rowName (baselessReading d r)]
+
+#eval show IO Unit from do
+  for n in [0, 1, 2, 3] do
+    for ok in [true, false] do
+      for lost in [true, false] do
+        IO.println <| conformanceLine "shouldRunAgain"
+          [toString n, toString ok, toString lost, toString (shouldRunAgain n ok lost)]
+  for read in [none, some 1, some 2] do
+    for now in [none, some 1, some 2] do
+      IO.println <| conformanceLine "lostRace" [optNat read, optNat now, toString (lostRace read now)]
+      for guarded in [true, false] do
+        IO.println <| conformanceLine "uploadsBeforeMerge"
+          [toString guarded, optNat read, optNat now, toString (uploadsBeforeMerge guarded read now)]
+
+#eval show IO Unit from do
+  let spellings : List (Option SpelledRevision) :=
+    [none, some ⟨false, true, 1⟩, some ⟨false, false, 1⟩, some ⟨true, true, 1⟩, some ⟨false, true, 2⟩]
+  for a in spellings do
+    for b in spellings do
+      IO.println <| conformanceLine "namesSameRevision"
+        [spelledName a, spelledName b, toString (namesSameRevision a b)]
+  for isNew in [true, false] do
+    for samePath in [true, false] do
+      for installed in [none, some 1] do
+        for remote in spellings do
+          IO.println <| conformanceLine "needsImport"
+            [toString isNew, toString samePath, optNat installed, spelledName remote,
+             toString (needsImportByToken isNew samePath installed remote)]
+
+#eval show IO Unit from do
+  -- "w1" is a weak server revision, which can identify no body.
+  for server in ["-", "w1", "1", "2"] do
+    for index in [none, some ⟨1, true⟩, some ⟨2, true⟩, some ⟨1, false⟩] do
+      let strong : Option Nat := match server with
+        | "1" => some 1 | "2" => some 2 | _ => none
+      IO.println <| conformanceLine "indexTrusted"
+        [server, indexName index, toString (indexTrusted strong index)]
+  for cacheUsable in [true, false] do
+    for applied in ["-", "A", "B"] do
+      for trusted in ["-", "A", "B"] do
+        IO.println <| conformanceLine "mayAdvanceWithoutFetch"
+          [toString cacheUsable, applied, trusted,
+           toString (mayAdvanceWithoutFetch cacheUsable (entriesFor applied) (entriesFor trusted))]
+  for candidate in [none, some 1, some 2] do
+    for strong in [true, false] do
+      for now in [none, some 1, some 2] do
+        IO.println <| conformanceLine "reuseArchive"
+          [optNat candidate, toString strong, optNat now, toString (reuseArchive candidate strong now)]
+
+#eval show IO Unit from do
+  let fresh := 99
+  let fields : List (Option PrefField) := [none, some ⟨some 1, 10⟩, some ⟨none, 10⟩]
+  let remotes : List (Option PrefField) :=
+    [none, some ⟨some 1, 10⟩, some ⟨some 2, 11⟩, some ⟨none, 11⟩]
+  for hasBase in [true, false] do
+    for previous in (if hasBase then fields else [none]) do
+      for remote in remotes do
+        for localValue in [none, some 1, some 2, some 3] do
+          let o := preferenceMerge hasBase previous remote localValue fresh
+          IO.println <| conformanceLine "preferenceMerge"
+            [toString hasBase, fieldName fresh previous, fieldName fresh remote, optNat localValue,
+             fieldName fresh o.published, toString o.applies, fieldName fresh o.baseline,
+             toString o.disputed]
 
 end LampSyncVerification

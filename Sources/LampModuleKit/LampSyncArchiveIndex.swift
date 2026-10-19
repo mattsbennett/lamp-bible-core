@@ -173,6 +173,21 @@ public extension LampSyncArchiveIndex {
     /// Unconditional on purpose: it describes one specific revision and says
     /// so, so a loser in a race writes something a reader will discard rather
     /// than something a reader will believe.
+    /// Whether a pass may take the server's archive revision as applied
+    /// without fetching the archive: the index describes that very revision,
+    /// and every entry a pass would install has the digest this device last
+    /// installed. Settings are left out of the fingerprint because their own
+    /// sync reads them. (`Verification/SyncMerge.lean`: `mayAdvanceWithoutFetch`.)
+    static func mayAdvanceWithoutFetch(
+        cacheUsable: Bool,
+        appliedFingerprint: String?,
+        availability: Availability
+    ) -> Bool {
+        guard cacheUsable, let appliedFingerprint,
+              let index = availability.index else { return false }
+        return index.importableFingerprint == appliedFingerprint
+    }
+
     static func publish(
         describing archive: LampSyncArchive,
         at revision: String,
