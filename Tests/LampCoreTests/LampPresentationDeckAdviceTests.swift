@@ -102,6 +102,53 @@ struct LampPresentationDeckAdviceTests {
         #expect(slide.plan.ignored.isEmpty)
     }
 
+    /// Contrasting two attitudes often means pairing, under each heading, a
+    /// writer's sentence with the verse that answers him. The second passage
+    /// used to become a third column, which is not drawn, so the slide had to
+    /// be split in two.
+    @Test func carriesTwoAttributedPassagesInEachHeadedColumn() {
+        let slide = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .title, text: "Two attitudes"),
+            .init(kind: .subtitle, text: "Resignation"),
+            .init(kind: .quotation, text: "Nothing to be done."),
+            .init(kind: .citation, text: "Beckett"),
+            .init(kind: .scripture, text: "We will not walk in it."),
+            .init(kind: .citation, text: "Jeremiah 6:16"),
+            .init(kind: .subtitle, text: "Expectancy"),
+            .init(kind: .quotation, text: "Yet I will look again."),
+            .init(kind: .citation, text: "Jonah"),
+            .init(kind: .scripture, text: "and you will find rest for your souls."),
+            .init(kind: .citation, text: "Jeremiah 6:16"),
+        ])
+        let columns = slide.plan.columnGroups
+        #expect(columns.count == 2)
+        #expect(columns.map(\.groups.count) == [2, 2])
+        #expect(columns.first?.groups.first?.citation?.text == "Beckett")
+        #expect(columns.first?.groups.last?.citation?.text == "Jeremiah 6:16")
+        #expect(columns.last?.groups.first?.quotations.map(\.text) == ["Yet I will look again."])
+        #expect(columns.last?.groups.last?.citation?.text == "Jeremiah 6:16")
+        // Every block reaches the slide, so neither validator has anything to say.
+        #expect(slide.plan.ignored.isEmpty)
+        #expect(warnings([slide]).isEmpty, "unexpected warnings: \(warnings([slide]))")
+    }
+
+    /// A passage with no citation still draws, wherever it falls in the column.
+    @Test func drawsAnUnattributedPassageAtTheEndOfAHeadedColumn() {
+        let slide = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .subtitle, text: "One"),
+            .init(kind: .quotation, text: "Credited."),
+            .init(kind: .citation, text: "A source"),
+            .init(kind: .body, text: "And a thought of my own."),
+            .init(kind: .subtitle, text: "Two"),
+            .init(kind: .body, text: "Second"),
+        ])
+        let columns = slide.plan.columnGroups
+        #expect(columns.first?.groups.count == 2)
+        #expect(columns.first?.groups.last?.quotations.map(\.text) == ["And a thought of my own."])
+        #expect(columns.first?.groups.last?.citation == nil)
+        #expect(slide.plan.ignored.isEmpty)
+    }
+
     @Test func namesAThirdHeadedColumnAndACitationWithNothingToAttribute() {
         let third = warnings([
             .init(layout: .twoColumn, blocks: [

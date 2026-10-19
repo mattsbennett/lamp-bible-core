@@ -458,8 +458,12 @@ public struct LampPresentationSlideCanvas: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// One column: its heading in a heavier weight, its prose, and its
-    /// citation in the accent colour, as a citation is drawn everywhere else.
+    /// One column: its heading in a heavier weight, then each of its passages
+    /// with its citation in the accent colour, as a citation is drawn
+    /// everywhere else.
+    ///
+    /// Two passages under one heading are two things said, so each keeps its
+    /// own citation rather than both being credited by one line at the foot.
     private func column(
         _ column: LampPresentationSlidePlan.Column,
         size: CGFloat,
@@ -469,17 +473,26 @@ public struct LampPresentationSlideCanvas: View {
             if let heading = column.heading {
                 slideBlockText(heading, size: size * unit, weight: .bold, stepsDown: false)
             }
-            ForEach(column.prose) { block in
-                slideBlockText(block, size: size * unit, weight: .regular, stepsDown: false)
-            }
-            if let citation = column.citation {
-                slideBlockText(
-                    citation,
-                    size: Self.citationSize(beside: size) * unit,
-                    weight: .medium,
-                    color: accent,
-                    stepsDown: false
-                )
+            ForEach(column.groups) { group in
+                VStack(alignment: .leading, spacing: 0.3 * size * unit) {
+                    ForEach(group.quotations) { block in
+                        slideBlockText(
+                            block,
+                            size: size * unit,
+                            weight: .regular,
+                            stepsDown: false
+                        )
+                    }
+                    if let citation = group.citation {
+                        slideBlockText(
+                            citation,
+                            size: Self.citationSize(beside: size) * unit,
+                            weight: .medium,
+                            color: accent,
+                            stepsDown: false
+                        )
+                    }
+                }
             }
         }
     }

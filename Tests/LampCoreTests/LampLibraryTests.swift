@@ -383,7 +383,7 @@ struct LampLibraryTests {
                 text: "John 1:1", startReference: 43_001_001
             )],
             summary: "God gives hope.",
-            content: "Opening paragraph.\n\n## A body heading\n\nMore detail.",
+            content: "Opening paragraph.[^one]\n\n## A body heading\n\nMore detail.",
             footnotes: "[^one]: A footnote."
         ))
         try await source.savePersonalDevotional(LampDevotional(
@@ -413,7 +413,12 @@ struct LampLibraryTests {
         #expect(rich.keyScriptures.first?.startReference == 43_001_001)
         #expect(rich.summary == "God gives hope.")
         #expect(rich.content.contains("## A body heading"))
-        #expect(rich.footnotes == "[^one]: A footnote.")
+        // Exported Markdown numbers footnotes by the order they are first
+        // referred to, so an exported document reads 1, 2, 3 whatever the
+        // writing labelled them. The label is the writer's shorthand; the
+        // number is what a reader is shown, so the number is what travels.
+        #expect(rich.content.contains("Opening paragraph.[^1]"))
+        #expect(rich.footnotes == "[^1]: A footnote.")
     }
 
     @Test func planCalendarRoundTripsStableLeapDaySlots() throws {

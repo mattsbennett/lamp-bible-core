@@ -84,8 +84,15 @@ public enum LampPersonalMarkdownWriter {
         if let summary = entry.summary?.markdownValue {
             blocks.append("> **Summary:** \(summary.replacingOccurrences(of: "\n", with: "\n> "))")
         }
-        if let content = entry.content.markdownValue { blocks.append(content) }
-        if let footnotes = entry.footnotes?.markdownValue {
+        // Numbered by the order of their first reference, so an exported
+        // document reads 1, 2, 3 however the labels were written. The writing
+        // itself is left alone; this is the copy going out.
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: entry.content,
+            footnotes: entry.footnotes
+        )
+        if let content = numbered.content.markdownValue { blocks.append(content) }
+        if let footnotes = LampDevotionalFootnotes.exportedFootnotes(numbered).markdownValue {
             blocks.append("### Footnotes\n\n\(footnotes)")
         }
         return blocks.joined(separator: "\n\n")

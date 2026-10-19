@@ -270,6 +270,48 @@ struct LampSlideCanvasLayoutTests {
         #expect(cited > plain)
     }
 
+    @Test("A headed column draws both of its attributed passages")
+    func twoColumnDrawsEveryCitationInEachColumn() throws {
+        /// Each heading over a writer's sentence and the verse that answers
+        /// him. The second passage used to become a third column and was never
+        /// drawn, so the slide had to be split in two.
+        let paired = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .title, text: "Two attitudes"),
+            .init(kind: .subtitle, text: "Resignation"),
+            .init(kind: .quotation, text: "Nothing to be done."),
+            .init(kind: .citation, text: "Beckett"),
+            .init(kind: .scripture, text: "We will not walk in it."),
+            .init(kind: .citation, text: "Jeremiah 6:16"),
+            .init(kind: .subtitle, text: "Expectancy"),
+            .init(kind: .quotation, text: "Yet I will look again."),
+            .init(kind: .citation, text: "Jonah 2:4"),
+            .init(kind: .scripture, text: "and find rest for your souls."),
+            .init(kind: .citation, text: "Jeremiah 6:16"),
+        ])
+        let single = LampPresentationSlide(layout: .twoColumn, blocks: [
+            .init(kind: .title, text: "Two attitudes"),
+            .init(kind: .subtitle, text: "Resignation"),
+            .init(kind: .quotation, text: "Nothing to be done."),
+            .init(kind: .citation, text: "Beckett"),
+            .init(kind: .subtitle, text: "Expectancy"),
+            .init(kind: .quotation, text: "Yet I will look again."),
+            .init(kind: .citation, text: "Jonah 2:4"),
+        ])
+        let image = try render(paired, deck: deck)
+        // Each half carries more than the same slide with one passage a side,
+        // so the second passage and its citation reached both columns.
+        for (fromLeft, toLeft) in [(0.02, 0.46), (0.54, 0.98)] {
+            let both = try inkFraction(
+                in: image, fromTop: 0.2, toTop: 0.98, fromLeft: fromLeft, toLeft: toLeft
+            )
+            let one = try inkFraction(
+                in: try render(single, deck: deck),
+                fromTop: 0.2, toTop: 0.98, fromLeft: fromLeft, toLeft: toLeft
+            )
+            #expect(both > one)
+        }
+    }
+
     @Test("A title-and-body slide draws every body block")
     func titleAndBodyDrawsEveryBody() throws {
         let two = LampPresentationSlide(layout: .titleAndBody, blocks: [

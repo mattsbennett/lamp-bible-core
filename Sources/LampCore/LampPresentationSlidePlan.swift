@@ -39,6 +39,11 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
 
         public var id: String { quotations.first?.id ?? citation?.id ?? "" }
 
+        /// The passage and its citation, in the order they are drawn.
+        public var blocks: [LampPresentationBlock] {
+            quotations + (citation.map { [$0] } ?? [])
+        }
+
         public init(quotations: [LampPresentationBlock], citation: LampPresentationBlock?) {
             self.quotations = quotations
             self.citation = citation
@@ -55,26 +60,47 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     /// A column used to be a single body block, so a heading and a reference
     /// could only be typed in as further lines of it and were drawn as body
     /// text like the rest.
+    ///
+    /// A headed column holds passages rather than one passage, because
+    /// contrasting two attitudes often means pairing, under each heading, a
+    /// writer's sentence with the verse that answers him — two credited
+    /// passages about one idea. A citation used to close the column itself, so
+    /// the second passage became a third column and was never drawn.
     public struct Column: Equatable, Sendable, Identifiable {
         public var heading: LampPresentationBlock?
-        public var prose: [LampPresentationBlock]
-        public var citation: LampPresentationBlock?
+        /// What the column says, each passage with the citation attributing it,
+        /// in the order the deck wrote them.
+        public var groups: [QuoteGroup]
 
         public var id: String { heading?.id ?? prose.first?.id ?? citation?.id ?? "" }
 
+        /// Everything the column says, across its passages.
+        public var prose: [LampPresentationBlock] { groups.flatMap(\.quotations) }
+
+        /// The citation attributing the column's last passage, which on a
+        /// column carrying one passage is simply the column's citation.
+        public var citation: LampPresentationBlock? { groups.last?.citation }
+
         /// Everything the column draws, top to bottom.
         public var blocks: [LampPresentationBlock] {
-            (heading.map { [$0] } ?? []) + prose + (citation.map { [$0] } ?? [])
+            (heading.map { [$0] } ?? []) + groups.flatMap(\.blocks)
         }
 
+        public init(heading: LampPresentationBlock? = nil, groups: [QuoteGroup] = []) {
+            self.heading = heading
+            self.groups = groups
+        }
+
+        /// A column carrying one passage, which is most of them.
         public init(
             heading: LampPresentationBlock? = nil,
-            prose: [LampPresentationBlock] = [],
+            prose: [LampPresentationBlock],
             citation: LampPresentationBlock? = nil
         ) {
-            self.heading = heading
-            self.prose = prose
-            self.citation = citation
+            self.init(
+                heading: heading,
+                groups: [QuoteGroup(quotations: prose, citation: citation)]
+            )
         }
     }
 
@@ -128,37 +154,62 @@ extension LampPresentationSlide {
 extension LampPresentationSlide {
     /// Reads a two-column slide's blocks into columns.
     ///
-    /// A `subtitle` opens a column and names it; the prose after it is that
-    /// column's, until a citation closes it or the next subtitle opens another.
+    /// A `subtitle` opens a column and names it; everything after it is that
+    /// column's until the next subtitle opens another. Inside a headed column a
+    /// citation closes the passage it follows rather than the column, so a
+    /// column can credit a writer and then the verse that answers him — each
+    /// passage drawn with its own citation, as a quotation slide draws its
+    /// groups.
+    ///
     /// A slide with no subtitles keeps the older reading, in which every prose
-    /// block is a column of its own. Either way a citation attributes the
-    /// column it follows.
+    /// block is a column of its own and a citation attributes the column it
+    /// follows, so decks written against that still draw as they did.
     static func columnGroups(
         in blocks: [LampPresentationBlock]
     ) -> [LampPresentationSlidePlan.Column] {
+        typealias Column = LampPresentationSlidePlan.Column
+        typealias QuoteGroup = LampPresentationSlidePlan.QuoteGroup
         let usesHeadings = blocks.contains { $0.kind == .subtitle }
-        var columns: [LampPresentationSlidePlan.Column] = []
+        var columns: [Column] = []
+        /// Prose read since the last citation, waiting to be attributed.
+        var pending: [LampPresentationBlock] = []
+
+        /// Closes what has been read into the open column as one passage.
+        func close(with citation: LampPresentationBlock?) {
+            guard !pending.isEmpty, let last = columns.indices.last else { return }
+            columns[last].groups.append(.init(quotations: pending, citation: citation))
+            pending = []
+        }
+
         for block in blocks {
             switch block.kind {
             case .subtitle:
-                columns.append(.init(heading: block))
+                // Whatever is still open belongs to the column being left.
+                close(with: nil)
+                columns.append(Column(heading: block))
             case .body, .scripture, .quotation:
-                if usesHeadings, let last = columns.indices.last,
-                   columns[last].citation == nil {
-                    columns[last].prose.append(block)
+                if usesHeadings, !columns.isEmpty {
+                    pending.append(block)
                 } else {
-                    columns.append(.init(prose: [block]))
+                    columns.append(Column(groups: [
+                        QuoteGroup(quotations: [block], citation: nil),
+                    ]))
                 }
             case .citation:
-                if let last = columns.indices.last,
-                   columns[last].citation == nil,
-                   !columns[last].prose.isEmpty {
-                    columns[last].citation = block
+                if usesHeadings {
+                    close(with: block)
+                } else if let last = columns.indices.last,
+                          let group = columns[last].groups.indices.last,
+                          columns[last].groups[group].citation == nil,
+                          !columns[last].groups[group].quotations.isEmpty {
+                    columns[last].groups[group].citation = block
                 }
             case .title, .image, .caption:
                 break
             }
         }
+        // A column may end on an unattributed passage, which still draws.
+        close(with: nil)
         return columns
     }
 }
