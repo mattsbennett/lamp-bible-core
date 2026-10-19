@@ -8,8 +8,9 @@ import Foundation
 /// renumbering every later one by hand, in the prose and in the definitions,
 /// and a mistake either side left a marker pointing at the wrong note.
 ///
-/// The labels in the source can now be anything — `[^lewis]`, `[^2a]`, or
-/// numbers in any order — and a reader is shown 1, 2, 3 in reading order. The
+/// The labels in the source can now be any run of characters with no space in
+/// it and no closing bracket — `[^lewis]`, `[^2a]`, `[^pinker-48]`, or numbers
+/// in any order — and a reader is shown 1, 2, 3 in reading order. The
 /// numbering happens where the writing is shown or exported, never on save:
 /// rewriting `draft.md` would change it under an agent that is editing it.
 public enum LampDevotionalFootnotes {

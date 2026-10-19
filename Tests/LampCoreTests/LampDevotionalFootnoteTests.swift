@@ -73,6 +73,22 @@ struct LampDevotionalFootnoteTests {
         #expect(numbered.footnotes.count == 1)
     }
 
+    @Test func readsAnyLabelWithoutASpaceOrAClosingBracket() {
+        // What a label may be is the one thing every platform has to agree on.
+        // The editor on iOS looked for `\w+`, so a label like `pinker-48` was
+        // shown there as typed and its note stayed in the prose.
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: "Vocabulary[^pinker-48], capacity[^lewis.26], and both[^a,b].",
+            footnotes: """
+            [^pinker-48]: Pinker, p. 48.
+            [^lewis.26]: Lewis, p. 26.
+            [^a,b]: Both of them.
+            """
+        )
+        #expect(numbered.content == "Vocabulary[^1], capacity[^2], and both[^3].")
+        #expect(numbered.footnotes.map(\.label) == ["pinker-48", "lewis.26", "a,b"])
+    }
+
     @Test func doesNothingToWritingWithNoFootnotes() {
         let numbered = LampDevotionalFootnotes.numbered(
             content: "Plain prose, with nothing to note.",
