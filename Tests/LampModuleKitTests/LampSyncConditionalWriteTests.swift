@@ -153,6 +153,37 @@ struct LampSyncConditionalWriteTests {
         ) == .undecidable)
     }
 
+
+    // MARK: - Confirming a write the server has not finished settling
+
+    /// A server that answers the confirming read with the body it held
+    /// before the write has not taken the write away from us. Read once and
+    /// that looks exactly like another device having won, and the user is
+    /// told they lost a race over a file that is sitting on the server.
+    @Test func aConfirmingReadThatLagsIsAskedAgain() async throws {
+        let store = SettlingStore(previousBody: Data("before".utf8), staleReads: 1)
+
+        let revision = try await LampSyncConditionalWrite.writeAndConfirm(
+            Data("published".utf8), to: "Library/a.lamp", in: store, condition: .ifAbsent
+        )
+
+        #expect(revision == "\"settled\"")
+        let reads = await store.reads()
+        #expect(reads == 2)
+    }
+
+    /// Asking twice must not turn somebody else's write into ours: bytes
+    /// that stay different are a real conflict however often they are read.
+    @Test func bytesThatStayDifferentAreStillAConflict() async {
+        let store = SettlingStore(previousBody: Data("someone else".utf8), staleReads: .max)
+
+        await #expect(throws: LampSyncConditionalWrite.WriteError.self) {
+            try await LampSyncConditionalWrite.writeAndConfirm(
+                Data("published".utf8), to: "Library/a.lamp", in: store, condition: .ifAbsent
+            )
+        }
+    }
+
 }
 
 private actor ConditionalStore: LampSyncRemoteStore {
@@ -190,5 +221,44 @@ private actor ConditionalStore: LampSyncRemoteStore {
         self.condition = condition
         remote = remoteAfterWrite
         return writeRevision
+    }
+}
+
+
+/// A store whose PUT returns no ETag, and whose first reads answer with the
+/// body it held before that write.
+private actor SettlingStore: LampSyncRemoteStore {
+    private let previousBody: Data
+    private var staleReads: Int
+    private var readCount = 0
+    private var written: Data?
+
+    init(previousBody: Data, staleReads: Int) {
+        self.previousBody = previousBody
+        self.staleReads = staleReads
+    }
+
+    func reads() -> Int { readCount }
+
+    func list(directory: String) async throws -> [LampSyncRemoteEntry]? { [] }
+    func revision(path: String) async throws -> String? { "\"settled\"" }
+
+    func read(path: String) async throws -> LampSyncRemoteFile? {
+        readCount += 1
+        if staleReads > 0 {
+            staleReads -= 1
+            return LampSyncRemoteFile(data: previousBody, revision: "\"stale\"")
+        }
+        guard let written else { return nil }
+        return LampSyncRemoteFile(data: written, revision: "\"settled\"")
+    }
+
+    func write(
+        _ data: Data,
+        to path: String,
+        condition: LampSyncWriteCondition
+    ) async throws -> String? {
+        written = data
+        return nil // No ETag on the PUT, so the caller confirms by reading.
     }
 }

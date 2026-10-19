@@ -65,13 +65,28 @@ public enum LampSyncConditionalWrite {
         if let responseRevision, LampWebDAVStorage.isStrongETag(responseRevision) {
             return responseRevision
         }
-        guard let remote = try await store.read(path: path),
-              remote.data == data,
-              let revision = remote.revision,
-              LampWebDAVStorage.isStrongETag(revision) else {
-            throw WriteError.conflict
+        // The write went through; what is left is naming the revision it
+        // produced, by reading back what was just written.
+        //
+        // Read once and a server that has not finished settling a large
+        // body answers with the version before it, which reads here as
+        // somebody else having taken the write — reported to the user as a
+        // lost race over a file that is on the server. Asking twice costs
+        // one request on a path that is already failing, and a genuine
+        // conflict still fails: the other device's bytes do not become ours
+        // for being read again.
+        for attempt in 0..<2 {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            if let remote = try await store.read(path: path),
+               remote.data == data,
+               let revision = remote.revision,
+               LampWebDAVStorage.isStrongETag(revision) {
+                return revision
+            }
         }
-        return revision
+        throw WriteError.conflict
     }
 
     /// The iOS settings cache stores an ETag without HTTP quote delimiters.
