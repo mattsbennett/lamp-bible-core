@@ -247,6 +247,60 @@ struct LampPresentationManuscriptNotesTests {
         ).isEmpty)
     }
 
+    @Test func allowsASlideToEndAQuotationTheProsePunctuatesDifferently() {
+        // The prose closes its quotation before the reference; the slide shows
+        // the words with a full stop of their own.
+        let prose = """
+        # John
+
+        These are written so that by believing you may have life in his
+        name\u{201D} (John 20:31).
+        """
+        let subject = deck(
+            [("first", nil)],
+            blocks: ["first": [
+                .init(
+                    id: "verse",
+                    kind: .scripture,
+                    text: "by believing you may have life in his name."
+                ),
+            ]]
+        )
+        #expect(LampPresentationManuscriptNotes.staleQuotations(
+            in: subject,
+            manuscript: prose
+        ).isEmpty)
+    }
+
+    @Test func stillFindsRewordedProseBehindTidyPunctuation() {
+        let subject = deck(
+            [("first", nil)],
+            blocks: ["first": [
+                .init(id: "stale", kind: .quotation, text: "It is the one we always ignore."),
+            ]]
+        )
+        // Only the edges are forgiven; the words themselves still have to be there.
+        #expect(LampPresentationManuscriptNotes.staleQuotations(
+            in: subject,
+            manuscript: manuscript
+        ).map(\.blockID) == ["stale"])
+    }
+
+    @Test func passesOverAFragmentThatIsAlmostAllPunctuation() {
+        let subject = deck(
+            [("first", nil)],
+            blocks: ["first": [
+                .init(id: "ornament", kind: .quotation, text: "\u{201C}!?\u{201D} -- ,,,,,,,,,,"),
+            ]]
+        )
+        // Nothing left to compare once the edges go, so there is nothing to
+        // report missing either.
+        #expect(LampPresentationManuscriptNotes.staleQuotations(
+            in: subject,
+            manuscript: manuscript
+        ).isEmpty)
+    }
+
     @Test func leavesAReferencedScriptureBlockToTheStrongerCheck() {
         let subject = deck(
             [("first", "The first dial is capacity")],

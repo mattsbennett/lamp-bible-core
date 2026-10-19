@@ -300,8 +300,10 @@ public enum LampPresentationManuscriptNotes {
     /// test than comparing it with the prose.
     ///
     /// Text is split on ellipses first, because a quotation that elides a
-    /// middle will never appear in the manuscript whole. Fragments shorter than
-    /// 15 characters are left alone; they match too easily to mean anything.
+    /// middle will never appear in the manuscript whole. What is compared is the
+    /// fragment without the punctuation at either end, and a fragment with fewer
+    /// than 15 characters left to compare is passed over; it would match too
+    /// easily to mean anything.
     public static func staleQuotations(
         in deck: LampPresentationDeck,
         manuscript: String
@@ -317,8 +319,9 @@ public enum LampPresentationManuscriptNotes {
                 for fragment in block.text.components(separatedBy: CharacterSet(charactersIn: "…"))
                     .flatMap({ $0.components(separatedBy: "...") }) {
                     let trimmed = fragment.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard trimmed.count >= 15 else { continue }
-                    guard !haystack.contains(Normalized(trimmed)) else { continue }
+                    let compared = comparableFragment(trimmed)
+                    guard compared.count >= 15 else { continue }
+                    guard !haystack.contains(Normalized(compared)) else { continue }
                     stale.append(StaleQuotation(
                         slideID: slide.id,
                         blockID: block.id,
@@ -328,6 +331,20 @@ public enum LampPresentationManuscriptNotes {
             }
         }
         return stale
+    }
+
+    /// A fragment as it is compared with the prose: without the punctuation at
+    /// either end of it.
+    ///
+    /// A quotation lifted onto a slide gets tidied at its edges. The prose closes
+    /// its quotation before the reference — `…life in his name" (John 20:31).` —
+    /// and the slide reads `…life in his name.`, so one full stop standing where
+    /// the prose has a quotation mark used to report the whole passage missing.
+    /// An edge like that is never the reworded prose this check exists to find.
+    private static func comparableFragment(_ fragment: String) -> String {
+        fragment.trimmingCharacters(
+            in: CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines)
+        )
     }
 
     // MARK: - Comparable text
