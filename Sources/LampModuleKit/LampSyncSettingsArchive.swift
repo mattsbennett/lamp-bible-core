@@ -126,7 +126,7 @@ public enum LampSyncSettingsArchive {
                 manifest: archived.legacyManifest,
                 legacy: legacy
             )
-            guard state != .changed else {
+            guard readSource(archiveLegacyState: state, legacyPresent: legacy != nil) == .archive else {
                 throw SettingsArchiveError.changedLegacyFile
             }
             return ResolvedRemoteSnapshot(
@@ -137,7 +137,8 @@ public enum LampSyncSettingsArchive {
                 legacyState: state
             )
         }
-        guard let legacy else { return nil }
+        guard readSource(archiveLegacyState: nil, legacyPresent: legacy != nil) == .legacy,
+              let legacy else { return nil }
         return ResolvedRemoteSnapshot(
             data: legacy.data,
             token: legacy.revision.flatMap(strongToken),
@@ -245,6 +246,19 @@ public enum LampSyncSettingsArchive {
         let manifest = try JSONDecoder().decode(LegacyManifest.self, from: entry.data)
         try manifest.validate(archiveData: settingsData)
         return manifest
+    }
+
+    public enum ReadSource: Equatable, Sendable {
+        case archive, legacy, absent, conflict
+    }
+
+    /// Which settings to read: the archive's, unless the legacy file has
+    /// changed since the archive superseded it, which is a conflict; with no
+    /// archive entry, the legacy file if there is one.
+    /// (`Verification/SyncMerge.lean`: `resolveSettingsSource`.)
+    public static func readSource(archiveLegacyState: LegacyState?, legacyPresent: Bool) -> ReadSource {
+        if let archiveLegacyState { return archiveLegacyState == .changed ? .conflict : .archive }
+        return legacyPresent ? .legacy : .absent
     }
 
     public static func classifyLegacy(

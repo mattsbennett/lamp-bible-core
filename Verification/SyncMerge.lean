@@ -155,11 +155,25 @@ theorem missingWebDAVHeadIsAbsence :
 -- A 409 from MKCOL is accepted only after a separate PROPFIND confirms that
 -- the requested path is already a collection. The Swift adapter checks the
 -- returned href as well; this abstracts that path comparison as `samePath`.
+-- A PROPFIND's 404 is no collection, any success is whatever its listing
+-- shows (207 usually, 200 from some servers), and anything else is an error.
+-- Until 19 October this said 207 only, which the adapter never required.
+def collectionConfirmed (propfindStatus : Nat) (listsCollection : Bool) : Option Bool :=
+  if propfindStatus == 404 then some false
+  else if 200 ≤ propfindStatus ∧ propfindStatus < 300 then some listsCollection
+  else none
+
 def webDAVDirectoryReady
     (mkcolStatus propfindStatus : Nat)
     (samePath isCollection : Bool) : Bool :=
   [200, 201, 204, 405].contains mkcolStatus ||
-    (mkcolStatus == 409 && propfindStatus == 207 && samePath && isCollection)
+    (mkcolStatus == 409 && collectionConfirmed propfindStatus (samePath && isCollection) == some true)
+
+theorem plainSuccessListingAlsoConfirmsTheCollection :
+    webDAVDirectoryReady 409 200 true true = true := by decide
+
+theorem failedPropfindConfirmsNothing :
+    webDAVDirectoryReady 409 500 true true = false := by decide
 
 theorem existingWebDAVCollectionAcceptsConflict :
     webDAVDirectoryReady 409 207 true true = true := by decide
@@ -3039,6 +3053,970 @@ theorem unknownRevisionNeverUploadsFirst (guarded : Bool) (r : Option Nat) :
     uploadsBeforeMerge guarded none r = false ∧ uploadsBeforeMerge guarded r none = false := by
   cases r <;> simp [uploadsBeforeMerge]
 
+/-! ## Devices interleaving whole passes
+
+Everything above proves one decision at a time. This runs them together:
+two devices editing, pulling and publishing in any interleaving, against one
+server whose writes are conditional on the revision a device read — the
+`LampSyncEngine` pull-then-publish pass over `LampSyncConditionalWrite`.
+
+Content is, per item, a version in a total order, and merging takes the later
+of each: `join`. That is what the per-item rules above provide —
+`mergeFile` is the least upper bound in the shared file order
+(`mergeFile_least_upper`, `mergeFile_comm`, `mergeFile_assoc`), a record's
+last-writer-wins time is ordered, and a deletion ledger keeps the later of
+each event (`mergeTombstone_comm`, `mergeTombstone_assoc`). Two exceptions
+are not a join and are outside this model: an equal-time disagreement over a
+record is set aside on each device, which keeps its own copy until someone
+chooses (`syncSetsEqualTimeDisagreementAside`; the choice then wins on both,
+`resolvedChoiceWinsOnTheOtherDevice`), and a settings merge with no baseline
+may bring back a deletion once (`baselessMergeRevivesAnUnseenDeletion`).
+
+Assumed, not proved: the server honours the write condition (WebDAV does;
+iCloud cannot, as the last two theorems show); each accepted write gets a new
+revision; device clocks give versions whose order decides who wins — skew
+changes the winner, never the theorems; and storage is durable. Steps are
+atomic: a device's pass is many steps here, and any interleaving of them is
+covered. -/
+
+namespace Interleaving
+
+
+
+abbrev Content := Nat → Nat
+
+def join (a b : Content) : Content := fun i => max (a i) (b i)
+
+def Covers (big small : Content) : Prop := ∀ i, small i ≤ big i
+
+theorem join_comm (a b : Content) : join a b = join b a := by
+  funext i; simp only [join]; omega
+
+theorem join_assoc (a b c : Content) : join (join a b) c = join a (join b c) := by
+  funext i; simp only [join]; omega
+
+theorem join_idem (a : Content) : join a a = a := by
+  funext i; simp only [join]; omega
+
+theorem join_covers_left (a b : Content) : Covers (join a b) a := by
+  intro i; simp only [join]; omega
+
+theorem join_covers_right (a b : Content) : Covers (join a b) b := by
+  intro i; simp only [join]; omega
+
+theorem covers_refl (a : Content) : Covers a a := fun _ => Nat.le_refl _
+
+theorem covers_trans (a b c : Content) (hab : Covers a b) (hbc : Covers b c) : Covers a c :=
+  fun i => Nat.le_trans (hbc i) (hab i)
+
+structure Server where
+  revision : Nat
+  content : Content
+
+structure Device where
+  content : Content
+  seen : Option (Nat × Content)
+
+structure World where
+  server : Server
+  a : Device
+  b : Device
+
+inductive Who where | a | b
+  deriving DecidableEq, Repr
+
+inductive Step where
+  | edit (who : Who) (item version : Nat)
+  | pull (who : Who)
+  | publish (who : Who)
+
+def World.device (w : World) : Who → Device
+  | .a => w.a
+  | .b => w.b
+
+def World.setDevice (w : World) : Who → Device → World
+  | .a, d => { w with a := d }
+  | .b, d => { w with b := d }
+
+def edited (item version : Nat) : Content := fun j => if j = item then version else 0
+
+-- A pull merges the server's content in and remembers the revision it read.
+-- A publish is the conditional write: accepted only while the server still
+-- holds that revision, and then it holds this device's content.
+def step (w : World) : Step → World
+  | .edit who item version =>
+    let d := w.device who
+    w.setDevice who { d with content := join d.content (edited item version) }
+  | .pull who =>
+    let d := w.device who
+    w.setDevice who ⟨join d.content w.server.content, some (w.server.revision, w.server.content)⟩
+  | .publish who =>
+    let d := w.device who
+    match d.seen with
+    | some (r, _) =>
+      if r = w.server.revision then
+        { (w.setDevice who { d with seen := some (r + 1, d.content) }) with
+            server := ⟨r + 1, d.content⟩ }
+      else w
+    | none => w
+
+def run (w : World) : List Step → World
+  | [] => w
+  | s :: rest => run (step w s) rest
+
+-- What a device last read is still in it, and if the server has not moved
+-- since, it is what the server holds.
+def DeviceAgrees (server : Server) (d : Device) : Prop :=
+  match d.seen with
+  | none => True
+  | some (r, c) => Covers d.content c ∧ r ≤ server.revision ∧ (r = server.revision → c = server.content)
+
+def Agrees (w : World) : Prop := DeviceAgrees w.server w.a ∧ DeviceAgrees w.server w.b
+
+theorem device_setDevice_same (w : World) (who : Who) (d : Device) :
+    (w.setDevice who d).device who = d := by cases who <;> rfl
+
+theorem server_setDevice (w : World) (who : Who) (d : Device) :
+    (w.setDevice who d).server = w.server := by cases who <;> rfl
+
+-- The server never loses anything: every step leaves it covering what it held.
+theorem serverNeverLoses (w : World) (s : Step) (h : Agrees w) :
+    Covers (step w s).server.content w.server.content := by
+  cases s with
+  | edit who item version =>
+    simp only [step, server_setDevice]; exact covers_refl _
+  | pull who =>
+    simp only [step, server_setDevice]; exact covers_refl _
+  | publish who =>
+    have hd : DeviceAgrees w.server (w.device who) := by cases who <;> simp [World.device, h.1, h.2]
+    simp only [step]
+    split
+    · next r c hseen =>
+      split
+      · next hr =>
+        simp only [DeviceAgrees, hseen] at hd
+        have hc := hd.2.2 hr
+        subst hc
+        exact hd.1
+      · exact covers_refl _
+    · exact covers_refl _
+
+theorem deviceAgrees_grow (s : Server) (d d' : Device) (h : DeviceAgrees s d)
+    (grow : Covers d'.content d.content) (same : d'.seen = d.seen) : DeviceAgrees s d' := by
+  unfold DeviceAgrees at *
+  rw [same]
+  cases hs : d.seen with
+  | none => trivial
+  | some p =>
+    rw [hs] at h
+    exact ⟨covers_trans _ _ _ grow h.1, h.2.1, h.2.2⟩
+
+theorem deviceAgrees_pulled (s : Server) (content : Content) :
+    DeviceAgrees s ⟨join content s.content, some (s.revision, s.content)⟩ := by
+  unfold DeviceAgrees
+  exact ⟨join_covers_right _ _, Nat.le_refl _, fun _ => rfl⟩
+
+theorem deviceAgrees_published (d : Device) (r : Nat) :
+    DeviceAgrees ⟨r + 1, d.content⟩ { d with seen := some (r + 1, d.content) } := by
+  unfold DeviceAgrees
+  exact ⟨covers_refl _, Nat.le_refl _, fun _ => rfl⟩
+
+-- The other device's last read is now behind the server, so nothing more is
+-- claimed about it than that it is behind.
+theorem deviceAgrees_afterOtherPublishes (s : Server) (d : Device) (h : DeviceAgrees s d)
+    (r : Nat) (hr : r = s.revision) (content : Content) :
+    DeviceAgrees ⟨r + 1, content⟩ d := by
+  unfold DeviceAgrees at *
+  cases hs : d.seen with
+  | none => trivial
+  | some p =>
+    rw [hs] at h
+    obtain ⟨cov, le, _⟩ := h
+    refine ⟨cov, ?_, fun e => ?_⟩
+    · show p.1 ≤ r + 1
+      omega
+    · exfalso
+      have : p.1 = r + 1 := e
+      omega
+
+theorem agreesAfterStep (w : World) (s : Step) (h : Agrees w) : Agrees (step w s) := by
+  obtain ⟨ha, hb⟩ := h
+  cases s with
+  | edit who item version =>
+    cases who
+    · exact ⟨deviceAgrees_grow _ _ _ ha (join_covers_left _ _) rfl, hb⟩
+    · exact ⟨ha, deviceAgrees_grow _ _ _ hb (join_covers_left _ _) rfl⟩
+  | pull who =>
+    cases who
+    · exact ⟨deviceAgrees_pulled _ _, hb⟩
+    · exact ⟨ha, deviceAgrees_pulled _ _⟩
+  | publish who =>
+    cases who
+    · simp only [step, World.device]
+      split
+      · next r c hseen =>
+        split
+        · next hr =>
+          exact ⟨deviceAgrees_published _ _, deviceAgrees_afterOtherPublishes _ _ hb _ hr _⟩
+        · exact ⟨ha, hb⟩
+      · exact ⟨ha, hb⟩
+    · simp only [step, World.device]
+      split
+      · next r c hseen =>
+        split
+        · next hr =>
+          exact ⟨deviceAgrees_afterOtherPublishes _ _ ha _ hr _, deviceAgrees_published _ _⟩
+        · exact ⟨ha, hb⟩
+      · exact ⟨ha, hb⟩
+
+theorem agreesAlongRun (w : World) (steps : List Step) (h : Agrees w) : Agrees (run w steps) := by
+  induction steps generalizing w with
+  | nil => exact h
+  | cons s rest ih => exact ih _ (agreesAfterStep w s h)
+
+-- Whatever the devices do, in whatever order, the server never loses
+-- anything it held.
+theorem serverNeverLosesAlongRun (w : World) (steps : List Step) (h : Agrees w) :
+    Covers (run w steps).server.content w.server.content := by
+  induction steps generalizing w with
+  | nil => exact covers_refl _
+  | cons s rest ih =>
+    exact covers_trans _ _ _ (ih _ (agreesAfterStep w s h)) (serverNeverLoses w s h)
+
+-- Devices that have not synced yet claim nothing, so any library starts out
+-- agreeing.
+theorem unsyncedDevicesAgree (server : Server) (a b : Content) :
+    Agrees ⟨server, ⟨a, none⟩, ⟨b, none⟩⟩ := ⟨trivial, trivial⟩
+
+-- A publish the server refuses changes nothing anywhere.
+theorem refusedPublishChangesNothing (w : World) (who : Who)
+    (h : ∀ r c, (w.device who).seen = some (r, c) → r ≠ w.server.revision) :
+    step w (.publish who) = w := by
+  simp only [step]
+  split
+  · next r c hseen =>
+    have := h r c hseen
+    simp [this]
+  · rfl
+
+-- Reading and then publishing, with nobody else publishing in between, is
+-- accepted: the second attempt `LampSyncPassRetry` makes after a lost race
+-- succeeds unless another device publishes again inside it.
+theorem pullThenPublishIsAccepted (w : World) (who : Who) :
+    (run w [.pull who, .publish who]).server =
+      ⟨w.server.revision + 1, join (w.device who).content w.server.content⟩ := by
+  cases who <;> simp [run, step, World.device, World.setDevice]
+
+-- What an accepted publish put on the server stays there, whatever happens
+-- after.
+theorem publishedContentIsNeverLost (w : World) (who : Who) (h : Agrees w)
+    (steps : List Step) :
+    Covers (run (run w [.pull who, .publish who]) steps).server.content
+      (join (w.device who).content w.server.content) := by
+  have hAgree : Agrees (run w [.pull who, .publish who]) := agreesAlongRun _ _ h
+  have hLater := serverNeverLosesAlongRun _ steps hAgree
+  rw [pullThenPublishIsAccepted] at hLater
+  exact hLater
+
+-- Once editing stops, one quiet round brings both devices and the server to
+-- the same content: everything any of them held.
+theorem aQuietRoundConverges (w : World) :
+    let after := run w [.pull .a, .publish .a, .pull .b, .publish .b, .pull .a]
+    after.a.content = after.b.content ∧
+    after.b.content = after.server.content ∧
+    after.server.content = join (join w.a.content w.b.content) w.server.content := by
+  simp only [run, step, World.device, World.setDevice, ↓reduceIte]
+  refine ⟨?_, ?_, ?_⟩
+  all_goals first | trivial | (funext i; simp only [join]; omega)
+
+/-! ### Without the condition
+
+iCloud's provider path has no server-side precondition: a write replaces
+whatever is there. On the same schedule as the theorem below, a conditional
+write keeps the other device's edit, and an unconditional one loses it. -/
+
+def publishUnconditionally (w : World) (who : Who) : World :=
+  let d := w.device who
+  { w with server := ⟨w.server.revision + 1, d.content⟩ }
+
+def blank : World := ⟨⟨0, fun _ => 0⟩, ⟨fun _ => 0, none⟩, ⟨fun _ => 0, none⟩⟩
+
+-- Both read; B edits item 1 and publishes; A, whose read is now stale,
+-- publishes too.
+theorem conditionalPublishKeepsTheOtherEdit :
+    (run blank [.pull .a, .pull .b, .edit .b 1 5, .publish .b, .publish .a]).server.content 1 = 5 := by
+  simp [run, step, blank, World.device, World.setDevice, join, edited]
+
+theorem unconditionalPublishLosesTheOtherEdit :
+    (publishUnconditionally
+      (publishUnconditionally (run blank [.pull .a, .pull .b, .edit .b 1 5]) .b) .a).server.content 1 = 0 := by
+  simp [run, step, blank, World.device, World.setDevice, join, publishUnconditionally]
+
+end Interleaving
+
+/-! ## Connecting rules for conformance
+
+Two older rules are stated over shapes the Swift code does not use. These say
+what the Swift decision computes and prove it agrees with the rule. -/
+
+-- `LampSyncMerge.shouldReplaceFile` answers whether an incoming file replaces
+-- the current one: whether `mergeFile` chooses it and it is not the same.
+def replaceFile (current incoming : FileVersion) : Bool :=
+  mergeFile current incoming == incoming && current != incoming
+
+theorem replacedFileIsWhatMergeChooses (current incoming : FileVersion)
+    (h : replaceFile current incoming = true) : mergeFile current incoming = incoming := by
+  simp [replaceFile] at h
+  exact h.1
+
+theorem keptFileIsWhatMergeChooses (current incoming : FileVersion)
+    (h : replaceFile current incoming = false) : mergeFile current incoming = current := by
+  unfold replaceFile at h
+  unfold mergeFile at *
+  split at h <;> simp_all
+
+-- `LampLibrary.stagedCommitAllowed`: a staged import replaces the live
+-- library only while its files are those the stage was copied from. An
+-- absent library is `none`, so a library that appeared or vanished during the
+-- import also blocks the commit.
+def stagedCommitAllowed (original live : Option (List Nat)) : Bool :=
+  original == live
+
+theorem stagedCommitAllowedIsTheGuard (base current incoming : List Nat) :
+    (guardedStagedBackupCommit base current incoming).isSome =
+      stagedCommitAllowed (some base) (some current) := by
+  simp [guardedStagedBackupCommit, stagedCommitAllowed]
+  split <;> simp_all
+
+theorem libraryThatAppearedBlocksTheCommit (live : List Nat) :
+    stagedCommitAllowed none (some live) = false := rfl
+
+theorem libraryThatVanishedBlocksTheCommit (original : List Nat) :
+    stagedCommitAllowed (some original) none = false := rfl
+
+/-! ## The per-file library (design B)
+
+Each module is its own file, and the manifest in the settings bundle says
+which files belong to the library (`LampSyncLibraryManifest`). Per path it
+keeps two stamps: the latest write and the latest deletion, each a time and
+the revision it concerned. Revisions are opaque, so numbers here. -/
+
+abbrev Stamp := Option Nat × Option Nat
+
+-- An absent time or revision orders before any present one.
+def optKey : Option Nat → Nat
+  | none => 0
+  | some n => n + 1
+
+theorem optKey_inj {a b : Option Nat} (h : optKey a = optKey b) : a = b := by
+  cases a <;> cases b <;> simp_all [optKey]
+
+-- Stamps order by time, then by revision, so equal times still pick one the
+-- same way on every device.
+def stampLE (a b : Stamp) : Prop :=
+  optKey a.1 < optKey b.1 ∨ (optKey a.1 = optKey b.1 ∧ optKey a.2 ≤ optKey b.2)
+
+instance (a b : Stamp) : Decidable (stampLE a b) := by
+  unfold stampLE; infer_instance
+
+theorem stampLE_refl (a : Stamp) : stampLE a a := by unfold stampLE; omega
+
+theorem stampLE_total (a b : Stamp) : stampLE a b ∨ stampLE b a := by unfold stampLE; omega
+
+theorem stampLE_trans {a b c : Stamp} (h1 : stampLE a b) (h2 : stampLE b c) : stampLE a c := by
+  unfold stampLE at *; omega
+
+theorem stampLE_antisymm {a b : Stamp} (h1 : stampLE a b) (h2 : stampLE b a) : a = b := by
+  unfold stampLE at h1 h2
+  exact Prod.ext (optKey_inj (by omega)) (optKey_inj (by omega))
+
+def laterStamp (a b : Stamp) : Stamp := if stampLE a b then b else a
+
+theorem laterStamp_left (a b : Stamp) : stampLE a (laterStamp a b) := by
+  unfold laterStamp; split
+  · assumption
+  · exact stampLE_refl a
+
+theorem laterStamp_right (a b : Stamp) : stampLE b (laterStamp a b) := by
+  unfold laterStamp; split
+  · exact stampLE_refl b
+  · rename_i h; exact (stampLE_total a b).resolve_left h
+
+theorem laterStamp_cases (a b : Stamp) : laterStamp a b = a ∨ laterStamp a b = b := by
+  unfold laterStamp; split <;> simp
+
+theorem laterStamp_comm (a b : Stamp) : laterStamp a b = laterStamp b a :=
+  stampLE_antisymm
+    (by rcases laterStamp_cases a b with h | h <;> rw [h]
+        · exact laterStamp_right b a
+        · exact laterStamp_left b a)
+    (by rcases laterStamp_cases b a with h | h <;> rw [h]
+        · exact laterStamp_right a b
+        · exact laterStamp_left a b)
+
+theorem laterStamp_idem (a : Stamp) : laterStamp a a = a := by
+  rcases laterStamp_cases a a with h | h <;> exact h
+
+theorem laterStamp_assoc (a b c : Stamp) :
+    laterStamp (laterStamp a b) c = laterStamp a (laterStamp b c) := by
+  have la := stampLE_trans (laterStamp_left a b) (laterStamp_left (laterStamp a b) c)
+  have lb := stampLE_trans (laterStamp_right a b) (laterStamp_left (laterStamp a b) c)
+  have lc := laterStamp_right (laterStamp a b) c
+  have ra := laterStamp_left a (laterStamp b c)
+  have rb := stampLE_trans (laterStamp_left b c) (laterStamp_right a (laterStamp b c))
+  have rc := stampLE_trans (laterStamp_right b c) (laterStamp_right a (laterStamp b c))
+  apply stampLE_antisymm
+  · rcases laterStamp_cases (laterStamp a b) c with h | h <;> rw [h]
+    · rcases laterStamp_cases a b with h' | h' <;> rw [h'] <;> assumption
+    · assumption
+  · rcases laterStamp_cases a (laterStamp b c) with h | h <;> rw [h]
+    · assumption
+    · rcases laterStamp_cases b c with h' | h' <;> rw [h'] <;> assumption
+
+structure ManifestEntry where
+  presentSince : Option Nat
+  revision : Option Nat
+  deletedAt : Option Nat
+  deletedRevision : Option Nat
+  deriving DecidableEq, Repr
+
+def ManifestEntry.written (e : ManifestEntry) : Stamp := (e.presentSince, e.revision)
+def ManifestEntry.deleted (e : ManifestEntry) : Stamp := (e.deletedAt, e.deletedRevision)
+
+def ManifestEntry.withStamps (w d : Stamp) : ManifestEntry := ⟨w.1, w.2, d.1, d.2⟩
+
+@[simp] theorem ManifestEntry.written_withStamps (w d : Stamp) :
+    (ManifestEntry.withStamps w d).written = w := rfl
+
+@[simp] theorem ManifestEntry.deleted_withStamps (w d : Stamp) :
+    (ManifestEntry.withStamps w d).deleted = d := rfl
+
+def emptyEntry : ManifestEntry := ⟨none, none, none, none⟩
+
+-- Two manifests merge path by path, keeping the later of each stamp.
+def mergeManifestEntry (a b : ManifestEntry) : ManifestEntry :=
+  .withStamps (laterStamp a.written b.written) (laterStamp a.deleted b.deleted)
+
+theorem mergeManifestEntry_comm (a b : ManifestEntry) :
+    mergeManifestEntry a b = mergeManifestEntry b a := by
+  simp [mergeManifestEntry, laterStamp_comm]
+
+theorem mergeManifestEntry_assoc (a b c : ManifestEntry) :
+    mergeManifestEntry (mergeManifestEntry a b) c = mergeManifestEntry a (mergeManifestEntry b c) := by
+  simp only [mergeManifestEntry, ManifestEntry.written_withStamps,
+    ManifestEntry.deleted_withStamps, laterStamp_assoc]
+
+theorem mergeManifestEntry_idem (a : ManifestEntry) : mergeManifestEntry a a = a := by
+  simp only [mergeManifestEntry, laterStamp_idem]; rfl
+
+-- A file is a member while it was written after its latest deletion. Equal
+-- times are a deletion, as the other ledgers rule.
+def entryIsMember (e : ManifestEntry) : Bool :=
+  match e.presentSince, e.deletedAt with
+  | none, _ => false
+  | some _, none => true
+  | some p, some d => Decidable.decide (d < p)
+
+theorem equalTimeDeletesAFile (t : Nat) (r d : Option Nat) :
+    entryIsMember ⟨some t, r, some t, d⟩ = false := by
+  simp [entryIsMember]
+
+-- Devices that merged the same manifests, in any order, agree on membership.
+theorem membershipIgnoresMergeOrder (a b : ManifestEntry) :
+    entryIsMember (mergeManifestEntry a b) = entryIsMember (mergeManifestEntry b a) := by
+  rw [mergeManifestEntry_comm]
+
+-- A write recorded over the revision the manifest holds is that write's
+-- successor, and is stamped after it, so a slow clock cannot make the later
+-- write lose. Any other write takes the later stamp.
+def recordWrite (e : ManifestEntry) (rev previous : Option Nat) (time : Nat) : ManifestEntry :=
+  if e.revision = previous then
+    { e with presentSince := some (max time ((e.presentSince.map (· + 1)).getD time)),
+             revision := rev }
+  else .withStamps (laterStamp e.written (some time, rev)) e.deleted
+
+theorem successorWriteIsStampedLater (e : ManifestEntry) (rev : Option Nat) (time p : Nat)
+    (h : e.presentSince = some p) :
+    ∃ q, (recordWrite e rev e.revision time).presentSince = some q ∧ p < q := by
+  simp [recordWrite, h]; omega
+
+-- Whichever branch records it, a write is stamped no earlier than it was made.
+theorem recordedWriteIsNoEarlier (e : ManifestEntry) (rev previous : Option Nat) (time : Nat) :
+    ∃ q, (recordWrite e rev previous time).presentSince = some q ∧ time ≤ q := by
+  unfold recordWrite
+  split
+  · exact ⟨_, rfl, Nat.le_max_left _ _⟩
+  · have h := laterStamp_right e.written (some time, rev)
+    unfold stampLE at h
+    revert h
+    generalize laterStamp e.written (some time, rev) = s
+    obtain ⟨s1, s2⟩ := s
+    cases s1 <;> simp [ManifestEntry.withStamps, optKey] <;> omega
+
+-- So a copy written after a deletion comes out a member, on either branch.
+theorem writeAfterDeletionIsMember (e : ManifestEntry) (rev previous : Option Nat)
+    (time d : Nat) (hd : e.deletedAt = some d) (hlater : d < time) :
+    entryIsMember (recordWrite e rev previous time) = true := by
+  obtain ⟨q, hq, hle⟩ := recordedWriteIsNoEarlier e rev previous time
+  have hdel : (recordWrite e rev previous time).deletedAt = some d := by
+    unfold recordWrite; split <;> simp [ManifestEntry.withStamps, ManifestEntry.deleted, hd]
+  simp [entryIsMember, hq, hdel]; omega
+
+-- Whether a copy at `r` is the one a tombstone deleted, or the write it
+-- recorded before that. A tombstone with neither recorded matches any copy.
+def deletesRevision (e : ManifestEntry) (r : Nat) : Bool :=
+  match e.revision, e.deletedRevision with
+  | none, none => true
+  | a, b => a == some r || b == some r
+
+def removeFile (e : ManifestEntry) (time : Nat) (rev : Option Nat) : ManifestEntry :=
+  .withStamps e.written (laterStamp e.deleted (some time, rev))
+
+-- Adopting a file found on the server: one dropped in by hand, or one a pass
+-- wrote and ended before recording. The deleted copy, waiting to be reaped,
+-- is never adopted; anything else put back is, after the deletion.
+def adoptFile (e : ManifestEntry) (rev time : Nat) : ManifestEntry :=
+  if entryIsMember e then
+    if e.revision.isNone then { e with revision := some rev } else e
+  else if e.deletedAt.isSome && deletesRevision e rev then e
+  else { e with presentSince := some (max time (((later e.presentSince e.deletedAt).map (· + 1)).getD time)),
+                revision := some rev }
+
+theorem adoptionNeverUndoesADeletion (e : ManifestEntry) (r t : Nat)
+    (hm : entryIsMember e = false) (hd : e.deletedAt.isSome = true) (hr : deletesRevision e r = true) :
+    adoptFile e r t = e := by
+  simp [adoptFile, hm, hd, hr]
+
+theorem aCopyPutBackIsAdopted (e : ManifestEntry) (r t d : Nat)
+    (hm : entryIsMember e = false) (hd : e.deletedAt = some d) (hr : deletesRevision e r = false) :
+    entryIsMember (adoptFile e r t) = true := by
+  have bound : ∃ m, later e.presentSince (some d) = some m ∧ d ≤ m := by
+    cases e.presentSince <;> simp [later] <;> omega
+  obtain ⟨m, hl, hle⟩ := bound
+  unfold adoptFile
+  rw [hm]
+  simp only [hd, hr, hl, Option.isSome_some, Bool.and_false, Bool.false_eq_true, ite_false,
+    Option.map_some, Option.getD_some]
+  simp [entryIsMember]; omega
+
+-- A deletion is remembered for 180 days, in milliseconds.
+def tombstoneLifetime : Nat := 180 * 24 * 60 * 60 * 1000
+
+-- A tombstone goes once it is older than that, and, for a listed kind, once
+-- its file is gone too: until then it is what tells devices to reap it.
+def pruneTombstone (e : ManifestEntry) (now : Nat) (listed present : Bool) : Bool :=
+  !entryIsMember e
+    && (match e.deletedAt with | some d => Decidable.decide (d + tombstoneLifetime ≤ now) | none => false)
+    && (!listed || !present)
+
+theorem pruneNeverDropsAMember (e : ManifestEntry) (now : Nat) (listed present : Bool)
+    (h : entryIsMember e = true) : pruneTombstone e now listed present = false := by
+  simp [pruneTombstone, h]
+
+theorem pruneWaitsForTheReap (e : ManifestEntry) (now : Nat) :
+    pruneTombstone e now true true = false := by
+  simp [pruneTombstone]
+
+-- The cost accepted with the lifetime: once a tombstone is pruned, a device
+-- offline for longer still holds the file and records it again, at the time
+-- it last saved it, which predates the deletion. It comes back.
+theorem tombstoneLifetimeCost :
+    let deleted := ⟨some 1, some 1, some 5, some 1⟩
+    pruneTombstone deleted (5 + tombstoneLifetime) false false = true
+      ∧ entryIsMember (recordWrite emptyEntry (some 1) none 1) = true := by
+  decide
+
+/-! ### What a pass does with each file
+
+`LampSyncFilePlan.plan` decides, per path, from the manifest entry, this
+client's copy, a deletion made here and not yet in a written bundle, and the
+revision a listing found on the server. One rule underlies the rest: a file
+and the manifest disagreeing means the file changed, and is compared by
+value. It is never a conflict or a loss. That is what lets a pass write its
+files first and record them in one bundle update at the end. -/
+
+-- Media never changes at a path. Listed kinds (modules, decks) are found by
+-- listing their folders; workspace files are checked one at a time.
+inductive FileClass where
+  | media | listed | unlisted
+  deriving DecidableEq, Repr
+
+structure HeldFile where
+  changed : Bool
+  lastRevision : Option Nat
+  savedAt : Option Nat
+  deriving DecidableEq, Repr
+
+structure PlanAction where
+  download : Bool := false
+  merge : Option Nat := none
+  upload : Option WriteCondition := none
+  deleteLocally : Bool := false
+  adopt : Option Nat := none
+  tombstone : Option Nat := none
+  reap : Option Nat := none
+  deriving DecidableEq, Repr
+
+def uploadAction (c : WriteCondition) : PlanAction := { upload := some c }
+
+-- A member, or a file being adopted: this client's copy against the server's.
+def changeAction (cls : FileClass) (held : Option HeldFile) (listed : Option Nat) : PlanAction :=
+  match cls, held, listed with
+  | .media, none, _ => { download := true }
+  | .media, some h, _ => if h.lastRevision.isNone then uploadAction .ifAbsent else {}
+  | _, none, none => {}
+  | _, none, some _ => { download := true }
+  | _, some h, none => if h.changed || h.lastRevision.isNone then uploadAction .ifAbsent else {}
+  | _, some h, some r =>
+    match h.lastRevision != some r, h.changed with
+    | false, false => {}
+    | false, true => uploadAction (.ifRevision r)
+    | true, false => { download := true }
+    | true, true => { merge := some r }
+
+def savedAfter (h : HeldFile) (d : Nat) : Bool :=
+  match h.savedAt with
+  | some s => Decidable.decide (d < s)
+  | none => false
+
+def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Option HeldFile)
+    (deletedHere listed : Option Nat) : PlanAction :=
+  match deletedHere with
+  | some d =>
+    let after := removeFile (entry.getD emptyEntry) d listed
+    if entryIsMember after then
+      -- Written elsewhere after it was deleted here: it comes back.
+      { tombstone := some d, download := held.isNone && (listed.isSome || cls == .media) }
+    else
+      { tombstone := some d,
+        reap := match listed with
+          | some r => some r
+          | none => if cls == .listed then none else (entry.bind (·.revision)) }
+  | none =>
+    match entry with
+    | none =>
+      match listed with
+      | none => if held.isSome then uploadAction .ifAbsent else {}
+      | some r => { changeAction cls held listed with adopt := some r }
+    | some e =>
+      if entryIsMember e then changeAction cls held listed
+      else match e.deletedAt with
+        | none =>
+          match listed with
+          | none => if held.isSome then uploadAction .ifAbsent else {}
+          | some r => { changeAction cls held listed with adopt := some r }
+        | some d =>
+          match listed with
+          | some r =>
+            if !deletesRevision e r then { changeAction cls held listed with adopt := some r }
+            else match held with
+              | some h => if savedAfter h d then
+                  uploadAction (if cls == .media then .ifAbsent else .ifRevision r)
+                else { deleteLocally := true, reap := some r }
+              | none => { reap := some r }
+          | none =>
+            match held with
+            | some h => if savedAfter h d then uploadAction .ifAbsent else { deleteLocally := true }
+            | none => {}
+
+theorem changeActionNeverDeletes (cls : FileClass) (held : Option HeldFile) (listed : Option Nat) :
+    (changeAction cls held listed).deleteLocally = false
+      ∧ (changeAction cls held listed).adopt = none := by
+  unfold changeAction
+  split <;> (try split) <;> (try split) <;> exact ⟨rfl, rfl⟩
+
+-- Absence from a listing never deletes: nothing is deleted here without a
+-- tombstone in the manifest.
+theorem deletingNeedsATombstone (cls : FileClass) (entry : Option ManifestEntry)
+    (held : Option HeldFile) (listed : Option Nat)
+    (h : (filePlanAction cls entry held none listed).deleteLocally = true) :
+    ∃ e d, entry = some e ∧ e.deletedAt = some d ∧ entryIsMember e = false := by
+  have keeps := (changeActionNeverDeletes cls held listed).1
+  unfold filePlanAction at h
+  cases entry with
+  | none =>
+    cases listed with
+    | none => cases held <;> simp [uploadAction] at h
+    | some r => simp [keeps] at h
+  | some e =>
+    by_cases hm : entryIsMember e = true
+    · simp [hm, keeps] at h
+    · cases hd : e.deletedAt with
+      | none =>
+        simp only [hm, hd] at h
+        cases listed with
+        | none => cases held <;> simp [uploadAction] at h
+        | some r => simp [keeps] at h
+      | some d => exact ⟨e, d, rfl, hd, by simpa using hm⟩
+
+-- A file on the server that nobody tombstoned is adopted, never dropped.
+theorem anUnknownFileIsAdopted (cls : FileClass) (held : Option HeldFile) (r : Nat) :
+    (filePlanAction cls none held none (some r)).adopt = some r
+      ∧ (filePlanAction cls none held none (some r)).deleteLocally = false := by
+  simp [filePlanAction, (changeActionNeverDeletes cls held (some r)).1]
+
+-- With no record of what it last installed, a client never writes over the
+-- server's copy: it downloads it, or merges with it. Records are kept per
+-- provider, so a provider switch starts here rather than re-uploading.
+theorem noRecordNeverOverwrites (cls : FileClass) (e : ManifestEntry) (h : HeldFile) (r : Nat)
+    (hc : cls ≠ .media) (hm : entryIsMember e = true) (hr : h.lastRevision = none) :
+    (filePlanAction cls (some e) (some h) none (some r)).upload = none := by
+  simp only [filePlanAction, hm, ite_true]
+  cases cls with
+  | media => exact absurd rfl hc
+  | listed | unlisted =>
+    have hne : ((none : Option Nat) != some r) = true := rfl
+    cases hch : h.changed <;> simp [changeAction, hr, hch, hne]
+
+/-! ### Listing revisions
+
+`LampSyncFilePlan.listing` takes a listing's revision when it has one
+(WebDAV's ETags), a member's recorded revision when it doesn't (the folder
+provider), and asks the store only for a file the manifest doesn't record
+as a member. -/
+
+-- The revision used, and whether the store was asked.
+def listedRevision (item recordedForMember stored : Option Nat) : Option Nat × Bool :=
+  match item, recordedForMember with
+  | some r, _ => (some r, false)
+  | none, some r => (some r, false)
+  | none, none => (stored, true)
+
+-- So an evicted iCloud file the manifest records is never read just to be
+-- compared.
+theorem aRecordedMemberIsNeverRead (item stored : Option Nat) (r : Nat) :
+    (listedRevision item (some r) stored).2 = false := by
+  cases item <;> rfl
+
+/-! ### The settings bundle
+
+`LampSyncSettingsStore.update` reads the bundle, applies a change, and
+writes it under the revision read; refused, it reads again, up to its
+attempts. -/
+
+-- `refusals` says, attempt by attempt, whether another device wrote first.
+-- The answer is the attempt that wrote, counting from one.
+def settingsUpdateFrom : Nat → List Bool → Nat → Option Nat
+  | 0, _, _ => none
+  | n + 1, true :: rest, made => settingsUpdateFrom n rest (made + 1)
+  | _ + 1, _, made => some (made + 1)
+
+def settingsUpdate (attempts : Nat) (refusals : List Bool) : Option Nat :=
+  settingsUpdateFrom (max attempts 1) refusals 0
+
+theorem settingsUpdateFromBounded (n : Nat) (refusals : List Bool) (made k : Nat)
+    (h : settingsUpdateFrom n refusals made = some k) : k ≤ made + n := by
+  induction n generalizing refusals made with
+  | zero => simp [settingsUpdateFrom] at h
+  | succ n ih =>
+    cases refusals with
+    | nil => simp [settingsUpdateFrom] at h; omega
+    | cons b rest =>
+      cases b with
+      | true => have := ih rest (made + 1) (by simpa [settingsUpdateFrom] using h); omega
+      | false => simp [settingsUpdateFrom] at h; omega
+
+-- It never writes more times than it was given attempts.
+theorem settingsUpdateIsBounded (attempts : Nat) (refusals : List Bool) (k : Nat)
+    (h : settingsUpdate attempts refusals = some k) : k ≤ max attempts 1 := by
+  have := settingsUpdateFromBounded _ _ _ _ h; omega
+
+-- What the bundle path holds, from the first bytes of its body, so an
+-- archive the size of the library is never unpacked to find out.
+inductive BundleHeader where
+  | version (n : Nat) | entriesFirst | garbage
+  deriving DecidableEq, Repr
+
+inductive BundleContents where
+  | bundle | archive | newer (n : Nat) | damaged
+  deriving DecidableEq, Repr
+
+def bundlePathHolds : BundleHeader → BundleContents
+  | .version n =>
+    if n = 1 ∨ n = 2 then .archive
+    else if n = 3 then .bundle
+    else if 3 < n then .newer n
+    else .damaged
+  | .entriesFirst => .archive
+  | .garbage => .damaged
+
+-- Archive readers accept formats 1 and 2 only, so an old client refuses the
+-- bundle rather than reading a library with no modules as an emptied one.
+def archiveReaderAccepts (version : Nat) : Bool := version == 1 || version == 2
+
+theorem oldReadersRefuseTheBundle : archiveReaderAccepts 3 = false := rfl
+
+theorem anArchiveIsNeverReadAsTheBundle (n : Nat) (h : archiveReaderAccepts n = true) :
+    bundlePathHolds (.version n) = .archive := by
+  simp [archiveReaderAccepts] at h
+  simp [bundlePathHolds, h]
+
+/-! ### The folder as a store
+
+`LampSyncDirectoryStore` runs the folder provider through the same pass. Its
+revision is a file's content digest, and a conditional write or delete
+compares it inside a coordinated block. Unresolved iCloud versions stop the
+file, and a placeholder that appeared means iCloud is replacing it under us,
+so that refuses too. This guards against writers on this device only:
+`stableICloudReadDoesNotProtectLaterWrite` is the upload that can still land
+afterwards. -/
+
+inductive DirectoryOutcome where
+  | proceed | refuse | unresolved | nothingThere
+  deriving DecidableEq, Repr
+
+def directoryWrite (c : WriteCondition) (current : Option Nat) (placeholder unresolved : Bool) :
+    DirectoryOutcome :=
+  if unresolved then .unresolved
+  else if placeholder then .refuse
+  else match c with
+    | .unconditional => .proceed
+    | .ifAbsent => if current.isNone then .proceed else .refuse
+    | .ifRevision r => if current = some r then .proceed else .refuse
+
+def directoryDelete (c : WriteCondition) (current : Option Nat) (placeholder unresolved : Bool) :
+    DirectoryOutcome :=
+  if unresolved then .unresolved
+  else if placeholder then .refuse
+  else match current, c with
+    | none, _ => .nothingThere
+    | some _, .unconditional => .proceed
+    | some _, .ifAbsent => .refuse
+    | some v, .ifRevision r => if v = r then .proceed else .refuse
+
+-- A conditional write goes ahead exactly when the coordinated check the
+-- folder publisher already made allows it.
+theorem directoryWriteIsTheCoordinatedCheck (expected current : Option Nat) (placeholder : Bool) :
+    (directoryWrite (match expected with | none => .ifAbsent | some r => .ifRevision r)
+        current placeholder false = .proceed)
+      = coordinatedGenericFileWriteAllowed expected current placeholder := by
+  cases expected <;> cases current <;> cases placeholder <;>
+    simp [directoryWrite, coordinatedGenericFileWriteAllowed] <;> omega
+
+theorem unresolvedVersionsStopTheFile (c : WriteCondition) (current : Option Nat) (placeholder : Bool) :
+    directoryWrite c current placeholder true = .unresolved
+      ∧ directoryDelete c current placeholder true = .unresolved := by
+  simp [directoryWrite, directoryDelete]
+
+-- A reap never removes a copy other than the one it was asked to.
+theorem aDeleteNeverRemovesAnotherCopy (r v : Nat) (placeholder unresolved : Bool) (h : v ≠ r) :
+    directoryDelete (.ifRevision r) (some v) placeholder unresolved ≠ .proceed := by
+  unfold directoryDelete
+  split
+  · simp
+  · split
+    · simp
+    · simp [h]
+
+/-! ### Copies written at once
+
+iCloud keeps a losing write as a conflict version instead of refusing it, so
+the settings bundle can come back as a current copy with others beside it.
+`LampSyncSettingsStore.update` folds each version in, then writes over the
+current copy and resolves exactly the versions it merged. -/
+
+-- Nothing at the bundle path: a marker an earlier sync left, or any file in a
+-- kind folder, means nobody has migrated this library yet. A folder the Mac
+-- keeps holds its files loose with no archive, so absence alone says nothing.
+def emptyBundlePath (marker content : Bool) : Bool := marker || content
+
+theorem onlyAnEmptyLibraryIsNew (marker content : Bool) :
+    emptyBundlePath marker content = false ↔ marker = false ∧ content = false := by
+  cases marker <;> cases content <;> simp [emptyBundlePath]
+
+-- Only a bundle this client reads is merged. Anything else stops the update:
+-- merging it is impossible, and dropping it loses another device's write.
+def versionMerges (c : BundleContents) : Bool := c == .bundle
+
+theorem anArchiveVersionIsNeverMerged (n : Nat) (h : archiveReaderAccepts n = true) :
+    versionMerges (bundlePathHolds (.version n)) = false := by
+  rw [anArchiveIsNeverReadAsTheBundle n h]; rfl
+
+inductive SettingsWrite where
+  | needsMerge | resolve | create | replace | nothing
+  deriving DecidableEq, Repr
+
+-- What `update` writes once `change` has run.
+def settingsWrite (current versions merges changed : Bool) : SettingsWrite :=
+  if versions then (if merges then .resolve else .needsMerge)
+  else if !current then .create
+  else if changed then .replace else .nothing
+
+-- A version is merged and resolved by the write, or it stops the update. It
+-- is never dropped unmerged, and never left behind by a write.
+theorem aVersionIsMergedOrStops (current merges changed : Bool) :
+    settingsWrite current true merges changed = (if merges then .resolve else .needsMerge) := by
+  simp [settingsWrite]
+
+-- Merged versions are written even when the merge changed nothing, or they
+-- would stay, and every check after would find them again.
+theorem mergedVersionsAreAlwaysResolved (current changed : Bool) :
+    settingsWrite current true true changed = .resolve := by
+  simp [settingsWrite]
+
+theorem nothingIsWrittenOnlyOverAnUnchangedCopy (current versions merges changed : Bool)
+    (h : settingsWrite current versions merges changed = .nothing) :
+    current = true ∧ versions = false ∧ changed = false := by
+  cases current <;> cases versions <;> cases merges <;> cases changed <;> simp_all [settingsWrite]
+
+/-! The shared preferences join field by field. Each field carries when it was
+set, always later than the field it replaced, and its revision, and the
+later stamp wins. Without the time, one device's edit and the other's
+unchanged value look the same, since there is no base: the device that lost
+the write has recorded its own write as one. -/
+
+-- When a field is set: now, but never before the field it replaces.
+def preferenceStamp (now : Nat) (replaced : Option Nat) : Nat :=
+  match replaced with
+  | none => now
+  | some t => max now (t + 1)
+
+def preferenceJoin (a b : Stamp) : Stamp := laterStamp a b
+
+-- The later edit survives whichever copy the store kept as current.
+theorem aLaterEditSurvivesEitherWay (edit other : Stamp) (h : stampLE other edit) :
+    preferenceJoin edit other = edit ∧ preferenceJoin other edit = edit := by
+  have h1 : laterStamp other edit = edit := by simp [laterStamp, h]
+  exact ⟨by rw [preferenceJoin, laterStamp_comm]; exact h1, h1⟩
+
+-- So a field set on another device's value beats it, even with a clock
+-- behind that device's.
+theorem aSetFieldBeatsWhatItReplaced (now t r r' : Nat) :
+    preferenceJoin (some t, some r) (some (preferenceStamp now (some t)), some r')
+      = (some (preferenceStamp now (some t)), some r') :=
+  (aLaterEditSurvivesEitherWay _ _ (by unfold stampLE; simp [optKey, preferenceStamp]; omega)).2
+
+-- One copy of the bundle, reduced to a path's manifest entry, a preference
+-- field, and an app's own settings, which are opaque to core.
+structure BundleCopy where
+  entry : ManifestEntry
+  preference : Stamp
+  own : Nat
+  deriving DecidableEq, Repr
+
+-- `LampSyncSettingsBundle.merge(version:)`: joins what core can join, and
+-- keeps the current copy's own settings for the app to merge.
+def mergeVersion (current version : BundleCopy) : BundleCopy :=
+  { entry := mergeManifestEntry current.entry version.entry,
+    preference := preferenceJoin current.preference version.preference,
+    own := current.own }
+
+theorem versionMergeIgnoresWhichCopyIsCurrent (a b : BundleCopy) :
+    (mergeVersion a b).entry = (mergeVersion b a).entry
+      ∧ (mergeVersion a b).preference = (mergeVersion b a).preference
+      ∧ (mergeVersion a b).own = a.own := by
+  simp [mergeVersion, preferenceJoin, mergeManifestEntry_comm, laterStamp_comm]
+
+-- Several versions fold to the same joined parts in any order.
+theorem versionsFoldInAnyOrder (a b c : BundleCopy) :
+    (mergeVersion (mergeVersion a b) c).entry = (mergeVersion (mergeVersion a c) b).entry
+      ∧ (mergeVersion (mergeVersion a b) c).preference
+          = (mergeVersion (mergeVersion a c) b).preference := by
+  simp only [mergeVersion, preferenceJoin]
+  constructor
+  · rw [mergeManifestEntry_assoc, mergeManifestEntry_comm b.entry, ← mergeManifestEntry_assoc]
+  · rw [laterStamp_assoc, laterStamp_comm b.preference, ← laterStamp_assoc]
+
 /-! ## Conformance tables
 
 Each line below names a model decision, its inputs and its answer. Swift's
@@ -3196,5 +4174,507 @@ def entriesFor : String → Option (List (Nat × Nat))
             [toString hasBase, fieldName fresh previous, fieldName fresh remote, optNat localValue,
              fieldName fresh o.published, toString o.applies, fieldName fresh o.baseline,
              toString o.disputed]
+
+def fileName (v : FileVersion) : String := toString v.tick ++ ":" ++ toString v.bytes
+
+def optFileName : Option FileVersion → String
+  | none => "-"
+  | some v => fileName v
+
+def choiceName : ThreeWayChoice → String
+  | .local => "local" | .remote => "remote" | .conflict => "conflict"
+
+def bootstrapName : SettingsBootstrapAction → String
+  | .missing => "missing" | .create => "create" | .adopt => "adopt"
+  | .guarded => "guarded" | .merge => "merge"
+
+def baseName : ObservedBase → String
+  | .absent => "absent" | .revision r => "revision:" ++ toString r
+  | .digest c => "digest:" ++ toString c
+
+def optList : Option (List Nat) → String
+  | none => "-"
+  | some l => ",".intercalate (l.map toString)
+
+def resultName : WriteResult → String
+  | .wrote => "w" | .refused => "r" | .failed => "f"
+
+def readName : Option (Nat × Option Nat) → String
+  | none => "-"
+  | some (bytes, revision) => toString bytes ++ ":" ++ optNat revision
+
+#eval show IO Unit from do
+  for ct in [0, 1, 2] do
+    for cb in [0, 1, 2] do
+      for it in [0, 1, 2] do
+        for ib in [0, 1, 2] do
+          let c : FileVersion := ⟨ct, cb⟩
+          let i : FileVersion := ⟨it, ib⟩
+          IO.println <| conformanceLine "replaceFile"
+            [fileName c, fileName i, toString (replaceFile c i)]
+  let incomings : List (List FileVersion) := [[], [⟨0, 2⟩], [⟨1, 0⟩], [⟨2, 1⟩], [⟨1, 2⟩, ⟨2, 0⟩]]
+  for deletion in [none, some (0 : Int), some 1, some 2] do
+    for installed in [none, some (⟨1, 1⟩ : FileVersion)] do
+      for incoming in incomings do
+        let deleted : FileVersion → Bool := fun v =>
+          match deletion with | none => false | some d => Decidable.decide (v.tick ≤ d)
+        IO.println <| conformanceLine "deckPull"
+          [(match deletion with | none => "-" | some d => toString d), optFileName installed,
+           (if incoming.isEmpty then "-" else ",".intercalate (incoming.map fileName)),
+           optFileName (deckPull deleted installed incoming)]
+
+#eval show IO Unit from do
+  for base in [ObservedBase.absent, .revision 1, .digest 7] do
+    for remote in [none, some (1, 7), some (2, 7), some (1, 8)] do
+      for content in [7, 9] do
+        IO.println <| conformanceLine "observedModuleWrite"
+          [baseName base,
+           (match remote with | none => "-" | some (r, c) => toString r ++ ":" ++ toString c),
+           toString content, toString (observedModuleWrite base remote content).isSome]
+
+#eval show IO Unit from do
+  for base in [true, false] do
+    for device in [true, false] do
+      for remote in [true, false] do
+        IO.println <| conformanceLine "mergeMembership"
+          [toString base, toString device, toString remote, toString (mergeMembership base device remote)]
+  for base in [0, 1, 2] do
+    for device in [0, 1, 2] do
+      for remote in [0, 1, 2] do
+        IO.println <| conformanceLine "chooseWholeValue"
+          [toString base, toString device, toString remote, choiceName (chooseWholeValue base device remote)]
+  for dt in [0, 1, 2] do
+    for rt in [0, 1, 2] do
+      for dr in [0, 1] do
+        for rr in [0, 1] do
+          IO.println <| conformanceLine "chooseReading"
+            [toString dt, toString rt, toString dr, toString rr, choiceName (chooseReading dt rt dr rr)]
+  for a in [true, false] do
+    for b in [true, false] do
+      for c in [true, false] do
+        for d in [true, false] do
+          for e in [true, false] do
+            for f in [true, false] do
+              IO.println <| conformanceLine "settingsBootstrap"
+                [toString a, toString b, toString c, toString d, toString e, toString f,
+                 bootstrapName (settingsBootstrap a b c d e f)]
+
+#eval show IO Unit from do
+  for committed in [[1], [2]] do
+    for pending in [none, some [2], some [3]] do
+      for observed in [[1], [2], [3]] do
+        IO.println <| conformanceLine "folderSealAccepts"
+          [optList (some committed), optList pending, optList (some observed),
+           toString (folderSealAccepts committed pending observed)]
+  for stageValid in [true, false] do
+    for old in [none, some 1, some 2] do
+      for intended in [none, some 1, some 2] do
+        for current in [none, some 1, some 2] do
+          IO.println <| conformanceLine "folderRecoveryStep"
+            [toString stageValid, optNat old, optNat intended, optNat current,
+             toString (folderRecoveryStep stageValid old intended current).isSome]
+  for original in [none, some [1], some [2]] do
+    for live in [none, some [1], some [2]] do
+      IO.println <| conformanceLine "stagedCommitAllowed"
+        [optList original, optList live, toString (stagedCommitAllowed original live)]
+
+#eval show IO Unit from do
+  let all := [WriteResult.wrote, .refused, .failed]
+  let mut batches : List (List WriteResult) := [[]]
+  for a in all do
+    batches := batches ++ [[a]]
+    for b in all do
+      batches := batches ++ [[a, b]]
+      for c in all do
+        batches := batches ++ [[a, b, c]]
+  for batch in batches do
+    IO.println <| conformanceLine "publishReportingRefusals"
+      [(if batch.isEmpty then "-" else String.join (batch.map resultName)),
+       (match publishReportingRefusals batch with
+        | none => "stopped"
+        | some flags => if flags.isEmpty then "-" else String.join (flags.map fun r => if r then "r" else "w"))]
+  let reads : List (Option (Nat × Option Nat)) := [none, some (5, some 1), some (4, some 2), some (5, none)]
+  for first in reads do
+    for second in reads do
+      IO.println <| conformanceLine "confirmWrite"
+        [readName first, readName second, optNat (confirmWrite 5 [first, second])]
+
+def legacyStateName : LegacySettingsState → String
+  | .absent => "absent" | .mirrored => "mirrored" | .superseded => "superseded" | .changed => "changed"
+
+def readSourceName : SettingsReadSource → String
+  | .absent => "absent" | .legacy => "legacy" | .archive => "archive" | .conflict => "conflict"
+
+def migrationName : MigrationCopyAction → String
+  | .publishMerged => "publishMerged" | .create => "create"
+  | .alreadyPresent => "alreadyPresent" | .conflict => "conflict"
+
+def optPair : Option (Nat × Nat) → String
+  | none => "-"
+  | some (a, b) => toString a ++ ":" ++ toString b
+
+def optBool : Option Bool → String
+  | none => "-"
+  | some b => toString b
+
+def traceName (trace : List Nat) : String :=
+  if trace.isEmpty then "-" else String.join (trace.map toString)
+
+def formatName : ModuleFormat → String
+  | .lamp => "lamp" | .json => "json"
+
+def candidateName (c : ModuleCandidate) : String :=
+  toString c.identity ++ ":" ++ formatName c.format ++ (if c.superseded then ":s" else "")
+
+def hexBytes (bytes : List Nat) : String :=
+  if bytes.isEmpty then "-" else ".".intercalate (bytes.map toString)
+
+#eval show IO Unit from do
+  for head in [200, 204, 403, 404, 405, 500] do
+    for get in [200, 403, 404, 500] do
+      IO.println <| conformanceLine "webDAVPresence"
+        [toString head, toString get, optBool (webDAVPresence head get)]
+  for mkcol in [201, 405, 409, 500] do
+    for propfind in [200, 207, 404, 500] do
+      for samePath in [true, false] do
+        for isCollection in [true, false] do
+          IO.println <| conformanceLine "webDAVDirectoryReady"
+            [toString mkcol, toString propfind, toString samePath, toString isCollection,
+             toString (webDAVDirectoryReady mkcol propfind samePath isCollection)]
+  -- `"abc"`, `W/"abc"`, `"a,b"`, `"a"b"`, `""`, a newline inside, bare `abc`,
+  -- two tags joined, and a lone quote.
+  let tags : List (List Nat) := [[34, 97, 98, 99, 34], [87, 47, 34, 97, 98, 99, 34], [34, 97, 44, 98, 34],
+    [34, 97, 34, 98, 34], [34, 34], [34, 97, 10, 98, 34], [97, 98, 99],
+    [34, 97, 34, 44, 32, 34, 98, 34], [34]]
+  for tag in tags do
+    IO.println <| conformanceLine "guardedETagCondition"
+      [hexBytes tag, toString (guardedETagCondition tag).isSome]
+
+#eval show IO Unit from do
+  -- A manifest records a legacy base revision and digest together or not at
+  -- all (`LegacyManifest.validate`), so only those two shapes occur.
+  let bases : List (Option Nat × Option Nat) := [(none, none), (some 1, some 7)]
+  let legacies : List (Option (Nat × Nat)) := [none, some (1, 5), some (1, 7), some (2, 7), some (1, 8)]
+  for (baseRevision, baseDigest) in bases do
+    for legacy in legacies do
+      IO.println <| conformanceLine "classifyLegacySettings"
+        [optNat baseRevision, optNat baseDigest, optPair legacy,
+         legacyStateName (classifyLegacySettings 5 baseRevision baseDigest legacy)]
+      for archive in [none, some 5] do
+        IO.println <| conformanceLine "resolveSettingsSource"
+          [optNat archive, optNat baseRevision, optNat baseDigest, optPair legacy,
+           readSourceName (resolveSettingsSource archive baseRevision baseDigest legacy)]
+  for archiveStrong in [true, false] do
+    for legacyStrong in [true, false] do
+      for savedArchive in [none, some 1] do
+        for currentArchive in [none, some 1, some 2] do
+          for savedLegacy in [none, some 1] do
+            for currentLegacy in [none, some 1, some 2] do
+              IO.println <| conformanceLine "maySkipArchivePoll"
+                [toString archiveStrong, toString legacyStrong, optNat savedArchive,
+                 optNat currentArchive, optNat savedLegacy, optNat currentLegacy,
+                 toString (maySkipArchivePoll false true archiveStrong legacyStrong
+                   savedArchive currentArchive savedLegacy currentLegacy)]
+
+#eval show IO Unit from do
+  let values := [none, some 1, some 2]
+  for before in values do
+    for after in values do
+      IO.println <| conformanceLine "stableRead" [optNat before, optNat after, optNat (stableRead before after)]
+      for body in values do
+        IO.println <| conformanceLine "checkedContentRead"
+          [optNat before, optNat body, optNat after, optNat (checkedContentRead before body after)]
+
+#eval show IO Unit from do
+  for beforePull in [true, false] do
+    for afterPull in [true, false] do
+      for afterPublish in [true, false] do
+        for pullOK in [true, false] do
+          for publishOK in [true, false] do
+            IO.println <| conformanceLine "cancellableRunTrace"
+              [toString beforePull, toString afterPull, toString afterPublish, toString pullOK,
+               toString publishOK,
+               traceName (cancellableRunTrace beforePull afterPull afterPublish pullOK publishOK)]
+  for pullOK in [true, false] do
+    for publishOK in [true, false] do
+      for persistOK in [true, false] do
+        for wipeRequested in [true, false] do
+          for wipeOK in [true, false] do
+            IO.println <| conformanceLine "backendTransition"
+              [toString pullOK, toString publishOK, toString persistOK, toString wipeRequested,
+               toString wipeOK,
+               toString (deferredBackendWipe wipeRequested pullOK publishOK persistOK),
+               toString (wipeRequested && rollbackAttempted pullOK publishOK persistOK wipeOK),
+               toString (backendActivationOccurs pullOK publishOK persistOK wipeRequested wipeOK)]
+  for editable in [true, false] do
+    for destination in [none, some 1, some 2] do
+      IO.println <| conformanceLine "migrationCopyAction"
+        [toString editable, optNat destination, migrationName (migrationCopyAction editable 1 destination),
+         toString (migrationRawWriteOccurs (migrationCopyAction editable 1 destination))]
+
+#eval show IO Unit from do
+  let pool : List ModuleCandidate :=
+    [⟨1, .lamp, false⟩, ⟨1, .json, false⟩, ⟨1, .lamp, true⟩, ⟨2, .json, false⟩]
+  let mut lists : List (List ModuleCandidate) := []
+  for a in pool do
+    lists := lists ++ [[a]]
+    for b in pool do
+      lists := lists ++ [[a, b]]
+      for c in pool do
+        lists := lists ++ [[a, b, c]]
+  for files in lists do
+    for identity in [1, 2] do
+      IO.println <| conformanceLine "selectedCandidateIndex"
+        [toString identity, ",".intercalate (files.map candidateName),
+         optNat (selectedCandidateIndexForIdentity identity files)]
+
+def bools (values : List Bool) : String :=
+  if values.isEmpty then "-" else String.join (values.map fun b => if b then "t" else "f")
+
+def boolLists : Nat → List (List Bool)
+  | 0 => [[]]
+  | n + 1 => [[]] ++ (boolLists n).flatMap fun rest => [true :: rest, false :: rest]
+
+def folderEntryCode (entry : ModuleFolderEntry) : String :=
+  (if entry.isDirectory then "d" else "f") ++ (if entry.supportedFilename then "s" else "u")
+
+def highlightName : MacHighlightExport → String
+  | .ready => "ready" | .empty => "empty" | .failed => "failed"
+
+#eval show IO Unit from do
+  for device in [0, 1, 3] do
+    for incoming in [0, 1, 3] do
+      for now in [0, 2, 5] do
+        IO.println <| conformanceLine "resolvedRecordRevision"
+          [toString device, toString incoming, toString now,
+           toString (resolvedRecordRevision device incoming now)]
+  for cacheValid in [true, false] do
+    for strongRevision in [true, false] do
+      for revisionMatches in [true, false] do
+        IO.println <| conformanceLine "archiveGetRequired"
+          [toString cacheValid, toString strongRevision, toString revisionMatches,
+           toString (archiveGetRequired cacheValid strongRevision revisionMatches)]
+  let kinds : List ModuleFolderEntry := [⟨false, true⟩, ⟨false, false⟩, ⟨true, true⟩, ⟨true, false⟩]
+  let mut listings : List (Option (Option (List ModuleFolderEntry))) := [none, some none, some (some [])]
+  for a in kinds do
+    listings := listings ++ [some (some [a])]
+    for b in kinds do
+      listings := listings ++ [some (some [a, b])]
+  for response in listings do
+    let shown := match response with
+      | none => "error" | some none => "missing"
+      | some (some entries) => if entries.isEmpty then "-" else ",".intercalate (entries.map folderEntryCode)
+    IO.println <| conformanceLine "moduleFolderListing"
+      [shown, match moduleFolderListing response with
+        | none => "error"
+        | some kept => if kept.isEmpty then "-" else ",".intercalate (kept.map folderEntryCode)]
+
+#eval show IO Unit from do
+  -- Earlier attempts' outcomes, then one more attempt by a caller that may be
+  -- cancelled while it waits.
+  for earlier in boolLists 2 do
+    let completed := earlier.foldl initialSyncCompletedAfterAttempt false
+    for succeeded in [true, false] do
+      for cancelled in [true, false] do
+        let after := initialSyncCompletedAfterAttempt completed succeeded
+        IO.println <| conformanceLine "initialSync"
+          [bools earlier, toString succeeded, toString cancelled, toString after,
+           toString (initialSyncCallerMayContinue after cancelled)]
+  for outcomes in boolLists 3 do
+    IO.println <| conformanceLine "mirrorAttempts"
+      [bools outcomes, bools (mirrorAttempts outcomes), toString (mirrorBatchSucceeds outcomes)]
+    IO.println <| conformanceLine "mediaBatchComplete"
+      [bools outcomes, toString (mediaBatchComplete outcomes)]
+  for outcome in [MacHighlightExport.ready, .empty, .failed] do
+    IO.println <| conformanceLine "macHighlightAllowsArchivePublish"
+      [highlightName outcome, toString (macHighlightAllowsArchivePublish outcome)]
+
+#eval show IO Unit from do
+  for base in [ObservedBase.absent, .revision 1, .digest 7, .digest 5] do
+    for archive in [none, some (5, 1), some (5, 2), some (7, 1)] do
+      for remote in [none, some (1, 7), some (2, 7), some (1, 8)] do
+        for content in [7, 9] do
+          IO.println <| conformanceLine "observedCompatibilityWrite"
+            [baseName base, optPair archive, optPair remote, toString content,
+             toString (observedCompatibilityWrite base archive remote content).isSome]
+
+def captureName : ArchiveCaptureChoice → String
+  | .include => "include" | .skip => "skip" | .reject => "reject"
+
+def columnName : StoredColumn → String
+  | .nothing => "nothing"
+  | .json a => "json:" ++ toString a
+  | .text a => "text:" ++ toString a
+
+#eval show IO Unit from do
+  for isMedia in [true, false] do
+    for hidden in [true, false] do
+      for symlink in [true, false] do
+        IO.println <| conformanceLine "archiveCaptureChoice"
+          [toString isMedia, toString hidden, toString symlink,
+           captureName (archiveCaptureChoice isMedia hidden symlink)]
+  for remote in [none, some 1, some 2] do
+    IO.println <| conformanceLine "devotionalMediaUploadDecision"
+      [optNat remote, optBool (devotionalMediaUploadDecision remote 1)]
+  let columns := [StoredColumn.nothing, .json 1, .json 2, .text 1, .text 2]
+  for one in columns do
+    for other in columns do
+      IO.println <| conformanceLine "sameColumn"
+        [columnName one, columnName other, toString (sameColumn one other)]
+
+def entryCode (e : ManifestEntry) : String :=
+  ":".intercalate [optNat e.presentSince, optNat e.revision, optNat e.deletedAt, optNat e.deletedRevision]
+
+def optEntryCode : Option ManifestEntry → String
+  | none => "-"
+  | some e => entryCode e
+
+def heldCode : Option HeldFile → String
+  | none => "-"
+  | some h => ":".intercalate [toString h.changed, optNat h.lastRevision, optNat h.savedAt]
+
+def fileClassName : FileClass → String
+  | .media => "media" | .listed => "listed" | .unlisted => "unlisted"
+
+def actionCode (a : PlanAction) : String :=
+  let tokens :=
+    (if a.download then ["download"] else [])
+    ++ (a.merge.map fun r => ["merge:" ++ toString r]).getD []
+    ++ (a.upload.map fun c => ["upload:" ++ conditionName c]).getD []
+    ++ (if a.deleteLocally then ["deleteLocally"] else [])
+    ++ (a.adopt.map fun r => ["adopt:" ++ toString r]).getD []
+    ++ (a.tombstone.map fun t => ["tombstone:" ++ toString t]).getD []
+    ++ (a.reap.map fun r => ["reap:" ++ toString r]).getD []
+  if tokens.isEmpty then "-" else ",".intercalate tokens
+
+def headerName : BundleHeader → String
+  | .version n => "version:" ++ toString n
+  | .entriesFirst => "entriesFirst"
+  | .garbage => "garbage"
+
+def contentsName : BundleContents → String
+  | .bundle => "bundle" | .archive => "archive" | .newer n => "newer:" ++ toString n
+  | .damaged => "damaged"
+
+def manifestEntries : List ManifestEntry :=
+  [emptyEntry, ⟨some 5, some 1, none, none⟩, ⟨some 5, some 2, none, none⟩,
+   ⟨some 7, some 1, some 6, some 3⟩, ⟨none, none, some 5, some 1⟩, ⟨some 5, none, some 5, none⟩]
+
+#eval show IO Unit from do
+  for a in manifestEntries do
+    for b in manifestEntries do
+      let merged := mergeManifestEntry a b
+      IO.println <| conformanceLine "manifestMerge"
+        [entryCode a, entryCode b, entryCode merged, toString (entryIsMember merged)]
+  for e in manifestEntries do
+    for previous in [none, some 1, some 2] do
+      for time in [3, 9] do
+        IO.println <| conformanceLine "recordWrite"
+          [entryCode e, optNat previous, toString time, entryCode (recordWrite e (some 4) previous time)]
+    for rev in [1, 3, 4] do
+      for time in [3, 9] do
+        IO.println <| conformanceLine "adoptFile"
+          [entryCode e, toString rev, toString time, entryCode (adoptFile e rev time)]
+  let now := 10 + tombstoneLifetime
+  for e in [⟨some 1, some 1, none, none⟩, ⟨some 1, some 1, some 5, some 1⟩,
+            ⟨some 1, some 1, some 15, some 1⟩, emptyEntry] do
+    for listed in [true, false] do
+      for present in [true, false] do
+        IO.println <| conformanceLine "pruneTombstone"
+          [entryCode e, toString now, toString listed, toString present,
+           toString (pruneTombstone e now listed present)]
+
+#eval show IO Unit from do
+  let entries : List (Option ManifestEntry) :=
+    [none, some ⟨some 5, some 1, none, none⟩, some ⟨some 5, some 1, some 7, some 2⟩,
+     some ⟨some 5, some 1, some 7, none⟩, some ⟨none, none, some 7, none⟩,
+     some ⟨some 9, some 3, some 7, some 1⟩, some emptyEntry]
+  let helds : List (Option HeldFile) :=
+    [none, some ⟨false, some 1, some 6⟩, some ⟨true, some 1, some 8⟩, some ⟨false, some 2, some 6⟩,
+     some ⟨true, none, some 8⟩, some ⟨false, none, none⟩]
+  for cls in [FileClass.media, .listed, .unlisted] do
+    for entry in entries do
+      for held in helds do
+        for deletedHere in [none, some 6, some 10] do
+          for listed in [none, some 1, some 2, some 3] do
+            IO.println <| conformanceLine "filePlanAction"
+              [fileClassName cls, optEntryCode entry, heldCode held, optNat deletedHere, optNat listed,
+               actionCode (filePlanAction cls entry held deletedHere listed)]
+
+#eval show IO Unit from do
+  -- The manifest's view of a listed file: unknown, a member with or without
+  -- a recorded revision, or a tombstone.
+  let states : List (String × Option Nat) :=
+    [("unknown", none), ("member:2", some 2), ("member:-", none), ("tombstone:2", none)]
+  for item in [none, some 1] do
+    for (state, recorded) in states do
+      for stored in [none, some 3] do
+        let (revision, asked) := listedRevision item recorded stored
+        IO.println <| conformanceLine "listedRevision"
+          [optNat item, state, optNat stored, optNat revision, toString asked]
+  for attempts in [0, 1, 2, 3] do
+    for refusals in boolLists 3 do
+      IO.println <| conformanceLine "settingsUpdate"
+        [toString attempts, bools refusals, optNat (settingsUpdate attempts refusals)]
+  for header in [BundleHeader.version 0, .version 1, .version 2, .version 3, .version 4,
+                 .entriesFirst, .garbage] do
+    IO.println <| conformanceLine "bundlePathHolds"
+      [headerName header, contentsName (bundlePathHolds header)]
+
+def directoryOutcomeName : DirectoryOutcome → String
+  | .proceed => "proceed" | .refuse => "refuse" | .unresolved => "unresolved"
+  | .nothingThere => "nothingThere"
+
+#eval show IO Unit from do
+  for c in [WriteCondition.unconditional, .ifAbsent, .ifRevision 1] do
+    for current in [none, some 1, some 2] do
+      for placeholder in [true, false] do
+        for unresolved in [true, false] do
+          IO.println <| conformanceLine "directoryWrite"
+            [conditionName c, optNat current, toString placeholder, toString unresolved,
+             directoryOutcomeName (directoryWrite c current placeholder unresolved)]
+          IO.println <| conformanceLine "directoryDelete"
+            [conditionName c, optNat current, toString placeholder, toString unresolved,
+             directoryOutcomeName (directoryDelete c current placeholder unresolved)]
+
+
+def settingsWriteName : SettingsWrite → String
+  | .needsMerge => "needsMerge" | .resolve => "resolve" | .create => "create"
+  | .replace => "replace" | .nothing => "nothing"
+
+def stampCode (s : Stamp) : String := optNat s.1 ++ ":" ++ optNat s.2
+
+def bundleCopies : List BundleCopy :=
+  let stamps : List Stamp :=
+    [(none, some 1), (none, some 2), (some 5, some 1), (some 5, some 2), (some 7, some 1), (some 3, some 9)]
+  (stamps.zip manifestEntries).zipIdx.map fun ((p, e), i) => ⟨e, p, i⟩
+
+#eval show IO Unit from do
+  for marker in [true, false] do
+    for content in [true, false] do
+      IO.println <| conformanceLine "emptyBundlePath"
+        [toString marker, toString content, toString (emptyBundlePath marker content)]
+  for header in [BundleHeader.version 0, .version 1, .version 2, .version 3, .version 4,
+                 .entriesFirst, .garbage] do
+    IO.println <| conformanceLine "versionMerges"
+      [headerName header, toString (versionMerges (bundlePathHolds header))]
+  for current in [true, false] do
+    for versions in [true, false] do
+      for merges in [true, false] do
+        for changed in [true, false] do
+          IO.println <| conformanceLine "settingsWrite"
+            [toString current, toString versions, toString merges, toString changed,
+             settingsWriteName (settingsWrite current versions merges changed)]
+  for now in [3, 9] do
+    for replaced in [none, some 2, some 9] do
+      IO.println <| conformanceLine "preferenceStamp"
+        [toString now, optNat replaced, toString (preferenceStamp now replaced)]
+  for a in bundleCopies do
+    for b in bundleCopies do
+      let m := mergeVersion a b
+      IO.println <| conformanceLine "versionMerge"
+        [stampCode a.preference, entryCode a.entry, toString a.own,
+         stampCode b.preference, entryCode b.entry, toString b.own,
+         stampCode m.preference, entryCode m.entry, toString m.own]
 
 end LampSyncVerification

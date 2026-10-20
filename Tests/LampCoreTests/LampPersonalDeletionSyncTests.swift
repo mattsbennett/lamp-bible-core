@@ -42,6 +42,25 @@ struct LampPersonalDeletionSyncTests {
 
     // MARK: - Writing
 
+    /// The phone keeps its own ledger with these, so both clients record and
+    /// key items the same way.
+    @Test func recordingKeepsTheLaterTimeAndKeysMatch() {
+        var ledger = LampPersonalDeletionLedger()
+        let key = LampPersonalDeletionLedger.highlightKey(
+            setID: "set", reference: verse, start: 0, end: 4, style: 1, color: "yellow"
+        )
+        ledger.recordPresence(.highlight, key, at: 10)
+        ledger.recordPresence(.highlight, key, at: 5)
+        ledger.recordDeletion(.highlight, key, at: 20)
+        ledger.recordDeletion(.highlight, key, at: 15)
+        #expect(ledger.entry(.highlight, key) == .init(presentSince: 10, deletedAt: 20))
+        #expect(ledger.entries(of: .highlight).keys.sorted() == [key])
+        #expect(ledger.entries(of: .note).isEmpty)
+        #expect(key == "set\u{1F}\(verse)\u{1F}0\u{1F}4\u{1F}1\u{1F}yellow")
+        #expect(LampPersonalDeletionLedger.highlightThemeKey(setID: "set", color: "red", style: 2)
+            == "set\u{1F}red\u{1F}2")
+    }
+
     @Test func deletedWritingStaysDeletedOnEveryDevice() async throws {
         let devices = try Devices()
         defer { devices.remove() }

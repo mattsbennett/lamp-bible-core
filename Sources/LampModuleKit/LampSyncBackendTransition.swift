@@ -4,6 +4,16 @@ import Foundation
 /// changes. Provider selection is persisted before a destructive wipe, then
 /// activated only after the wipe succeeds. Earlier remote writes are not
 /// rolled back if a later stage fails.
+///
+/// A client's per-path sync records (the revision it last installed or
+/// wrote, its last upload's digest, writes and deletions waiting for a
+/// bundle) belong to one provider, and a transition leaves them behind: an
+/// ETag never equals a digest, so records offered to another provider make
+/// every file read as changed. Key them by provider, as the preference
+/// ledger is, so the new one starts with none. With no record a file is
+/// downloaded and compared by value, never written over
+/// (`Verification/SyncMerge.lean`: `noRecordNeverOverwrites`), and a switch
+/// back finds the old records intact.
 public enum LampSyncBackendTransition {
     public enum TransitionError: Error, LocalizedError {
         case rollbackFailed(wipeError: Error, rollbackError: Error)

@@ -116,17 +116,60 @@ public struct LampSyncArchive: Codable, Equatable, Sendable {
         return archive
     }
 
+    /// The packed archive, built on disk and read back through a mapping.
     public func compressedData() throws -> Data {
-        try validate()
-        let data = try JSONEncoder().encode(self)
-        return try (data as NSData).compressed(using: .zlib) as Data
+        let file = LampSyncScratchFile.url()
+        defer { try? FileManager.default.removeItem(at: file) }
+        try writeCompressed(to: file)
+        // The mapping keeps the bytes readable after the file is removed.
+        return try Data(contentsOf: file, options: .alwaysMapped)
     }
 
+    /// Packs the archive into `url` one entry at a time, so its JSON (a third
+    /// larger than the bodies, which are base64 in it) is never in memory
+    /// whole beside the entries and their packed form.
+    public func writeCompressed(to url: URL) throws {
+        try validate()
+        let json = LampSyncScratchFile.url()
+        defer { try? FileManager.default.removeItem(at: json) }
+        guard FileManager.default.createFile(atPath: json.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: json.path])
+        }
+        let handle = try FileHandle(forWritingTo: json)
+        defer { try? handle.close() }
+        let encoder = JSONEncoder()
+        // The synthesized shape, written by hand around entries encoded one
+        // at a time: `{"formatVersion":…,"entries":[…]}`.
+        try handle.write(contentsOf: Data(#"{"formatVersion":\#(formatVersion),"entries":["#.utf8))
+        for (index, entry) in entries.enumerated() {
+            try autoreleasepool {
+                if index > 0 { try handle.write(contentsOf: Data(",".utf8)) }
+                try handle.write(contentsOf: encoder.encode(entry))
+            }
+        }
+        try handle.write(contentsOf: Data("]}".utf8))
+        try handle.close()
+        try LampZlib.compress(fileAt: json, to: url)
+    }
+
+    /// Unpacks to a scratch file and decodes from a mapping of it, so the
+    /// unpacked JSON never sits in memory beside the compressed body and the
+    /// decoded entries. Holding all three for a library-sized archive is what
+    /// got the iOS app stopped by the system.
     public static func decode(compressedData: Data) throws -> LampSyncArchive {
-        let data = try (compressedData as NSData).decompressed(using: .zlib) as Data
-        let archive = try JSONDecoder().decode(LampSyncArchive.self, from: data)
+        let json = LampSyncScratchFile.url()
+        defer { try? FileManager.default.removeItem(at: json) }
+        try LampZlib.decompress(compressedData, to: json)
+        let archive = try JSONDecoder().decode(
+            LampSyncArchive.self, from: Data(contentsOf: json, options: .alwaysMapped)
+        )
         try archive.validate()
         return archive
+    }
+
+    /// Decodes an archive saved to disk, reading it through a mapping.
+    public static func decode(compressedFileAt url: URL) throws -> LampSyncArchive {
+        try decode(compressedData: Data(contentsOf: url, options: .alwaysMapped))
     }
 
     /// Replace one file without changing the other archive payloads. Rebuild

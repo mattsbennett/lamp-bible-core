@@ -16,9 +16,14 @@
         "guardedStagedBackupCommit",
         "editableCommit",
         "tombstoneDeletes",
-        "ownedSQLiteReplacement"
+        "ownedSQLiteReplacement",
+        "stagedCommitAllowed",
+        "stagedCommitAllowedIsTheGuard"
       ],
-      "boundary": "Only the library's sync paths are modelled: personal import, staged backup import and the deletion ledger. SQLite and filesystem behaviour are assumed."
+      "boundary": "Only the library's sync paths are modelled: personal import, staged backup import and the deletion ledger. SQLite and filesystem behaviour are assumed.",
+      "conformance": [
+        "stagedCommitAllowed"
+      ]
     },
     "Sources/LampCore/LampPersonalDeletionLedger.swift": {
       "rules": [
@@ -28,12 +33,14 @@
         "mergeTombstone_assoc",
         "mergeTombstone_idem",
         "exchangedLedgersAgree",
-        "editAfterDeletionSurvives"
+        "editAfterDeletionSurvives",
+        "later"
       ],
       "conformance": [
         "tombstone",
         "tombstoneMerge"
-      ]
+      ],
+      "boundary": "Its item keys are spelled here once, for both clients. Recording a save or a deletion keeps the later time, as `later`."
     },
     "Sources/LampCore/LampPresentationDeckPortable.swift": {
       "rules": [
@@ -43,7 +50,8 @@
         "tombstoneDeletes"
       ],
       "conformance": [
-        "tombstone"
+        "tombstone",
+        "deckPull"
       ]
     },
     "Sources/LampCore/LampSyncConflict.swift": {
@@ -59,12 +67,32 @@
         "devotionalMediaUploadDecision",
         "mediaImportChoice",
         "portableMediaMayCommit"
+      ],
+      "conformance": [
+        "devotionalMediaUploadDecision"
       ]
     },
     "Sources/LampCore/LampSyncPersonalExport.swift": {
       "rules": [
         "macHighlightAllowsArchivePublish"
+      ],
+      "conformance": [
+        "macHighlightAllowsArchivePublish"
       ]
+    },
+    "Sources/LampCore/LampSyncSettingsBundleMerge.swift": {
+      "rules": [
+        "mergeVersion",
+        "versionMergeIgnoresWhichCopyIsCurrent",
+        "versionsFoldInAnyOrder",
+        "mergeManifestEntry_comm",
+        "mergeTombstone_comm",
+        "deckPullIgnoresArrivalOrder"
+      ],
+      "conformance": [
+        "versionMerge"
+      ],
+      "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable personal deletion ledger stops the merge; the deck ledger stays lenient, as it is everywhere."
     },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [
@@ -73,17 +101,29 @@
         "disputedPreferenceKeepsTheServersValue",
         "firstMeetingKeepsTheServersValue",
         "firstMeetingContributesALocalOnlyValue",
-        "registeredDefaultWithoutStoredPreferenceIsNotAnEdit"
+        "registeredDefaultWithoutStoredPreferenceIsNotAnEdit",
+        "preferenceStamp",
+        "preferenceJoin",
+        "aLaterEditSurvivesEitherWay",
+        "aSetFieldBeatsWhatItReplaced",
+        "laterStamp_comm",
+        "laterStamp_assoc"
       ],
       "conformance": [
-        "preferenceMerge"
-      ]
+        "preferenceMerge",
+        "versionMerge",
+        "preferenceStamp"
+      ],
+      "boundary": "A field's time is the device's clock, raised past the field it replaces; joining two copies orders by it, then by revision, as `preferenceJoin`."
     },
     "Sources/LampModuleKit/LampSyncArchive.swift": {
       "rules": [
         "archiveCaptureChoice",
         "hiddenMediaAttachmentIsIncluded",
         "mediaSymlinkStopsArchiveCapture"
+      ],
+      "conformance": [
+        "archiveCaptureChoice"
       ]
     },
     "Sources/LampModuleKit/LampSyncArchiveIndex.swift": {
@@ -105,13 +145,20 @@
         "macArchivePublish",
         "staleMacArchiveCannotReplaceSettings"
       ],
-      "boundary": "Publishing the index after the archive is best effort; a lost index write costs a reader one fetch, which indexTrusted shows is never trusted stale."
+      "boundary": "Publishing the index after the archive is best effort; a lost index write costs a reader one fetch, which indexTrusted shows is never trusted stale.",
+      "conformance": [
+        "archiveGetRequired"
+      ]
     },
     "Sources/LampModuleKit/LampSyncBackendTransition.swift": {
       "rules": [
         "deferredBackendWipe",
         "backendActivationOccurs",
-        "pendingBackendMarker"
+        "pendingBackendMarker",
+        "rollbackAttempted"
+      ],
+      "conformance": [
+        "backendTransition"
       ]
     },
     "Sources/LampModuleKit/LampSyncCompatibilityPublisher.swift": {
@@ -120,7 +167,12 @@
         "publishReportingRefusals",
         "refusalsDoNotStopTheBatch",
         "aFailureStopsTheBatch",
-        "everyFileIsAccountedFor"
+        "everyFileIsAccountedFor",
+        "mirrorBatchSucceeds"
+      ],
+      "conformance": [
+        "publishReportingRefusals",
+        "mirrorAttempts"
       ]
     },
     "Sources/LampModuleKit/LampSyncConditionalWrite.swift": {
@@ -131,12 +183,17 @@
         "landingIsSound",
         "refusedWriteCanLookWritten",
         "confirmWrite",
-        "namesSameRevision"
+        "namesSameRevision",
+        "conditionalPublishKeepsTheOtherEdit",
+        "refusedPublishChangesNothing",
+        "contentRevision"
       ],
       "conformance": [
         "landing",
-        "namesSameRevision"
-      ]
+        "namesSameRevision",
+        "confirmWrite"
+      ],
+      "boundary": "A read-back is compared with the upload by SHA-256 digest, streamed from disk; collision resistance is assumed, as for contentRevision. Which errors count as a refusal is a list of error cases, Swift's."
     },
     "Sources/LampModuleKit/LampSyncContentRevision.swift": {
       "rules": [
@@ -144,16 +201,66 @@
       ],
       "boundary": "SHA-256 collision resistance is assumed."
     },
+    "Sources/LampModuleKit/LampSyncDirectoryStore.swift": {
+      "rules": [
+        "directoryWrite",
+        "directoryDelete",
+        "directoryWriteIsTheCoordinatedCheck",
+        "unresolvedVersionsStopTheFile",
+        "aDeleteNeverRemovesAnotherCopy",
+        "coordinatedGenericFileWriteAllowed",
+        "contentRevision",
+        "stableICloudReadDoesNotProtectLaterWrite"
+      ],
+      "conformance": [
+        "directoryWrite",
+        "directoryDelete"
+      ],
+      "boundary": "File coordination, NSFileVersion and iCloud's download of an evicted file are the OS's; a timed-out download is an error, never absence. The decision inside the coordinated block is held by tables. iCloud offers no server-side condition, so a later upload from another device can still land after the check. Conflict versions are read and resolved in one coordinated block; which to resolve is the settings store's (`settingsWrite`), and only versions named by their bytes are resolved."
+    },
     "Sources/LampModuleKit/LampSyncEngine.swift": {
       "rules": [
         "runTrace",
+        "cancellableRunTrace",
+        "agreesAlongRun",
+        "serverNeverLosesAlongRun",
+        "aQuietRoundConverges"
+      ],
+      "conformance": [
         "cancellableRunTrace"
       ]
+    },
+    "Sources/LampModuleKit/LampSyncFilePlan.swift": {
+      "rules": [
+        "filePlanAction",
+        "changeAction",
+        "changeActionNeverDeletes",
+        "deletingNeedsATombstone",
+        "anUnknownFileIsAdopted",
+        "noRecordNeverOverwrites",
+        "listedRevision",
+        "aRecordedMemberIsNeverRead"
+      ],
+      "conformance": [
+        "filePlanAction",
+        "listedRevision"
+      ],
+      "boundary": "Gathering the plan's inputs per path and listing each folder is Swift's; the decision for one path, and which revision a listed file is compared by, are held by tables."
+    },
+    "Sources/LampModuleKit/LampSyncFolderLayout.swift": {
+      "rules": [
+        "FileClass"
+      ],
+      "boundary": "Path spelling and validation are Swift's. What the plan needs from a path, whether it is media and whether its folder is listed, is the model's FileClass, and filePlanAction's table reaches it through one path of each class."
     },
     "Sources/LampModuleKit/LampSyncFolderPublisher.swift": {
       "rules": [
         "folderPreflight",
         "folderFileWrite",
+        "folderSealAccepts",
+        "folderRecoveryStep"
+      ],
+      "conformance": [
         "folderSealAccepts",
         "folderRecoveryStep"
       ]
@@ -164,10 +271,47 @@
         "sameColumn_trans",
         "textIsNeverTheSameAsJSONOrNothing"
       ],
-      "boundary": "Classifying a stored string as absent, JSON or text is JSONSerialization's; Swift tests cover it."
+      "boundary": "Classifying a stored string as absent, JSON or text is JSONSerialization's; Swift tests cover it.",
+      "conformance": [
+        "sameColumn"
+      ]
     },
     "Sources/LampModuleKit/LampSyncLayout.swift": {
       "boundary": "Path constants only; no decision."
+    },
+    "Sources/LampModuleKit/LampSyncLibraryManifest.swift": {
+      "rules": [
+        "laterStamp",
+        "laterStamp_comm",
+        "laterStamp_assoc",
+        "laterStamp_idem",
+        "mergeManifestEntry",
+        "mergeManifestEntry_comm",
+        "mergeManifestEntry_assoc",
+        "mergeManifestEntry_idem",
+        "entryIsMember",
+        "equalTimeDeletesAFile",
+        "membershipIgnoresMergeOrder",
+        "recordWrite",
+        "successorWriteIsStampedLater",
+        "writeAfterDeletionIsMember",
+        "deletesRevision",
+        "removeFile",
+        "adoptFile",
+        "adoptionNeverUndoesADeletion",
+        "aCopyPutBackIsAdopted",
+        "pruneTombstone",
+        "pruneNeverDropsAMember",
+        "pruneWaitsForTheReap",
+        "tombstoneLifetimeCost"
+      ],
+      "conformance": [
+        "manifestMerge",
+        "recordWrite",
+        "adoptFile",
+        "pruneTombstone"
+      ],
+      "boundary": "Revisions compare as tokens here and as numbers in the model; the tables use single-digit revisions, where the two orders agree. Coding, path validation and sorting are Swift's."
     },
     "Sources/LampModuleKit/LampSyncMerge.swift": {
       "rules": [
@@ -175,15 +319,24 @@
         "mergeFile",
         "resolvedRecordRevision",
         "portableImportOutcome",
-        "oldWindowHasCycle"
+        "oldWindowHasCycle",
+        "replaceFile",
+        "replacedFileIsWhatMergeChooses",
+        "keptFileIsWhatMergeChooses"
       ],
       "conformance": [
         "decide",
-        "importOutcome"
+        "importOutcome",
+        "replaceFile",
+        "resolvedRecordRevision"
       ]
     },
     "Sources/LampModuleKit/LampSyncMigrationCopy.swift": {
       "rules": [
+        "migrationCopyAction",
+        "migrationRawWriteOccurs"
+      ],
+      "conformance": [
         "migrationCopyAction"
       ]
     },
@@ -197,11 +350,15 @@
         "weakListingCannotSkipThroughTheAdapter"
       ],
       "conformance": [
-        "needsImport"
+        "needsImport",
+        "selectedCandidateIndex"
       ]
     },
     "Sources/LampModuleKit/LampSyncModuleFolder.swift": {
       "rules": [
+        "moduleFolderListing"
+      ],
+      "conformance": [
         "moduleFolderListing"
       ]
     },
@@ -216,12 +373,19 @@
         "observedModuleWrite",
         "observedCompatibilityWrite",
         "unbasedContentWriteAllowed"
+      ],
+      "conformance": [
+        "observedModuleWrite",
+        "observedCompatibilityWrite"
       ]
     },
     "Sources/LampModuleKit/LampSyncOnce.swift": {
       "rules": [
         "initialSyncCompletedAfterAttempt",
         "initialSyncCallerMayContinue"
+      ],
+      "conformance": [
+        "initialSync"
       ]
     },
     "Sources/LampModuleKit/LampSyncPassRetry.swift": {
@@ -229,7 +393,8 @@
         "shouldRunAgain",
         "lostRace",
         "passesRun",
-        "aSyncRunsAtMostTwoPasses"
+        "aSyncRunsAtMostTwoPasses",
+        "pullThenPublishIsAccepted"
       ],
       "conformance": [
         "shouldRunAgain",
@@ -246,6 +411,9 @@
         "shouldFetchReferencedMedia",
         "mediaBatchComplete",
         "referencedMediaPhaseComplete"
+      ],
+      "conformance": [
+        "mediaBatchComplete"
       ]
     },
     "Sources/LampModuleKit/LampSyncRemoteDirectories.swift": {
@@ -254,7 +422,7 @@
       ]
     },
     "Sources/LampModuleKit/LampSyncRemoteStore.swift": {
-      "boundary": "The provider protocol; no decision of its own."
+      "boundary": "The provider protocol, and scratch files for bodies streamed to and from disk; no decision of its own. Conditional delete defaults to throwing, so a store that cannot delete fails a reap visibly. `LampSyncVersionedStore` adds reading and resolving a file's conflict versions; a store without it never has any."
     },
     "Sources/LampModuleKit/LampSyncSettingsArchive.swift": {
       "rules": [
@@ -265,7 +433,10 @@
         "reuseArchive"
       ],
       "conformance": [
-        "reuseArchive"
+        "reuseArchive",
+        "classifyLegacySettings",
+        "resolveSettingsSource",
+        "maySkipArchivePoll"
       ]
     },
     "Sources/LampModuleKit/LampSyncSettingsBootstrap.swift": {
@@ -275,8 +446,21 @@
         "movedRevisionMergesInsteadOfRefusing"
       ],
       "conformance": [
-        "uploadsBeforeMerge"
+        "uploadsBeforeMerge",
+        "settingsBootstrap"
       ]
+    },
+    "Sources/LampModuleKit/LampSyncSettingsBundle.swift": {
+      "rules": [
+        "bundlePathHolds",
+        "archiveReaderAccepts",
+        "oldReadersRefuseTheBundle",
+        "anArchiveIsNeverReadAsTheBundle"
+      ],
+      "conformance": [
+        "bundlePathHolds"
+      ],
+      "boundary": "JSON and zlib encoding are Swift's. What the path holds is judged from the unpacked header alone, so an archive is never unpacked to find out it is one."
     },
     "Sources/LampModuleKit/LampSyncSettingsPlanner.swift": {
       "rules": [
@@ -289,18 +473,49 @@
         "baselessMergeRevivesAnUnseenDeletion"
       ],
       "conformance": [
-        "baselessReading"
+        "baselessReading",
+        "chooseReading"
       ]
+    },
+    "Sources/LampModuleKit/LampSyncSettingsStore.swift": {
+      "rules": [
+        "settingsUpdate",
+        "settingsUpdateIsBounded",
+        "emptyBundlePath",
+        "onlyAnEmptyLibraryIsNew",
+        "versionMerges",
+        "anArchiveVersionIsNeverMerged",
+        "settingsWrite",
+        "aVersionIsMergedOrStops",
+        "mergedVersionsAreAlwaysResolved",
+        "nothingIsWrittenOnlyOverAnUnchangedCopy"
+      ],
+      "conformance": [
+        "settingsUpdate",
+        "emptyBundlePath",
+        "versionMerges",
+        "settingsWrite"
+      ],
+      "boundary": "Reading and the one-HEAD checks are Swift's; the retry and its bound, what an empty path means, which versions merge and what the write does with them are held by tables. `change` and `mergingVersion` must be merges that only compute, which the types cannot enforce."
     },
     "Sources/LampModuleKit/LampSyncStableRead.swift": {
       "rules": [
+        "stableRead",
+        "checkedContentRead"
+      ],
+      "conformance": [
         "stableRead",
         "checkedContentRead"
       ]
     },
     "Sources/LampModuleKit/LampSyncThreeWaySet.swift": {
       "rules": [
-        "mergeMembership"
+        "mergeMembership",
+        "chooseWholeValue"
+      ],
+      "conformance": [
+        "mergeMembership",
+        "chooseWholeValue"
       ]
     },
     "Sources/LampModuleKit/LampWebDAVCompatibility.swift": {
@@ -324,17 +539,85 @@
         "webDAVPresence",
         "webDAVDirectoryReady",
         "strongETagBytes",
+        "guardedETagCondition",
+        "collectionConfirmed",
+        "plainSuccessListingAlsoConfirmsTheCollection",
+        "failedPropfindConfirmsNothing"
+      ],
+      "conformance": [
+        "webDAVPresence",
+        "webDAVDirectoryReady",
         "guardedETagCondition"
-      ]
+      ],
+      "boundary": "HTTP transport and PROPFIND XML parsing are Swift's; the presence, directory and entity-tag decisions are held by tables. A conditional DELETE sends the PUT's preconditions, so guardedETagCondition holds it too."
     }
   },
   "platformSources": {
+    "../lamp-bible-ios/Lamp Bible/Data/DevotionalMediaStorage.swift": {
+      "boundary": "Local media files; which media to fetch or upload is core's LampSyncReferencedMedia."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/DevotionalStorage.swift": {
+      "boundary": "Local devotional rows; their sync decisions are core's (decide, portableImportOutcome) and the iOS module merge."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/ICloudModuleStorage.swift": {
+      "rules": [
+        "coordinatedContentWriteAllowed",
+        "changedBodyInsideCoordinationIsRejected",
+        "checkedContentRead",
+        "reportedICloudVersionConflictStopsRead",
+        "laterRemoteUploadDoesNotChangeExportRevision",
+        "stableICloudReadDoesNotProtectLaterWrite",
+        "unconditionalPublishLosesTheOtherEdit"
+      ],
+      "boundary": "File coordination and NSFileVersion are the OS's; iCloud offers no server-side precondition, so a later upload from another device can replace a checked write."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/ModuleMediaStorage.swift": {
+      "boundary": "Local media files for modules; transfer decisions are core's LampSyncReferencedMedia."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/ModuleStorage.swift": {
+      "rules": [
+        "pairedModuleImport",
+        "contentModuleImport"
+      ],
+      "boundary": "The storage protocol each provider adapter implements; it requires readModuleSnapshot and makes no decision of its own."
+    },
     "../lamp-bible-ios/Lamp Bible/Data/ModuleSyncManager.swift": {
       "rules": [
         "mayAdvanceWithoutFetch",
         "needsImportByToken",
         "maySkipEditableArchiveImport"
       ]
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/NoteStorage.swift": {
+      "boundary": "Local note rows and the conflict record iOS persists; the conflict gate is pendingModuleConflictBlocksExport."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/Sync/LibrarySyncPass.swift": {
+      "rules": [
+        "filePlanAction",
+        "settingsUpdate"
+      ],
+      "boundary": "Design B's pass on the phone: it gathers what the phone holds and carries out LampSyncFilePlan's actions and the pass's one LampSyncSettingsStore.update. The decisions are core's."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/Sync/SyncCoordinator.swift": {
+      "rules": [
+        "iosFullPassTrace",
+        "foregroundReconciliationTrace",
+        "iosForegroundSinglePassTrace",
+        "deferredBackendWipe",
+        "backendActivationOccurs",
+        "migrationCopyAction",
+        "aQuietRoundConverges"
+      ],
+      "boundary": "Pass order is modelled as traces; the coordinator's sequencing itself is iOS code held by iOS tests."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/Sync/SyncProvider.swift": {
+      "boundary": "The provider protocol: types only, no sync decision."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/Sync/SyncTypes.swift": {
+      "boundary": "Shared sync types and errors; no sync decision."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/Sync/SyncableEntry.swift": {
+      "boundary": "The protocol a syncable record conforms to; no sync decision."
     },
     "../lamp-bible-ios/Lamp Bible/Data/Sync/UserSettingsSyncManager.swift": {
       "rules": [
@@ -345,11 +628,31 @@
       ],
       "boundary": "Serialising settings syncs (one in flight, later requests wait) is Swift concurrency, not modelled."
     },
+    "../lamp-bible-ios/Lamp Bible/Data/Sync/WebDAVClient.swift": {
+      "rules": [
+        "webDAVPresence",
+        "guardedETagCondition"
+      ],
+      "boundary": "Transport; requests and status handling are the shared LampWebDAVStorage's."
+    },
     "../lamp-bible-ios/Lamp Bible/Data/Sync/WebDAVModuleStorage.swift": {
       "rules": [
         "webDAVAdapterRevision",
         "weakListingCannotSkipThroughTheAdapter"
       ]
+    },
+    "../lamp-bible-ios/Lamp Bible/Presentation/PresentationDeckStorage.swift": {
+      "rules": [
+        "deckPull"
+      ],
+      "boundary": "Local deck files; which copy wins is core's LampPresentationDeckPortablePull, held by the deckPull table."
+    },
+    "../lamp-bible-ios/Lamp Bible/Presentation/PresentationDeckSync.swift": {
+      "rules": [
+        "deckPull",
+        "tombstoneDeletes"
+      ],
+      "boundary": "Reads decks and the deletion ledger from the archive and applies core's plan."
     },
     "../lamp-bible-macos/Sources/LampBibleMac/App/LibrarySyncController.swift": {
       "rules": [
@@ -358,9 +661,18 @@
         "lostRace",
         "landing",
         "settleByBytes",
-        "commitMacPull"
+        "commitMacPull",
+        "aQuietRoundConverges",
+        "publishedContentIsNeverLost"
       ],
       "boundary": "Mac's pass orchestration calls the shared decisions; the byte comparison that settles an undecidable write is settleByBytes."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMac/App/SyncConflictRow.swift": {
+      "rules": [
+        "resolvedChoiceWinsWhereItWasMade",
+        "resolvedChoiceWinsOnTheOtherDevice"
+      ],
+      "boundary": "Shows a set-aside conflict and passes the person's choice to LampLibrary.resolveSyncConflict; the choice itself is core's."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift": {
       "rules": [
@@ -381,5 +693,14 @@
         "mergeFile"
       ]
     }
-  }
+  },
+  "platformPatterns": [
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/*Sync*.swift",
+    "../lamp-bible-macos/Sources/LampBibleMac/App/*Sync*.swift",
+    "../lamp-bible-ios/Lamp Bible/Data/Sync/*.swift",
+    "../lamp-bible-ios/Lamp Bible/Data/*Storage.swift",
+    "../lamp-bible-ios/Lamp Bible/Data/*Sync*.swift",
+    "../lamp-bible-ios/Lamp Bible/Presentation/*Sync*.swift",
+    "../lamp-bible-ios/Lamp Bible/Presentation/*Storage.swift"
+  ]
 }

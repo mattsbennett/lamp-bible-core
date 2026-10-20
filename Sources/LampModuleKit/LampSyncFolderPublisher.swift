@@ -36,8 +36,9 @@ public enum LampSyncFolderPublisher {
 
         func matches(_ entries: [LampSyncArchive.Entry]) -> Bool {
             guard formatVersion == 1 else { return false }
-            let observed = Self.files(in: entries)
-            return files == observed || pendingFiles == observed
+            return LampSyncFolderPublisher.sealAccepts(
+                committed: files, pending: pendingFiles, observed: Self.files(in: entries)
+            )
         }
 
         func matchesPending(_ entries: [LampSyncArchive.Entry]) -> Bool {
@@ -49,6 +50,25 @@ public enum LampSyncFolderPublisher {
                 File(path: $0.path, sha256: LampSyncContentRevision.digest(for: $0.data))
             }.sorted { $0.path < $1.path }
         }
+    }
+
+    /// Whether the visible files are a snapshot the seal vouches for: the
+    /// committed set, or the complete pending set of a batch that stopped.
+    /// (`Verification/SyncMerge.lean`: `folderSealAccepts`.)
+    static func sealAccepts<Files: Equatable>(
+        committed: Files, pending: Files?, observed: Files
+    ) -> Bool {
+        observed == committed || pending == observed
+    }
+
+    /// Whether recovery may finish one file of a stopped batch: the stage
+    /// checked out, and the visible file is still the old body or already the
+    /// intended one. Anything else is an edit recovery must not overwrite.
+    /// (`Verification/SyncMerge.lean`: `folderRecoveryStep`.)
+    static func recoveryMayProceed(
+        stageValid: Bool, old: String?, intended: String?, visible: String?
+    ) -> Bool {
+        stageValid && (visible == old || visible == intended)
     }
 
     public enum FolderError: Error, LocalizedError, Equatable {
@@ -206,8 +226,12 @@ public enum LampSyncFolderPublisher {
                   stagedEntries[path] != nil || old[path] == digest
               }),
               next.allSatisfy({ path, digest in
-                  let actual = visible[path].map { LampSyncContentRevision.digest(for: $0.data) }
-                  return actual == old[path] || actual == digest
+                  recoveryMayProceed(
+                      stageValid: true,
+                      old: old[path],
+                      intended: digest,
+                      visible: visible[path].map { LampSyncContentRevision.digest(for: $0.data) }
+                  )
               }) else {
             throw FolderError.incompletePublication(folder.path)
         }

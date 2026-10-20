@@ -247,4 +247,45 @@ struct LampSharedPreferenceLedgerTests {
         #expect(merged.applicable.fields["reader.defaultTranslationID"]?.value == .string("ESVs"))
     }
 
+
+    /// A local edit is stamped after what it replaced, so it wins a join
+    /// even from a device whose clock is behind.
+    @Test func aLocalEditIsStampedAfterWhatItReplaced() throws {
+        let key = "reader.fontSize"
+        let base = LampSharedPreferenceLedger(fields: [key: .init(value: .number(18), modifiedAt: 5_000)])
+        let merge = try LampSharedPreferenceLedger.merge(
+            local: [key: .number(20)], base: base, remote: base, now: 1_000
+        )
+        let edited = try #require(merge.publishable.fields[key])
+        #expect(edited.value == .number(20) && edited.modifiedAt == 5_001)
+        #expect(merge.publishable.joined(with: base).fields[key] == edited)
+        #expect(base.joined(with: merge.publishable).fields[key] == edited)
+    }
+
+    /// Each field's later copy, every key either holds, in either order.
+    @Test func aJoinKeepsTheLaterOfEachField() throws {
+        let mine = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(20), modifiedAt: 9),
+            "plans.reminder.hour": .init(value: .integer(7), modifiedAt: 2),
+        ])
+        let theirs = LampSharedPreferenceLedger(fields: [
+            "reader.fontSize": .init(value: .number(18), modifiedAt: 3),
+            "plans.reminder.hour": .init(value: .integer(8), modifiedAt: 4),
+            "reader.showStrongsHints": .init(value: .boolean(true)),
+        ])
+        let joined = mine.joined(with: theirs)
+        #expect(joined == theirs.joined(with: mine))
+        #expect(joined.fields["reader.fontSize"]?.value == .number(20))
+        #expect(joined.fields["plans.reminder.hour"]?.value == .integer(8))
+        #expect(joined.fields["reader.showStrongsHints"]?.value == .boolean(true))
+    }
+
+    /// A field written before the stamp existed reads as it did, and one
+    /// without a stamp writes no key for it.
+    @Test func aFieldWithoutAStampKeepsItsEncoding() throws {
+        let field = LampSharedPreferenceLedger.Field(value: .number(18))
+        let data = try JSONEncoder().encode(field)
+        #expect(!String(decoding: data, as: UTF8.self).contains("modifiedAt"))
+        #expect(try JSONDecoder().decode(LampSharedPreferenceLedger.Field.self, from: data) == field)
+    }
 }

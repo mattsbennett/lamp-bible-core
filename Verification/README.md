@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 445 cases across 15 decisions. `SyncModelConformanceTests` asks the
+  answer, 3,546 cases across 65 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -40,8 +40,10 @@ the code it describes:
   conformance tables that hold it, and what is deliberately not modelled.
   `SyncVerificationCoverageTests` fails on a new sync source with no entry, an
   entry for a file that is gone, or a rule the model does not define. The Mac
-  and iOS files that make sync decisions are listed too, and are checked when
-  those repositories are checked out beside this one.
+  and iOS repositories are held the same way, by their own patterns
+  (`platformPatterns`): wherever they are checked out beside this one, a sync
+  file in either app with no entry fails too, so sync logic written into an
+  app cannot arrive unaccounted for.
 
 When you change a sync decision, change the model in the same commit, update
 its conformance table if it has one, and give any new sync source a
@@ -73,6 +75,11 @@ after it. Comparing the two found the following.
 - Module revisions now compare as tokens. The weak-ETag rule still holds, but
   only because the WebDAV adapters drop weak tags before `needsImport` sees
   them. The model now says so (`needsImportByToken`, `webDAVAdapterRevision`).
+- After a 409 from MKCOL, the model accepted only a 207 PROPFIND as proof that
+  the collection already exists. The adapter accepts any success, since some
+  servers answer 200, and treats a failed PROPFIND as an error. Found when
+  `webDAVDirectoryReady` got a conformance table; the model now says what the
+  adapter does (`collectionConfirmed`, `plainSuccessListingAlsoConfirmsTheCollection`).
 
 **A bug the model exposed:**
 
@@ -244,8 +251,9 @@ record-set test covers key union and duplicate input handling; the Lean proof
 covers the per-key choice. WebDAV
 transport behavior is covered by Swift tests, not by this Lean model.
 
-The proof does not establish that a full sync is lossless.
-`uploadFirstLosesRemoteOnlyEdit` demonstrates why a whole-file upload before
+A full sync is lossless only within the system model below ("What the system
+model proves"), and only for content whose merge is a join; the two
+exceptions are named there. `uploadFirstLosesRemoteOnlyEdit` demonstrates why a whole-file upload before
 reading the remote snapshot can discard an independent edit. iOS settings now
 read first and use `LampSyncThreeWaySet` with a locally stored baseline for
 completed readings. `mergeMembership` proves the per-ID add and delete rule;
@@ -695,7 +703,12 @@ that asserted nothing (`landingIsSound`). Everything else is undecidable, and
 the Mac settles it by comparing bytes (`settleByBytes`). `writeAndConfirm` names
 a revision only from a read returning this write's bytes, asking twice
 (`settlingServerConfirmsOnTheSecondRead`,
-`anotherDevicesBytesNeverConfirm`, `aThirdReadIsNeverMade`).
+`anotherDevicesBytesNeverConfirm`, `aThirdReadIsNeverMade`). The read-back is
+streamed to disk and compared by SHA-256 digest, so a library-sized body is
+never held twice; equal digests standing for equal bytes is the assumption
+`contentRevision` already makes. This compares this client's own upload with
+the server's copy of it. Imports compare values, never bytes, since two clients
+encode one value differently.
 
 **Revisions and JSON.** `namesSameRevision` treats quoted, bare and weak
 spellings of one tag as one revision, and absent and present as different
@@ -723,7 +736,126 @@ is a failure that left the revision where it was
 (`anUnmovedRevisionIsNotRepeated`). An archive that appeared since the read
 counts as a lost race (`anArchiveThatAppearedIsALostRace`).
 
+**The per-file library (design B).** Each module is its own file, and a
+manifest in the settings bundle says which belong to the library. Per path it
+keeps two stamps, the latest write and the latest deletion, each a time and
+the revision it concerned. Stamps order by time and then by revision, and the
+manifest merges by keeping the later of each, a join
+(`laterStamp_comm`, `_assoc`, `_idem`; `mergeManifestEntry_comm`, `_assoc`,
+`_idem`), so devices agree on membership whatever order they merge in
+(`membershipIgnoresMergeOrder`). Equal times are a deletion
+(`equalTimeDeletesAFile`). A write recorded over the revision the manifest
+holds is stamped after it, so a slow clock cannot make the later write lose
+(`successorWriteIsStampedLater`), and any write made after a deletion comes out
+a member (`writeAfterDeletionIsMember`). Adoption never undoes a deletion
+(`adoptionNeverUndoesADeletion`), and a copy put back by hand after one is
+adopted (`aCopyPutBackIsAdopted`). A tombstone is never pruned from a member
+(`pruneNeverDropsAMember`), nor from a listed file still waiting to be reaped
+(`pruneWaitsForTheReap`). The 180-day lifetime has a cost, proved as a
+counterexample: a device offline for longer brings the file back
+(`tombstoneLifetimeCost`).
+
+`filePlanAction` is the decision for one path. Nothing is deleted locally
+without a tombstone, so absence from a listing never deletes
+(`deletingNeedsATombstone`). A file nobody tombstoned is adopted, never dropped
+(`anUnknownFileIsAdopted`). That is what lets a pass write its files first and
+record them all in one bundle update at the end. A client with no record of a
+file never writes over the server's copy, but downloads or merges it
+(`noRecordNeverOverwrites`). Records are kept per provider, so a provider
+switch costs one comparison by value, not a re-upload. On the folder provider a
+member's revision comes from the manifest, so an evicted iCloud file is never
+read just to be compared (`aRecordedMemberIsNeverRead`). The bundle's update
+retries a refused write, never more than its attempts
+(`settingsUpdateIsBounded`). Format 3 is refused by archive readers, which
+accept 1 and 2 (`oldReadersRefuseTheBundle`), and an archive at the bundle path
+is never read as a bundle (`anArchiveIsNeverReadAsTheBundle`). That is judged
+from the unpacked header alone. Nothing at the bundle path is a new library
+only when no earlier sync's marker or module file is there either
+(`onlyAnEmptyLibraryIsNew`): a folder the Mac keeps holds its files loose,
+with no archive, and only the migration may create a bundle over them.
+
+On the folder provider, `directoryWrite` and `directoryDelete` decide a
+conditional write or delete inside the coordinated block, and a write goes
+ahead exactly when the folder publisher's coordinated check allowed it
+(`directoryWriteIsTheCoordinatedCheck`). Unresolved iCloud versions stop a
+file (`unresolvedVersionsStopTheFile`), and a reap never removes a copy other
+than the one named (`aDeleteNeverRemovesAnotherCopy`). The settings bundle is
+the one file whose versions are merged. Only a format-3 bundle is merged
+(`anArchiveVersionIsNeverMerged`). A version is merged and resolved by the
+write, or it stops the update; it is never dropped unmerged, and merged
+versions are written even when nothing changed (`aVersionIsMergedOrStops`,
+`mergedVersionsAreAlwaysResolved`). Core's merge of a version joins what it
+can and keeps the apps' own settings for them to merge. The joined parts come
+out the same whichever copy iCloud kept as current, and fold in any order
+(`versionMergeIgnoresWhichCopyIsCurrent`, `versionsFoldInAnyOrder`). That
+needs no base, which matters: a device that lost a write has recorded its own
+write as its base. So the shared preferences carry a time per field, raised
+past the field it replaced, and the later edit survives the join either way
+(`aLaterEditSurvivesEitherWay`, `aSetFieldBeatsWhatItReplaced`).
+
+## What the system model proves
+
+The section "Devices interleaving whole passes" runs the decisions together:
+two devices editing, pulling and publishing in any interleaving, against one
+server whose writes are conditional on the revision a device read. Content is,
+per item, a version in a total order, merged by taking the later — which is
+what `mergeFile`, a record's time and a deletion ledger each provide.
+
+- **Nothing the server holds is ever lost, under any interleaving**
+  (`serverNeverLosesAlongRun`), starting from any state in which each device's
+  last read is in it — which any library whose devices have not yet synced
+  satisfies (`unsyncedDevicesAgree`, `agreesAlongRun`).
+- **What an accepted publish put there stays** (`publishedContentIsNeverLost`),
+  and **a refused publish changes nothing** (`refusedPublishChangesNothing`).
+- **Retrying works:** reading and then publishing with nobody else publishing
+  in between is always accepted (`pullThenPublishIsAccepted`), which is what
+  `LampSyncPassRetry`'s one extra pass relies on.
+- **Devices converge:** once editing stops, one quiet round — A reads and
+  publishes, B reads and publishes, A reads — leaves both devices and the
+  server holding everything any of them held (`aQuietRoundConverges`), from
+  any prior state.
+- **Why the condition matters:** on one schedule a conditional write keeps
+  another device's edit (`conditionalPublishKeepsTheOtherEdit`), and an
+  unconditional one — iCloud's situation — loses it
+  (`unconditionalPublishLosesTheOtherEdit`).
+
+Assumed: the server honours the condition and gives each accepted write a new
+revision; steps are atomic; storage is durable. Device clocks decide which of
+two edits to one item wins; skew changes the winner, never these results. Not
+a join, and so outside this model: an equal-time disagreement over a record,
+which each device keeps its own copy of until someone chooses, and a settings
+merge with no baseline, which may bring back an unseen deletion once.
+
 **Still outside the model.**
+
+- 65 tables ask 75 of the model's 207 definitions directly, and reach 101
+  counting the rules those call. Of the rest:
+  - Counterexamples of former behaviour (`oldReplace`, `uploadBeforeRead`,
+    `earlyBackendWipe` and the like) have no Swift counterpart by design.
+  - The system model's own parts (`step`, `run`, `Agrees`) describe devices,
+    not code.
+  - Decisions made in the apps are held by the apps' own tests. These are
+    iOS's import checks and pass traces (`iosFullPassTrace`,
+    `sqliteImportAllowed`, `importSchemaAllows` and their kin) and the Mac's
+    pull and settings recovery (`guardedMacPull`, `recoverMacSettings`). A
+    table needs the decision moved into core first.
+  - Core decisions still held only by Swift unit tests:
+    - folder publishing's whole-tree preflight and per-file check
+      (`folderPreflight`, `folderFileWrite`);
+    - settings and preferences without a shared base (`chooseWithoutBase`,
+      `choosePreference`, `explicitPreferenceValue`, `preservedSettings`,
+      `mayAdoptLegacyBase`, `preferenceBasesAfterPublish`);
+    - revising rich writing blocks (`reviseRichDevotionalBlock` and its kin,
+      `devotionalStoredBody`);
+    - portable media import (`mediaImportChoice`, `portableMediaMayCommit`,
+      `mediaMetadataAfterBridge`) and whether to fetch referenced media
+      (`shouldFetchReferencedMedia`);
+    - the provider-switch marker (`pendingBackendMarker`,
+      `newBackendAvailable`).
+
+    For module reads (`pairedModuleImport`, `contentModuleImport`), pairing a
+    body with its own revision is fixed by the function's signature, so there
+    is nothing for a table to ask.
 
 - iOS serialises settings syncs — one in flight, later requests wait. That is
   Swift concurrency, not a decision.
@@ -756,10 +888,12 @@ phase-boundary cancellation checks alongside `runTrace`.
 | Cross-platform devotional media | `LampDevotionalMediaReference`, `LampPortableDevotionalMedia`, `LampPortableDevotionalContent`, `LampSyncReferencedMedia`, `LampSyncDevotionalMedia`, staged `LampLibrary.importPortableBackup`, iOS archive import | `hiddenMediaAttachmentSurvivesPortableRoundTrip`, `richDevotionalBlocksKeepTheirContent`, `unchangedRichDevotionalBlockIsExact`, `editedRichDevotionalBlockKeepsOpaqueFields`, `movedRichSectionKeepsIdentity`, `movedRichSectionKeepsOpaqueFields`, `changedRichOutlineKeepsRootFields`, `iosRichEditStoresRevisedBlocks`, `iosPlainEditKeepsAuthoredMarkdown`, `bracketedMarkdownWithoutBlockSchemaKeepsMarkdown`, `existingMediaMetadataIsPreserved`, `missingPortableAttachmentStopsCommit`, `missingPortableMediaForcesArchiveRead`, `macImportEnrichesMissingMetadata`, `macMetadataEditKeepsStructuredBlocks`, `failedDevotionalMediaStopsModuleMirror`, `identicalDevotionalMediaNeedsNoWrite`, `conflictingDevotionalMediaCannotPublish`, `missingIOSMediaStopsMacPull` | Old archives without a compatible devotional module still leave personal JSON outside iOS import; deleted sections are removed; local media files and SQLite rows are separate writes |
 | macOS folder library | `LampSyncEngine`, `LampSyncFolderPublisher`, `LampPortableModuleInspector`, staged local library import and settings recovery, shared record and file ordering | `runTrace`, `folderPreflight`, `folderFileWrite`, `folderSealAccepts`, `folderRecoveryStep`, `mergeFile`, `ownedSQLiteRows`, `stagedBackupImport`, `guardedStagedBackupCommit`, `commitMacPull`, `recoverMacSettings` | Cross-device and multi-file atomicity, OS durability of library and UserDefaults writes, repair when the stage is missing or another writer changed a file |
 | iOS backend switching | `LampSyncBackendTransition`, `LampSyncMigrationCopy`, local recovery record | `deferredBackendWipe`, `backendActivationOccurs`, `pendingBackendMarker`, `migrationCopyAction` | Two local databases remain separate; sync is suspended until a failed rollback can be recovered; iCloud remote uploads can race the local create check |
+| Per-file library and settings bundle (design B) | `LampSyncFolderLayout`, `LampSyncLibraryManifest`, `LampSyncFilePlan`, `LampSyncSettingsBundle`, `LampSyncSettingsStore`, conditional `delete(path:condition:)` | `mergeManifestEntry`, `recordWrite`, `adoptFile`, `pruneTombstone`, `filePlanAction`, `listedRevision`, `settingsUpdate` and `bundlePathHolds` (conformance), `deletingNeedsATombstone`, `anUnknownFileIsAdopted`, `noRecordNeverOverwrites`, `aRecordedMemberIsNeverRead`, `tombstoneLifetimeCost` | Revisions are compared within one provider; a value-equal import must not mark content changed, which each app's importer keeps; executing the plan and the folder provider's store are the apps' and batch 2's |
 | Personal deletions (notes, writing, highlights, themes, sets) | `LampPersonalDeletionLedger`, `LampLibrary` ledger merge and apply | `tombstoneDeletes` and `mergeTombstone` (conformance), `mergeTombstone_comm`, `mergeTombstone_assoc`, `mergeTombstone_idem`, `exchangedLedgersAgree`, `editAfterDeletionSurvives`, `equalTimeFavoursDeletion` | Device clocks are assumed comparable; the SQL upsert is the Swift `merged(with:)` rule |
 | Slide decks | `LampPresentationDeckDeletionLedger`, `LampPresentationDeckPortablePull`, macOS `PresentationDeckSyncSupport` | `tombstoneDeletes` (conformance), `deckPull`, `deckPullNeverKeepsADeletedDeck`, `deckPullIgnoresArrivalOrder` | Assets have no ledger and are kept while any deck names them |
 | Workspace files (macOS) | `WorkspaceSyncLedger` in `SyncSupport.swift`, shared file order | `tombstoneDeletes`, `workspaceDeletionTime`, `documentDeletionSparesALaterEdit`, `mergeFile` | Context files' deletions use the time they were noticed, not a comparable modification time |
 | Conflicts set aside and resolved | `LampSyncMerge.importOutcome`, `LampSyncConflict`, `LampLibrary.resolveSyncConflict` | `portableImportOutcome` (conformance), `syncImportNeverStops`, `resolvedChoiceWinsWhereItWasMade`, `resolvedChoiceWinsOnTheOtherDevice`, `sameColumn` | Choosing in the UI and the stored payload are Swift; JSON classification is JSONSerialization's |
+| Two devices running whole passes (system model) | `LampSyncEngine`, `LampSyncConditionalWrite`, `LampSyncPassRetry`, and the per-item orders of `LampSyncMerge` and the deletion ledgers | `serverNeverLosesAlongRun`, `agreesAlongRun`, `publishedContentIsNeverLost`, `refusedPublishChangesNothing`, `pullThenPublishIsAccepted`, `aQuietRoundConverges`, `conditionalPublishKeepsTheOtherEdit`, `unconditionalPublishLosesTheOtherEdit` | The server honours conditions and issues new revisions; steps are atomic; storage is durable; equal-time record disagreements and baseless settings merges are not joins |
 
 The listed Lean rules prove properties of models that correspond to shared
 Swift decisions. Swift tests exercise each shared implementation with the

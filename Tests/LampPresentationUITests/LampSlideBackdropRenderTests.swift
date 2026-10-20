@@ -18,6 +18,19 @@ struct LampSlideBackdropRenderTests {
         let height: Int
         let bytes: [UInt8]
 
+        /// The pixels again as an image, for saving.
+        var image: CGImage? {
+            var copy = bytes
+            return copy.withUnsafeMutableBytes { buffer in
+                CGContext(
+                    data: buffer.baseAddress, width: width, height: height,
+                    bitsPerComponent: 8, bytesPerRow: width * 4,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                )?.makeImage()
+            }
+        }
+
         func color(_ x: Int, _ y: Int) -> (r: Int, g: Int, b: Int) {
             let offset = (y * width + x) * 4
             return (Int(bytes[offset]), Int(bytes[offset + 1]), Int(bytes[offset + 2]))
@@ -200,12 +213,45 @@ struct LampSlideBackdropRenderTests {
             ]),
             picture: nil
         )
-        let differing = zip(with.bytes, without.bytes).filter { $0 != $1 }
-        let largest = differing.map { abs(Int($0) - Int($1)) }.max() ?? 0
-        #expect(
-            with.bytes == without.bytes,
-            "\(differing.count) bytes differ, by up to \(largest)"
-        )
+        // Exactly, but for text edges: under load, two renders of the same
+        // words in one process can round their anti-aliasing one level apart
+        // (seen: 685 bytes, all by 1, all inside the title). A scrim, a colour
+        // or a moved line differs by far more than that.
+        #expect(largestDifference(with, without) <= 1, "\(difference(with, without))")
+    }
+
+    private func largestDifference(_ one: Pixels, _ other: Pixels) -> Int {
+        guard one.bytes.count == other.bytes.count else { return .max }
+        return zip(one.bytes, other.bytes).reduce(0) { max($0, abs(Int($1.0) - Int($1.1))) }
+    }
+
+    /// Where two renders differ, and both images saved for looking at: a
+    /// difference that only shows under load is otherwise gone by the time
+    /// anyone looks.
+    private func difference(_ one: Pixels, _ other: Pixels) -> String {
+        var count = 0, largest = 0
+        var minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
+        for index in 0..<min(one.bytes.count, other.bytes.count) where one.bytes[index] != other.bytes[index] {
+            count += 1
+            largest = max(largest, abs(Int(one.bytes[index]) - Int(other.bytes[index])))
+            let pixel = index / 4
+            minX = min(minX, pixel % one.width); maxX = max(maxX, pixel % one.width)
+            minY = min(minY, pixel / one.width); maxY = max(maxY, pixel / one.width)
+        }
+        guard count > 0 else { return "identical" }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-render-difference-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for (name, pixels) in [("first", one), ("second", other)] {
+            guard let image = pixels.image else { continue }
+            let url = folder.appendingPathComponent("\(name).png")
+            if let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                CGImageDestinationAddImage(destination, image, nil)
+                CGImageDestinationFinalize(destination)
+            }
+        }
+        return "\(count) bytes differ, by up to \(largest), within x \(minX)...\(maxX), y \(minY)...\(maxY) "
+            + "of \(one.width)×\(one.height); both renders are in \(folder.path)"
     }
 
     @Test("The words are told how they were set")

@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import LampCore
 import LampModuleKit
 import Testing
@@ -63,6 +64,67 @@ struct LampDevotionalSyncRoundTripTests {
             fileManager: .default
         ).write(to: wire)
         return wire
+    }
+
+    /// Under per-file sync, "should I upload this?" compares this export with
+    /// the last one uploaded. So an unchanged library has to export the same
+    /// bytes every time, even after a row tied with others on every sort
+    /// column has moved in its table. Otherwise the whole module uploads again
+    /// for no change. Every export query needs a total order to keep this.
+    @Test(arguments: LampPersonalModule.allCases)
+    func anUnchangedLibraryExportsTheSameBytes(_ module: LampPersonalModule) async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let libraryRoot = root.appendingPathComponent("Library")
+        let library = library(libraryRoot)
+        let time = Date(timeIntervalSince1970: 1_788_132_249)
+        let table: String
+        // Six rows tied on every column the export sorts by except `id`.
+        for index in 1...6 {
+            switch module {
+            case .writing:
+                // Untitled drafts: one title, no series, no date.
+                try await library.savePersonalDevotional(LampDevotional(
+                    id: "tie-\(index)", moduleID: module.rawValue, moduleName: "My Writing",
+                    title: "New Writing", content: "Draft \(index)", created: time, lastModified: time
+                ), preserveLastModified: true)
+            case .notes:
+                try await library.saveVerseNote(LampVerseNote(
+                    id: "tie-\(index)", reference: 1_001_001, content: "Note \(index)", lastModified: time
+                ))
+            case .highlights:
+                _ = try await library.saveHighlightSet(LampHighlightSet(
+                    id: "tie-\(index)", name: "Highlights", translationID: "KJV", created: time
+                ))
+            }
+        }
+        table = switch module {
+        case .writing: "personal_devotionals"
+        case .notes: "personal_notes"
+        case .highlights: "highlight_sets"
+        }
+        func exportDigest(_ name: String) async throws -> String {
+            let url = root.appendingPathComponent(name)
+            try await library.exportPersonalModule(module, format: .lamp, to: url)
+            return try LampSyncContentRevision.digest(forFileAt: url)
+        }
+        let first = try await exportDigest("first.lamp")
+        #expect(try await exportDigest("again.lamp") == first)
+
+        // Delete one row and insert it again with every value unchanged, so
+        // only its place in the table moves.
+        let database = try DatabaseQueue(path: libraryRoot.appendingPathComponent("UserData.sqlite").path)
+        try await database.write { db in
+            let row = try #require(try Row.fetchOne(db, sql: "SELECT * FROM \(table) WHERE id = 'tie-2'"))
+            let columns = Array(row.columnNames)
+            try db.execute(sql: "DELETE FROM \(table) WHERE id = 'tie-2'")
+            try db.execute(
+                sql: "INSERT INTO \(table) (\(columns.joined(separator: ", "))) VALUES (\(columns.map { _ in "?" }.joined(separator: ", ")))",
+                arguments: StatementArguments(row.databaseValues)
+            )
+        }
+        try database.close()
+        #expect(try await exportDigest("moved.lamp") == first)
     }
 
     @Test func readingOurOwnPublishedFileBackChangesNothing() async throws {

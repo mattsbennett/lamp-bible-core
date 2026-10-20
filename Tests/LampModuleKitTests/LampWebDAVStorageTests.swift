@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import LampModuleKit
 
+/// Serialized: every test here answers through one static stub handler.
+@Suite(.serialized)
 struct LampWebDAVStorageTests {
     @Test func acceptsOnlyOneStrongEntityTag() {
         for revision in ["\"\"", "\"one\"", "\"a,b\"", "\"back\\slash\""] {
@@ -195,6 +197,113 @@ struct LampWebDAVStorageTests {
             } catch LampWebDAVStorage.StorageError.httpStatus(409) {
                 // A verified collection is the only accepted conflict.
             }
+        }
+    }
+
+    @Test func aBodyIsSentFromAFileUnderItsCondition() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebDAVTestURLProtocol.self]
+        let storage = LampWebDAVStorage(
+            baseURL: try #require(URL(string: "https://dav.example.com/sync/")),
+            session: URLSession(configuration: configuration)
+        )
+        let body = Data(repeating: 4, count: 200_000)
+        WebDAVTestURLProtocol.handler = { request in
+            let url = try #require(request.url)
+            #expect(request.httpMethod == "PUT")
+            #expect(request.value(forHTTPHeaderField: "If-Match") == "\"old\"")
+            var sent = Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 65_536)
+                while case let count = stream.read(&buffer, maxLength: buffer.count), count > 0 {
+                    sent.append(buffer, count: count)
+                }
+            }
+            let status = sent == body ? 201 : 412
+            return (HTTPURLResponse(
+                url: url, statusCode: status, httpVersion: nil,
+                headerFields: status == 201 ? ["ETag": "\"new\""] : nil
+            )!, Data())
+        }
+        let file = LampSyncScratchFile.url()
+        defer { try? FileManager.default.removeItem(at: file) }
+        try body.write(to: file)
+        #expect(try await storage.write(fileAt: file, to: "archive", condition: .ifRevision("\"old\"")) == "\"new\"")
+        await #expect(throws: LampWebDAVStorage.StorageError.self) {
+            try await storage.write(fileAt: file, to: "archive", condition: .ifRevision("W/\"old\""))
+        }
+    }
+
+    @Test func downloadsStreamTheBodyToAFile() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebDAVTestURLProtocol.self]
+        let storage = LampWebDAVStorage(
+            baseURL: try #require(URL(string: "https://dav.example.com/sync/")),
+            session: URLSession(configuration: configuration)
+        )
+        let body = Data(repeating: 9, count: 200_000)
+        WebDAVTestURLProtocol.handler = { request in
+            let url = try #require(request.url)
+            #expect(request.httpMethod == "GET")
+            let status = switch url.lastPathComponent {
+            case "archive": 200
+            case "missing": 404
+            default: 500
+            }
+            return (HTTPURLResponse(
+                url: url, statusCode: status, httpVersion: nil,
+                headerFields: status == 200 ? ["ETag": "\"a\""] : nil
+            )!, status == 200 ? body : Data("error page".utf8))
+        }
+        let file = LampSyncScratchFile.url()
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("stale".utf8).write(to: file)
+
+        let downloaded = try #require(try await storage.read(path: "archive", into: file))
+        #expect(downloaded.url == file)
+        #expect(downloaded.revision == "\"a\"")
+        #expect(try Data(contentsOf: file) == body)
+
+        #expect(try await storage.read(path: "missing", into: LampSyncScratchFile.url()) == nil)
+        await #expect(throws: LampWebDAVStorage.StorageError.self) {
+            try await storage.read(path: "broken", into: LampSyncScratchFile.url())
+        }
+    }
+
+    /// A reap: deleted only while still at the revision seen. A file already
+    /// gone is done; one at another revision stays, and says so.
+    @Test func aDeleteIsSentUnderItsCondition() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebDAVTestURLProtocol.self]
+        let storage = LampWebDAVStorage(
+            baseURL: try #require(URL(string: "https://dav.example.com/sync/")),
+            session: URLSession(configuration: configuration)
+        )
+        WebDAVTestURLProtocol.handler = { request in
+            let url = try #require(request.url)
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.value(forHTTPHeaderField: "If-Match") == "\"1\"")
+            let status = switch url.lastPathComponent {
+            case "seen.lamp": 204
+            case "gone.lamp": 404
+            case "moved.lamp": 412
+            default: 500
+            }
+            return (HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        try await storage.delete(path: "Notes/seen.lamp", condition: .ifRevision("\"1\""))
+        try await storage.delete(path: "Notes/gone.lamp", condition: .ifRevision("\"1\""))
+        await #expect {
+            try await storage.delete(path: "Notes/moved.lamp", condition: .ifRevision("\"1\""))
+        } throws: { LampSyncConditionalWrite.isRefusal($0) }
+        await #expect(throws: LampWebDAVStorage.StorageError.self) {
+            try await storage.delete(path: "Notes/broken.lamp", condition: .ifRevision("\"1\""))
+        }
+        // A weak revision cannot protect a delete any more than a write.
+        await #expect(throws: LampWebDAVStorage.StorageError.self) {
+            try await storage.delete(path: "Notes/seen.lamp", condition: .ifRevision("W/\"1\""))
         }
     }
 }

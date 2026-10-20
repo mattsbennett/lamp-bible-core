@@ -85,6 +85,26 @@ public struct LampWebDAVHTTP: Sendable {
         return (data, response)
     }
 
+    /// Like `send`, but the body goes to a file instead of into memory. The
+    /// file is the caller's to move or remove.
+    public func download(_ request: URLRequest) async throws -> (URL, HTTPURLResponse) {
+        let (url, response) = try await session.download(for: request)
+        guard let response = response as? HTTPURLResponse else {
+            try? FileManager.default.removeItem(at: url)
+            throw TransportError.invalidResponse
+        }
+        return (url, response)
+    }
+
+    /// Like `send`, but the request body is read from a file.
+    public func upload(_ request: URLRequest, fromFile url: URL) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await session.upload(for: request, fromFile: url)
+        guard let response = response as? HTTPURLResponse else {
+            throw TransportError.invalidResponse
+        }
+        return (data, response)
+    }
+
     private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData

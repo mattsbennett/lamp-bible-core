@@ -1194,7 +1194,10 @@ public actor LampLibrary {
                     """
                 arguments = [pattern, pattern, pattern, pattern, pattern, pattern]
             }
-            sql += " ORDER BY COALESCE(series_name, ''), COALESCE(series_order, 0), COALESCE(devotional_date, ''), title"
+            // `id` last makes the order total. Without it, writings tied on the
+            // rest come back in table scan order, which moves when a row is
+            // deleted and saved again, and the export's bytes move with it.
+            sql += " ORDER BY COALESCE(series_name, ''), COALESCE(series_order, 0), COALESCE(devotional_date, ''), title, id"
             return try Row.fetchAll(db, sql: sql, arguments: arguments).map(makePersonalDevotional)
         }
     }
@@ -3234,6 +3237,16 @@ public actor LampLibrary {
     /// A thrown operation discards that copy; a successful one replaces the root
     /// only if the live library has not changed while the operation was running.
     @discardableResult
+    /// Whether a staged import may replace the live library: only while the
+    /// live files are still those the stage was copied from, or while there
+    /// was no library before and still is none. An absent library is `nil`.
+    /// (`Verification/SyncMerge.lean`: `stagedCommitAllowed`.)
+    static func stagedCommitAllowed(
+        original: [String: String]?, live: [String: String]?
+    ) -> Bool {
+        original == live
+    }
+
     public func withStagedChanges<Result>(
         _ operation: (LampLibrary) async throws -> Result
     ) async throws -> Result {
@@ -3262,13 +3275,11 @@ public actor LampLibrary {
 
         // Another actor call may have changed the live library while this
         // actor was suspended for the staged import. Never replace that edit.
-        let liveUnchanged: Bool
-        if rootExisted, fileManager.fileExists(atPath: rootURL.path) {
-            liveUnchanged = try libraryFileRevisions(at: rootURL) == originalFiles
-        } else {
-            liveUnchanged = !rootExisted && !fileManager.fileExists(atPath: rootURL.path)
-        }
-        guard liveUnchanged else {
+        let liveFiles = fileManager.fileExists(atPath: rootURL.path)
+            ? try libraryFileRevisions(at: rootURL) : nil
+        guard Self.stagedCommitAllowed(
+            original: rootExisted ? originalFiles : nil, live: liveFiles
+        ) else {
             throw LampLibraryError.syncConflict("Local library changed during sync import.")
         }
 
@@ -4298,9 +4309,7 @@ public actor LampLibrary {
         ).isDeleted(itemModified: itemModified)
     }
 
-    /// Highlights have no lasting identity of their own, so one is known by
-    /// where it is and how it looks.
-    static func highlightKey(
+    private static func highlightKey(
         setID: String,
         reference: Int,
         start: Int,
@@ -4308,8 +4317,9 @@ public actor LampLibrary {
         style: Int,
         color: String?
     ) -> String {
-        [setID, String(reference), String(start), String(end), String(style), color ?? ""]
-            .joined(separator: "\u{1F}")
+        LampPersonalDeletionLedger.highlightKey(
+            setID: setID, reference: reference, start: start, end: end, style: style, color: color
+        )
     }
 
     private static func highlightKey(_ row: Row) -> String {
@@ -4319,8 +4329,8 @@ public actor LampLibrary {
         )
     }
 
-    static func highlightThemeKey(setID: String, color: String, style: Int) -> String {
-        [setID, color, String(style)].joined(separator: "\u{1F}")
+    private static func highlightThemeKey(setID: String, color: String, style: Int) -> String {
+        LampPersonalDeletionLedger.highlightThemeKey(setID: setID, color: color, style: style)
     }
 
     private func openUserDatabase() throws -> DatabaseQueue {
@@ -5163,6 +5173,12 @@ public actor LampLibrary {
                         lastModified: Date(timeIntervalSince1970: TimeInterval(modified))
                     )
                 }
+            // Every query here needs a total order: sync compares this export's
+            // bytes with the last one uploaded (`anUnchangedLibraryExportsTheSameBytes`).
+            // Highlights tied on the rest come back in `id` order with or without
+            // `h.id`, since `id` is the rowid and can't move without changing
+            // what is exported. Themes are already total: their sort covers the
+            // (set_id, color, style) primary key.
             let highlights = try Row.fetchAll(db, sql: """
                 SELECT h.id, h.set_id, s.translation_id, h.ref,
                        h.sc, h.ec, h.style, h.color

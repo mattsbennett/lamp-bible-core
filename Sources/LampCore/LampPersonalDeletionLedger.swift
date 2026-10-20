@@ -42,7 +42,7 @@ public struct LampPersonalDeletionLedger: Equatable, Sendable {
             )
         }
 
-        private static func later(_ a: Int64?, _ b: Int64?) -> Int64? {
+        fileprivate static func later(_ a: Int64?, _ b: Int64?) -> Int64? {
             switch (a, b) {
             case let (a?, b?): max(a, b)
             case let (a?, nil): a
@@ -69,8 +69,49 @@ public struct LampPersonalDeletionLedger: Equatable, Sendable {
         entry(kind, key)?.isDeleted(itemModified: itemModified) ?? false
     }
 
+    public func entries(of kind: LampPersonalItemKind) -> [String: Entry] {
+        entries[kind] ?? [:]
+    }
+
     public mutating func set(_ entry: Entry, kind: LampPersonalItemKind, key: String) {
         entries[kind, default: [:]][key] = entry
+    }
+
+    /// Records a save of the item at `time`, keeping the later of it and any
+    /// save already recorded.
+    public mutating func recordPresence(_ kind: LampPersonalItemKind, _ key: String, at time: Int64) {
+        var entry = entry(kind, key) ?? Entry()
+        entry.presentSince = Entry.later(entry.presentSince, time)
+        set(entry, kind: kind, key: key)
+    }
+
+    /// Records a deletion of the item at `time`, keeping the later of it and
+    /// any deletion already recorded.
+    public mutating func recordDeletion(_ kind: LampPersonalItemKind, _ key: String, at time: Int64) {
+        var entry = entry(kind, key) ?? Entry()
+        entry.deletedAt = Entry.later(entry.deletedAt, time)
+        set(entry, kind: kind, key: key)
+    }
+
+    // MARK: - Keys
+
+    /// Highlights have no lasting identity of their own, so one is known by
+    /// where it is and how it looks. Every client keys them this way, or a
+    /// deletion recorded on one never matches the copy on another.
+    public static func highlightKey(
+        setID: String,
+        reference: Int,
+        start: Int,
+        end: Int,
+        style: Int,
+        color: String?
+    ) -> String {
+        [setID, String(reference), String(start), String(end), String(style), color ?? ""]
+            .joined(separator: "\u{1F}")
+    }
+
+    public static func highlightThemeKey(setID: String, color: String, style: Int) -> String {
+        [setID, color, String(style)].joined(separator: "\u{1F}")
     }
 
     public mutating func merge(_ other: LampPersonalDeletionLedger) {

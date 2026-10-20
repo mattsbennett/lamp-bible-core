@@ -13,6 +13,49 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
 
     private let http: LampWebDAVHTTP
 
+    /// What a status says about a file being there. HEAD's 404 is absence,
+    /// and its 405 means ask GET instead, since some servers allow GET but
+    /// not HEAD. A success is presence. Anything else is an error, never
+    /// absence. (`Verification/SyncMerge.lean`: `webDAVPresence`.)
+    enum Presence: Equatable { case present, absent, askGET, failed }
+
+    static func presence(afterHEAD status: Int) -> Presence {
+        if status == 405 { return .askGET }
+        return presence(afterGET: status)
+    }
+
+    static func presence(afterGET status: Int) -> Presence {
+        if status == 404 { return .absent }
+        return (200..<300).contains(status) ? .present : .failed
+    }
+
+    /// Whether MKCOL left a directory there: created, already there (405),
+    /// or a 409 Conflict over a collection a PROPFIND confirms is there.
+    /// (`Verification/SyncMerge.lean`: `webDAVDirectoryReady`.)
+    static func directoryReady(mkcolStatus: Int, existingCollection: Bool) -> Bool {
+        [200, 201, 204, 405].contains(mkcolStatus) || (mkcolStatus == 409 && existingCollection)
+    }
+
+    /// What a PROPFIND says about a collection: 404 is none, a success is
+    /// whatever its listing shows, and anything else is an error.
+    /// (`Verification/SyncMerge.lean`: `collectionConfirmed`.)
+    static func collectionConfirmed(
+        propfindStatus: Int, listsCollection: () throws -> Bool
+    ) rethrows -> Bool? {
+        if propfindStatus == 404 { return false }
+        guard (200..<300).contains(propfindStatus) else { return nil }
+        return try listsCollection()
+    }
+
+    /// Whether a listing names `requested` as a collection.
+    static func listsCollection(_ items: [LampWebDAVItem], at requested: String) -> Bool {
+        items.contains { item in
+            guard item.isDirectory else { return false }
+            let found = item.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return found == requested || requested.hasSuffix("/\(found)")
+        }
+    }
+
     public static func isStrongETag(_ revision: String) -> Bool {
         // RFC 9110 entity-tag grammar permits one opaque quoted tag here.
         // An embedded quote could turn If-Match into a list of validators.
@@ -100,12 +143,34 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
 
     public func read(path: String) async throws -> LampSyncRemoteFile? {
         let (data, response, _) = try await send(method: "GET", path: path)
-        if response.statusCode == 404 { return nil }
-        try requireSuccess(response)
+        switch Self.presence(afterGET: response.statusCode) {
+        case .absent: return nil
+        case .failed, .askGET: throw StorageError.httpStatus(response.statusCode)
+        case .present: break
+        }
         return LampSyncRemoteFile(
             data: data,
             revision: response.value(forHTTPHeaderField: "ETag")
         )
+    }
+
+    public func read(path: String, into url: URL) async throws -> LampSyncDownloadedFile? {
+        let body: URL
+        let response: HTTPURLResponse
+        do {
+            (body, response) = try await http.download(makeRequest(method: "GET", path: path))
+        } catch LampWebDAVHTTP.TransportError.invalidResponse {
+            throw StorageError.invalidResponse
+        }
+        defer { try? FileManager.default.removeItem(at: body) }
+        switch Self.presence(afterGET: response.statusCode) {
+        case .absent: return nil
+        case .failed, .askGET: throw StorageError.httpStatus(response.statusCode)
+        case .present: break
+        }
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: body, to: url)
+        return LampSyncDownloadedFile(url: url, revision: response.value(forHTTPHeaderField: "ETag"))
     }
 
     public func upload(_ data: Data, to path: String) async throws {
@@ -117,6 +182,31 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
         to path: String,
         condition: LampSyncWriteCondition
     ) async throws -> String? {
+        let (_, response, _) = try await send(
+            method: "PUT", path: path,
+            headers: try Self.putHeaders(for: condition), body: data
+        )
+        return try Self.revision(afterPUT: response)
+    }
+
+    public func write(
+        fileAt url: URL,
+        to path: String,
+        condition: LampSyncWriteCondition
+    ) async throws -> String? {
+        let request = try http.makeRequest(
+            method: "PUT", path: path, headers: try Self.putHeaders(for: condition)
+        )
+        let response: HTTPURLResponse
+        do {
+            (_, response) = try await http.upload(request, fromFile: url)
+        } catch LampWebDAVHTTP.TransportError.invalidResponse {
+            throw StorageError.invalidResponse
+        }
+        return try Self.revision(afterPUT: response)
+    }
+
+    private static func putHeaders(for condition: LampSyncWriteCondition) throws -> [String: String] {
         var headers = ["Content-Type": "application/octet-stream"]
         switch condition {
         case .unconditional:
@@ -131,14 +221,16 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
             }
             headers["If-Match"] = revision
         }
-        let (_, response, _) = try await send(
-            method: "PUT", path: path,
-            headers: headers, body: data
-        )
+        return headers
+    }
+
+    private static func revision(afterPUT response: HTTPURLResponse) throws -> String? {
         if response.statusCode == 412 || response.statusCode == 428 {
             throw StorageError.preconditionFailed
         }
-        try requireSuccess(response, allowed: [200, 201, 204])
+        guard [200, 201, 204].contains(response.statusCode) else {
+            throw StorageError.httpStatus(response.statusCode)
+        }
         return response.value(forHTTPHeaderField: "ETag")
     }
 
@@ -147,15 +239,27 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
         try requireSuccess(response, allowed: [200, 204, 404])
     }
 
+    /// DELETE under the same preconditions PUT uses. 404 is a file already
+    /// gone; 412 is one at another revision, which stays.
+    public func delete(path: String, condition: LampSyncWriteCondition) async throws {
+        var headers = try Self.putHeaders(for: condition)
+        headers.removeValue(forKey: "Content-Type")
+        let (_, response, _) = try await send(method: "DELETE", path: path, headers: headers)
+        if response.statusCode == 412 || response.statusCode == 428 {
+            throw StorageError.preconditionFailed
+        }
+        try requireSuccess(response, allowed: [200, 202, 204, 404])
+    }
+
     public func createDirectory(_ path: String) async throws {
         let (_, response, _) = try await send(
             method: "MKCOL", path: path, headers: ["Content-Length": "0"]
         )
-        if response.statusCode == 409, try await isExistingDirectory(path) {
-            // Some servers use Conflict for a collection that already exists.
-            return
+        // Some servers use Conflict for a collection that already exists.
+        let existing = response.statusCode == 409 ? try await isExistingDirectory(path) : false
+        guard Self.directoryReady(mkcolStatus: response.statusCode, existingCollection: existing) else {
+            throw StorageError.httpStatus(response.statusCode)
         }
-        try requireSuccess(response, allowed: [200, 201, 204, 405])
     }
 
     private func isExistingDirectory(_ path: String) async throws -> Bool {
@@ -167,21 +271,23 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
             method: "PROPFIND", path: path,
             headers: ["Depth": "0", "Content-Type": "application/xml"], body: body
         )
-        if response.statusCode == 404 { return false }
-        try requireSuccess(response)
-        let items: [LampWebDAVItem]
-        do {
-            items = try LampWebDAVDirectoryParser.parse(data)
-        } catch LampWebDAVDirectoryParser.ParseError.invalidResponse(let message) {
-            throw StorageError.invalidXML(message)
-        }
         let requested = request.url?.path
             .trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
-        return items.contains { item in
-            guard item.isDirectory else { return false }
-            let found = item.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            return found == requested || requested.hasSuffix("/\(found)")
+        guard let confirmed = try Self.collectionConfirmed(
+            propfindStatus: response.statusCode,
+            listsCollection: {
+                let items: [LampWebDAVItem]
+                do {
+                    items = try LampWebDAVDirectoryParser.parse(data)
+                } catch LampWebDAVDirectoryParser.ParseError.invalidResponse(let message) {
+                    throw StorageError.invalidXML(message)
+                }
+                return Self.listsCollection(items, at: requested)
+            }
+        ) else {
+            throw StorageError.httpStatus(response.statusCode)
         }
+        return confirmed
     }
 
     public func getETag(_ path: String) async throws -> String? {
@@ -202,13 +308,14 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
 
     public func exists(_ path: String) async throws -> Bool {
         let (_, response, _) = try await send(method: "HEAD", path: path)
-        if response.statusCode == 404 { return false }
-        if response.statusCode == 405 {
+        switch Self.presence(afterHEAD: response.statusCode) {
+        case .absent: return false
+        case .present: return true
+        case .askGET:
             // Some servers allow GET but reject HEAD for the same resource.
             return try await read(path: path) != nil
+        case .failed: throw StorageError.httpStatus(response.statusCode)
         }
-        try requireSuccess(response)
-        return true
     }
 
     private func send(

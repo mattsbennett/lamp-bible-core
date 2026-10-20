@@ -41,11 +41,16 @@ public enum LampSyncConditionalWrite {
             }
             return .ifRevision(revision)
         }
-        let remote = try await store.read(path: path)
+        // Only presence and revision matter here, so the body goes to a
+        // scratch file and is dropped.
+        let remote = try await LampSyncScratchFile.with { scratch in
+            try await store.read(path: path, into: scratch)
+        }
         if remote == nil && expectedToken != nil {
             throw WriteError.conflict
         }
-        let writeCondition = try condition(for: remote)
+        guard let remote else { return .ifAbsent }
+        let writeCondition = try condition(forExistingRevision: remote.revision)
         if case .ifRevision(let revision) = writeCondition,
            token(for: revision) != expectedToken {
             throw WriteError.conflict
@@ -61,7 +66,33 @@ public enum LampSyncConditionalWrite {
         in store: any LampSyncRemoteStore,
         condition: LampSyncWriteCondition
     ) async throws -> String {
-        let responseRevision = try await store.write(data, to: path, condition: condition)
+        try await confirm(
+            store.write(data, to: path, condition: condition),
+            of: { LampSyncContentRevision.digest(for: data) },
+            at: path, in: store
+        )
+    }
+
+    /// `writeAndConfirm` for a body on disk, sent and checked from the file.
+    public static func writeAndConfirm(
+        fileAt url: URL,
+        to path: String,
+        in store: any LampSyncRemoteStore,
+        condition: LampSyncWriteCondition
+    ) async throws -> String {
+        try await confirm(
+            store.write(fileAt: url, to: path, condition: condition),
+            of: { try LampSyncContentRevision.digest(forFileAt: url) },
+            at: path, in: store
+        )
+    }
+
+    private static func confirm(
+        _ responseRevision: String?,
+        of sentDigest: () throws -> String,
+        at path: String,
+        in store: any LampSyncRemoteStore
+    ) async throws -> String {
         if let responseRevision, LampWebDAVStorage.isStrongETag(responseRevision) {
             return responseRevision
         }
@@ -75,18 +106,42 @@ public enum LampSyncConditionalWrite {
         // one request on a path that is already failing, and a genuine
         // conflict still fails: the other device's bytes do not become ours
         // for being read again.
+        //
+        // Each read-back is streamed to disk and compared by digest, so it
+        // never sits in memory beside the upload. Bytes are the right
+        // comparison here, and only here: this is this client's own upload
+        // against what the server returns for it. An import compares values
+        // (`LampSyncJSONComparison`), because two clients encode one value
+        // differently.
+        let sent = try sentDigest()
         for attempt in 0..<2 {
             if attempt > 0 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            if let remote = try await store.read(path: path),
-               remote.data == data,
-               let revision = remote.revision,
-               LampWebDAVStorage.isStrongETag(revision) {
+            let confirmed = try await LampSyncScratchFile.with { scratch -> String? in
+                guard let readBack = try await store.read(path: path, into: scratch),
+                      let revision = readBack.revision,
+                      LampWebDAVStorage.isStrongETag(revision),
+                      try LampSyncContentRevision.digest(forFileAt: readBack.url) == sent else {
+                    return nil
+                }
                 return revision
             }
+            if let confirmed { return confirmed }
         }
         throw WriteError.conflict
+    }
+
+    /// Whether a write failed because its condition no longer held: another
+    /// device wrote first. A store may say so through this module's
+    /// `WriteError.conflict`, through WebDAV's own 412 or 428, or through an
+    /// error of its own that adopts `LampSyncRefusal`. An app that wraps
+    /// these in its own error type must adopt it, or a refusal reads as a
+    /// failure and nothing that retries on one ever retries.
+    public static func isRefusal(_ error: any Error) -> Bool {
+        if case WriteError.conflict = error { return true }
+        if case LampWebDAVStorage.StorageError.preconditionFailed = error { return true }
+        return (error as? any LampSyncRefusal)?.isRefusal ?? false
     }
 
     /// The iOS settings cache stores an ETag without HTTP quote delimiters.
@@ -119,6 +174,12 @@ public enum LampSyncConditionalWrite {
         }
         return token(for: revision)
     }
+}
+
+/// An app's own error that can stand for a refused conditional write.
+public protocol LampSyncRefusal: Error {
+    /// Whether this error is the refusal, rather than another failure.
+    var isRefusal: Bool { get }
 }
 
 public extension LampSyncConditionalWrite {

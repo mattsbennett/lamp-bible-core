@@ -16,6 +16,52 @@ public enum LampZlib {
 
     /// Replaces whatever is at `url` with the unpacked bytes.
     public static func decompress(_ data: Data, to url: URL) throws {
+        try process(data, operation: COMPRESSION_STREAM_DECODE, to: url)
+    }
+
+    /// Packs the file at `source` into `url`, a chunk at a time, in the
+    /// format `NSData.compressed(using: .zlib)` writes.
+    public static func compress(fileAt source: URL, to url: URL) throws {
+        try process(Data(contentsOf: source, options: .alwaysMapped), operation: COMPRESSION_STREAM_ENCODE, to: url)
+    }
+
+    /// The first `count` unpacked bytes, or all of them if there are fewer,
+    /// without unpacking the rest: enough to read a header from a body that
+    /// may unpack to hundreds of megabytes.
+    public static func decompressedPrefix(of data: Data, count: Int) throws -> Data {
+        let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        defer { stream.deallocate() }
+        guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+            == COMPRESSION_STATUS_OK
+        else { throw DecompressionError.invalidData }
+        defer { compression_stream_destroy(stream) }
+        var prefix = Data(count: count)
+        let produced = try prefix.withUnsafeMutableBytes { (output: UnsafeMutableRawBufferPointer) -> Int in
+            try data.withUnsafeBytes { (source: UnsafeRawBufferPointer) -> Int in
+                guard let start = source.bindMemory(to: UInt8.self).baseAddress,
+                      let destination = output.bindMemory(to: UInt8.self).baseAddress
+                else { throw DecompressionError.invalidData }
+                stream.pointee.src_ptr = start
+                stream.pointee.src_size = source.count
+                stream.pointee.dst_ptr = destination
+                stream.pointee.dst_size = count
+                // All the input is given at once, so it is final from the start.
+                let finalize = Int32(bitPattern: COMPRESSION_STREAM_FINALIZE.rawValue)
+                while stream.pointee.dst_size > 0 {
+                    let before = stream.pointee.dst_size
+                    let status = compression_stream_process(stream, finalize)
+                    if status == COMPRESSION_STATUS_END { break }
+                    guard status == COMPRESSION_STATUS_OK, stream.pointee.dst_size < before else {
+                        throw DecompressionError.invalidData
+                    }
+                }
+                return count - stream.pointee.dst_size
+            }
+        }
+        return prefix.prefix(produced)
+    }
+
+    private static func process(_ data: Data, operation: compression_stream_operation, to url: URL) throws {
         guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
         }
@@ -24,7 +70,7 @@ public enum LampZlib {
 
         let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
         defer { stream.deallocate() }
-        guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+        guard compression_stream_init(stream, operation, COMPRESSION_ZLIB)
             == COMPRESSION_STATUS_OK
         else { throw DecompressionError.invalidData }
         defer { compression_stream_destroy(stream) }

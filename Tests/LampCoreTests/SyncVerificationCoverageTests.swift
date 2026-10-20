@@ -18,6 +18,7 @@ struct SyncVerificationCoverageTests {
         }
         let patterns: [String]
         let sources: [String: Entry]
+        let platformPatterns: [String]
         let platformSources: [String: Entry]
     }
 
@@ -44,20 +45,38 @@ struct SyncVerificationCoverageTests {
         return names
     }
 
-    /// Files matching `pattern`, which is a path whose last component may
-    /// hold one `*`.
+    /// Files matching `pattern`, a path whose last component is a shell
+    /// wildcard, relative to this package.
     private func files(matching pattern: String) throws -> [String] {
         let directory = (pattern as NSString).deletingLastPathComponent
         let name = (pattern as NSString).lastPathComponent
-        let parts = name.split(separator: "*", maxSplits: 1, omittingEmptySubsequences: false)
         let contents = try FileManager.default.contentsOfDirectory(
             atPath: Self.root.appendingPathComponent(directory).path
         )
-        return contents.filter { file in
-            parts.count == 1 ? file == name
-                : file.hasPrefix(parts[0]) && file.hasSuffix(parts[1]) && file.count >= name.count - 1
-        }
-        .map { "\(directory)/\($0)" }
+        return contents.filter { fnmatch(name, $0, 0) == 0 }.map { "\(directory)/\($0)" }
+    }
+
+    /// Whether the sibling repository a `../repository/...` path points into
+    /// is checked out beside this one.
+    private func siblingIsPresent(_ path: String) -> Bool {
+        let components = path.split(separator: "/")
+        guard components.count > 2, components[0] == ".." else { return false }
+        return FileManager.default.fileExists(
+            atPath: Self.root.appendingPathComponent("../\(components[1])").standardizedFileURL.path
+        )
+    }
+
+    /// The apps' sync files, matched by the same kind of pattern, wherever
+    /// those repositories are checked out beside this one — so sync logic
+    /// written into an app cannot arrive unaccounted for either.
+    @Test func everyAppSyncSourceHasAnEntry() throws {
+        let manifest = try manifest()
+        let found = try Set(manifest.platformPatterns.filter(siblingIsPresent).flatMap(files(matching:)))
+        let unlisted = found.subtracting(manifest.platformSources.keys).sorted()
+        #expect(unlisted.isEmpty, """
+            App sync sources with no platformSources entry in Verification/coverage.json: \(unlisted). \
+            Move a new decision into core and model it, or say why the file makes none.
+            """)
     }
 
     @Test func everySyncSourceHasAnEntry() throws {
@@ -77,11 +96,7 @@ struct SyncVerificationCoverageTests {
         }
         #expect(gone.isEmpty, "Entries for files that no longer exist: \(gone.sorted())")
         // A sibling app repository is checked only where it is checked out.
-        for path in manifest.platformSources.keys {
-            let components = path.split(separator: "/")
-            guard components.count > 2, components[0] == ".." else { continue }
-            let repository = Self.root.appendingPathComponent("../\(components[1])").standardizedFileURL
-            guard FileManager.default.fileExists(atPath: repository.path) else { continue }
+        for path in manifest.platformSources.keys where siblingIsPresent(path) {
             let file = Self.root.appendingPathComponent(path).standardizedFileURL
             #expect(FileManager.default.fileExists(atPath: file.path), "No such platform source: \(path)")
         }

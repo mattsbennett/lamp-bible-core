@@ -15,10 +15,22 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
     public struct Field: Codable, Equatable, Sendable {
         public let value: Value?
         public let revision: String
+        /// When it was set, in milliseconds, and always later than the field
+        /// it replaced. Joining two copies needs it: without a base, one
+        /// device's edit and the other's unchanged value look alike. Older
+        /// fields have none and count as earliest.
+        public let modifiedAt: Int64?
 
-        public init(value: Value?, revision: String = UUID().uuidString) {
+        public init(value: Value?, revision: String = UUID().uuidString, modifiedAt: Int64? = nil) {
             self.value = value
             self.revision = revision
+            self.modifiedAt = modifiedAt
+        }
+
+        /// A field set at `now` in place of `replaced`.
+        static func setting(_ value: Value?, replacing replaced: Field?, at now: Int64) -> Field {
+            let after = replaced?.modifiedAt.map { $0 < .max ? $0 + 1 : $0 }
+            return Field(value: value, modifiedAt: Swift.max(now, after ?? now))
         }
     }
 
@@ -180,7 +192,8 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
     public static func merge(
         local: [String: Value],
         base: Self?,
-        remote: Self?
+        remote: Self?,
+        now: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
     ) throws -> Merge {
         try base?.validate()
         try remote?.validate()
@@ -207,7 +220,7 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
                 // than this client's default; a value only this client holds
                 // is contributed rather than dropped.
                 if incoming == nil, let localValue {
-                    fields[key] = Field(value: localValue)
+                    fields[key] = Field.setting(localValue, replacing: nil, at: now)
                 }
                 continue
             }
@@ -220,7 +233,7 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
                 continue
             }
             if localChanged && !remoteChanged {
-                fields[key] = Field(value: localValue)
+                fields[key] = Field.setting(localValue, replacing: previous, at: now)
             } else if let incoming {
                 fields[key] = incoming
             }
@@ -255,6 +268,29 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
             publishable: merged, applicable: applicable,
             baseline: baseline, disputed: disputed.sorted()
         )
+    }
+
+    /// Both copies joined, field by field: the later of each by time, then
+    /// revision. Order doesn't matter, so the result is the same whichever
+    /// copy a store kept as current. This is how two copies written at once
+    /// are put together, with no base: a device that lost an iCloud write
+    /// has recorded its own write as the base, which the other copy never
+    /// saw. (`Verification/SyncMerge.lean`: `preferenceJoin`.)
+    public func joined(with other: Self) -> Self {
+        var fields = self.fields
+        for (key, theirs) in other.fields {
+            guard let ours = fields[key] else {
+                fields[key] = theirs
+                continue
+            }
+            fields[key] = Self.later(ours, theirs)
+        }
+        return Self(fields: fields)
+    }
+
+    static func later(_ a: Field, _ b: Field) -> Field {
+        let stamp = LampSyncLibraryManifest.Entry.later((a.modifiedAt, a.revision), (b.modifiedAt, b.revision))
+        return stamp.0 == b.modifiedAt && stamp.1 == b.revision ? b : a
     }
 
     public func apply(to defaults: UserDefaults) throws {

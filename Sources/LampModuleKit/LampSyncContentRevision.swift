@@ -11,6 +11,12 @@ public enum LampSyncContentRevision {
             .joined()
     }
 
+    /// The digest of a file's bytes, read through a mapping so a large body
+    /// is not copied into memory.
+    public static func digest(forFileAt url: URL) throws -> String {
+        digest(for: try Data(contentsOf: url, options: .alwaysMapped))
+    }
+
     public static func token(for data: Data) -> String {
         "sha256:" + digest(for: data)
     }
