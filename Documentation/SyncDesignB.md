@@ -406,12 +406,16 @@ are loose files. So a library only the phone kept has an archive at the
 bundle path.
 - `earlierLibrary(in:)` judges an archive by its entries
   (`earlierLibrary(ofArchive:)`): the phone's if it holds nothing but those
-  four, the Mac's otherwise. Entries are sorted by path and nothing the phone
-  writes sorts before `Settings/`, so an archive whose first entry does
-  (`Modules/`, `Media/`, …) is the Mac's from its first kilobyte, never
-  unpacked.
-- It downloads the archive to judge it. A client that polls should judge the
-  archive its old pass already read, or remember the answer by revision.
+  four, the Mac's otherwise. Any entry the phone never writes settles it, so
+  the archive is judged from its first 256 KB, asked for by Range
+  (`readPrefix`). The judgement uses every path that start reaches, wherever
+  it stands, since the encoder fixes no order for an entry's fields. An
+  earlier version looked only at the first entry's leading `path` field. The
+  encoder escapes `/` and orders fields at random, so that version never
+  fired, and every archive was downloaded whole.
+- Only an archive whose start settles nothing, which means a phone's small
+  one, is read whole. A wrapper around a store should forward `readPrefix`,
+  or it reads the whole file.
 - `migratePhoneLibrary(in:)` replaces a phone's archive with a bundle carrying
   its settings and shared preferences, written `.ifRevision` of the archive it
   judged. If the Mac publishes in between, the write is refused, the phone

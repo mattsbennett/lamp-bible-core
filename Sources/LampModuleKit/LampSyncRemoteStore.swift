@@ -117,6 +117,12 @@ public protocol LampSyncRemoteStore {
     /// `LampSyncRemoteStoreError.deleteUnsupported`, so a store that has not
     /// implemented it fails the reap visibly rather than never reaping.
     func delete(path: String, condition: LampSyncWriteCondition) async throws
+    /// The first `count` bytes of a file, with its revision, or nil when there
+    /// is no file. Enough to tell an archive by its start without fetching a
+    /// library-sized body. A store that can should ask for only those bytes;
+    /// the default reads the whole file to disk and keeps the start. A
+    /// wrapper should forward it, or it fetches the whole file.
+    func readPrefix(path: String, count: Int) async throws -> LampSyncRemoteFile?
 }
 
 public enum LampSyncRemoteStoreError: Error, Equatable {
@@ -152,6 +158,15 @@ public protocol LampSyncVersionedStore: LampSyncRemoteStore {
 }
 
 public extension LampSyncRemoteStore {
+    func readPrefix(path: String, count: Int) async throws -> LampSyncRemoteFile? {
+        try await LampSyncScratchFile.with { scratch in
+            guard let file = try await read(path: path, into: scratch) else { return nil }
+            let handle = try FileHandle(forReadingFrom: file.url)
+            defer { try? handle.close() }
+            return LampSyncRemoteFile(data: try handle.read(upToCount: max(count, 0)) ?? Data(), revision: file.revision)
+        }
+    }
+
     func read(path: String, into url: URL) async throws -> LampSyncDownloadedFile? {
         guard let file = try await read(path: path) else { return nil }
         try file.data.write(to: url, options: .atomic)

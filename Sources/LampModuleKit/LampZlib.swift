@@ -28,6 +28,36 @@ public enum LampZlib {
     /// The first `count` unpacked bytes, or all of them if there are fewer,
     /// without unpacking the rest: enough to read a header from a body that
     /// may unpack to hundreds of megabytes.
+    /// As much of the unpacked start as `data`, which may be only the start
+    /// of a compressed body, yields, up to `count` bytes. Never throws: a
+    /// short or truncated input gives a shorter start.
+    public static func decompressedStart(of data: Data, upTo count: Int) -> Data {
+        let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        defer { stream.deallocate() }
+        guard count > 0, !data.isEmpty,
+              compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK
+        else { return Data() }
+        defer { compression_stream_destroy(stream) }
+        var start = Data(count: count)
+        let produced = start.withUnsafeMutableBytes { (output: UnsafeMutableRawBufferPointer) -> Int in
+            data.withUnsafeBytes { (source: UnsafeRawBufferPointer) -> Int in
+                guard let from = source.bindMemory(to: UInt8.self).baseAddress,
+                      let to = output.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                stream.pointee.src_ptr = from
+                stream.pointee.src_size = source.count
+                stream.pointee.dst_ptr = to
+                stream.pointee.dst_size = count
+                while stream.pointee.dst_size > 0 {
+                    let before = stream.pointee.dst_size
+                    let status = compression_stream_process(stream, 0)
+                    guard status == COMPRESSION_STATUS_OK, stream.pointee.dst_size < before else { break }
+                }
+                return count - stream.pointee.dst_size
+            }
+        }
+        return start.prefix(produced)
+    }
+
     public static func decompressedPrefix(of data: Data, count: Int) throws -> Data {
         let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
         defer { stream.deallocate() }

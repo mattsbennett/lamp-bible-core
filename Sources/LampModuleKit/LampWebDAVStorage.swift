@@ -154,6 +154,34 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
         )
     }
 
+    /// Asks for only the first `count` bytes. A server that honours Range
+    /// answers 206 with them; one that ignores it answers 200 with the whole
+    /// body, which is streamed to disk and cut, so it costs a download but
+    /// never the memory. The revision is the whole file's either way.
+    public func readPrefix(path: String, count: Int) async throws -> LampSyncRemoteFile? {
+        var request = try makeRequest(method: "GET", path: path)
+        request.setValue("bytes=0-\(max(count, 1) - 1)", forHTTPHeaderField: "Range")
+        let body: URL
+        let response: HTTPURLResponse
+        do {
+            (body, response) = try await http.download(request)
+        } catch LampWebDAVHTTP.TransportError.invalidResponse {
+            throw StorageError.invalidResponse
+        }
+        defer { try? FileManager.default.removeItem(at: body) }
+        switch Self.presence(afterGET: response.statusCode) {
+        case .absent: return nil
+        case .failed, .askGET: throw StorageError.httpStatus(response.statusCode)
+        case .present: break
+        }
+        let handle = try FileHandle(forReadingFrom: body)
+        defer { try? handle.close() }
+        return LampSyncRemoteFile(
+            data: try handle.read(upToCount: max(count, 0)) ?? Data(),
+            revision: response.value(forHTTPHeaderField: "ETag")
+        )
+    }
+
     public func read(path: String, into url: URL) async throws -> LampSyncDownloadedFile? {
         let body: URL
         let response: HTTPURLResponse

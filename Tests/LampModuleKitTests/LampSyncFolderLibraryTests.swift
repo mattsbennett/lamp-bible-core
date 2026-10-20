@@ -186,14 +186,6 @@ struct LampSyncFolderLibraryTests {
         return (try archive.compressedData(), ledger)
     }
 
-    /// Everything a phone's archive holds sorts at or after `Settings/`, so
-    /// judging an archive by a first entry before it never misjudges one.
-    @Test func noPhoneArchivePathIsJudgedTheMacsByItsFirstEntry() {
-        #expect(LampSyncSettingsStore.phoneArchivePaths.allSatisfy { !LampSyncSettingsStore.firstEntryIsTheMacs($0) })
-        #expect(LampSyncSettingsStore.firstEntryIsTheMacs("Modules/kjv.lamp"))
-        #expect(LampSyncSettingsStore.firstEntryIsTheMacs("Media/x.png"))
-    }
-
     /// On WebDAV the phone left a settings-only archive. The migration
     /// replaces it with a bundle carrying its settings and preferences,
     /// written only while it is still that archive.
@@ -211,6 +203,77 @@ struct LampSyncFolderLibraryTests {
         #expect(moved.bundle.preferences == ledger)
         #expect(store.conditions == [.ifRevision("\"a1\"")])
         #expect(try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate) == moved)
+    }
+
+    /// An archive's start is judged by every path it reaches, whatever order
+    /// an entry's fields came in, which the encoder does not fix. Each path
+    /// is read as the JSON string it is, since the encoder writes `/` as `\/`.
+    /// A start cut off mid-stream still gives the paths before the cut.
+    @Test func anArchivesStartIsJudgedByEveryPathItReaches() throws {
+        let mac = try LampSyncSettingsArchive.replacingData(Data("settings".utf8), in: nil)
+            .replacingEntry(at: "Modules/kjv.lamp", with: Data("module".utf8))
+            .replacingEntry(at: LampPortableBackupLayout.settingsPath, with: Data("plist".utf8))
+        let packed = try mac.compressedData()
+        #expect(LampSyncSettingsStore.entryPaths(inStart: packed).contains("Modules/kjv.lamp"))
+        #expect(LampSyncSettingsStore.verdict(fromStart: packed) == .mac)
+        #expect(LampSyncSettingsStore.verdict(fromStart: try LampSyncSettingsBundle().encoded()) == .bundle)
+        let phone = try LampSyncSettingsArchive.replacingData(Data("settings".utf8), in: nil)
+        #expect(LampSyncSettingsStore.verdict(fromStart: try phone.compressedData()) == .undecided)
+
+        let long = try LampSyncSettingsArchive.replacingData(Data("settings".utf8), in: nil)
+            .replacingEntry(at: "Modules/a.lamp", with: Data((0..<200_000).map { UInt8($0 % 251) }))
+            .replacingEntry(at: "Modules/b.lamp", with: Data((0..<200_000).map { UInt8($0 % 241) }))
+        let cut = try long.compressedData().prefix(32 * 1024)
+        #expect(!LampSyncSettingsStore.entryPaths(inStart: cut).isEmpty)
+    }
+
+    /// A Mac's archive is told by its start, without fetching the
+    /// library-sized body; a phone's small one is read whole to be sure.
+    @Test func anArchiveIsJudgedByItsStartWhereThatSettlesIt() async throws {
+        let mac = try LampSyncSettingsArchive.replacingData(Data("settings".utf8), in: nil)
+            .replacingEntry(at: "Modules/kjv.lamp", with: Data(repeating: 7, count: 300_000))
+        let macStore = BundleStore()
+        macStore.files[LampSyncSettingsStore.path] = (try mac.compressedData(), "\"a1\"")
+        #expect(try await LampSyncSettingsStore.earlierLibrary(in: macStore) == .mac)
+        #expect(macStore.reads == 0 && macStore.prefixReads == 1)
+
+        let phoneStore = BundleStore()
+        phoneStore.files[LampSyncSettingsStore.path] = (try phoneArchive(settings: "phone", fontSize: 18).0, "\"a1\"")
+        #expect(try await LampSyncSettingsStore.earlierLibrary(in: phoneStore) == .phone)
+        #expect(phoneStore.reads == 1)
+    }
+
+    /// A start that settles nothing is never taken for the phone's: the
+    /// archive is read whole. Two Mac archives whose first 256 KB reach no
+    /// path the phone never writes. One leads with paths both clients write,
+    /// its only Mac entry far behind them. The other leads with one large
+    /// module, whose path may come after its body.
+    @Test func anInconclusiveStartIsReadWholeNeverTakenForThePhones() async throws {
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func noise(_ count: Int) -> Data {
+            Data((0..<count).map { _ in
+                seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                return UInt8(truncatingIfNeeded: seed >> 33)
+            })
+        }
+        let settingsFirst = try LampSyncSettingsArchive.replacingData(noise(1_000_000), in: nil)
+            .replacingEntry(at: LampPortableBackupLayout.settingsPath, with: Data("plist".utf8))
+        let moduleFirst = try LampSyncSettingsArchive.replacingData(Data("settings".utf8), in: nil)
+            .replacingEntry(at: "Compatibility/Notes/notes.lamp", with: noise(1_000_000))
+        for archive in [settingsFirst, moduleFirst] {
+            let store = BundleStore()
+            let packed = try archive.compressedData()
+            #expect(packed.count > 2 * LampSyncSettingsStore.startLength)
+            store.files[LampSyncSettingsStore.path] = (packed, "\"a1\"")
+            #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .mac)
+        }
+        // The first is inconclusive by construction, so it was read whole.
+        let store = BundleStore()
+        store.files[LampSyncSettingsStore.path] = (try settingsFirst.compressedData(), "\"a1\"")
+        #expect(LampSyncSettingsStore.verdict(fromStart: try settingsFirst.compressedData()
+            .prefix(LampSyncSettingsStore.startLength)) == .undecided)
+        _ = try await LampSyncSettingsStore.earlierLibrary(in: store)
+        #expect(store.reads == 1)
     }
 
     @Test func aMacsArchiveIsNeverReplacedByThePhone() async throws {
@@ -425,6 +488,14 @@ private final class BundleStore: LampSyncRemoteStore, @unchecked Sendable {
     }
 
     func revision(path: String) async throws -> String? { files[path]?.1 }
+
+    /// The start only, as a server that honours Range sends it.
+    private(set) var prefixReads = 0
+
+    func readPrefix(path: String, count: Int) async throws -> LampSyncRemoteFile? {
+        prefixReads += 1
+        return files[path].map { LampSyncRemoteFile(data: $0.0.prefix(count), revision: $0.1) }
+    }
 
     func write(_ data: Data, to path: String, condition: LampSyncWriteCondition) async throws -> String? {
         if let beforeNextWrite {

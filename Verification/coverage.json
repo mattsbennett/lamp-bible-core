@@ -493,7 +493,7 @@
       ]
     },
     "Sources/LampModuleKit/LampSyncRemoteStore.swift": {
-      "boundary": "The provider protocol, and scratch files for bodies streamed to and from disk; no decision of its own. Conditional delete defaults to throwing, so a store that cannot delete fails a reap visibly. `LampSyncVersionedStore` adds reading and resolving a file's conflict versions; a store without it never has any."
+      "boundary": "The provider protocol, and scratch files for bodies streamed to and from disk; no decision of its own. Conditional delete defaults to throwing, so a store that cannot delete fails a reap visibly. `LampSyncVersionedStore` adds reading and resolving a file's conflict versions; a store without it never has any. `readPrefix` reads a file's start, by Range on WebDAV, so an archive is judged without its body."
     },
     "Sources/LampModuleKit/LampSyncSettingsArchive.swift": {
       "rules": [
@@ -571,7 +571,7 @@
         "archiveKeeper",
         "anArchiveWithAModuleIsTheMacs",
         "theMacsSettingsMarkItsArchive",
-        "thePeekNeverMisjudgesAPhoneArchive"
+        "anEntryThePhoneNeverWritesSettlesIt"
       ],
       "conformance": [
         "settingsUpdate",

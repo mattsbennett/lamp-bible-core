@@ -3980,12 +3980,6 @@ def isPhoneEntry : ArchiveEntry → Bool
   | .phoneSettings | .legacyManifest | .preferences | .portableManifest => true
   | .macSettings | .module => false
 
--- Entries are sorted by path. A module (`Modules/`, `Media/`, …) sorts before
--- `Settings/`; everything a phone writes sorts at or after it.
-def sortsBeforeSettings : ArchiveEntry → Bool
-  | .module => true
-  | _ => false
-
 -- Who wrote an archive: the phone, if it holds nothing but settings.
 def archiveKeeper (entries : List ArchiveEntry) : EarlierLibrary :=
   if entries.all isPhoneEntry then .phone else .mac
@@ -4002,17 +3996,14 @@ theorem theMacsSettingsMarkItsArchive (entries : List ArchiveEntry) (h : .macSet
     rw [List.all_eq_false]; exact ⟨.macSettings, h, by simp [isPhoneEntry]⟩
   simp [archiveKeeper, this]
 
--- Judging by the first entry alone never calls a phone's archive the Mac's,
--- so the peek that spares unpacking a library is safe.
-theorem thePeekNeverMisjudgesAPhoneArchive (entries : List ArchiveEntry)
-    (h : archiveKeeper entries = .phone) (e : ArchiveEntry) (he : e ∈ entries) :
-    sortsBeforeSettings e = false := by
-  unfold archiveKeeper at h
-  split at h
-  · rename_i hall
-    have := List.all_eq_true.mp hall e he
-    cases e <;> simp_all [isPhoneEntry, sortsBeforeSettings]
-  · cases h
+-- Any entry a phone never writes settles an archive as the Mac's, however
+-- few of its entries were read: so the start of a library-sized archive is
+-- enough to judge it, whatever order its entries' fields came in.
+theorem anEntryThePhoneNeverWritesSettlesIt (entries : List ArchiveEntry) (e : ArchiveEntry)
+    (he : e ∈ entries) (h : isPhoneEntry e = false) : archiveKeeper entries = .mac := by
+  have : entries.all isPhoneEntry = false := by
+    rw [List.all_eq_false]; exact ⟨e, he, by simp [h]⟩
+  simp [archiveKeeper, this]
 
 -- An ordinary pass never claims an earlier library, so only a migration the
 -- person agreed to moves one.

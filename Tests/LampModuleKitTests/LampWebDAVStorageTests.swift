@@ -334,6 +334,34 @@ struct LampWebDAVStorageTests {
         #expect(log.filter { $0.hasPrefix("PUT") }.count == 2)
     }
 
+    /// Only the start is asked for. A server that honours Range answers 206;
+    /// one that ignores it answers 200 with everything, which is cut.
+    @Test func aPrefixIsAskedForByRange() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebDAVTestURLProtocol.self]
+        let storage = LampWebDAVStorage(
+            baseURL: try #require(URL(string: "https://dav.example.com/sync/")),
+            session: URLSession(configuration: configuration)
+        )
+        let body = Data((0..<200).map { UInt8($0) })
+        WebDAVTestURLProtocol.handler = { request in
+            let url = try #require(request.url)
+            #expect(request.value(forHTTPHeaderField: "Range") == "bytes=0-15")
+            let (status, data): (Int, Data) = switch url.lastPathComponent {
+            case "ranged.lampsync": (206, body.prefix(16))
+            case "whole.lampsync": (200, body)
+            default: (404, Data())
+            }
+            return (HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
+                                    headerFields: ["ETag": "\"e1\""])!, data)
+        }
+        let ranged = try #require(try await storage.readPrefix(path: "ranged.lampsync", count: 16))
+        #expect(ranged.data == body.prefix(16) && ranged.revision == "\"e1\"")
+        let whole = try #require(try await storage.readPrefix(path: "whole.lampsync", count: 16))
+        #expect(whole.data == body.prefix(16))
+        #expect(try await storage.readPrefix(path: "missing.lampsync", count: 16) == nil)
+    }
+
     @Test func aDeleteIsSentUnderItsCondition() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [WebDAVTestURLProtocol.self]

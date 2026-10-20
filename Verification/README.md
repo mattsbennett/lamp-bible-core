@@ -785,10 +785,10 @@ Mac's (`thePhoneNeverClaimsAMacLibrary`). On WebDAV the phone left a
 settings-only archive. An archive is the phone's only if it holds nothing but
 settings; a module or the Mac's own settings make it the Mac's
 (`archiveKeeper`, `anArchiveWithAModuleIsTheMacs`,
-`theMacsSettingsMarkItsArchive`). Entries are sorted, and nothing the phone
-writes sorts before `Settings/`, so judging by a first entry before it never
-misjudges a phone's archive and spares unpacking a library
-(`thePeekNeverMisjudgesAPhoneArchive`).
+`theMacsSettingsMarkItsArchive`). Any entry the phone never writes settles it,
+however few entries were read (`anEntryThePhoneNeverWritesSettlesIt`). So a
+library-sized archive is judged from the paths its first 256 KB reach, found
+wherever they stand, since the encoder fixes no order for an entry's fields.
 
 The Mac moves a library it kept by writing the first bundle, carrying only
 what lives nowhere else under the per-file layout: every setting and ledger

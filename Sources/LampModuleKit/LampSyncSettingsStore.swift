@@ -289,6 +289,15 @@ public enum LampSyncSettingsStore {
     /// Otherwise one root listing, then one listing per kind folder present.
     public static func earlierLibrary(in store: any LampSyncRemoteStore) async throws -> EarlierLibrary? {
         if try await store.revision(path: path) != nil {
+            // The start settles a Mac's archive, and a bundle, without the
+            // library-sized body: any entry the phone never writes is enough.
+            if let start = try await store.readPrefix(path: path, count: startLength) {
+                switch verdict(fromStart: start.data) {
+                case .bundle: return nil
+                case .mac: return .mac
+                case .undecided: break
+                }
+            }
             return try await LampSyncScratchFile.with { scratch -> EarlierLibrary? in
                 guard let body = try await store.read(path: path, into: scratch) else { return nil }
                 return try archiveKeeper(at: body.url)?.keeper
@@ -313,8 +322,7 @@ public enum LampSyncSettingsStore {
 
     /// What a phone's settings-only archive holds: its settings, the legacy
     /// manifest beside them, the shared preferences, and the empty portable
-    /// manifest core writes into any new archive. All sort at or after
-    /// `Settings/`.
+    /// manifest core writes into any new archive.
     public static let phoneArchivePaths: Set<String> = [
         LampSyncSettingsArchive.path,
         LampSyncSettingsArchive.legacyManifestPath,
@@ -333,13 +341,33 @@ public enum LampSyncSettingsStore {
         paths.allSatisfy(phoneArchivePaths.contains) ? .phone : .mac
     }
 
-    /// Whether an archive's first entry already says it is the Mac's. Entries
-    /// are sorted by path, and everything a phone's archive holds sorts at
-    /// or after `Settings/`, so a first entry before it (`Modules/`,
-    /// `Media/`, …) means the Mac's, judged without unpacking a library.
-    /// (`Verification/SyncMerge.lean`: `thePeekNeverMisjudgesAPhoneArchive`.)
-    static func firstEntryIsTheMacs(_ path: String) -> Bool {
-        path < "Settings/"
+    /// How much of an archive is read to judge it by its start.
+    static let startLength = 256 * 1024
+
+    enum StartVerdict: Equatable { case bundle, mac, undecided }
+
+    /// What the start of a body settles: a bundle; a Mac's archive, because
+    /// an entry the phone never writes is among those it reaches; or nothing
+    /// yet. An entry's fields come in no fixed order, so the paths are found
+    /// wherever they stand, and a body is base64, with no quotes in it, so
+    /// every `"path":"…"` is an entry's.
+    /// (`Verification/SyncMerge.lean`: `anEntryThePhoneNeverWritesSettlesIt`.)
+    static func verdict(fromStart data: Data) -> StartVerdict {
+        switch LampSyncSettingsBundle.contents(ofHeader: (try? LampSyncSettingsBundle.header(of: data)) ?? Data()) {
+        case .bundle, .newerBundle: .bundle
+        case .damaged: .undecided
+        case .archive: entryPaths(inStart: data).contains { !phoneArchivePaths.contains($0) } ? .mac : .undecided
+        }
+    }
+
+    /// The entry paths the unpacked start of an archive reaches. A path is a
+    /// JSON string, and the encoder writes `/` as `\/`, so each is decoded
+    /// as one.
+    static func entryPaths(inStart data: Data) -> [String] {
+        let text = String(decoding: LampZlib.decompressedStart(of: data, upTo: 4 * startLength), as: UTF8.self)
+        return text.matches(of: #/"path"\s*:\s*("(?:[^"\\]|\\.)*")/#).compactMap {
+            try? JSONDecoder().decode(String.self, from: Data(String($0.1).utf8))
+        }
     }
 
     /// Judges the body at `url`: nil for a bundle, otherwise who wrote the
@@ -348,10 +376,7 @@ public enum LampSyncSettingsStore {
         let data = try Data(contentsOf: url, options: .alwaysMapped)
         guard LampSyncSettingsBundle.contents(ofHeader: try LampSyncSettingsBundle.header(of: data)) == .archive
         else { return nil }
-        if let prefix = try? LampZlib.decompressedPrefix(of: data, count: 1024),
-           let match = String(decoding: prefix, as: UTF8.self)
-               .firstMatch(of: #/"entries"\s*:\s*\[\s*\{\s*"path"\s*:\s*"([^"\\]*)"/#),
-           firstEntryIsTheMacs(String(match.1)) {
+        if verdict(fromStart: data) == .mac {
             return (.mac, nil)
         }
         let archive = try LampSyncArchive.decode(compressedFileAt: url)
