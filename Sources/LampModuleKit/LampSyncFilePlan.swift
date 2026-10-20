@@ -44,11 +44,16 @@ public enum LampSyncFilePlan {
         public var downloads: [String] = []
         /// Files both sides changed. The caller reconciles them (personal
         /// modules by value, in one transaction), then uploads the result
-        /// under the revision listed here.
+        /// under the revision listed here, `.ifRevision`.
+        ///
+        /// These paths are not in `uploads`, but each must be written too:
+        /// a caller that writes only `uploads` keeps every merge on this
+        /// device, silently.
         public var merge: [String: String] = [:]
         /// Files to write, each under its condition. Media is always
         /// `.ifAbsent`. Record every write that succeeds in the pass's
-        /// bundle update with `recordingWrite`.
+        /// bundle update with `recordingWrite`. Merged files are not here:
+        /// write those from `merge`, once reconciled.
         public var uploads: [String: LampSyncWriteCondition] = [:]
         /// Deleted elsewhere after the copy here was saved.
         public var deleteLocally: [String] = []

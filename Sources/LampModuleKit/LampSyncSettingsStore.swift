@@ -83,13 +83,33 @@ public enum LampSyncSettingsStore {
 
     public static let path = LampSyncFolderLayout.bundlePath
 
-    /// What an earlier sync leaves at a library's root: the Mac's folder seal
-    /// and its portable backup's manifest, and the phone's settings folder.
-    public static let earlierLibraryMarkers: Set<String> = [
+    /// What the Mac's folder sync leaves at a library's root: its seal and its
+    /// portable backup's manifest.
+    public static let macLibraryMarkers: Set<String> = [
         LampSyncFolderPublisher.snapshotPath,
         LampPortableBackupLayout.manifestPath,
+    ]
+
+    /// What the phone's earlier sync leaves at a library's root: its settings
+    /// folder.
+    public static let phoneLibraryMarkers: Set<String> = [
         String(LampSyncLayout.userSettingsPath.prefix { $0 != "/" }),
     ]
+
+    /// Everything an earlier sync leaves at a library's root.
+    public static let earlierLibraryMarkers = macLibraryMarkers.union(phoneLibraryMarkers)
+
+    /// Who kept a library nobody has migrated.
+    public enum EarlierLibrary: Equatable, Sendable {
+        /// The Mac's folder sync, by its seal or its portable manifest. Its
+        /// files are a backup's layout, not the per-file one, so only the
+        /// Mac's migration can move it.
+        case mac
+        /// Only the phone's own files, or modules dropped in by hand: already
+        /// the per-file layout, named by their IDs. Moved by claiming the
+        /// path (`migratePhoneLibrary`); the next pass adopts the files.
+        case phone
+    }
 
     /// The bundle, or nil for a library nobody has synced to yet.
     ///
@@ -137,18 +157,70 @@ public enum LampSyncSettingsStore {
         knownArchiveRevision: String? = nil,
         attempts: Int = 3
     ) async throws -> Snapshot {
+        try await claim(
+            in: store, knownArchiveRevision: knownArchiveRevision, attempts: attempts, migratingPhone: false
+        )
+    }
+
+    /// Moves a library only the phone kept to the per-file layout, by
+    /// writing the first bundle. The pass that follows adopts its files:
+    /// they are already in the per-file layout, named by their IDs. Returns
+    /// the bundle there if another device got there first, and the bundle
+    /// already there if the library is migrated.
+    ///
+    /// On a folder, nothing is at the bundle path, and the first bundle is
+    /// empty, written where still absent. On WebDAV, the phone left a
+    /// settings-only archive there. The bundle replaces it, written only
+    /// while it is still the archive judged, and carries its settings and
+    /// shared preferences, so nothing set on another phone is lost.
+    ///
+    /// A library the Mac kept still throws `notMigrated`, whether a folder or
+    /// an archive. Call this only once the person has agreed,
+    /// having been asked to update their other devices first: the phone's
+    /// iCloud sync before 1.2.0 never reads the bundle, so an un-updated
+    /// device keeps writing files and settings the new sync ignores.
+    /// (`Verification/SyncMerge.lean`: `mayClaim`,
+    /// `thePhoneNeverClaimsAMacLibrary`.)
+    public static func migratePhoneLibrary(
+        in store: any LampSyncRemoteStore,
+        attempts: Int = 3
+    ) async throws -> Snapshot {
+        try await claim(in: store, knownArchiveRevision: nil, attempts: attempts, migratingPhone: true)
+    }
+
+    private static func claim(
+        in store: any LampSyncRemoteStore,
+        knownArchiveRevision: String?,
+        attempts: Int,
+        migratingPhone: Bool
+    ) async throws -> Snapshot {
         var knownArchiveRevision = knownArchiveRevision
         for _ in 0..<max(attempts, 1) {
-            if let snapshot = try await read(from: store, knownArchiveRevision: knownArchiveRevision) {
-                return snapshot
+            // The bundle to write first, and the condition it is written
+            // under: where nothing is, or over the phone's archive as read.
+            var first = LampSyncSettingsBundle()
+            var condition = LampSyncWriteCondition.ifAbsent
+            do {
+                if let snapshot = try await read(from: store, knownArchiveRevision: knownArchiveRevision) {
+                    return snapshot
+                }
+            } catch StoreError.notMigrated(revision: nil) where migratingPhone {
+                guard mayClaim(try await earlierLibrary(in: store), migratingPhone: true) else {
+                    throw StoreError.notMigrated(revision: nil)
+                }
+            } catch StoreError.notMigrated(let revision?) where migratingPhone {
+                guard let archive = try await phoneArchive(in: store) else {
+                    throw StoreError.notMigrated(revision: revision)
+                }
+                first = try bundle(fromPhoneArchive: archive.archive)
+                condition = .ifRevision(archive.revision)
             }
             knownArchiveRevision = nil
-            let empty = LampSyncSettingsBundle()
             do {
                 let revision = try await LampSyncConditionalWrite.writeAndConfirm(
-                    empty.encoded(), to: path, in: store, condition: .ifAbsent
+                    first.encoded(), to: path, in: store, condition: condition
                 )
-                return Snapshot(bundle: empty, revision: revision)
+                return Snapshot(bundle: first, revision: revision)
             } catch where LampSyncConditionalWrite.isRefusal(error) {
                 continue
             }
@@ -156,10 +228,30 @@ public enum LampSyncSettingsStore {
         throw StoreError.tooManyAttempts
     }
 
-    /// Whether a store with nothing at the bundle path holds a library an
-    /// earlier sync kept. A root listing, then one listing per kind folder
-    /// present, and only when there is no bundle.
-    static func holdsEarlierLibrary(_ store: any LampSyncRemoteStore) async throws -> Bool {
+    /// Whether a pass may write the first bundle: in a new library, or in one
+    /// only the phone kept when migrating it. Never in one the Mac kept.
+    /// (`Verification/SyncMerge.lean`: `mayClaim`.)
+    static func mayClaim(_ earlier: EarlierLibrary?, migratingPhone: Bool) -> Bool {
+        switch earlier {
+        case nil: true
+        case .phone: migratingPhone
+        case .mac: false
+        }
+    }
+
+    /// Who kept the library, or nil for an empty one or one already
+    /// migrated. An archive at the bundle path is judged by its entries
+    /// (`earlierLibrary(ofArchive:)`); it is downloaded to judge it, so a
+    /// caller that already read the archive should judge that instead, and
+    /// one that polls should remember the answer by the archive's revision.
+    /// Otherwise one root listing, then one listing per kind folder present.
+    public static func earlierLibrary(in store: any LampSyncRemoteStore) async throws -> EarlierLibrary? {
+        if try await store.revision(path: path) != nil {
+            return try await LampSyncScratchFile.with { scratch -> EarlierLibrary? in
+                guard let body = try await store.read(path: path, into: scratch) else { return nil }
+                return try archiveKeeper(at: body.url)?.keeper
+            }
+        }
         let root = try await store.list(directory: "") ?? []
         let names = Set(root.map(\.name))
         var contentFound = false
@@ -170,9 +262,93 @@ public enum LampSyncSettingsStore {
                 break
             }
         }
-        return emptyPathMeansEarlierLibrary(
-            marker: !names.isDisjoint(with: earlierLibraryMarkers), content: contentFound
+        return earlierLibrary(
+            mac: !names.isDisjoint(with: macLibraryMarkers),
+            phone: !names.isDisjoint(with: phoneLibraryMarkers),
+            content: contentFound
         )
+    }
+
+    /// What a phone's settings-only archive holds: its settings, the legacy
+    /// manifest beside them, the shared preferences, and the empty portable
+    /// manifest core writes into any new archive. All sort at or after
+    /// `Settings/`.
+    public static let phoneArchivePaths: Set<String> = [
+        LampSyncSettingsArchive.path,
+        LampSyncSettingsArchive.legacyManifestPath,
+        LampPortableBackupLayout.sharedPreferencesPath,
+        LampPortableBackupLayout.manifestPath,
+    ]
+
+    /// Who wrote an archive. The phone's holds nothing but settings; one with
+    /// anything else, a module or the Mac's own `settings.plist`, is the
+    /// Mac's. (`Verification/SyncMerge.lean`: `archiveKeeper`.)
+    public static func earlierLibrary(ofArchive archive: LampSyncArchive) -> EarlierLibrary {
+        archiveKeeper(paths: archive.entries.map(\.path))
+    }
+
+    static func archiveKeeper(paths: [String]) -> EarlierLibrary {
+        paths.allSatisfy(phoneArchivePaths.contains) ? .phone : .mac
+    }
+
+    /// Whether an archive's first entry already says it is the Mac's. Entries
+    /// are sorted by path, and everything a phone's archive holds sorts at
+    /// or after `Settings/`, so a first entry before it (`Modules/`,
+    /// `Media/`, …) means the Mac's, judged without unpacking a library.
+    /// (`Verification/SyncMerge.lean`: `thePeekNeverMisjudgesAPhoneArchive`.)
+    static func firstEntryIsTheMacs(_ path: String) -> Bool {
+        path < "Settings/"
+    }
+
+    /// Judges the body at `url`: nil for a bundle, otherwise who wrote the
+    /// archive, and the archive when it was unpacked to tell.
+    private static func archiveKeeper(at url: URL) throws -> (keeper: EarlierLibrary, archive: LampSyncArchive?)? {
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
+        guard LampSyncSettingsBundle.contents(ofHeader: try LampSyncSettingsBundle.header(of: data)) == .archive
+        else { return nil }
+        if let prefix = try? LampZlib.decompressedPrefix(of: data, count: 1024),
+           let match = String(decoding: prefix, as: UTF8.self)
+               .firstMatch(of: #/"entries"\s*:\s*\[\s*\{\s*"path"\s*:\s*"([^"\\]*)"/#),
+           firstEntryIsTheMacs(String(match.1)) {
+            return (.mac, nil)
+        }
+        let archive = try LampSyncArchive.decode(compressedFileAt: url)
+        return (earlierLibrary(ofArchive: archive), archive)
+    }
+
+    /// The archive at the bundle path and its revision, if the phone wrote it.
+    private static func phoneArchive(
+        in store: any LampSyncRemoteStore
+    ) async throws -> (archive: LampSyncArchive, revision: String)? {
+        try await LampSyncScratchFile.with { scratch in
+            guard let body = try await store.read(path: path, into: scratch),
+                  let revision = body.revision, LampWebDAVStorage.isStrongETag(revision),
+                  let judged = try archiveKeeper(at: body.url), judged.keeper == .phone,
+                  let archive = judged.archive
+            else { return nil }
+            return (archive, revision)
+        }
+    }
+
+    /// The first bundle over a phone's archive: its settings and its shared
+    /// preferences. The phone's modules were never in it; they are loose
+    /// files, which the next pass adopts.
+    static func bundle(fromPhoneArchive archive: LampSyncArchive) throws -> LampSyncSettingsBundle {
+        LampSyncSettingsBundle(
+            userSettings: archive.entries.first { $0.path == LampSyncSettingsArchive.path }?.data,
+            preferences: try LampSyncPreferenceState.ledger(in: archive) ?? .init()
+        )
+    }
+
+    /// The Mac's marks win: only its migration can move its layout.
+    /// (`Verification/SyncMerge.lean`: `earlierLibrary`.)
+    static func earlierLibrary(mac: Bool, phone: Bool, content: Bool) -> EarlierLibrary? {
+        if mac { return .mac }
+        return phone || content ? .phone : nil
+    }
+
+    static func holdsEarlierLibrary(_ store: any LampSyncRemoteStore) async throws -> Bool {
+        try await earlierLibrary(in: store) != nil
     }
 
     /// (`Verification/SyncMerge.lean`: `emptyBundlePath`.)

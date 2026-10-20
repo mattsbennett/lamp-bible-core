@@ -111,6 +111,7 @@ struct SyncModelConformanceTests {
         "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone", "filePlanAction",
         "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite", "directoryDelete",
         "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge", "preferenceStamp", "bundleRead",
+        "earlierLibrary", "mayClaim", "archiveKeeper",
     ]
 
     // MARK: - The model itself
@@ -1230,6 +1231,99 @@ struct SyncModelConformanceTests {
             let read = try await readFolder(bundle: f[0] == "true", marker: f[1] == "true", content: f[2] == "true")
             #expect(read == f[3], "bundleRead \(f.joined(separator: " "))")
         }
+    }
+
+    /// Who kept a real folder: the Mac's seal, the phone's settings folder,
+    /// a module file.
+    @Test func earlierLibrary() async throws {
+        let cases = SyncModel.cases("earlierLibrary")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let root = try folder(mac: f[0] == "true", phone: f[1] == "true", content: f[2] == "true")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let earlier = try await LampSyncSettingsStore.earlierLibrary(in: LampSyncDirectoryStore(root: root))
+            #expect(earlier.map { "\($0)" } ?? "-" == f[3], "earlierLibrary \(f.joined(separator: " "))")
+        }
+    }
+
+    /// Through the two ways a pass starts: `readOrClaim`, and
+    /// `migratePhoneLibrary` once the person has agreed.
+    @Test func mayClaim() async throws {
+        let cases = SyncModel.cases("mayClaim")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let root = try folder(mac: f[1] == "mac", phone: f[1] == "phone", content: f[1] != "-")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = LampSyncDirectoryStore(root: root)
+            let claimed: Bool
+            do {
+                _ = f[0] == "true"
+                    ? try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+                    : try await LampSyncSettingsStore.readOrClaim(from: store)
+                claimed = true
+            } catch LampSyncSettingsStore.StoreError.notMigrated(nil) {
+                claimed = false
+            }
+            let written = FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(LampSyncSettingsStore.path).path
+            )
+            #expect(claimed == (f[2] == "true") && written == claimed, "mayClaim \(f.joined(separator: " "))")
+        }
+    }
+
+    /// Through `earlierLibrary(in:)` over a real archive at the bundle path:
+    /// one starting with a module is judged from its first entry, the rest
+    /// unpacked.
+    @Test func archiveKeeper() async throws {
+        let paths: [String: String] = [
+            "phoneSettings": LampSyncSettingsArchive.path,
+            "legacyManifest": LampSyncSettingsArchive.legacyManifestPath,
+            "preferences": LampPortableBackupLayout.sharedPreferencesPath,
+            "portableManifest": LampPortableBackupLayout.manifestPath,
+            "macSettings": LampPortableBackupLayout.settingsPath,
+            "module": "Modules/kjv.lamp",
+        ]
+        let cases = SyncModel.cases("archiveKeeper")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let entries = (f[0] == "-" ? [] : f[0].split(separator: ",")).map { name in
+                let data = Data(name.utf8)
+                return LampSyncArchive.Entry(
+                    path: paths[String(name)]!, data: data, modifiedAt: Date(timeIntervalSince1970: 0),
+                    sha256: LampSyncContentRevision.digest(for: data)
+                )
+            }.sorted { $0.path < $1.path }
+            let store = ScriptedRemoteStore()
+            store.files[LampSyncSettingsStore.path] = LampSyncRemoteFile(
+                data: try LampSyncArchive(entries: entries).compressedData(), revision: "\"a\""
+            )
+            let keeper = try await LampSyncSettingsStore.earlierLibrary(in: store)
+            #expect(keeper.map { "\($0)" } == f[1], "archiveKeeper \(f.joined(separator: " "))")
+        }
+    }
+
+    /// A real folder with the Mac's seal, the phone's settings folder and a
+    /// module file, as asked. The caller removes it.
+    private func folder(mac: Bool, phone: Bool, content: Bool) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-earlier-library-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Notes"), withIntermediateDirectories: true
+        )
+        if mac {
+            try Data("{}".utf8).write(to: root.appendingPathComponent(LampSyncFolderPublisher.snapshotPath))
+        }
+        if phone {
+            let settings = root.appendingPathComponent(LampSyncLayout.userSettingsPath)
+            try FileManager.default.createDirectory(
+                at: settings.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data("settings".utf8).write(to: settings)
+        }
+        if content {
+            try Data("notes".utf8).write(to: root.appendingPathComponent("Notes/notes.lamp"))
+        }
+        return root
     }
 
     /// What `read` makes of a real folder holding a bundle, an earlier

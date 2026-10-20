@@ -166,6 +166,72 @@ struct LampSyncFolderLibraryTests {
         }
     }
 
+    /// A phone's settings-only archive, as the phone published one to a
+    /// WebDAV server it alone used.
+    private func phoneArchive(settings: String, fontSize: Double) throws -> (Data, LampSharedPreferenceLedger) {
+        let ledger = LampSharedPreferenceLedger(fields: ["reader.fontSize": .init(value: .number(fontSize))])
+        let archive = try LampSyncPreferenceState.replacing(
+            ledger, in: LampSyncSettingsArchive.replacingData(Data(settings.utf8), in: nil)
+        )
+        return (try archive.compressedData(), ledger)
+    }
+
+    /// Everything a phone's archive holds sorts at or after `Settings/`, so
+    /// judging an archive by a first entry before it never misjudges one.
+    @Test func noPhoneArchivePathIsJudgedTheMacsByItsFirstEntry() {
+        #expect(LampSyncSettingsStore.phoneArchivePaths.allSatisfy { !LampSyncSettingsStore.firstEntryIsTheMacs($0) })
+        #expect(LampSyncSettingsStore.firstEntryIsTheMacs("Modules/kjv.lamp"))
+        #expect(LampSyncSettingsStore.firstEntryIsTheMacs("Media/x.png"))
+    }
+
+    /// On WebDAV the phone left a settings-only archive. The migration
+    /// replaces it with a bundle carrying its settings and preferences,
+    /// written only while it is still that archive.
+    @Test func aPhonesArchiveIsReplacedByABundleCarryingItsSettings() async throws {
+        let store = BundleStore()
+        let (archive, ledger) = try phoneArchive(settings: "phone settings", fontSize: 21)
+        store.files[LampSyncSettingsStore.path] = (archive, "\"a1\"")
+        await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: "\"a1\"")) {
+            try await LampSyncSettingsStore.readOrClaim(from: store)
+        }
+        #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .phone)
+
+        let moved = try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+        #expect(moved.bundle.userSettings == Data("phone settings".utf8))
+        #expect(moved.bundle.preferences == ledger)
+        #expect(store.conditions == [.ifRevision("\"a1\"")])
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == moved)
+    }
+
+    @Test func aMacsArchiveIsNeverReplacedByThePhone() async throws {
+        let store = BundleStore()
+        let mac = try LampSyncSettingsArchive.replacingData(Data("settings".utf8), in: nil)
+            .replacingEntry(at: "Modules/kjv.lamp", with: Data("module".utf8))
+            .replacingEntry(at: LampPortableBackupLayout.settingsPath, with: Data("plist".utf8))
+        store.files[LampSyncSettingsStore.path] = (try mac.compressedData(), "\"a1\"")
+        #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .mac)
+        await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: "\"a1\"")) {
+            try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+        }
+        #expect(store.writes == 0)
+    }
+
+    /// The Mac publishes its archive between the phone's judging and its
+    /// write: the write is refused, and the phone judges again and stops.
+    @Test func aPhonesArchiveThatTheMacReplacesIsLeftToTheMac() async throws {
+        let store = BundleStore()
+        store.files[LampSyncSettingsStore.path] = (try phoneArchive(settings: "phone", fontSize: 18).0, "\"a1\"")
+        let mac = try LampSyncSettingsArchive.replacingData(Data("settings".utf8), in: nil)
+            .replacingEntry(at: "Modules/kjv.lamp", with: Data("module".utf8))
+        store.beforeNextWrite = {
+            store.files[LampSyncSettingsStore.path] = (try mac.compressedData(), "\"mac\"")
+        }
+        await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: "\"mac\"")) {
+            try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+        }
+        #expect(store.writes == 0 && store.files[LampSyncSettingsStore.path]?.1 == "\"mac\"")
+    }
+
     /// Two devices starting the same library: the one whose claim is refused
     /// reads the other's bundle rather than failing or writing over it.
     @Test func aRefusedClaimReadsTheWinnersBundle() async throws {

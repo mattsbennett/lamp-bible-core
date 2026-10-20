@@ -14,6 +14,18 @@ public enum LampSyncDevotionalMedia {
         }
     }
 
+    /// An attachment to publish: where it goes, and the local file that
+    /// holds it.
+    public struct OutgoingFile: Equatable, Sendable {
+        public let remotePath: String
+        public let localURL: URL
+
+        public init(remotePath: String, localURL: URL) {
+            self.remotePath = remotePath
+            self.localURL = localURL
+        }
+    }
+
     public enum UploadError: Error, LocalizedError {
         case invalidLocalFile(String)
         case conflictingRemoteFile(String)
@@ -37,7 +49,24 @@ public enum LampSyncDevotionalMedia {
         from libraryRootURL: URL,
         fileManager: FileManager = .default
     ) throws -> [UploadFile] {
-        var files: [UploadFile] = []
+        try outgoingFileURLs(
+            for: devotionals, to: moduleID, from: libraryRootURL, fileManager: fileManager
+        ).map {
+            UploadFile(remotePath: $0.remotePath, data: try Data(contentsOf: $0.localURL, options: [.mappedIfSafe]))
+        }
+    }
+
+    /// The same plan as `outgoingFiles`, naming each local file rather than
+    /// reading it, for a pass that publishes from disk. A missing or
+    /// non-regular attachment still throws: a writing published without its
+    /// image is worse than a pass that stops.
+    public static func outgoingFileURLs(
+        for devotionals: [LampDevotional],
+        to moduleID: String,
+        from libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) throws -> [OutgoingFile] {
+        var files: [OutgoingFile] = []
         var plannedPaths = Set<String>()
         for devotional in devotionals {
             let legacy = try LampPortableDevotionalMedia.references(
@@ -51,10 +80,7 @@ public enum LampSyncDevotionalMedia {
                     filename: filename
                 )
                 guard plannedPaths.insert(remotePath).inserted else { continue }
-                let localURL = libraryRootURL
-                    .appendingPathComponent("Media/Devotionals", isDirectory: true)
-                    .appendingPathComponent(devotional.id, isDirectory: true)
-                    .appendingPathComponent(filename)
+                let localURL = localURL(in: libraryRootURL, devotionalID: devotional.id, filename: filename)
                 guard fileManager.fileExists(atPath: localURL.path),
                       let values = try? localURL.resourceValues(
                         forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
@@ -63,13 +89,18 @@ public enum LampSyncDevotionalMedia {
                       values.isSymbolicLink != true else {
                     throw UploadError.invalidLocalFile(remotePath)
                 }
-                files.append(UploadFile(
-                    remotePath: remotePath,
-                    data: try Data(contentsOf: localURL, options: [.mappedIfSafe])
-                ))
+                files.append(OutgoingFile(remotePath: remotePath, localURL: localURL))
             }
         }
         return files
+    }
+
+    /// Where the library keeps a writing's attachment.
+    private static func localURL(in libraryRootURL: URL, devotionalID: String, filename: String) -> URL {
+        libraryRootURL
+            .appendingPathComponent("Media/Devotionals", isDirectory: true)
+            .appendingPathComponent(devotionalID, isDirectory: true)
+            .appendingPathComponent(filename)
     }
 
     /// Missing immutable attachments are created conditionally. An identical
@@ -108,11 +139,10 @@ public enum LampSyncDevotionalMedia {
                     moduleID: moduleID, devotionalID: devotional.id,
                     filename: filename
                 )
-                let localURL = libraryRootURL
-                    .appendingPathComponent("Media/Devotionals", isDirectory: true)
-                    .appendingPathComponent(devotional.id, isDirectory: true)
-                    .appendingPathComponent(filename)
-                items.append(.init(remotePath: remotePath, localURL: localURL))
+                items.append(.init(
+                    remotePath: remotePath,
+                    localURL: localURL(in: libraryRootURL, devotionalID: devotional.id, filename: filename)
+                ))
             }
         }
         try await LampSyncReferencedMedia.downloadMissing(items, readRemote: readRemote)

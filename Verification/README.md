@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 3,554 cases across 66 decisions. `SyncModelConformanceTests` asks the
+  answer, 3,632 cases across 69 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -777,6 +777,18 @@ new library's first pass claims the path with an empty bundle before writing
 any file. Writing files first, its own files would make the closing update
 call the library an earlier one, and it could never finish
 (`uploadingFirstLocksAFreshLibraryOut`, `claimingFirstNeverMeetsItsOwnFiles`).
+An earlier library is the Mac's if its marks are there, and otherwise the
+phone's, whose files are already the per-file layout (`earlierLibrary`). An
+ordinary pass claims only a new library (`anOrdinaryPassClaimsOnlyANewLibrary`);
+the phone's migration may also claim the phone's, and nothing claims the
+Mac's (`thePhoneNeverClaimsAMacLibrary`). On WebDAV the phone left a
+settings-only archive. An archive is the phone's only if it holds nothing but
+settings; a module or the Mac's own settings make it the Mac's
+(`archiveKeeper`, `anArchiveWithAModuleIsTheMacs`,
+`theMacsSettingsMarkItsArchive`). Entries are sorted, and nothing the phone
+writes sorts before `Settings/`, so judging by a first entry before it never
+misjudges a phone's archive and spares unpacking a library
+(`thePeekNeverMisjudgesAPhoneArchive`).
 
 On the folder provider, `directoryWrite` and `directoryDelete` decide a
 conditional write or delete inside the coordinated block, and a write goes
@@ -832,7 +844,7 @@ merge with no baseline, which may bring back an unseen deletion once.
 
 **Still outside the model.**
 
-- 66 tables ask 76 of the model's 208 definitions directly, and reach 102
+- 69 tables ask 79 of the model's 213 definitions directly, and reach 106
   counting the rules those call. Of the rest:
   - Counterexamples of former behaviour (`oldReplace`, `uploadBeforeRead`,
     `earlyBackendWipe` and the like) have no Swift counterpart by design.

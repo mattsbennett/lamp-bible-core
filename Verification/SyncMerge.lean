@@ -3943,6 +3943,84 @@ theorem uploadingFirstLocksAFreshLibraryOut : bundleRead false false true = .not
 theorem claimingFirstNeverMeetsItsOwnFiles (marker content : Bool) :
     bundleRead true marker content = .bundle := rfl
 
+inductive EarlierLibrary where
+  | mac | phone
+  deriving DecidableEq, Repr
+
+-- Who kept a library nobody has migrated. The Mac's marks win: its files are
+-- a backup's layout, and only its migration can move them. The phone's
+-- files are already the per-file layout.
+def earlierLibrary (mac phone content : Bool) : Option EarlierLibrary :=
+  if mac then some .mac else if phone || content then some .phone else none
+
+-- The same libraries count as earlier as under the empty-path rule.
+theorem earlierLibraryIsTheEmptyPathRule (mac phone content : Bool) :
+    (earlierLibrary mac phone content).isSome = emptyBundlePath (mac || phone) content := by
+  cases mac <;> cases phone <;> cases content <;> rfl
+
+-- Whether a pass may write the first bundle: in a new library always; in one
+-- only the phone kept, when migrating it; in one the Mac kept, never.
+def mayClaim (migratingPhone : Bool) : Option EarlierLibrary → Bool
+  | none => true
+  | some .phone => migratingPhone
+  | some .mac => false
+
+theorem thePhoneNeverClaimsAMacLibrary (migrating phone content : Bool) :
+    mayClaim migrating (earlierLibrary true phone content) = false := by
+  simp [earlierLibrary, mayClaim]
+
+-- What an archive's entries can be. The phone's archive holds only settings:
+-- its settings database, the legacy manifest beside it, the shared
+-- preferences, and the empty portable manifest every new archive starts with.
+inductive ArchiveEntry where
+  | phoneSettings | legacyManifest | preferences | portableManifest | macSettings | module
+  deriving DecidableEq, Repr
+
+def isPhoneEntry : ArchiveEntry → Bool
+  | .phoneSettings | .legacyManifest | .preferences | .portableManifest => true
+  | .macSettings | .module => false
+
+-- Entries are sorted by path. A module (`Modules/`, `Media/`, …) sorts before
+-- `Settings/`; everything a phone writes sorts at or after it.
+def sortsBeforeSettings : ArchiveEntry → Bool
+  | .module => true
+  | _ => false
+
+-- Who wrote an archive: the phone, if it holds nothing but settings.
+def archiveKeeper (entries : List ArchiveEntry) : EarlierLibrary :=
+  if entries.all isPhoneEntry then .phone else .mac
+
+theorem anArchiveWithAModuleIsTheMacs (entries : List ArchiveEntry) (h : .module ∈ entries) :
+    archiveKeeper entries = .mac := by
+  have : entries.all isPhoneEntry = false := by
+    rw [List.all_eq_false]; exact ⟨.module, h, by simp [isPhoneEntry]⟩
+  simp [archiveKeeper, this]
+
+theorem theMacsSettingsMarkItsArchive (entries : List ArchiveEntry) (h : .macSettings ∈ entries) :
+    archiveKeeper entries = .mac := by
+  have : entries.all isPhoneEntry = false := by
+    rw [List.all_eq_false]; exact ⟨.macSettings, h, by simp [isPhoneEntry]⟩
+  simp [archiveKeeper, this]
+
+-- Judging by the first entry alone never calls a phone's archive the Mac's,
+-- so the peek that spares unpacking a library is safe.
+theorem thePeekNeverMisjudgesAPhoneArchive (entries : List ArchiveEntry)
+    (h : archiveKeeper entries = .phone) (e : ArchiveEntry) (he : e ∈ entries) :
+    sortsBeforeSettings e = false := by
+  unfold archiveKeeper at h
+  split at h
+  · rename_i hall
+    have := List.all_eq_true.mp hall e he
+    cases e <;> simp_all [isPhoneEntry, sortsBeforeSettings]
+  · cases h
+
+-- An ordinary pass never claims an earlier library, so only a migration the
+-- person agreed to moves one.
+theorem anOrdinaryPassClaimsOnlyANewLibrary (mac phone content : Bool)
+    (h : mayClaim false (earlierLibrary mac phone content) = true) :
+    emptyBundlePath (mac || phone) content = false := by
+  cases mac <;> cases phone <;> cases content <;> simp_all [earlierLibrary, mayClaim, emptyBundlePath]
+
 -- Only a bundle this client reads is merged. Anything else stops the update:
 -- merging it is impossible, and dropping it loses another device's write.
 def versionMerges (c : BundleContents) : Bool := c == .bundle
@@ -4663,6 +4741,14 @@ def settingsWriteName : SettingsWrite → String
 
 def stampCode (s : Stamp) : String := optNat s.1 ++ ":" ++ optNat s.2
 
+def archiveEntryName : ArchiveEntry → String
+  | .phoneSettings => "phoneSettings" | .legacyManifest => "legacyManifest"
+  | .preferences => "preferences" | .portableManifest => "portableManifest"
+  | .macSettings => "macSettings" | .module => "module"
+
+def earlierLibraryName : Option EarlierLibrary → String
+  | none => "-" | some .mac => "mac" | some .phone => "phone"
+
 def bundleReadName : BundleRead → String
   | .bundle => "bundle" | .fresh => "fresh" | .notMigrated => "notMigrated"
 
@@ -4676,6 +4762,23 @@ def bundleCopies : List BundleCopy :=
     for content in [true, false] do
       IO.println <| conformanceLine "emptyBundlePath"
         [toString marker, toString content, toString (emptyBundlePath marker content)]
+  for mac in [true, false] do
+    for phone in [true, false] do
+      for content in [true, false] do
+        IO.println <| conformanceLine "earlierLibrary"
+          [toString mac, toString phone, toString content,
+           earlierLibraryName (earlierLibrary mac phone content)]
+  let kinds := [ArchiveEntry.phoneSettings, .legacyManifest, .preferences, .portableManifest,
+                .macSettings, .module]
+  for mask in List.range 64 do
+    let entries := (kinds.zipIdx.filter fun (_, i) => (mask >>> i) % 2 == 1).map (·.1)
+    IO.println <| conformanceLine "archiveKeeper"
+      [if entries.isEmpty then "-" else ",".intercalate (entries.map archiveEntryName),
+       earlierLibraryName (some (archiveKeeper entries))]
+  for migrating in [true, false] do
+    for earlier in [none, some EarlierLibrary.phone, some .mac] do
+      IO.println <| conformanceLine "mayClaim"
+        [toString migrating, earlierLibraryName earlier, toString (mayClaim migrating earlier)]
   for bundle in [true, false] do
     for marker in [true, false] do
       for content in [true, false] do

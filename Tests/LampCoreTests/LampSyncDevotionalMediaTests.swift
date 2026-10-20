@@ -84,10 +84,27 @@ struct LampSyncDevotionalMediaTests {
         #expect(files.map(\.data) == [
             Data("legacy".utf8), Data("rich".utf8), Data("future".utf8),
         ])
+        // The same plan, naming the files rather than reading them.
+        let urls = try LampSyncDevotionalMedia.outgoingFileURLs(
+            for: [devotional], to: "devotionals", from: root
+        )
+        #expect(urls.map(\.remotePath) == files.map(\.remotePath))
+        #expect(urls.map(\.localURL.lastPathComponent) == ["old.png", "new.m4a", "future.bin"])
+        #expect(try urls.map { try Data(contentsOf: $0.localURL) } == files.map(\.data))
+        #expect(try urls.map {
+            try LampSyncFolderLayout.devotionalMediaPath(
+                moduleID: "devotionals", devotionalID: "daily", filename: $0.localURL.lastPathComponent
+            )
+        } == urls.map(\.remotePath))
 
         try FileManager.default.removeItem(at: folder.appendingPathComponent("new.m4a"))
         #expect(throws: LampSyncDevotionalMedia.UploadError.self) {
             try LampSyncDevotionalMedia.outgoingFiles(
+                for: [devotional], to: "devotionals", from: root
+            )
+        }
+        #expect(throws: LampSyncDevotionalMedia.UploadError.self) {
+            try LampSyncDevotionalMedia.outgoingFileURLs(
                 for: [devotional], to: "devotionals", from: root
             )
         }

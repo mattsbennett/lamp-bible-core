@@ -361,8 +361,54 @@ pass that wrote its files first would find them at its closing `update` and
 be told `notMigrated`, on every pass. A device that loses the claim reads the
 winner's bundle (`bundleRead`).
 
-Open, for the user: a folder library only the phone ever kept would wait for a
-Mac forever, since the phone never migrates.
+### A library only the phone kept (done)
+
+Decided by the user on 20 October: the phone may migrate a library only it
+kept. `earlierLibrary(in:)` says who kept one:
+- `.mac` if the Mac's seal or portable manifest is at the root. Its files are a
+  backup's layout, so only the Mac's migration moves it, and the phone keeps
+  waiting.
+- `.phone` otherwise, when the phone's `UserData` folder or any module file is
+  there. The phone's files are already the per-file layout, named by their
+  IDs.
+
+`migratePhoneLibrary(in:)` claims a `.phone` library with an empty bundle,
+`.ifAbsent` as `readOrClaim` does, and the next pass adopts its files and
+downloads or merges them by value. Nothing else claims one: `readOrClaim`
+still throws `notMigrated` there (`mayClaim`). The phone asks first, and asks
+the person to update their other devices. Its iCloud sync before 1.2.0 never
+reads `lamp-bible.lampsync`, so an un-updated device doesn't stop at format 3
+the way it does on WebDAV. It keeps writing loose files and
+`UserData/user-settings.db`, which the new sync ignores, and what it deletes
+comes back. The same holds on a folder the Mac migrates.
+
+The Mac never claims a `.phone` library during a pass. It reports it and offers
+joining as an action the person takes once. The Mac publishes the whole
+library, so a background join of the wrong folder would republish everything
+into someone else's library.
+
+On the folder, a revision is the quoted SHA-256 of a file's bytes. A phone
+whose earlier records hold the digest of what it installed can seed
+`lastRevision` from them and compare without downloading.
+
+**On WebDAV** (decided by the user the same day, in the iOS session: both
+providers). The shipped phone publishes a settings-only archive to an empty
+server: its settings database, the legacy manifest, the shared preferences
+and the empty portable manifest every new archive starts with. Its modules
+are loose files. So a library only the phone kept has an archive at the
+bundle path.
+- `earlierLibrary(in:)` judges an archive by its entries
+  (`earlierLibrary(ofArchive:)`): the phone's if it holds nothing but those
+  four, the Mac's otherwise. Entries are sorted by path and nothing the phone
+  writes sorts before `Settings/`, so an archive whose first entry does
+  (`Modules/`, `Media/`, …) is the Mac's from its first kilobyte, never
+  unpacked.
+- It downloads the archive to judge it. A client that polls should judge the
+  archive its old pass already read, or remember the answer by revision.
+- `migratePhoneLibrary(in:)` replaces a phone's archive with a bundle carrying
+  its settings and shared preferences, written `.ifRevision` of the archive it
+  judged. If the Mac publishes in between, the write is refused, the phone
+  judges again, and stops.
 
 ### The Mac's one-time migration
 
@@ -443,6 +489,8 @@ public enum LampSyncFolderMigration {
   deleted files back once.
 - Old app versions stop syncing at the switch. They refuse format 3 rather than
   misread it. There is no compatibility layer.
+- A library only the phone kept is migrated by the phone, once the person
+  agrees; one the Mac kept waits for the Mac.
 - Relayed through the iOS session: no dry run, so the migration runs on the
   original library folder, which the user has backed up; and the phone's
   design B build is version 1.2.0.

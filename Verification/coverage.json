@@ -491,14 +491,26 @@
         "nothingIsWrittenOnlyOverAnUnchangedCopy",
         "bundleRead",
         "uploadingFirstLocksAFreshLibraryOut",
-        "claimingFirstNeverMeetsItsOwnFiles"
+        "claimingFirstNeverMeetsItsOwnFiles",
+        "earlierLibrary",
+        "earlierLibraryIsTheEmptyPathRule",
+        "mayClaim",
+        "thePhoneNeverClaimsAMacLibrary",
+        "anOrdinaryPassClaimsOnlyANewLibrary",
+        "archiveKeeper",
+        "anArchiveWithAModuleIsTheMacs",
+        "theMacsSettingsMarkItsArchive",
+        "thePeekNeverMisjudgesAPhoneArchive"
       ],
       "conformance": [
         "settingsUpdate",
         "emptyBundlePath",
         "versionMerges",
         "settingsWrite",
-        "bundleRead"
+        "bundleRead",
+        "earlierLibrary",
+        "mayClaim",
+        "archiveKeeper"
       ],
       "boundary": "Reading and the one-HEAD checks are Swift's; the retry and its bound, what an empty path means, which versions merge and what the write does with them are held by tables. `change` and `mergingVersion` must be merges that only compute, which the types cannot enforce."
     },
@@ -678,6 +690,15 @@
       ],
       "boundary": "Shows a set-aside conflict and passes the person's choice to LampLibrary.resolveSyncConflict; the choice itself is core's."
     },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncBundlePass.swift": {
+      "rules": [
+        "filePlanAction",
+        "anUnknownFileIsAdopted",
+        "uploadingFirstLocksAFreshLibraryOut",
+        "settingsUpdateIsBounded"
+      ],
+      "boundary": "The Mac's pass orders core's decisions: `readOrClaim` first, downloads and merges before uploads, one bundle update for the whole pass, and reaps only after it. Each step is decided in core; the order is held by the Mac's own tests."
+    },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncFileRecords.swift": {
       "rules": [
         "noRecordNeverOverwrites",
@@ -687,6 +708,9 @@
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalFiles.swift": {
       "boundary": "Gathers what the Mac holds as `LampSyncFilePlan.Local`: each installed module placed by core's `LampInstalledModuleFile.syncPath()`, never its storage-key filename, and a digest of the bytes on disk. It decides nothing; the plan does (`filePlanAction`)."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift": {
+      "boundary": "The Mac's install, merge and removal of single files for its pass, through the same library calls the archive pass made. Merges import by value, and what goes back up is the re-export from the merged library. Record decisions are core's (`decide`, `importOutcome`); the file-level ones are the plan's (`filePlanAction`)."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift": {
       "rules": [

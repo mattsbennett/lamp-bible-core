@@ -290,6 +290,42 @@ struct LampSyncDirectoryStoreTests {
         #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == recorded)
     }
 
+    /// A library only the phone kept: an ordinary pass leaves it alone, the
+    /// migration claims it, and the next pass adopts its files as they are.
+    @Test func aPhoneLibraryIsMigratedByClaimingItsPath() async throws {
+        try put("notes", at: "Notes/notes.lamp")
+        try put("settings", at: LampSyncLayout.userSettingsPath)
+        let store = store()
+        await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: nil)) {
+            try await LampSyncSettingsStore.readOrClaim(from: store)
+        }
+        #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .phone)
+
+        let claimed = try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+        #expect(claimed.bundle == LampSyncSettingsBundle())
+        #expect(try await LampSyncSettingsStore.migratePhoneLibrary(in: store) == claimed)
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == claimed)
+
+        let listing = try await LampSyncFilePlan.listing(in: store, manifest: claimed.bundle.manifest)
+        let plan = LampSyncFilePlan.plan(
+            manifest: claimed.bundle.manifest, local: [], deletedLocally: [:], listing: listing
+        )
+        #expect(plan.adopt == ["Notes/notes.lamp": revision(of: "notes")])
+        #expect(plan.downloads == ["Notes/notes.lamp"])
+    }
+
+    /// The Mac's folder is the Mac's to migrate, whatever else is in it.
+    @Test func aMacLibraryIsNeverClaimedByThePhone() async throws {
+        try put("{}", at: LampSyncFolderPublisher.snapshotPath)
+        try put("settings", at: LampSyncLayout.userSettingsPath)
+        try put("notes", at: "Notes/notes.lamp")
+        #expect(try await LampSyncSettingsStore.earlierLibrary(in: store()) == .mac)
+        await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: nil)) {
+            try await LampSyncSettingsStore.migratePhoneLibrary(in: store())
+        }
+        #expect(contents(LampSyncSettingsStore.path) == nil)
+    }
+
     @Test func nothingAtTheBundlePathIsNewOnlyInAnEmptyLibrary() async throws {
         #expect(try await LampSyncSettingsStore.read(from: store()) == nil)
         try FileManager.default.createDirectory(
