@@ -169,6 +169,10 @@ public enum LampSyncLibraryMigration {
         }
     }
 
+    /// A write the server took is never retried as a refusal: thrown
+    /// `LampSyncConditionalWrite.Unconfirmed` means the library moved and
+    /// the server has not shown it back yet.
+    ///
     /// Moves the library. `archive` is what the Mac just imported: the
     /// archive downloaded at `revision` on WebDAV, or on a folder the tree
     /// it captured, with `revision` nil. Returns the bundle there afterwards,
@@ -177,9 +181,11 @@ public enum LampSyncLibraryMigration {
         in store: any LampSyncRemoteStore,
         imported archive: LampSyncArchive,
         revision: String?,
-        attempts: Int = 3
+        attempts: Int = 3,
+        patience: LampSyncConditionalWrite.Patience = .standard
     ) async throws -> LampSyncSettingsStore.Snapshot {
-        for _ in 0..<max(attempts, 1) {
+        for attempt in 0..<max(attempts, 1) {
+            try? await Task.sleep(for: patience.retryWait(before: attempt))
             var snapshot: LampSyncSettingsStore.Snapshot?
             var current: String?
             do {
@@ -203,12 +209,17 @@ public enum LampSyncLibraryMigration {
                 throw MigrationError.notTheMacsLibrary
             case .write(let condition):
                 let bundle = try firstBundle(from: archive)
-                do {
-                    let written = try await LampSyncConditionalWrite.writeAndConfirm(
-                        bundle.encoded(), to: LampSyncSettingsStore.path, in: store, condition: condition
-                    )
+                switch try await LampSyncConditionalWrite.write(
+                    bundle.encoded(), to: LampSyncSettingsStore.path, in: store,
+                    condition: condition, patience: patience
+                ) {
+                case .written(let written):
                     return LampSyncSettingsStore.Snapshot(bundle: bundle, revision: written)
-                } catch where LampSyncConditionalWrite.isRefusal(error) {
+                case .writtenUnconfirmed:
+                    // Moved: the bundle is on the server, which has not
+                    // shown it back yet. The next pass finds it.
+                    throw LampSyncConditionalWrite.Unconfirmed(path: LampSyncSettingsStore.path)
+                case .refused:
                     continue
                 }
             }

@@ -115,7 +115,7 @@ struct LampSyncLibraryMigrationTests {
         let store = ArchiveStore()
         store.files[LampSyncSettingsStore.path] = (try unknown.compressedData(), "\"a1\"")
         await #expect(throws: LampSyncLibraryMigration.MigrationError.unknownEntry("Backups/old.zip")) {
-            try await LampSyncLibraryMigration.migrate(in: store, imported: unknown, revision: "\"a1\"")
+            try await LampSyncLibraryMigration.migrate(in: store, imported: unknown, revision: "\"a1\"", patience: .immediate)
         }
         #expect(store.writes == 0)
 
@@ -130,12 +130,32 @@ struct LampSyncLibraryMigrationTests {
         let store = ArchiveStore()
         store.files[LampSyncSettingsStore.path] = (try archive.compressedData(), "\"a1\"")
 
-        let moved = try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"")
+        let moved = try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"", patience: .immediate)
         #expect(store.conditions == [.ifRevision("\"a1\"")])
         #expect(moved.bundle.macSettings == Data("mac settings".utf8))
-        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == moved)
-        #expect(try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"") == moved)
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate) == moved)
+        #expect(try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"", patience: .immediate) == moved)
         #expect(store.writes == 1)
+    }
+
+    /// The user's first move: the bundle lands over the archive, and the
+    /// Synology keeps naming the archive for a few reads. The move waits for
+    /// it, asking by HEAD so the library-sized archive is not downloaded
+    /// again, and never retries into a refusal of its own write.
+    @Test func aMoveWaitsForALaggingServerRatherThanRetrying() async throws {
+        let (archive, _) = try macArchive()
+        let store = ArchiveStore()
+        let packed = try archive.compressedData()
+        store.files[LampSyncSettingsStore.path] = (packed, "\"a1\"")
+        store.watched = packed
+        store.namesRevisionOnPut = false
+        store.lag = 3
+        let moved = try await LampSyncLibraryMigration.migrate(
+            in: store, imported: archive, revision: "\"a1\"",
+            patience: .init(confirm: Array(repeating: .zero, count: 5), retry: [.zero])
+        )
+        #expect(moved.bundle.macSettings == Data("mac settings".utf8))
+        #expect(store.writes == 1 && store.archiveDownloads == 0)
     }
 
     @Test func anArchiveThatMovedSinceTheImportIsImportedAgain() async throws {
@@ -143,7 +163,7 @@ struct LampSyncLibraryMigrationTests {
         let store = ArchiveStore()
         store.files[LampSyncSettingsStore.path] = (try archive.compressedData(), "\"a2\"")
         await #expect(throws: LampSyncLibraryMigration.MigrationError.importAgain) {
-            try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"")
+            try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"", patience: .immediate)
         }
         #expect(store.writes == 0)
     }
@@ -157,14 +177,14 @@ struct LampSyncLibraryMigrationTests {
         store.files[LampSyncSettingsStore.path] = (try archive.compressedData(), "\"a1\"")
         let other = LampSyncSettingsBundle(macSettings: Data("other mac".utf8))
         store.beforeNextWrite = { store.files[LampSyncSettingsStore.path] = (try other.encoded(), "\"b1\"") }
-        let moved = try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"")
+        let moved = try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"", patience: .immediate)
         #expect(moved == LampSyncSettingsStore.Snapshot(bundle: other, revision: "\"b1\"") && store.writes == 0)
 
         store.files[LampSyncSettingsStore.path] = (try archive.compressedData(), "\"a1\"")
         let newer = try archive.replacingEntry(at: "Modules/other.lamp", with: Data("newer".utf8))
         store.beforeNextWrite = { store.files[LampSyncSettingsStore.path] = (try newer.compressedData(), "\"a2\"") }
         await #expect(throws: LampSyncLibraryMigration.MigrationError.importAgain) {
-            try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"")
+            try await LampSyncLibraryMigration.migrate(in: store, imported: archive, revision: "\"a1\"", patience: .immediate)
         }
     }
 
@@ -173,7 +193,7 @@ struct LampSyncLibraryMigrationTests {
         let store = ArchiveStore()
         store.files[LampSyncSettingsStore.path] = (try phone.compressedData(), "\"a1\"")
         await #expect(throws: LampSyncLibraryMigration.MigrationError.notTheMacsLibrary) {
-            try await LampSyncLibraryMigration.migrate(in: store, imported: phone, revision: "\"a1\"")
+            try await LampSyncLibraryMigration.migrate(in: store, imported: phone, revision: "\"a1\"", patience: .immediate)
         }
         #expect(store.writes == 0)
     }
@@ -204,9 +224,9 @@ struct LampSyncLibraryMigrationTests {
 
         let store = LampSyncDirectoryStore(root: folder)
         #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .mac)
-        let moved = try await LampSyncLibraryMigration.migrate(in: store, imported: imported, revision: nil)
+        let moved = try await LampSyncLibraryMigration.migrate(in: store, imported: imported, revision: nil, patience: .immediate)
         #expect(moved.bundle.macSettings == Data("mac settings".utf8))
-        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == moved)
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate) == moved)
 
         let listing = try await LampSyncFilePlan.listing(in: store, manifest: moved.bundle.manifest)
         #expect(listing.keys.sorted() == ["Translations/kjv.lamp", "Workspaces/Presentations/easter.lampdeck"])
@@ -223,7 +243,8 @@ struct LampSyncLibraryMigrationTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         await #expect(throws: LampSyncLibraryMigration.MigrationError.notTheMacsLibrary) {
             try await LampSyncLibraryMigration.migrate(
-                in: LampSyncDirectoryStore(root: folder), imported: LampSyncArchive(entries: []), revision: nil
+                in: LampSyncDirectoryStore(root: folder), imported: LampSyncArchive(entries: []), revision: nil,
+                patience: .immediate
             )
         }
     }
@@ -233,17 +254,34 @@ struct LampSyncLibraryMigrationTests {
 private final class ArchiveStore: LampSyncRemoteStore, @unchecked Sendable {
     var files: [String: (Data, String)] = [:]
     var beforeNextWrite: (() throws -> Void)?
+    /// False for a server like the user's Synology, which names no revision
+    /// on PUT and answers the next `lag` reads with what it held before.
+    var namesRevisionOnPut = true
+    var lag = 0
+    private var before: [String: (Data, String)] = [:]
+    private var remaining: [String: Int] = [:]
     private(set) var writes = 0
+    /// Bytes whose downloads are counted in `archiveDownloads`.
+    var watched: Data?
+    private(set) var archiveDownloads = 0
     private(set) var conditions: [LampSyncWriteCondition] = []
     private var counter = 0
+
+    private func visible(_ path: String) -> (Data, String)? {
+        guard let left = remaining[path], left > 0 else { return files[path] }
+        remaining[path] = left - 1
+        return before[path]
+    }
 
     func list(directory: String) async throws -> [LampSyncRemoteEntry]? { nil }
 
     func read(path: String) async throws -> LampSyncRemoteFile? {
-        files[path].map { LampSyncRemoteFile(data: $0.0, revision: $0.1) }
+        let file = visible(path)
+        if let watched, file?.0 == watched { archiveDownloads += 1 }
+        return file.map { LampSyncRemoteFile(data: $0.0, revision: $0.1) }
     }
 
-    func revision(path: String) async throws -> String? { files[path]?.1 }
+    func revision(path: String) async throws -> String? { visible(path)?.1 }
 
     func write(_ data: Data, to path: String, condition: LampSyncWriteCondition) async throws -> String? {
         if let beforeNextWrite {
@@ -262,7 +300,9 @@ private final class ArchiveStore: LampSyncRemoteStore, @unchecked Sendable {
         writes += 1
         counter += 1
         let revision = "\"w\(counter)\""
+        before[path] = files[path]
+        remaining[path] = lag
         files[path] = (data, revision)
-        return revision
+        return namesRevisionOnPut ? revision : nil
     }
 }

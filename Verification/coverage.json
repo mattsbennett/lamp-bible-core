@@ -204,12 +204,17 @@
         "namesSameRevision",
         "conditionalPublishKeepsTheOtherEdit",
         "refusedPublishChangesNothing",
-        "contentRevision"
+        "contentRevision",
+        "writeOutcome",
+        "confirmReadBacks",
+        "anAcceptedWriteIsNeverRefused",
+        "aWriteIsNamedOnlyByItsOwnBytes"
       ],
       "conformance": [
         "landing",
         "namesSameRevision",
-        "confirmWrite"
+        "confirmWrite",
+        "writeOutcome"
       ],
       "boundary": "A read-back is compared with the upload by SHA-256 digest, streamed from disk; collision resistance is assumed, as for contentRevision. Which errors count as a refusal is a list of error cases, Swift's."
     },
@@ -733,6 +738,9 @@
         "preferenceJoin"
       ],
       "boundary": "`macSettings` has no merge of its own: the newer copy stands. The shared keys go through the preference ledger, which wins where both carry a key."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncErrorText.swift": {
+      "boundary": "Sentences for sync errors shown to the person. Core's errors now carry their own descriptions; this decides nothing."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncFileRecords.swift": {
       "rules": [

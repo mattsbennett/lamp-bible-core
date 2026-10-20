@@ -36,7 +36,7 @@ public enum LampSyncSettingsStore {
         }
     }
 
-    public enum StoreError: Error, Equatable {
+    public enum StoreError: Error, Equatable, LocalizedError {
         /// The path still holds an archive, or nothing while the library
         /// holds an earlier sync's files: the Mac has not migrated. The
         /// archive's revision is the one read, so a caller can skip the next
@@ -54,6 +54,22 @@ public enum LampSyncSettingsStore {
         /// The bundle has versions and `update` was given no way to merge
         /// them.
         case versionsNeedAMerge
+
+        /// What happened, whether anything changed, and what to do.
+        public var errorDescription: String? {
+            switch self {
+            case .notMigrated:
+                "The server still holds the older library layout, so the new sync did not run. Nothing was changed."
+            case .unversioned:
+                "The server did not give the sync file a strong ETag, so it could not be written over safely. Nothing was changed."
+            case .tooManyAttempts:
+                "Another device wrote the sync file first on every attempt. Nothing was lost: the next sync starts again from what is there."
+            case .unreadableVersion(let revision):
+                "The server holds a copy of the sync file this version cannot read (\(revision)), so it was left alone rather than written over. Nothing was changed."
+            case .versionsNeedAMerge:
+                "iCloud holds more than one version of the sync file and this sync had no way to merge them. Nothing was changed."
+            }
+        }
     }
 
     /// What `update` writes, decided once `change` has run.
@@ -155,10 +171,12 @@ public enum LampSyncSettingsStore {
     public static func readOrClaim(
         from store: any LampSyncRemoteStore,
         knownArchiveRevision: String? = nil,
-        attempts: Int = 3
+        attempts: Int = 3,
+        patience: LampSyncConditionalWrite.Patience = .standard
     ) async throws -> Snapshot {
         try await claim(
-            in: store, knownArchiveRevision: knownArchiveRevision, attempts: attempts, migratingPhone: false
+            in: store, knownArchiveRevision: knownArchiveRevision, attempts: attempts,
+            patience: patience, migratingPhone: false
         )
     }
 
@@ -183,19 +201,24 @@ public enum LampSyncSettingsStore {
     /// `thePhoneNeverClaimsAMacLibrary`.)
     public static func migratePhoneLibrary(
         in store: any LampSyncRemoteStore,
-        attempts: Int = 3
+        attempts: Int = 3,
+        patience: LampSyncConditionalWrite.Patience = .standard
     ) async throws -> Snapshot {
-        try await claim(in: store, knownArchiveRevision: nil, attempts: attempts, migratingPhone: true)
+        try await claim(
+            in: store, knownArchiveRevision: nil, attempts: attempts, patience: patience, migratingPhone: true
+        )
     }
 
     private static func claim(
         in store: any LampSyncRemoteStore,
         knownArchiveRevision: String?,
         attempts: Int,
+        patience: LampSyncConditionalWrite.Patience,
         migratingPhone: Bool
     ) async throws -> Snapshot {
         var knownArchiveRevision = knownArchiveRevision
-        for _ in 0..<max(attempts, 1) {
+        for attempt in 0..<max(attempts, 1) {
+            try? await Task.sleep(for: patience.retryWait(before: attempt))
             // The bundle to write first, and the condition it is written
             // under: where nothing is, or over the phone's archive as read.
             var first = LampSyncSettingsBundle()
@@ -216,13 +239,12 @@ public enum LampSyncSettingsStore {
                 condition = .ifRevision(archive.revision)
             }
             knownArchiveRevision = nil
-            do {
-                let revision = try await LampSyncConditionalWrite.writeAndConfirm(
-                    first.encoded(), to: path, in: store, condition: condition
-                )
-                return Snapshot(bundle: first, revision: revision)
-            } catch where LampSyncConditionalWrite.isRefusal(error) {
-                continue
+            switch try await LampSyncConditionalWrite.write(
+                first.encoded(), to: path, in: store, condition: condition, patience: patience
+            ) {
+            case .written(let revision): return Snapshot(bundle: first, revision: revision)
+            case .writtenUnconfirmed: throw LampSyncConditionalWrite.Unconfirmed(path: path)
+            case .refused: continue
             }
         }
         throw StoreError.tooManyAttempts
@@ -431,6 +453,12 @@ public enum LampSyncSettingsStore {
     /// participants were prepared with and throw, as a moved bundle does.
     /// Without it, versions stop the update rather than being dropped.
     ///
+    /// A write the server took is never retried as a refusal. If the server
+    /// has not shown it back within `patience`, this throws
+    /// `LampSyncConditionalWrite.Unconfirmed`: the bundle is there, and the
+    /// next pass reads it. A refused write is retried after a wait, so a
+    /// server still answering with what it held before can catch up.
+    ///
     /// Use the returned revision for the rest of the pass. Never re-probe
     /// with `hasChanged` straight after your own write: a NAS may answer with
     /// the revision from before the PUT for a while, which reads as a phantom
@@ -440,10 +468,12 @@ public enum LampSyncSettingsStore {
     public static func update(
         in store: any LampSyncRemoteStore,
         attempts: Int = 3,
+        patience: LampSyncConditionalWrite.Patience = .standard,
         mergingVersion: ((inout LampSyncSettingsBundle, Version) throws -> Void)? = nil,
         _ change: (inout LampSyncSettingsBundle) throws -> Void
     ) async throws -> Snapshot {
-        for _ in 0..<max(attempts, 1) {
+        for attempt in 0..<max(attempts, 1) {
+            try? await Task.sleep(for: patience.retryWait(before: attempt))
             let current = try await read(from: store)
             let versions = current?.versions ?? []
             var bundle = current?.bundle ?? LampSyncSettingsBundle()
@@ -473,10 +503,15 @@ public enum LampSyncSettingsStore {
                         resolving: Set(versions.map(\.revision))
                     )
                 case .create, .replace:
-                    revision = try await LampSyncConditionalWrite.writeAndConfirm(
+                    switch try await LampSyncConditionalWrite.write(
                         bundle.encoded(), to: path, in: store,
-                        condition: current.map { .ifRevision($0.revision) } ?? .ifAbsent
-                    )
+                        condition: current.map { .ifRevision($0.revision) } ?? .ifAbsent,
+                        patience: patience
+                    ) {
+                    case .written(let written): revision = written
+                    case .writtenUnconfirmed: throw LampSyncConditionalWrite.Unconfirmed(path: path)
+                    case .refused: continue
+                    }
                 }
             } catch where LampSyncConditionalWrite.isRefusal(error) {
                 continue

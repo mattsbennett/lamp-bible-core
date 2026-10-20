@@ -132,6 +132,107 @@ public enum LampSyncConditionalWrite {
         throw WriteError.conflict
     }
 
+    /// How long to wait for a server that answers reads with what it held
+    /// before a write, as the user's Synology does after a PUT.
+    public struct Patience: Sendable, Equatable {
+        /// The wait before each read-back of a write whose response named no
+        /// revision.
+        public var confirm: [Duration]
+        /// The wait before each retry of a refused write, so a read that
+        /// follows sees what the server holds now.
+        public var retry: [Duration]
+
+        public init(confirm: [Duration], retry: [Duration]) {
+            self.confirm = confirm
+            self.retry = retry
+        }
+
+        /// About seven and a half seconds for a write to show back, and a
+        /// wait before each retry.
+        public static let standard = Patience(
+            confirm: [.zero, .milliseconds(500), .seconds(1), .seconds(2), .seconds(4)],
+            retry: [.milliseconds(500), .seconds(2)]
+        )
+
+        /// One read-back and no waiting, for stores that answer at once.
+        public static let immediate = Patience(confirm: [.zero], retry: [])
+
+        /// The wait before attempt `attempt`, counting the first as 0.
+        public func retryWait(before attempt: Int) -> Duration {
+            guard attempt > 0, let last = retry.last else { return .zero }
+            return attempt - 1 < retry.count ? retry[attempt - 1] : last
+        }
+    }
+
+    /// What became of a conditional write, with "taken but not yet shown
+    /// back" kept apart from "refused". `writeAndConfirm` folds the two into
+    /// one error; a loop that retries on a refusal must not, or a write the
+    /// server took is retried against a server still showing what it held
+    /// before, and refused for real. (`Verification/SyncMerge.lean`:
+    /// `writeOutcome`.)
+    public enum Outcome: Equatable, Sendable {
+        /// Written, and read back as the bytes sent: its revision.
+        case written(String)
+        /// The server took the write but has not shown it back in the time
+        /// allowed. It is there; only its revision is unknown.
+        case writtenUnconfirmed
+        /// The condition no longer held. Nothing was written.
+        case refused
+    }
+
+    /// A write the server took and has not shown back yet. It is on the
+    /// server, so the next read finds it. Never a refusal.
+    public struct Unconfirmed: Error, LocalizedError, Equatable {
+        public let path: String
+
+        public init(path: String) { self.path = path }
+
+        public var errorDescription: String? {
+            "The server took the change to \(path) but has not shown it back yet. Nothing was lost: the next sync picks it up."
+        }
+    }
+
+    /// Writes `data` under `condition` and says what became of it.
+    ///
+    /// A refusal is only the write's own. Once the server has taken the
+    /// write, reading it back can only name its revision; a read that still
+    /// shows the old body means the server has not caught up, so it waits
+    /// and asks again. While the server still names the revision the write
+    /// replaced, it asks by HEAD, so a library-sized body it is about to
+    /// replace is never downloaded just to see it is still there.
+    public static func write(
+        _ data: Data,
+        to path: String,
+        in store: any LampSyncRemoteStore,
+        condition: LampSyncWriteCondition,
+        patience: Patience = .standard
+    ) async throws -> Outcome {
+        let response: String?
+        do {
+            response = try await store.write(data, to: path, condition: condition)
+        } catch where isRefusal(error) {
+            return .refused
+        }
+        if let response, LampWebDAVStorage.isStrongETag(response) { return .written(response) }
+        let sent = LampSyncContentRevision.digest(for: data)
+        let replaced: String? = if case .ifRevision(let revision) = condition { revision } else { nil }
+        for wait in patience.confirm {
+            if wait > .zero { try? await Task.sleep(for: wait) }
+            if let replaced, namesSameRevision(try await store.revision(path: path), replaced) { continue }
+            let confirmed = try await LampSyncScratchFile.with { scratch -> String? in
+                guard let readBack = try await store.read(path: path, into: scratch),
+                      let revision = readBack.revision,
+                      LampWebDAVStorage.isStrongETag(revision),
+                      try LampSyncContentRevision.digest(forFileAt: readBack.url) == sent else {
+                    return nil
+                }
+                return revision
+            }
+            if let confirmed { return .written(confirmed) }
+        }
+        return .writtenUnconfirmed
+    }
+
     /// Whether a write failed because its condition no longer held: another
     /// device wrote first. A store may say so through this module's
     /// `WriteError.conflict`, through WebDAV's own 412 or 428, or through an

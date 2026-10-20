@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 3,688 cases across 71 decisions. `SyncModelConformanceTests` asks the
+  answer, 3,714 cases across 72 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -801,6 +801,15 @@ pass. It writes over an archive only at the revision it imported
 Mac kept (`theMigrationMovesOnlyTheMacsLibrary`), and run again writes nothing
 (`aMigratedLibraryIsLeftAlone`).
 
+A server can take a write and still answer the next reads with what it held
+before, as the user's Synology does after a PUT that names no revision; the
+first real move failed on exactly that. `writeOutcome` keeps "taken but not
+yet shown back" apart from "refused": a write the server took is never a
+refusal (`anAcceptedWriteIsNeverRefused`), and only a read-back of the bytes
+sent names its revision (`aWriteIsNamedOnlyByItsOwnBytes`). So the bundle's
+update, the claim and the move wait for the server instead of retrying into a
+refusal of their own write.
+
 On the folder provider, `directoryWrite` and `directoryDelete` decide a
 conditional write or delete inside the coordinated block, and a write goes
 ahead exactly when the folder publisher's coordinated check allowed it
@@ -855,7 +864,7 @@ merge with no baseline, which may bring back an unseen deletion once.
 
 **Still outside the model.**
 
-- 71 tables ask 81 of the model's 215 definitions directly, and reach 108
+- 72 tables ask 82 of the model's 217 definitions directly, and reach 110
   counting the rules those call. Of the rest:
   - Counterexamples of former behaviour (`oldReplace`, `uploadBeforeRead`,
     `earlyBackendWipe` and the like) have no Swift counterpart by design.

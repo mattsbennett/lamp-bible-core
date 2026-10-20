@@ -134,14 +134,14 @@ struct LampSyncFolderLibraryTests {
         }
         #expect(store.reads == reads)
         await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: "\"a1\"")) {
-            try await LampSyncSettingsStore.update(in: store) { $0.userSettings = Data() }
+            try await LampSyncSettingsStore.update(in: store, patience: .immediate) { $0.userSettings = Data() }
         }
         #expect(store.writes == 0)
     }
 
     @Test func anEmptyServerStartsAFreshBundleOnlyWhereStillAbsent() async throws {
         let store = BundleStore()
-        let written = try await LampSyncSettingsStore.update(in: store) {
+        let written = try await LampSyncSettingsStore.update(in: store, patience: .immediate) {
             $0.manifest = try $0.manifest.recordingWrite("Notes/notes.lamp", revision: "\"1\"", replacing: nil, at: 1)
         }
         #expect(store.conditions == [.ifAbsent])
@@ -149,7 +149,7 @@ struct LampSyncFolderLibraryTests {
         #expect(try await !LampSyncSettingsStore.hasChanged(since: written.revision, in: store))
         #expect(try await LampSyncSettingsStore.hasChanged(since: "\"other\"", in: store))
         // A change that changes nothing writes nothing.
-        let unchanged = try await LampSyncSettingsStore.update(in: store) { _ in }
+        let unchanged = try await LampSyncSettingsStore.update(in: store, patience: .immediate) { _ in }
         #expect(unchanged == written && store.writes == 1)
     }
 
@@ -202,15 +202,15 @@ struct LampSyncFolderLibraryTests {
         let (archive, ledger) = try phoneArchive(settings: "phone settings", fontSize: 21)
         store.files[LampSyncSettingsStore.path] = (archive, "\"a1\"")
         await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: "\"a1\"")) {
-            try await LampSyncSettingsStore.readOrClaim(from: store)
+            try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate)
         }
         #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .phone)
 
-        let moved = try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+        let moved = try await LampSyncSettingsStore.migratePhoneLibrary(in: store, patience: .immediate)
         #expect(moved.bundle.userSettings == Data("phone settings".utf8))
         #expect(moved.bundle.preferences == ledger)
         #expect(store.conditions == [.ifRevision("\"a1\"")])
-        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == moved)
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate) == moved)
     }
 
     @Test func aMacsArchiveIsNeverReplacedByThePhone() async throws {
@@ -221,7 +221,7 @@ struct LampSyncFolderLibraryTests {
         store.files[LampSyncSettingsStore.path] = (try mac.compressedData(), "\"a1\"")
         #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .mac)
         await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: "\"a1\"")) {
-            try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+            try await LampSyncSettingsStore.migratePhoneLibrary(in: store, patience: .immediate)
         }
         #expect(store.writes == 0)
     }
@@ -237,9 +237,50 @@ struct LampSyncFolderLibraryTests {
             store.files[LampSyncSettingsStore.path] = (try mac.compressedData(), "\"mac\"")
         }
         await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: "\"mac\"")) {
-            try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+            try await LampSyncSettingsStore.migratePhoneLibrary(in: store, patience: .immediate)
         }
         #expect(store.writes == 0 && store.files[LampSyncSettingsStore.path]?.1 == "\"mac\"")
+    }
+
+    // MARK: - A server that lags after a write
+
+    private let slow = LampSyncConditionalWrite.Patience(confirm: Array(repeating: .zero, count: 5), retry: [.zero])
+
+    /// What failed the user's first move: the write lands, the server keeps
+    /// showing the old bundle for a few reads, and the update must wait for
+    /// it rather than retry into a refusal of its own write.
+    @Test func anUpdateWaitsForALaggingServerRatherThanRetrying() async throws {
+        let store = LaggingStore()
+        store.files[LampSyncSettingsStore.path] = (try LampSyncSettingsBundle().encoded(), "\"1\"")
+        store.lag = 3
+        let written = try await LampSyncSettingsStore.update(in: store, patience: slow) {
+            $0.userSettings = Data("phone".utf8)
+        }
+        #expect(written.bundle.userSettings == Data("phone".utf8))
+        #expect(store.writes == 1)
+        // While it still named the old revision, it asked by HEAD alone.
+        #expect(store.bodyReads == 2)
+    }
+
+    @Test func aClaimWaitsForALaggingServer() async throws {
+        let store = LaggingStore()
+        store.lag = 2
+        let claimed = try await LampSyncSettingsStore.readOrClaim(from: store, patience: slow)
+        #expect(claimed.bundle == LampSyncSettingsBundle() && store.writes == 1)
+    }
+
+    /// A write the server never shows back in the time allowed is reported
+    /// as taken, not refused, and the next read finds it.
+    @Test func aWriteNotYetShownBackIsUnconfirmedNotRefused() async throws {
+        let store = LaggingStore()
+        store.files[LampSyncSettingsStore.path] = (try LampSyncSettingsBundle().encoded(), "\"1\"")
+        store.lag = 100
+        await #expect(throws: LampSyncConditionalWrite.Unconfirmed(path: LampSyncSettingsStore.path)) {
+            try await LampSyncSettingsStore.update(in: store, patience: .immediate) { $0.userSettings = Data("phone".utf8) }
+        }
+        #expect(store.writes == 1)
+        store.settle()
+        #expect(try await LampSyncSettingsStore.read(from: store)?.bundle.userSettings == Data("phone".utf8))
     }
 
     /// Two devices starting the same library: the one whose claim is refused
@@ -250,7 +291,7 @@ struct LampSyncFolderLibraryTests {
         store.beforeNextWrite = {
             store.files[LampSyncSettingsStore.path] = (try theirs.encoded(), "\"theirs\"")
         }
-        let claimed = try await LampSyncSettingsStore.readOrClaim(from: store)
+        let claimed = try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate)
         #expect(claimed == LampSyncSettingsStore.Snapshot(bundle: theirs, revision: "\"theirs\""))
         #expect(store.conditions == [.ifAbsent] && store.writes == 0)
     }
@@ -259,14 +300,14 @@ struct LampSyncFolderLibraryTests {
     /// edit survives the retry.
     @Test func aRefusedUpdateMergesIntoTheNewerBundle() async throws {
         let store = BundleStore()
-        try await LampSyncSettingsStore.update(in: store) { $0.userSettings = Data("phone".utf8) }
+        try await LampSyncSettingsStore.update(in: store, patience: .immediate) { $0.userSettings = Data("phone".utf8) }
         store.beforeNextWrite = {
             var newer = try LampSyncSettingsBundle.decode(store.files[LampSyncSettingsStore.path]!.0)
             newer.macSettings = Data("mac".utf8)
             store.files[LampSyncSettingsStore.path] = (try newer.encoded(), "\"mac\"")
         }
         var runs = 0
-        let written = try await LampSyncSettingsStore.update(in: store) { bundle in
+        let written = try await LampSyncSettingsStore.update(in: store, patience: .immediate) { bundle in
             runs += 1
             bundle.manifest = try bundle.manifest.recordingWrite(
                 "Notes/notes.lamp", revision: "\"1\"", replacing: nil, at: 1
@@ -282,7 +323,7 @@ struct LampSyncFolderLibraryTests {
         struct Stop: Error {}
         let store = BundleStore()
         await #expect(throws: Stop.self) {
-            try await LampSyncSettingsStore.update(in: store) { _ in throw Stop() }
+            try await LampSyncSettingsStore.update(in: store, patience: .immediate) { _ in throw Stop() }
         }
         #expect(store.writes == 0)
     }
@@ -359,3 +400,51 @@ private final class BundleStore: LampSyncRemoteStore, @unchecked Sendable {
         return revision
     }
 }
+
+/// A server like the user's Synology after a PUT: it takes the write at once
+/// and names no revision, and the next `lag` reads of the path, HEADs
+/// included, still answer with what was there before.
+private final class LaggingStore: LampSyncRemoteStore, @unchecked Sendable {
+    var files: [String: (Data, String)] = [:]
+    var lag = 0
+    private var before: [String: (Data, String)] = [:]
+    private var remaining: [String: Int] = [:]
+    private(set) var writes = 0
+    private(set) var bodyReads = 0
+    private var counter = 0
+
+    func settle() { remaining = [:] }
+
+    private func visible(_ path: String) -> (Data, String)? {
+        guard let left = remaining[path], left > 0 else { return files[path] }
+        remaining[path] = left - 1
+        return before[path]
+    }
+
+    func list(directory: String) async throws -> [LampSyncRemoteEntry]? { nil }
+
+    func read(path: String) async throws -> LampSyncRemoteFile? {
+        bodyReads += 1
+        return visible(path).map { LampSyncRemoteFile(data: $0.0, revision: $0.1) }
+    }
+
+    func revision(path: String) async throws -> String? { visible(path)?.1 }
+
+    func write(_ data: Data, to path: String, condition: LampSyncWriteCondition) async throws -> String? {
+        switch condition {
+        case .ifAbsent where files[path] != nil:
+            throw LampWebDAVStorage.StorageError.preconditionFailed
+        case .ifRevision(let revision) where files[path]?.1 != revision:
+            throw LampWebDAVStorage.StorageError.preconditionFailed
+        default:
+            break
+        }
+        before[path] = files[path]
+        remaining[path] = lag
+        counter += 1
+        files[path] = (data, "\"w\(counter)\"")
+        writes += 1
+        return nil
+    }
+}
+

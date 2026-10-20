@@ -111,7 +111,7 @@ struct SyncModelConformanceTests {
         "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone", "filePlanAction",
         "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite", "directoryDelete",
         "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge", "preferenceStamp", "bundleRead",
-        "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate", "macMigrationStep",
+        "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate", "macMigrationStep", "writeOutcome",
     ]
 
     // MARK: - The model itself
@@ -1163,6 +1163,34 @@ struct SyncModelConformanceTests {
         }
     }
 
+    /// Through `LampSyncConditionalWrite.write` over a server that names no
+    /// revision on PUT, as the user's Synology does, so every revision comes
+    /// from a read-back.
+    @Test func writeOutcome() async throws {
+        let cases = SyncModel.cases("writeOutcome")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let readBacks: [String] = f[1] == "empty" ? [] : f[1].split(separator: ",").map(String.init)
+            let store = ScriptedRemoteStore()
+            store.writeOutcomeSequence = [f[0] == "true" ? .accept(nil) : .refuse]
+            store.scriptedReads = readBacks.map { code in
+                guard code != "-" else { return nil }
+                let parts = code.split(separator: ":").map(String.init)
+                return LampSyncRemoteFile(data: Data(parts[0].utf8), revision: quoted(parts[1]))
+            }
+            let outcome = try await LampSyncConditionalWrite.write(
+                Data("1".utf8), to: "Notes/notes.lamp", in: store, condition: .ifAbsent,
+                patience: .init(confirm: Array(repeating: .zero, count: readBacks.count), retry: [])
+            )
+            let name: String = switch outcome {
+            case .written(let revision): "written:" + LampSyncConditionalWrite.token(for: revision)
+            case .writtenUnconfirmed: "writtenUnconfirmed"
+            case .refused: "refused"
+            }
+            #expect(name == f[2], "writeOutcome \(f.joined(separator: " "))")
+        }
+    }
+
     @Test func settingsUpdate() async throws {
         let cases = SyncModel.cases("settingsUpdate")
         #expect(!cases.isEmpty)
@@ -1175,7 +1203,7 @@ struct SyncModelConformanceTests {
             store.writeOutcomeSequence = refusals.map { $0 ? .refuse : .accept("\"2\"") }
             let written: String
             do {
-                try await LampSyncSettingsStore.update(in: store, attempts: Int(f[0])!) {
+                try await LampSyncSettingsStore.update(in: store, attempts: Int(f[0])!, patience: .immediate) {
                     $0.userSettings = Data("changed".utf8)
                 }
                 written = String(store.writeLog.count)
@@ -1258,8 +1286,8 @@ struct SyncModelConformanceTests {
             let claimed: Bool
             do {
                 _ = f[0] == "true"
-                    ? try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
-                    : try await LampSyncSettingsStore.readOrClaim(from: store)
+                    ? try await LampSyncSettingsStore.migratePhoneLibrary(in: store, patience: .immediate)
+                    : try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate)
                 claimed = true
             } catch LampSyncSettingsStore.StoreError.notMigrated(nil) {
                 claimed = false

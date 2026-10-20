@@ -247,13 +247,13 @@ struct LampSyncDirectoryStoreTests {
 
         // With nothing to merge them, versions stop the update untouched.
         await #expect(throws: LampSyncSettingsStore.StoreError.versionsNeedAMerge) {
-            try await LampSyncSettingsStore.update(in: store) { _ in }
+            try await LampSyncSettingsStore.update(in: store, patience: .immediate) { _ in }
         }
         #expect(staged.count == 1)
 
         // An update that changes nothing still writes, to resolve them.
         let written = try await LampSyncSettingsStore.update(
-            in: store, mergingVersion: { $0.manifest = $0.manifest.merged(with: $1.bundle.manifest) }
+            in: store, patience: .immediate, mergingVersion: { $0.manifest = $0.manifest.merged(with: $1.bundle.manifest) }
         ) { _ in }
         #expect(written.bundle.manifest.paths == ["Notes/current.lamp", "Notes/lost.lamp"])
         #expect(staged.count == 0 && written.versions.isEmpty)
@@ -268,7 +268,7 @@ struct LampSyncDirectoryStoreTests {
         let staged = try stageVersions(["not a bundle"], of: path)
         let store = store(versions: staged)
         await #expect(throws: LampSyncSettingsStore.StoreError.unreadableVersion(revision(of: "not a bundle"))) {
-            try await LampSyncSettingsStore.update(in: store, mergingVersion: { _, _ in }) { _ in }
+            try await LampSyncSettingsStore.update(in: store, patience: .immediate, mergingVersion: { _, _ in }) { _ in }
         }
         #expect(staged.count == 1)
     }
@@ -278,16 +278,16 @@ struct LampSyncDirectoryStoreTests {
     /// closing update find them and call the library an earlier one.
     @Test func aFreshLibraryIsClaimedBeforeItsFiles() async throws {
         let store = store()
-        let claimed = try await LampSyncSettingsStore.readOrClaim(from: store)
+        let claimed = try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate)
         #expect(claimed.bundle == LampSyncSettingsBundle())
         let revision = try #require(
             try await store.write(Data("notes".utf8), to: "Notes/notes.lamp", condition: .ifAbsent)
         )
-        let recorded = try await LampSyncSettingsStore.update(in: store) {
+        let recorded = try await LampSyncSettingsStore.update(in: store, patience: .immediate) {
             $0.manifest = try $0.manifest.recordingWrite("Notes/notes.lamp", revision: revision, replacing: nil, at: 1)
         }
         #expect(recorded.bundle.manifest.members.map(\.path) == ["Notes/notes.lamp"])
-        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == recorded)
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate) == recorded)
     }
 
     /// A library only the phone kept: an ordinary pass leaves it alone, the
@@ -297,14 +297,14 @@ struct LampSyncDirectoryStoreTests {
         try put("settings", at: LampSyncLayout.userSettingsPath)
         let store = store()
         await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: nil)) {
-            try await LampSyncSettingsStore.readOrClaim(from: store)
+            try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate)
         }
         #expect(try await LampSyncSettingsStore.earlierLibrary(in: store) == .phone)
 
-        let claimed = try await LampSyncSettingsStore.migratePhoneLibrary(in: store)
+        let claimed = try await LampSyncSettingsStore.migratePhoneLibrary(in: store, patience: .immediate)
         #expect(claimed.bundle == LampSyncSettingsBundle())
-        #expect(try await LampSyncSettingsStore.migratePhoneLibrary(in: store) == claimed)
-        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == claimed)
+        #expect(try await LampSyncSettingsStore.migratePhoneLibrary(in: store, patience: .immediate) == claimed)
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store, patience: .immediate) == claimed)
 
         let listing = try await LampSyncFilePlan.listing(in: store, manifest: claimed.bundle.manifest)
         let plan = LampSyncFilePlan.plan(
@@ -321,7 +321,7 @@ struct LampSyncDirectoryStoreTests {
         try put("notes", at: "Notes/notes.lamp")
         #expect(try await LampSyncSettingsStore.earlierLibrary(in: store()) == .mac)
         await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: nil)) {
-            try await LampSyncSettingsStore.migratePhoneLibrary(in: store())
+            try await LampSyncSettingsStore.migratePhoneLibrary(in: store(), patience: .immediate)
         }
         #expect(contents(LampSyncSettingsStore.path) == nil)
     }
@@ -344,7 +344,7 @@ struct LampSyncDirectoryStoreTests {
         try put("web", at: "Translations/web.lamp")
         try evict("Translations/web.lamp")
         await #expect(throws: LampSyncSettingsStore.StoreError.notMigrated(revision: nil)) {
-            try await LampSyncSettingsStore.update(in: store()) { _ in }
+            try await LampSyncSettingsStore.update(in: store(), patience: .immediate) { _ in }
         }
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(LampSyncSettingsStore.path).path))
     }

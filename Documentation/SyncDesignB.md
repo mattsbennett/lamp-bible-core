@@ -574,3 +574,29 @@ older clients still sync, or they will overwrite it and its deletions with
 them. Change the format only together with a bundle format that old clients
 refuse.
 
+## A server that lags after a write (20 October)
+
+The first real move on the user's Synology failed with `tooManyAttempts`
+though its bundle had landed. The Synology names no revision on PUT, and
+answers the next reads with what it held before. `writeAndConfirm`'s two
+read-backs both showed the old archive, so it threw `conflict`. `migrate`
+took that for a refusal and retried at once, still read the archive at the
+imported revision, wrote `.ifRevision` of it, and was refused for real by its
+own bundle, three times over.
+
+`LampSyncConditionalWrite.write(_:to:in:condition:patience:)` now says what
+became of a write:
+- `written(revision)`: read back as the bytes sent;
+- `writtenUnconfirmed`: taken, not shown back within the patience allowed;
+- `refused`: the write's own refusal.
+
+While the server still names the revision being replaced, it asks by HEAD,
+so a library-sized archive is never downloaded just to see it is still
+there. `update`, `readOrClaim`, `migratePhoneLibrary` and
+`LampSyncLibraryMigration.migrate` use it. A write the server took is never
+retried. Unconfirmed, they throw `LampSyncConditionalWrite.Unconfirmed`: the
+bundle is there, and the next pass reads it. A refused write is retried after
+a wait. `Patience.standard` allows about seven and a half seconds to show a
+write back, and waits 0.5 s, then 2 s, before retries. `StoreError` now
+describes itself.
+

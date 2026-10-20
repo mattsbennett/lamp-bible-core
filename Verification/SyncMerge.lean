@@ -4114,6 +4114,57 @@ theorem versionsFoldInAnyOrder (a b c : BundleCopy) :
   · rw [mergeManifestEntry_assoc, mergeManifestEntry_comm b.entry, ← mergeManifestEntry_assoc]
   · rw [laterStamp_assoc, laterStamp_comm b.preference, ← laterStamp_assoc]
 
+/-! ### A write the server took
+
+A server can take a write and still answer the next reads with what it held
+before, as the user's Synology does after a PUT that names no revision.
+`LampSyncConditionalWrite.write` keeps "taken but not yet shown back" apart
+from "refused": a loop that retried on the first as on the second would
+retry against a server still showing the old revision, and be refused for
+real, though its write was there all along. -/
+
+inductive WriteOutcome where
+  | written (r : Nat) | writtenUnconfirmed | refused
+  deriving DecidableEq, Repr
+
+-- Each read-back is the digest and revision of the body the server showed,
+-- or none for nothing there. Only the bytes sent confirm the write.
+def confirmReadBacks (sent : Nat) : List (Option (Nat × Nat)) → WriteOutcome
+  | [] => .writtenUnconfirmed
+  | some (d, r) :: rest => if d = sent then .written r else confirmReadBacks sent rest
+  | none :: rest => confirmReadBacks sent rest
+
+def writeOutcome (accepted : Bool) (sent : Nat) (readBacks : List (Option (Nat × Nat))) : WriteOutcome :=
+  if accepted then confirmReadBacks sent readBacks else .refused
+
+theorem confirmReadBacksNeverRefuses (sent : Nat) (readBacks : List (Option (Nat × Nat))) :
+    confirmReadBacks sent readBacks ≠ .refused := by
+  induction readBacks with
+  | nil => simp [confirmReadBacks]
+  | cons b rest ih =>
+    rcases b with _ | ⟨d, r⟩
+    · simpa [confirmReadBacks] using ih
+    · unfold confirmReadBacks; split
+      · simp
+      · exact ih
+
+-- A write the server took is never a refusal, however long it lags.
+theorem anAcceptedWriteIsNeverRefused (sent : Nat) (readBacks : List (Option (Nat × Nat))) :
+    writeOutcome true sent readBacks ≠ .refused := by
+  simpa [writeOutcome] using confirmReadBacksNeverRefuses sent readBacks
+
+-- A revision is named only from a read-back of the bytes sent.
+theorem aWriteIsNamedOnlyByItsOwnBytes (sent r : Nat) (readBacks : List (Option (Nat × Nat)))
+    (h : confirmReadBacks sent readBacks = .written r) : some (sent, r) ∈ readBacks := by
+  induction readBacks with
+  | nil => simp [confirmReadBacks] at h
+  | cons b rest ih =>
+    rcases b with _ | ⟨d, r'⟩
+    · simp [confirmReadBacks] at h; exact List.mem_cons_of_mem _ (ih h)
+    · unfold confirmReadBacks at h; split at h
+      · rename_i hd; cases h; subst hd; exact List.mem_cons_self
+      · exact List.mem_cons_of_mem _ (ih h)
+
 /-! ### The Mac's migration
 
 The Mac moves a library it kept by writing the first bundle, carrying only
@@ -4843,6 +4894,14 @@ def settingsWriteName : SettingsWrite → String
 
 def stampCode (s : Stamp) : String := optNat s.1 ++ ":" ++ optNat s.2
 
+def readBacksCode (rb : List (Option (Nat × Nat))) : String :=
+  if rb.isEmpty then "empty"
+  else ",".intercalate (rb.map fun | none => "-" | some (d, r) => toString d ++ ":" ++ toString r)
+
+def writeOutcomeName : WriteOutcome → String
+  | .written r => "written:" ++ toString r | .writtenUnconfirmed => "writtenUnconfirmed"
+  | .refused => "refused"
+
 def archivePathName (p : ArchivePath) : String := ((reprStr p).splitOn ".").getLast!
 
 def entryFateName : EntryFate → String
@@ -4880,6 +4939,12 @@ def bundleCopies : List BundleCopy :=
         IO.println <| conformanceLine "earlierLibrary"
           [toString mac, toString phone, toString content,
            earlierLibraryName (earlierLibrary mac phone content)]
+  let readBacks : List (Option (Nat × Nat)) := [none, some (1, 7), some (2, 8)]
+  let lists := [[]] ++ readBacks.map ([·]) ++ (readBacks.flatMap fun a => readBacks.map fun b => [a, b])
+  for accepted in [true, false] do
+    for rb in lists do
+      IO.println <| conformanceLine "writeOutcome"
+        [toString accepted, readBacksCode rb, writeOutcomeName (writeOutcome accepted 1 rb)]
   for p in [ArchivePath.macSettings, .phoneSettings, .preferences, .personalLedger, .deckLedger,
             .legacyManifest, .compatibilityManifest, .portableManifest, .seal, .archiveIndex, .hidden,
             .retiredAlias, .portableModule, .study, .writingDocument, .media, .workspaceFile, .compatibleModule,
