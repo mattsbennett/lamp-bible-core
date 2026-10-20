@@ -618,3 +618,36 @@ compatibility publisher made folders first; the new writes didn't.
 `LampWebDAVStorage.write` now makes the folders on a 409 and asks the same
 PUT once more, under the same condition, for both apps.
 
+## The pass engine moves into core (20 October)
+
+The day's live bugs clustered in the layer each app wrote for itself, while
+each fault in core's primitives was fixed once for both. So the pass engine
+moved from the Mac into LampModuleKit, as it was at Mac `72d3d69`:
+- `LampSyncBundlePass` and its `LampSyncPassLibrary` protocol;
+- `LampSyncFileRecords`;
+- `LampSyncLocalFile`, with `LampSyncLocalFiles`' `describe` and `locals`;
+- `LampSyncLibraryLayout`.
+
+Its tests moved with it, unchanged, and hold its order: claim before any
+file, apply what the bundle carries before gathering, downloads and merges
+before uploads, media before the modules that name it, one bundle update,
+reaps after it, and a tombstone kept while its file is listed.
+
+Each app keeps what is its own to answer:
+- its enumeration, as an extension of `LampSyncLocalFiles`;
+- its `LampSyncPassLibrary`;
+- where it persists `LampSyncFileRecords`: the engine takes them `inout`;
+- its settings participants;
+- its version merge: `mergingVersion` is the caller's, since LampCore's
+  `merge(version:)` is out of LampModuleKit's reach.
+
+Next in the engine, each with a test (the phone's R2–R10):
+- R2: planned kinds;
+- R3: re-preparing a contribution against a newer bundle;
+- R4: the written snapshot in the outcome;
+- R6: patience;
+- R9: save times;
+- R10: versions passed to `receiving`.
+
+Then the pass order goes into the model.
+
