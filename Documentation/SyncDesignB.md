@@ -610,3 +610,11 @@ reading back what it just wrote, sees `W/"…"`. `read(from:)` now waits a
 weak revision out within `patience`, and throws `unversioned` only if it
 stays weak. The write's read-back already waits for a strong one.
 
+The first pass after the move then reported HTTP 409 for workspace files.
+A WebDAV PUT into a folder that isn't there fails with 409 and writes
+nothing, and the per-file pass writes into folders no one has made yet: a
+workspace, a new writing's attachments, a book's pictures. The old
+compatibility publisher made folders first; the new writes didn't.
+`LampWebDAVStorage.write` now makes the folders on a 409 and asks the same
+PUT once more, under the same condition, for both apps.
+

@@ -182,11 +182,10 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
         to path: String,
         condition: LampSyncWriteCondition
     ) async throws -> String? {
-        let (_, response, _) = try await send(
-            method: "PUT", path: path,
-            headers: try Self.putHeaders(for: condition), body: data
-        )
-        return try Self.revision(afterPUT: response)
+        let headers = try Self.putHeaders(for: condition)
+        return try await putCreatingParents(path) {
+            try await send(method: "PUT", path: path, headers: headers, body: data).1
+        }
     }
 
     public func write(
@@ -197,11 +196,28 @@ public struct LampWebDAVStorage: Sendable, LampSyncRemoteStore {
         let request = try http.makeRequest(
             method: "PUT", path: path, headers: try Self.putHeaders(for: condition)
         )
-        let response: HTTPURLResponse
-        do {
-            (_, response) = try await http.upload(request, fromFile: url)
-        } catch LampWebDAVHTTP.TransportError.invalidResponse {
-            throw StorageError.invalidResponse
+        return try await putCreatingParents(path) {
+            do {
+                return try await http.upload(request, fromFile: url).1
+            } catch LampWebDAVHTTP.TransportError.invalidResponse {
+                throw StorageError.invalidResponse
+            }
+        }
+    }
+
+    /// A PUT into a folder that isn't there fails with 409 and writes nothing
+    /// (RFC 4918, 9.7.1). Per-file sync puts files into folders no one has
+    /// made yet: a new writing's attachments, a book's pictures, a
+    /// workspace. So on 409 the folders are made, and the same PUT, under
+    /// the same condition, is asked once more.
+    private func putCreatingParents(
+        _ path: String,
+        _ put: () async throws -> HTTPURLResponse
+    ) async throws -> String? {
+        var response = try await put()
+        if response.statusCode == 409, path.contains("/") {
+            try await LampSyncRemoteDirectories.prepareParents(for: path) { try await createDirectory($0) }
+            response = try await put()
         }
         return try Self.revision(afterPUT: response)
     }

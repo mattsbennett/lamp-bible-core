@@ -274,6 +274,66 @@ struct LampWebDAVStorageTests {
 
     /// A reap: deleted only while still at the revision seen. A file already
     /// gone is done; one at another revision stays, and says so.
+    /// A PUT into a folder that isn't there is a 409. The folders are made
+    /// and the same PUT asked once more, under the same condition; folders
+    /// already there answer MKCOL with 405.
+    @Test func aWriteIntoAMissingFolderMakesItAndAsksAgain() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebDAVTestURLProtocol.self]
+        let storage = LampWebDAVStorage(
+            baseURL: try #require(URL(string: "https://dav.example.com/sync/")),
+            session: URLSession(configuration: configuration)
+        )
+        var folders: Set<String> = ["/sync", "/sync/Workspaces"]
+        var conflictAlways = false
+        var log: [String] = []
+        WebDAVTestURLProtocol.handler = { request in
+            let url = try #require(request.url)
+            let path = url.path.hasSuffix("/") ? String(url.path.dropLast()) : url.path
+            let method = try #require(request.httpMethod)
+            log.append("\(method) \(path)")
+            func respond(_ status: Int) -> (HTTPURLResponse, Data) {
+                (HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            switch method {
+            case "MKCOL":
+                guard !folders.contains(path) else { return respond(405) }
+                folders.insert(path)
+                return respond(201)
+            case "PUT":
+                #expect(request.value(forHTTPHeaderField: "If-None-Match") == "*")
+                let parent = (path as NSString).deletingLastPathComponent
+                return respond(!conflictAlways && folders.contains(parent) ? 201 : 409)
+            default:
+                return respond(500)
+            }
+        }
+        _ = try await storage.write(
+            Data("[]".utf8), to: "Workspaces/Devotionals/w1/EnabledSkills.json", condition: .ifAbsent
+        )
+        #expect(log == [
+            "PUT /sync/Workspaces/Devotionals/w1/EnabledSkills.json",
+            "MKCOL /sync/Workspaces",
+            "MKCOL /sync/Workspaces/Devotionals",
+            "MKCOL /sync/Workspaces/Devotionals/w1",
+            "PUT /sync/Workspaces/Devotionals/w1/EnabledSkills.json",
+        ])
+
+        // A file streamed from disk the same way; a second 409 is reported.
+        let source = LampSyncScratchFile.url()
+        defer { try? FileManager.default.removeItem(at: source) }
+        try Data("png".utf8).write(to: source)
+        log = []
+        _ = try await storage.write(fileAt: source, to: "DevotionalMedia/w/d/a.png", condition: .ifAbsent)
+        #expect(log.filter { $0.hasPrefix("PUT") }.count == 2)
+        conflictAlways = true
+        log = []
+        await #expect(throws: LampWebDAVStorage.StorageError.self) {
+            try await storage.write(Data(), to: "Notes/notes.lamp", condition: .ifAbsent)
+        }
+        #expect(log.filter { $0.hasPrefix("PUT") }.count == 2)
+    }
+
     @Test func aDeleteIsSentUnderItsCondition() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [WebDAVTestURLProtocol.self]

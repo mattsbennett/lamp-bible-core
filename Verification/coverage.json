@@ -588,7 +588,7 @@
         "webDAVDirectoryReady",
         "guardedETagCondition"
       ],
-      "boundary": "HTTP transport and PROPFIND XML parsing are Swift's; the presence, directory and entity-tag decisions are held by tables. A conditional DELETE sends the PUT's preconditions, so guardedETagCondition holds it too."
+      "boundary": "HTTP transport and PROPFIND XML parsing are Swift's; the presence, directory and entity-tag decisions are held by tables. A conditional DELETE sends the PUT's preconditions, so guardedETagCondition holds it too. A PUT that meets a missing folder (409, RFC 4918) makes the folders and is asked once more under the same condition; nothing was written by the first."
     }
   },
   "platformSources": {
