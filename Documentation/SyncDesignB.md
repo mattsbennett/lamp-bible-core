@@ -328,8 +328,8 @@ public protocol LampSyncVersionedStore: LampSyncRemoteStore {
   the shared preferences and both deletion ledgers, and keeps the current
   copy's `userSettings` and `macSettings`. The joined parts come out the same
   whichever copy iCloud kept as current (`versionMerge`). An unreadable
-  personal deletion ledger stops the merge, as it stops a pass; the deck
-  ledger stays lenient.
+  ledger never stops it, as it never stops a pass: of two personal ledgers
+  the readable one stands, and an unreadable deck ledger leaves this copy's.
 - Each app merges its own settings from `Snapshot.versions` before the write,
   **without a base**: after a lost write, a device has recorded its own write
   as the base, which the current copy never saw, so a three-way merge undoes
@@ -453,8 +453,8 @@ What each entry of the archive or tree becomes (`entryFate`):
 - **Carried** into the first bundle: `settings.plist` → `macSettings`,
   `UserData/user-settings.db` → `userSettings`,
   `Settings/shared-preferences.json` → `preferences`, `Deletions/ledger.json`
-  → `personalDeletions` (an unreadable one stops the move, as it stops a
-  pass), `Workspaces/Presentations/deleted-decks.json` → `deckDeletions`.
+  → `personalDeletions` (carried as it is; a pass that can't read it skips
+  it), `Workspaces/Presentations/deleted-decks.json` → `deckDeletions`.
   Ledgers go into the bundle, never into files: a ledger written as a member
   file is won, not merged, so two Macs deleting different decks would lose
   one deletion. The deck ledger left in the deck folder is never adopted
@@ -562,3 +562,15 @@ Swift.
 - **The Mac's migration:** every setting and ledger is carried, only
   bookkeeping is dropped, and it writes over an archive only at the revision
   it imported.
+
+## Unreadable ledgers (20 October)
+
+Both apps skip a personal deletion ledger they can't read rather than stop
+syncing, and contribute their own records in its place. Core's version merge
+and the migration follow. One consequence to keep in mind: `decode` ignores
+`formatVersion`, and a ledger an old client can't read is replaced by that
+client's own records. So a future ledger format must not be written while
+older clients still sync, or they will overwrite it and its deletions with
+them. Change the format only together with a bundle format that old clients
+refuse.
+

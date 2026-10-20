@@ -39,13 +39,18 @@ struct LampSyncSettingsBundleMergeTests {
         #expect(current.personalDeletions == (try theirs.encoded()))
     }
 
-    /// An unreadable personal ledger stops a pass, so it stops the merge too,
-    /// rather than resolving away another device's deletions.
-    @Test func anUnreadablePersonalLedgerStopsTheMerge() throws {
-        var current = LampSyncSettingsBundle(personalDeletions: try LampPersonalDeletionLedger().encoded())
-        #expect(throws: (any Error).self) {
-            try current.merge(version: LampSyncSettingsBundle(personalDeletions: Data("damaged".utf8)))
-        }
+    /// An unreadable personal ledger never stops a pass, so it never stops
+    /// the merge: of the two, the readable one stands.
+    @Test func anUnreadablePersonalLedgerGivesWayToAReadableOne() throws {
+        var mine = LampPersonalDeletionLedger()
+        mine.recordDeletion(.note, "a", at: 5)
+        var current = LampSyncSettingsBundle(personalDeletions: try mine.encoded())
+        try current.merge(version: LampSyncSettingsBundle(personalDeletions: Data("damaged".utf8)))
+        #expect(current.personalDeletions == (try mine.encoded()))
+
+        var damaged = LampSyncSettingsBundle(personalDeletions: Data("damaged".utf8))
+        try damaged.merge(version: LampSyncSettingsBundle(personalDeletions: try mine.encoded()))
+        #expect(damaged.personalDeletions == (try mine.encoded()))
     }
 
     /// The deck ledger is lenient everywhere: an unreadable one, or a newer

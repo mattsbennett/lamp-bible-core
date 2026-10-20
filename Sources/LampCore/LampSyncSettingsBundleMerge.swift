@@ -12,18 +12,22 @@ extension LampSyncSettingsBundle {
     /// they are opaque here, and each app merges them from
     /// `Snapshot.versions` itself, before the write.
     ///
-    /// A personal deletion ledger either copy holds that this client can't
-    /// read stops the merge, as it stops a pass. The deck ledger is lenient
-    /// everywhere, so here an unreadable one leaves this copy's as it is, and
-    /// a newer client's is never rewritten in an older format.
+    /// A ledger this client can't read never stops the merge, as it never
+    /// stops a pass: of two personal ledgers the readable one stands, and of
+    /// two deck ledgers an unreadable one leaves this copy's as it is, so a
+    /// newer client's is never rewritten in an older format.
     /// (`Verification/SyncMerge.lean`: `versionMerge`.)
     public mutating func merge(version other: LampSyncSettingsBundle) throws {
         manifest = manifest.merged(with: other.manifest)
         preferences = preferences.joined(with: other.preferences)
-        personalDeletions = try Self.joined(personalDeletions, other.personalDeletions) { ours, theirs in
-            var ledger = try LampPersonalDeletionLedger.decode(ours)
-            ledger.merge(try LampPersonalDeletionLedger.decode(theirs))
-            return try ledger.encoded()
+        personalDeletions = Self.joined(personalDeletions, other.personalDeletions) { ours, theirs in
+            switch (try? LampPersonalDeletionLedger.decode(ours), try? LampPersonalDeletionLedger.decode(theirs)) {
+            case (var ledger?, let incoming?):
+                ledger.merge(incoming)
+                return (try? ledger.encoded()) ?? ours
+            case (nil, .some): return theirs
+            default: return ours
+            }
         }
         deckDeletions = Self.joined(deckDeletions, other.deckDeletions) { ours, theirs in
             func decoded(_ data: Data) throws -> LampPresentationDeckDeletionLedger {

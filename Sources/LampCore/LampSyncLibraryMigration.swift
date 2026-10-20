@@ -128,8 +128,8 @@ public enum LampSyncLibraryMigration {
                 case LampPortableBackupLayout.sharedPreferencesPath:
                     bundle.preferences = try LampSyncPreferenceState.decode(entry.data)
                 case LampPortableBackupLayout.deletionLedgerPath:
-                    // Unreadable stops a pass, so it stops the move.
-                    _ = try LampPersonalDeletionLedger.decode(entry.data)
+                    // Carried as it is: a pass that can't read it skips it,
+                    // and a device's own records take its place.
                     bundle.personalDeletions = entry.data
                 default:
                     bundle.deckDeletions = entry.data

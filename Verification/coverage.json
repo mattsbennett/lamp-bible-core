@@ -110,7 +110,7 @@
       "conformance": [
         "versionMerge"
       ],
-      "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable personal deletion ledger stops the merge; the deck ledger stays lenient, as it is everywhere."
+      "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable ledger never stops the merge: of two personal ledgers the readable one stands, and an unreadable deck ledger leaves this copy's, as the passes do."
     },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [
@@ -708,6 +708,15 @@
       ],
       "boundary": "Shows a set-aside conflict and passes the person's choice to LampLibrary.resolveSyncConflict; the choice itself is core's."
     },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncBundleLedgers.swift": {
+      "rules": [
+        "mergeTombstone_comm",
+        "mergeTombstone_assoc",
+        "exchangedLedgersAgree",
+        "deckPullIgnoresArrivalOrder"
+      ],
+      "boundary": "The Mac applies the bundle's deletion ledgers before reading what it holds, and contributes its own by joining them into the bundle's, never replacing them. An unreadable one is skipped, as on the phone."
+    },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncBundlePass.swift": {
       "rules": [
         "filePlanAction",
@@ -717,6 +726,14 @@
       ],
       "boundary": "The Mac's pass orders core's decisions: `readOrClaim` first, downloads and merges before uploads, one bundle update for the whole pass, and reaps only after it. Each step is decided in core; the order is held by the Mac's own tests."
     },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncBundleSettings.swift": {
+      "rules": [
+        "preferenceMerge",
+        "preferenceStamp",
+        "preferenceJoin"
+      ],
+      "boundary": "`macSettings` has no merge of its own: the newer copy stands. The shared keys go through the preference ledger, which wins where both carry a key."
+    },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncFileRecords.swift": {
       "rules": [
         "noRecordNeverOverwrites",
@@ -724,11 +741,21 @@
       ],
       "boundary": "The Mac's per-source records behind `LampSyncFilePlan.Local`. No record reads as changed, which the plan turns into a download or merge, never an upload over the server's copy. Change is judged by a digest of the bytes every pass, never by size or date."
     },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLibraryLayout.swift": {
+      "rules": [
+        "bundleRead",
+        "emptyBundlePath"
+      ],
+      "boundary": "Which pass a library gets, straight from core's read: a bundle or nothing goes to the new pass, an earlier library to the archive pass."
+    },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalFiles.swift": {
       "boundary": "Gathers what the Mac holds as `LampSyncFilePlan.Local`: each installed module placed by core's `LampInstalledModuleFile.syncPath()`, never its storage-key filename, and a digest of the bytes on disk. It decides nothing; the plan does (`filePlanAction`)."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift": {
       "boundary": "The Mac's install, merge and removal of single files for its pass, through the same library calls the archive pass made. Merges import by value, and what goes back up is the re-export from the merged library. Record decisions are core's (`decide`, `importOutcome`); the file-level ones are the plan's (`filePlanAction`)."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMoveOffer.swift": {
+      "boundary": "What the person is told before a move or a join. Which one is offered is core's `earlierLibrary`; the move itself is core's `LampSyncLibraryMigration`."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift": {
       "rules": [
