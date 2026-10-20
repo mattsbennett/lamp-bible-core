@@ -56,7 +56,8 @@ public enum LampSyncLibraryMigration {
         /// Already a per-file layout file where it stands; the next pass
         /// adopts it.
         case inPlace
-        /// The old layout's bookkeeping, with nothing to carry.
+        /// The old layout's bookkeeping, or a retired alias's copy, with
+        /// nothing to carry.
         case dropped
         /// Stops the migration.
         case unknown
@@ -91,7 +92,7 @@ public enum LampSyncLibraryMigration {
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
         if components.contains(where: { $0.hasPrefix(".") }) { return .dropped }
         if carriedPaths.contains(path) { return .carried }
-        if droppedPaths.contains(path) { return .dropped }
+        if droppedPaths.contains(path) || LampSyncFolderLayout.isRetiredAlias(path) { return .dropped }
         guard components.count >= 2, components.allSatisfy({ !$0.isEmpty }) else { return .unknown }
         let head = String(components[0])
         // The portable tree's writings are JSON documents; a writing in the

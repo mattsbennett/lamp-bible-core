@@ -326,6 +326,14 @@ struct LampSyncDirectoryStoreTests {
         #expect(contents(LampSyncSettingsStore.path) == nil)
     }
 
+    /// A pass never lists the old notes alias, so it is never adopted.
+    @Test func theRetiredNotesAliasIsNeverListed() async throws {
+        try put("old notes", at: "Notes/bible-notes.lamp")
+        try put("notes", at: "Notes/notes.lamp")
+        let listing = try await LampSyncFilePlan.listing(in: store(), manifest: LampSyncLibraryManifest())
+        #expect(listing == ["Notes/notes.lamp": revision(of: "notes")])
+    }
+
     @Test func nothingAtTheBundlePathIsNewOnlyInAnEmptyLibrary() async throws {
         #expect(try await LampSyncSettingsStore.read(from: store()) == nil)
         try FileManager.default.createDirectory(

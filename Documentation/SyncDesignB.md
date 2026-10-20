@@ -86,6 +86,13 @@ misread. The Mac's installed files are named by a storage key, so the Mac
 places them by `LampInstalledModuleFile.syncPath()`, from
 `LampLibrary.installedModuleFiles()`, never by filename.
 
+**A retired alias is outside the layout.** `Notes/bible-notes.lamp` is the
+copy the old sync left under notes' former ID, merged into `notes` long ago
+(`LampSyncModuleFiles.canonicalIdentity`). `kind(of:)` returns nil for it, so
+no pass lists, adopts or installs it. Adopted, it would arrive as a second
+notes module of old notes, and bring back any deleted before the ledger
+existed. The migration drops it as bookkeeping and leaves it where it is.
+
 ### Membership
 
 ```swift
@@ -459,7 +466,8 @@ What each entry of the archive or tree becomes (`entryFate`):
   `Translations/kjv.lamp` or `Devotionals/daily.lamp`, which the pass adopts.
 - **Dropped**: the old layout's bookkeeping. That covers the legacy and
   compatibility manifests, the portable `manifest.json`, the folder seal, the
-  archive index, and any hidden file, such as Finder's `Media/.DS_Store`.
+  archive index, any hidden file such as Finder's `Media/.DS_Store`, and the
+  retired notes alias `Notes/bible-notes.lamp`.
 - **Unknown**: anything else stops the move before it writes, naming the path.
 
 When it writes (`macMigrationStep`):

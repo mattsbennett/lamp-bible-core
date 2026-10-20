@@ -153,6 +153,16 @@ struct LampSyncFolderLibraryTests {
         #expect(unchanged == written && store.writes == 1)
     }
 
+    /// The copy the old sync left under notes' retired ID is outside the
+    /// layout: adopted, it would be a second notes module of old notes.
+    @Test func theRetiredNotesAliasIsOutsideTheLayout() {
+        #expect(LampSyncFolderLayout.kind(of: "Notes/bible-notes.lamp") == nil)
+        #expect(LampSyncFolderLayout.isRetiredAlias("Notes/bible-notes.lamp"))
+        #expect(LampSyncFolderLayout.kind(of: "Notes/notes.lamp") == .module(.notes))
+        #expect(LampSyncFolderLayout.kind(of: "Highlights/bible-notes.lamp") == .module(.highlights))
+        #expect(!LampSyncFolderLayout.isRetiredAlias("Highlights/bible-notes.lamp"))
+    }
+
     /// Every module kind has a folder, and a module placed there by its ID
     /// reads back as that kind and that ID.
     @Test func eachModuleKindHasAFolderThatRoundTrips() throws {

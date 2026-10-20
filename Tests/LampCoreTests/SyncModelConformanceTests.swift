@@ -1316,6 +1316,7 @@ struct SyncModelConformanceTests {
             "seal": ["lamp-sync-snapshot.json"],
             "archiveIndex": ["lamp-bible.lampsync.index.json"],
             "hidden": ["Media/.DS_Store", ".DS_Store", "Translations/.kjv.lamp.icloud"],
+            "retiredAlias": ["Notes/bible-notes.lamp"],
             "portableModule": ["Modules/9f86d081884c7d65.lamp"],
             "study": ["Study/Notes/john.json", "Study/Highlights/set.json"],
             "writingDocument": ["Devotionals/daily.json"],

@@ -4127,7 +4127,7 @@ imported the library it moves, and it writes over that archive only. -/
 inductive ArchivePath where
   | macSettings | phoneSettings | preferences | personalLedger | deckLedger
   | legacyManifest | compatibilityManifest | portableManifest | seal | archiveIndex | hidden
-  | portableModule | study | writingDocument | media | workspaceFile | compatibleModule
+  | retiredAlias | portableModule | study | writingDocument | media | workspaceFile | compatibleModule
   | perFile | unknown
   deriving DecidableEq, Repr
 
@@ -4138,16 +4138,18 @@ inductive EntryFate where
 def entryFate : ArchivePath → EntryFate
   | .macSettings | .phoneSettings | .preferences | .personalLedger | .deckLedger => .carried
   | .legacyManifest | .compatibilityManifest | .portableManifest | .seal | .archiveIndex
-  | .hidden => .dropped
+  | .hidden | .retiredAlias => .dropped
   | .portableModule | .study | .writingDocument | .media | .workspaceFile
   | .compatibleModule => .republished
   | .perFile => .inPlace
   | .unknown => .unknown
 
--- Only the old layout's own bookkeeping is dropped: nothing a person made.
+-- Only the old layout's own bookkeeping is dropped, with the copy a retired
+-- alias left (`Notes/bible-notes.lamp`, merged into `notes` long ago):
+-- nothing a person made that lives nowhere else.
 theorem onlyBookkeepingIsDropped (p : ArchivePath) (h : entryFate p = .dropped) :
     p = .legacyManifest ∨ p = .compatibilityManifest ∨ p = .portableManifest ∨ p = .seal
-      ∨ p = .archiveIndex ∨ p = .hidden := by
+      ∨ p = .archiveIndex ∨ p = .hidden ∨ p = .retiredAlias := by
   cases p <;> simp_all [entryFate]
 
 -- Every setting and ledger goes into the bundle: none is left to a pass that
@@ -4880,7 +4882,7 @@ def bundleCopies : List BundleCopy :=
            earlierLibraryName (earlierLibrary mac phone content)]
   for p in [ArchivePath.macSettings, .phoneSettings, .preferences, .personalLedger, .deckLedger,
             .legacyManifest, .compatibilityManifest, .portableManifest, .seal, .archiveIndex, .hidden,
-            .portableModule, .study, .writingDocument, .media, .workspaceFile, .compatibleModule,
+            .retiredAlias, .portableModule, .study, .writingDocument, .media, .workspaceFile, .compatibleModule,
             .perFile, .unknown] do
     IO.println <| conformanceLine "entryFate" [archivePathName p, entryFateName (entryFate p)]
   for bundle in [true, false] do

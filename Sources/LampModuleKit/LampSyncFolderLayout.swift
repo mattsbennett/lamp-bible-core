@@ -106,14 +106,14 @@ public enum LampSyncFolderLayout {
     }
 
     /// What a path holds, or nil for one outside the layout: a hidden file
-    /// such as an iCloud placeholder, a legacy module format, the bundle, or
-    /// anything unsafe.
+    /// such as an iCloud placeholder, a legacy module format, a retired
+    /// alias, the bundle, or anything unsafe.
     public static func kind(of path: String) -> LampSyncFileKind? {
         let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard components.count >= 2, components.allSatisfy(isSafeComponent) else { return nil }
         let head = components[0]
         if components.count == 2, let kind = LampSyncContentKind(rawValue: head) {
-            return isModuleFilename(components[1]) ? .module(kind) : nil
+            return isModuleFilename(components[1]) && !isRetiredAlias(path) ? .module(kind) : nil
         }
         if head == devotionalMediaDirectory {
             return components.count == 4 ? .devotionalMedia : nil
@@ -131,6 +131,20 @@ public enum LampSyncFolderLayout {
             return components.count == 4 && components[2] == "Assets" ? .deckAsset : nil
         }
         return .workspaceFile
+    }
+
+    /// A copy the old sync left under an ID it has since renamed:
+    /// `Notes/bible-notes.lamp`, merged into `notes` long ago. Outside the
+    /// layout, so it is never listed, adopted or installed. Adopted, it would
+    /// arrive as a second notes module holding old copies of notes, and bring
+    /// back any deleted before the deletion ledger existed.
+    public static func isRetiredAlias(_ path: String) -> Bool {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2, components[0] == Substring(LampSyncContentKind.notes.rawValue),
+              let id = LampSyncModuleFiles.moduleID(from: String(components[1])),
+              components[1].lowercased().hasSuffix(".\(moduleExtension)")
+        else { return false }
+        return LampSyncModuleFiles.canonicalIdentity(id, isNotes: true) != id
     }
 
     /// The module ID the *server* knows a module or its media by, taken from
