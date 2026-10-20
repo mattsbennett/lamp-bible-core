@@ -103,27 +103,6 @@ public enum LampSyncDevotionalMedia {
             .appendingPathComponent(filename)
     }
 
-    /// Missing immutable attachments are created conditionally. An identical
-    /// remote copy is already complete; a different copy must stop publication.
-    public static func pendingUploads(
-        _ files: [UploadFile],
-        readRemote: (String) async throws -> LampSyncRemoteFile?
-    ) async throws -> [LampSyncCompatibilityPublisher.File] {
-        var pending: [LampSyncCompatibilityPublisher.File] = []
-        for file in files {
-            if let remote = try await readRemote(file.remotePath) {
-                guard remote.data == file.data else {
-                    throw UploadError.conflictingRemoteFile(file.remotePath)
-                }
-                continue
-            }
-            pending.append(.init(
-                remotePath: file.remotePath, data: file.data, condition: .ifAbsent
-            ))
-        }
-        return pending
-    }
-
     public static func downloadToLibrary(
         for devotionals: [LampDevotional],
         from moduleID: String,

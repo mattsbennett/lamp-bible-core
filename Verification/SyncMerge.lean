@@ -4425,19 +4425,6 @@ def entriesFor : String → Option (List (Nat × Nat))
         [rowName d, rowName r, rowName (baselessReading d r)]
 
 #eval show IO Unit from do
-  for n in [0, 1, 2, 3] do
-    for ok in [true, false] do
-      for lost in [true, false] do
-        IO.println <| conformanceLine "shouldRunAgain"
-          [toString n, toString ok, toString lost, toString (shouldRunAgain n ok lost)]
-  for read in [none, some 1, some 2] do
-    for now in [none, some 1, some 2] do
-      IO.println <| conformanceLine "lostRace" [optNat read, optNat now, toString (lostRace read now)]
-      for guarded in [true, false] do
-        IO.println <| conformanceLine "uploadsBeforeMerge"
-          [toString guarded, optNat read, optNat now, toString (uploadsBeforeMerge guarded read now)]
-
-#eval show IO Unit from do
   let spellings : List (Option SpelledRevision) :=
     [none, some ⟨false, true, 1⟩, some ⟨false, false, 1⟩, some ⟨true, true, 1⟩, some ⟨false, true, 2⟩]
   for a in spellings do
@@ -4451,26 +4438,6 @@ def entriesFor : String → Option (List (Nat × Nat))
           IO.println <| conformanceLine "needsImport"
             [toString isNew, toString samePath, optNat installed, spelledName remote,
              toString (needsImportByToken isNew samePath installed remote)]
-
-#eval show IO Unit from do
-  -- "w1" is a weak server revision, which can identify no body.
-  for server in ["-", "w1", "1", "2"] do
-    for index in [none, some ⟨1, true⟩, some ⟨2, true⟩, some ⟨1, false⟩] do
-      let strong : Option Nat := match server with
-        | "1" => some 1 | "2" => some 2 | _ => none
-      IO.println <| conformanceLine "indexTrusted"
-        [server, indexName index, toString (indexTrusted strong index)]
-  for cacheUsable in [true, false] do
-    for applied in ["-", "A", "B"] do
-      for trusted in ["-", "A", "B"] do
-        IO.println <| conformanceLine "mayAdvanceWithoutFetch"
-          [toString cacheUsable, applied, trusted,
-           toString (mayAdvanceWithoutFetch cacheUsable (entriesFor applied) (entriesFor trusted))]
-  for candidate in [none, some 1, some 2] do
-    for strong in [true, false] do
-      for now in [none, some 1, some 2] do
-        IO.println <| conformanceLine "reuseArchive"
-          [optNat candidate, toString strong, optNat now, toString (reuseArchive candidate strong now)]
 
 #eval show IO Unit from do
   let fresh := 99
@@ -4536,15 +4503,6 @@ def readName : Option (Nat × Option Nat) → String
            optFileName (deckPull deleted installed incoming)]
 
 #eval show IO Unit from do
-  for base in [ObservedBase.absent, .revision 1, .digest 7] do
-    for remote in [none, some (1, 7), some (2, 7), some (1, 8)] do
-      for content in [7, 9] do
-        IO.println <| conformanceLine "observedModuleWrite"
-          [baseName base,
-           (match remote with | none => "-" | some (r, c) => toString r ++ ":" ++ toString c),
-           toString content, toString (observedModuleWrite base remote content).isSome]
-
-#eval show IO Unit from do
   for base in [true, false] do
     for device in [true, false] do
       for remote in [true, false] do
@@ -4561,15 +4519,6 @@ def readName : Option (Nat × Option Nat) → String
         for rr in [0, 1] do
           IO.println <| conformanceLine "chooseReading"
             [toString dt, toString rt, toString dr, toString rr, choiceName (chooseReading dt rt dr rr)]
-  for a in [true, false] do
-    for b in [true, false] do
-      for c in [true, false] do
-        for d in [true, false] do
-          for e in [true, false] do
-            for f in [true, false] do
-              IO.println <| conformanceLine "settingsBootstrap"
-                [toString a, toString b, toString c, toString d, toString e, toString f,
-                 bootstrapName (settingsBootstrap a b c d e f)]
 
 #eval show IO Unit from do
   for committed in [[1], [2]] do
@@ -4578,33 +4527,12 @@ def readName : Option (Nat × Option Nat) → String
         IO.println <| conformanceLine "folderSealAccepts"
           [optList (some committed), optList pending, optList (some observed),
            toString (folderSealAccepts committed pending observed)]
-  for stageValid in [true, false] do
-    for old in [none, some 1, some 2] do
-      for intended in [none, some 1, some 2] do
-        for current in [none, some 1, some 2] do
-          IO.println <| conformanceLine "folderRecoveryStep"
-            [toString stageValid, optNat old, optNat intended, optNat current,
-             toString (folderRecoveryStep stageValid old intended current).isSome]
   for original in [none, some [1], some [2]] do
     for live in [none, some [1], some [2]] do
       IO.println <| conformanceLine "stagedCommitAllowed"
         [optList original, optList live, toString (stagedCommitAllowed original live)]
 
 #eval show IO Unit from do
-  let all := [WriteResult.wrote, .refused, .failed]
-  let mut batches : List (List WriteResult) := [[]]
-  for a in all do
-    batches := batches ++ [[a]]
-    for b in all do
-      batches := batches ++ [[a, b]]
-      for c in all do
-        batches := batches ++ [[a, b, c]]
-  for batch in batches do
-    IO.println <| conformanceLine "publishReportingRefusals"
-      [(if batch.isEmpty then "-" else String.join (batch.map resultName)),
-       (match publishReportingRefusals batch with
-        | none => "stopped"
-        | some flags => if flags.isEmpty then "-" else String.join (flags.map fun r => if r then "r" else "w"))]
   let reads : List (Option (Nat × Option Nat)) := [none, some (5, some 1), some (4, some 2), some (5, none)]
   for first in reads do
     for second in reads do
@@ -4663,41 +4591,6 @@ def hexBytes (bytes : List Nat) : String :=
       [hexBytes tag, toString (guardedETagCondition tag).isSome]
 
 #eval show IO Unit from do
-  -- A manifest records a legacy base revision and digest together or not at
-  -- all (`LegacyManifest.validate`), so only those two shapes occur.
-  let bases : List (Option Nat × Option Nat) := [(none, none), (some 1, some 7)]
-  let legacies : List (Option (Nat × Nat)) := [none, some (1, 5), some (1, 7), some (2, 7), some (1, 8)]
-  for (baseRevision, baseDigest) in bases do
-    for legacy in legacies do
-      IO.println <| conformanceLine "classifyLegacySettings"
-        [optNat baseRevision, optNat baseDigest, optPair legacy,
-         legacyStateName (classifyLegacySettings 5 baseRevision baseDigest legacy)]
-      for archive in [none, some 5] do
-        IO.println <| conformanceLine "resolveSettingsSource"
-          [optNat archive, optNat baseRevision, optNat baseDigest, optPair legacy,
-           readSourceName (resolveSettingsSource archive baseRevision baseDigest legacy)]
-  for archiveStrong in [true, false] do
-    for legacyStrong in [true, false] do
-      for savedArchive in [none, some 1] do
-        for currentArchive in [none, some 1, some 2] do
-          for savedLegacy in [none, some 1] do
-            for currentLegacy in [none, some 1, some 2] do
-              IO.println <| conformanceLine "maySkipArchivePoll"
-                [toString archiveStrong, toString legacyStrong, optNat savedArchive,
-                 optNat currentArchive, optNat savedLegacy, optNat currentLegacy,
-                 toString (maySkipArchivePoll false true archiveStrong legacyStrong
-                   savedArchive currentArchive savedLegacy currentLegacy)]
-
-#eval show IO Unit from do
-  let values := [none, some 1, some 2]
-  for before in values do
-    for after in values do
-      IO.println <| conformanceLine "stableRead" [optNat before, optNat after, optNat (stableRead before after)]
-      for body in values do
-        IO.println <| conformanceLine "checkedContentRead"
-          [optNat before, optNat body, optNat after, optNat (checkedContentRead before body after)]
-
-#eval show IO Unit from do
   for beforePull in [true, false] do
     for afterPull in [true, false] do
       for afterPublish in [true, false] do
@@ -4718,11 +4611,6 @@ def hexBytes (bytes : List Nat) : String :=
                toString (deferredBackendWipe wipeRequested pullOK publishOK persistOK),
                toString (wipeRequested && rollbackAttempted pullOK publishOK persistOK wipeOK),
                toString (backendActivationOccurs pullOK publishOK persistOK wipeRequested wipeOK)]
-  for editable in [true, false] do
-    for destination in [none, some 1, some 2] do
-      IO.println <| conformanceLine "migrationCopyAction"
-        [toString editable, optNat destination, migrationName (migrationCopyAction editable 1 destination),
-         toString (migrationRawWriteOccurs (migrationCopyAction editable 1 destination))]
 
 #eval show IO Unit from do
   let pool : List ModuleCandidate :=
@@ -4760,12 +4648,6 @@ def highlightName : MacHighlightExport → String
         IO.println <| conformanceLine "resolvedRecordRevision"
           [toString device, toString incoming, toString now,
            toString (resolvedRecordRevision device incoming now)]
-  for cacheValid in [true, false] do
-    for strongRevision in [true, false] do
-      for revisionMatches in [true, false] do
-        IO.println <| conformanceLine "archiveGetRequired"
-          [toString cacheValid, toString strongRevision, toString revisionMatches,
-           toString (archiveGetRequired cacheValid strongRevision revisionMatches)]
   let kinds : List ModuleFolderEntry := [⟨false, true⟩, ⟨false, false⟩, ⟨true, true⟩, ⟨true, false⟩]
   let mut listings : List (Option (Option (List ModuleFolderEntry))) := [none, some none, some (some [])]
   for a in kinds do
@@ -4793,22 +4675,11 @@ def highlightName : MacHighlightExport → String
           [bools earlier, toString succeeded, toString cancelled, toString after,
            toString (initialSyncCallerMayContinue after cancelled)]
   for outcomes in boolLists 3 do
-    IO.println <| conformanceLine "mirrorAttempts"
-      [bools outcomes, bools (mirrorAttempts outcomes), toString (mirrorBatchSucceeds outcomes)]
     IO.println <| conformanceLine "mediaBatchComplete"
       [bools outcomes, toString (mediaBatchComplete outcomes)]
   for outcome in [MacHighlightExport.ready, .empty, .failed] do
     IO.println <| conformanceLine "macHighlightAllowsArchivePublish"
       [highlightName outcome, toString (macHighlightAllowsArchivePublish outcome)]
-
-#eval show IO Unit from do
-  for base in [ObservedBase.absent, .revision 1, .digest 7, .digest 5] do
-    for archive in [none, some (5, 1), some (5, 2), some (7, 1)] do
-      for remote in [none, some (1, 7), some (2, 7), some (1, 8)] do
-        for content in [7, 9] do
-          IO.println <| conformanceLine "observedCompatibilityWrite"
-            [baseName base, optPair archive, optPair remote, toString content,
-             toString (observedCompatibilityWrite base archive remote content).isSome]
 
 def captureName : ArchiveCaptureChoice → String
   | .include => "include" | .skip => "skip" | .reject => "reject"
@@ -4825,9 +4696,6 @@ def columnName : StoredColumn → String
         IO.println <| conformanceLine "archiveCaptureChoice"
           [toString isMedia, toString hidden, toString symlink,
            captureName (archiveCaptureChoice isMedia hidden symlink)]
-  for remote in [none, some 1, some 2] do
-    IO.println <| conformanceLine "devotionalMediaUploadDecision"
-      [optNat remote, optBool (devotionalMediaUploadDecision remote 1)]
   let columns := [StoredColumn.nothing, .json 1, .json 2, .text 1, .text 2]
   for one in columns do
     for other in columns do

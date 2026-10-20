@@ -19,21 +19,6 @@ struct LampSyncStreamingTests {
         #expect(try await LampSyncArchiveRemote.read(from: absent) == nil)
     }
 
-    @Test func theArchiveIsPackedAndSentFromAFile() async throws {
-        let archive = try archive()
-        let store = DownloadOnlyStore()
-        let revision = try await LampSyncArchiveRemote.publish(archive, replacing: nil, in: store)
-        #expect(revision == "\"w\"")
-        #expect(store.sentFiles.count == 1)
-        let sent = try #require(store.files[LampSyncLayout.archivePath])
-        #expect(try LampSyncArchive.decode(compressedData: sent.data) == archive)
-        // Packed the way every reader unpacks it.
-        #expect(try JSONDecoder().decode(
-            LampSyncArchive.self, from: (sent.data as NSData).decompressed(using: .zlib) as Data
-        ) == archive)
-        #expect(store.scratchFilesLeft().isEmpty)
-    }
-
     @Test func aWriteIsConfirmedFromAFile() async throws {
         let store = DownloadOnlyStore()
         let revision = try await LampSyncConditionalWrite.writeAndConfirm(

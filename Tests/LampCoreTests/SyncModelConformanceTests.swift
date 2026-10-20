@@ -95,23 +95,18 @@ enum SyncModel {
 struct SyncModelConformanceTests {
     /// Every rule the model prints, with the Swift decision it describes.
     static let checkedRules: Set<String> = [
-        "decide", "importOutcome", "landing", "tombstone", "tombstoneMerge",
-        "baselessReading", "shouldRunAgain", "lostRace", "uploadsBeforeMerge",
-        "namesSameRevision", "needsImport", "indexTrusted", "mayAdvanceWithoutFetch",
-        "reuseArchive", "preferenceMerge",
-        "replaceFile", "deckPull", "observedModuleWrite", "mergeMembership",
-        "chooseWholeValue", "chooseReading", "settingsBootstrap", "folderSealAccepts",
-        "folderRecoveryStep", "stagedCommitAllowed", "publishReportingRefusals", "confirmWrite",
-        "webDAVPresence", "webDAVDirectoryReady", "guardedETagCondition", "classifyLegacySettings",
-        "resolveSettingsSource", "maySkipArchivePoll", "stableRead", "checkedContentRead",
-        "cancellableRunTrace", "backendTransition", "migrationCopyAction", "selectedCandidateIndex",
-        "resolvedRecordRevision", "archiveGetRequired", "moduleFolderListing", "initialSync",
-        "mirrorAttempts", "mediaBatchComplete", "macHighlightAllowsArchivePublish",
-        "observedCompatibilityWrite", "archiveCaptureChoice", "devotionalMediaUploadDecision", "sameColumn",
-        "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone", "filePlanAction",
-        "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite", "directoryDelete",
-        "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge", "preferenceStamp", "bundleRead",
-        "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate", "macMigrationStep", "writeOutcome", "passTrace",
+        "decide", "importOutcome", "landing", "tombstone", "tombstoneMerge", "baselessReading",
+        "namesSameRevision", "needsImport", "preferenceMerge", "replaceFile", "deckPull",
+        "mergeMembership", "chooseWholeValue", "chooseReading", "folderSealAccepts",
+        "stagedCommitAllowed", "confirmWrite", "webDAVPresence", "webDAVDirectoryReady",
+        "guardedETagCondition", "cancellableRunTrace", "backendTransition",
+        "selectedCandidateIndex", "resolvedRecordRevision", "moduleFolderListing", "initialSync",
+        "mediaBatchComplete", "macHighlightAllowsArchivePublish", "archiveCaptureChoice",
+        "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
+        "filePlanAction", "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite",
+        "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
+        "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
+        "macMigrationStep", "writeOutcome", "passTrace",
     ]
 
     // MARK: - The model itself
@@ -189,29 +184,6 @@ struct SyncModelConformanceTests {
         }
     }
 
-    @Test func passRetry() throws {
-        try conform("shouldRunAgain") { f in
-            LampSyncPassRetry.shouldRunAgain(
-                passesRun: Int(f[0])!, lastPassSucceeded: f[1] == "true", lostRace: f[2] == "true"
-            ) == (f[3] == "true")
-        }
-        try conform("lostRace") { f in
-            LampSyncPassRetry.lostRace(
-                read: f[0] == "-" ? nil : quoted(f[0]), serverNow: f[1] == "-" ? nil : quoted(f[1])
-            ) == (f[2] == "true")
-        }
-    }
-
-    @Test func firstSettingsUpload() throws {
-        try conform("uploadsBeforeMerge") { f in
-            LampSyncSettingsBootstrap.uploadsBeforeMerge(
-                action: f[0] == "true" ? .guardedFirstUpload : .merge,
-                observedToken: f[1] == "-" ? nil : f[1],
-                remoteToken: f[2] == "-" ? nil : f[2]
-            ) == (f[3] == "true")
-        }
-    }
-
     // MARK: - Revisions
 
     @Test func revisionTokens() throws {
@@ -233,56 +205,6 @@ struct SyncModelConformanceTests {
     }
 
     // MARK: - Archive index and reuse
-
-    @Test func archiveIndexTrust() async throws {
-        for f in SyncModel.cases("indexTrusted") {
-            let store = InMemoryRemoteStore()
-            if f[1] != "-" {
-                let index = LampSyncArchiveIndex(
-                    formatVersion: f[1].hasSuffix("u") ? LampSyncArchiveIndex.currentFormatVersion + 1
-                        : LampSyncArchiveIndex.currentFormatVersion,
-                    archiveRevision: quoted(String(f[1].dropLast())),
-                    digests: ["notes/a.lamp": "digest"]
-                )
-                store.files[LampSyncLayout.archiveIndexPath] = try JSONEncoder().encode(index)
-            }
-            let known: String? = switch f[0] {
-            case "-": nil
-            case "w1": "W/\"1\""
-            default: quoted(f[0])
-            }
-            let trusted = await LampSyncArchiveIndex.availability(in: store, knownRevision: known).index != nil
-            #expect(trusted == (f[2] == "true"), "indexTrusted \(f.joined(separator: " "))")
-        }
-        #expect(!SyncModel.cases("indexTrusted").isEmpty)
-    }
-
-    @Test func advancingWithoutFetch() throws {
-        func index(_ entries: String) -> LampSyncArchiveIndex {
-            LampSyncArchiveIndex(
-                archiveRevision: "\"1\"",
-                digests: ["notes/a.lamp": entries == "A" ? "first" : "second"]
-            )
-        }
-        try conform("mayAdvanceWithoutFetch") { f in
-            LampSyncArchiveIndex.mayAdvanceWithoutFetch(
-                cacheUsable: f[0] == "true",
-                appliedFingerprint: f[1] == "-" ? nil : index(f[1]).importableFingerprint,
-                availability: f[2] == "-" ? .absent : .current(index(f[2]))
-            ) == (f[3] == "true")
-        }
-    }
-
-    @Test func archiveReuse() throws {
-        try conform("reuseArchive") { f in
-            let candidate: String? = f[0] == "-" ? nil
-                : f[1] == "true" ? quoted(f[0]) : "W/" + quoted(f[0])
-            return LampSyncSettingsArchive.mayReuse(
-                candidateRevision: candidate,
-                serverRevision: f[2] == "-" ? nil : quoted(f[2])
-            ) == (f[3] == "true")
-        }
-    }
 
     // MARK: - Deletion ledgers
 
@@ -428,21 +350,6 @@ struct SyncModelConformanceTests {
                 return f[4] == "conflict"
             }
         }
-        try conform("settingsBootstrap") { f in
-            let action = LampSyncSettingsBootstrap.action(
-                remoteExists: f[0] == "true", requireRemote: f[1] == "true",
-                hasApplicableBase: f[2] == "true", hasStoredToken: f[3] == "true",
-                freshInstall: f[4] == "true", hasUnsyncedChanges: f[5] == "true"
-            )
-            let name = switch action {
-            case .missingRequiredRemote: "missing"
-            case .createRemote: "create"
-            case .adoptRemote: "adopt"
-            case .guardedFirstUpload: "guarded"
-            case .merge: "merge"
-            }
-            return name == f[6]
-        }
     }
 
     // MARK: - Folders and staged imports
@@ -454,14 +361,6 @@ struct SyncModelConformanceTests {
                 committed: files(f[0])!, pending: files(f[1]), observed: files(f[2])!
             ) == (f[3] == "true")
         }
-        try conform("folderRecoveryStep") { f in
-            LampSyncFolderPublisher.recoveryMayProceed(
-                stageValid: f[0] == "true",
-                old: f[1] == "-" ? nil : f[1],
-                intended: f[2] == "-" ? nil : f[2],
-                visible: f[3] == "-" ? nil : f[3]
-            ) == (f[4] == "true")
-        }
         try conform("stagedCommitAllowed") { f in
             func library(_ field: String) -> [String: String]? { field == "-" ? nil : ["UserData.sqlite": field] }
             return LampLibrary.stagedCommitAllowed(original: library(f[0]), live: library(f[1])) == (f[2] == "true")
@@ -469,64 +368,6 @@ struct SyncModelConformanceTests {
     }
 
     // MARK: - Writing to a server
-
-    @Test func observedModuleWrite() async throws {
-        try #require(SyncModel.run.problem == nil)
-        let cases = SyncModel.cases("observedModuleWrite")
-        #expect(!cases.isEmpty)
-        for f in cases {
-            let store = ScriptedRemoteStore()
-            let path = "notes/a.lamp"
-            if f[1] != "-" {
-                let parts = f[1].split(separator: ":").map(String.init)
-                store.files[path] = LampSyncRemoteFile(data: Data([UInt8(parts[1])!]), revision: quoted(parts[0]))
-            }
-            let base: String? = switch f[0] {
-            case "absent": nil
-            case let field where field.hasPrefix("revision:"): quoted(String(field.dropFirst("revision:".count)))
-            default: LampSyncContentRevision.digest(for: Data([UInt8(f[0].dropFirst("digest:".count))!]))
-            }
-            var allowed = true
-            do {
-                try await LampSyncObservedWrite.publish(
-                    Data([UInt8(f[2])!]), to: path, in: store, matching: base
-                )
-            } catch LampSyncConditionalWrite.WriteError.conflict {
-                allowed = false
-            }
-            #expect(allowed == (f[3] == "true"), "observedModuleWrite \(f.joined(separator: " "))")
-        }
-    }
-
-    @Test func refusedFilesInABatch() async throws {
-        try #require(SyncModel.run.problem == nil)
-        let cases = SyncModel.cases("publishReportingRefusals")
-        #expect(!cases.isEmpty)
-        for f in cases {
-            let outcomes = f[0] == "-" ? [] : f[0].map { String($0) }
-            let store = ScriptedRemoteStore()
-            let files = outcomes.enumerated().map { index, outcome in
-                let path = "file-\(index)"
-                store.writeOutcomes[path] = switch outcome {
-                case "r": .refuse
-                case "f": .fail
-                default: .accept("\"w\"")
-                }
-                return LampSyncCompatibilityPublisher.File(remotePath: path, data: Data([1]), condition: .unconditional)
-            }
-            let result: String
-            do {
-                let attempt = try await LampSyncCompatibilityPublisher.publishReportingRefusals(files, in: store)
-                let flags = files.map { attempt.refused.contains($0.remotePath) ? "r" : "w" }.joined()
-                result = flags.isEmpty ? "-" : flags
-            } catch LampSyncConditionalWrite.WriteError.conflict {
-                result = "refusal escaped"
-            } catch {
-                result = "stopped"
-            }
-            #expect(result == f[1], "publishReportingRefusals \(f.joined(separator: " "))")
-        }
-    }
 
     @Test func confirmingAWrite() async throws {
         try #require(SyncModel.run.problem == nil)
@@ -599,88 +440,7 @@ struct SyncModelConformanceTests {
 
     // MARK: - Settings archive
 
-    @Test func settingsArchive() throws {
-        let archiveData = Data([5])
-        func manifest(_ revision: String, _ digest: String) throws -> LampSyncSettingsArchive.LegacyManifest? {
-            guard revision != "-" else { return nil }
-            return try LampSyncSettingsArchive.LegacyManifest(
-                archiveData: archiveData,
-                observedLegacy: LampSyncRemoteFile(data: Data([UInt8(digest)!]), revision: quoted(revision))
-            )
-        }
-        func legacy(_ field: String) -> LampSyncRemoteFile? {
-            guard field != "-" else { return nil }
-            let parts = field.split(separator: ":").map(String.init)
-            return LampSyncRemoteFile(data: Data([UInt8(parts[1])!]), revision: quoted(parts[0]))
-        }
-        try conform("classifyLegacySettings") { f in
-            let state = try LampSyncSettingsArchive.classifyLegacy(
-                archiveData: archiveData, manifest: try manifest(f[0], f[1]), legacy: legacy(f[2])
-            )
-            return "\(state)" == f[3]
-        }
-        try conform("resolveSettingsSource") { f in
-            // As `readWithLegacy` asks: classify against the archive's entry
-            // when there is one, then choose.
-            let state = f[0] == "-" ? nil : try LampSyncSettingsArchive.classifyLegacy(
-                archiveData: archiveData, manifest: try manifest(f[1], f[2]), legacy: legacy(f[3])
-            )
-            return "\(LampSyncSettingsArchive.readSource(archiveLegacyState: state, legacyPresent: f[3] != "-"))" == f[4]
-        }
-    }
-
-    @Test func skippingAnUnchangedPoll() async throws {
-        try #require(SyncModel.run.problem == nil)
-        let cases = SyncModel.cases("maySkipArchivePoll")
-        #expect(!cases.isEmpty)
-        for f in cases {
-            func spelled(_ tag: String, strong: Bool) -> String { strong ? quoted(tag) : "W/" + quoted(tag) }
-            let (archiveStrong, legacyStrong) = (f[0] == "true", f[1] == "true")
-            let store = ScriptedRemoteStore()
-            if f[3] != "-" {
-                store.files[LampSyncLayout.archivePath] = LampSyncRemoteFile(
-                    data: Data(), revision: spelled(f[3], strong: archiveStrong)
-                )
-            }
-            if f[5] != "-" {
-                store.files[LampSyncSettingsArchive.path] = LampSyncRemoteFile(
-                    data: Data(), revision: spelled(f[5], strong: legacyStrong)
-                )
-            }
-            let skip = await LampSyncSettingsArchive.canSkipUnchangedPoll(
-                expectedArchiveToken: f[2] == "-" ? nil : f[2],
-                expectedLegacyRevision: f[4] == "-" ? nil : spelled(f[4], strong: legacyStrong),
-                in: store
-            )
-            #expect(skip == (f[6] == "true"), "maySkipArchivePoll \(f.joined(separator: " "))")
-        }
-    }
-
     // MARK: - Reading without a precondition
-
-    @Test func stableReads() async throws {
-        try #require(SyncModel.run.problem == nil)
-        final class Probes: @unchecked Sendable {
-            var answers: [String?]
-            init(_ answers: [String?]) { self.answers = answers }
-            func next() -> String? { answers.removeFirst() }
-        }
-        func revision(_ field: String) -> String? { field == "-" ? nil : quoted(field) }
-        for (rule, f) in SyncModel.cases("stableRead").map({ ("stableRead", $0) })
-            + SyncModel.cases("checkedContentRead").map({ ("checkedContentRead", $0) }) {
-            let checksBody = rule == "checkedContentRead"
-            let (before, after) = (f[0], checksBody ? f[2] : f[1])
-            let probes = Probes([revision(before), revision(after)])
-            let read = try? await LampSyncStableRead.read(
-                revision: { probes.next() },
-                data: { Data() },
-                bodyRevision: checksBody ? { _ in revision(f[1]) ?? "no body" } : nil
-            )
-            let result = read?.revision.map { LampSyncConditionalWrite.token(for: $0) } ?? "-"
-            #expect(result == f.last!, "\(rule) \(f.joined(separator: " "))")
-        }
-        #expect(!SyncModel.cases("stableRead").isEmpty && !SyncModel.cases("checkedContentRead").isEmpty)
-    }
 
     // MARK: - The pass itself
 
@@ -744,9 +504,6 @@ struct SyncModelConformanceTests {
     // MARK: - Module files
 
     @Test func moduleFiles() throws {
-        try conform("migrationCopyAction") { f in
-            "\(LampSyncMigrationCopy.action(isEditable: f[0] == "true", source: Data([1]), destination: Int(f[1]).map { Data([UInt8($0)]) }))" == f[2]
-        }
         try conform("selectedCandidateIndex") { f in
             // Paths lead with their position, so among two of one format the
             // earlier sorts first, as the model's first occurrence does.
@@ -763,23 +520,6 @@ struct SyncModelConformanceTests {
         }
     }
 
-    @Test func migrationWritesOnlyToCreate() async throws {
-        try #require(SyncModel.run.problem == nil)
-        final class Created: @unchecked Sendable { var value = false }
-        let cases = SyncModel.cases("migrationCopyAction")
-        #expect(!cases.isEmpty)
-        for f in cases {
-            let created = Created()
-            _ = try? await LampSyncMigrationCopy.run(
-                isEditable: f[0] == "true",
-                source: Data([1]),
-                readDestination: { Int(f[1]).map { Data([UInt8($0)]) } },
-                createIfAbsent: { _ in created.value = true }
-            )
-            #expect(created.value == (f[3] == "true"), "migrationCopyAction \(f.joined(separator: " "))")
-        }
-    }
-
     // MARK: - Records, archive reads and folders
 
     @Test func resolvedRecordRevision() throws {
@@ -787,24 +527,6 @@ struct SyncModelConformanceTests {
             LampSyncMerge.resolutionTimestamp(
                 localModified: Int(f[0]), incomingModified: Int(f[1]), now: Int(f[2])!
             ) == Int(f[3])
-        }
-    }
-
-    @Test func archiveGets() async throws {
-        try #require(SyncModel.run.problem == nil)
-        let cases = SyncModel.cases("archiveGetRequired")
-        #expect(!cases.isEmpty)
-        for f in cases {
-            let known = f[1] == "true" ? quoted("1") : "W/" + quoted("1")
-            let store = ScriptedRemoteStore()
-            store.files[LampSyncLayout.archivePath] = LampSyncRemoteFile(
-                data: Data(), revision: f[2] == "true" ? known : quoted("2")
-            )
-            store.scriptedReads = []
-            _ = try? await LampSyncArchiveRemote.readIfChanged(
-                from: store, knownRevision: f[0] == "true" ? known : nil
-            )
-            #expect((store.readCount > 0) == (f[3] == "true"), "archiveGetRequired \(f.joined(separator: " "))")
         }
     }
 
@@ -872,28 +594,10 @@ struct SyncModelConformanceTests {
         }
     }
 
-    @Test func mirrorsAndMediaBatches() async throws {
+    @Test func mediaBatches() async throws {
         try #require(SyncModel.run.problem == nil)
         struct Failure: Error {}
         let outcomes = { (field: String) in field == "-" ? [] : field.map { $0 == "t" } }
-        let mirrors = SyncModel.cases("mirrorAttempts")
-        #expect(!mirrors.isEmpty)
-        for f in mirrors {
-            let store = ScriptedRemoteStore()
-            let files = outcomes(f[0]).enumerated().map { index, ok in
-                store.writeOutcomes["mirror-\(index)"] = ok ? .accept(quoted("w")) : .fail
-                return LampSyncCompatibilityPublisher.File(
-                    remotePath: "mirror-\(index)", data: Data([1]), condition: .unconditional
-                )
-            }
-            let succeeded = (try? await LampSyncCompatibilityPublisher.publish(files, in: store)) != nil
-            let attempts = store.writeLog.map { path -> String in
-                if case .accept = store.writeOutcomes[path]! { return "t" }
-                return "f"
-            }
-            #expect([attempts.isEmpty ? "-" : attempts.joined(), "\(succeeded)"] == Array(f.suffix(2)),
-                    "mirrorAttempts \(f.joined(separator: " "))")
-        }
         let batches = SyncModel.cases("mediaBatchComplete")
         #expect(!batches.isEmpty)
         let folder = FileManager.default.temporaryDirectory
@@ -943,44 +647,6 @@ struct SyncModelConformanceTests {
         }
     }
 
-    @Test func observedCompatibilityWrite() async throws {
-        try #require(SyncModel.run.problem == nil)
-        let cases = SyncModel.cases("observedCompatibilityWrite")
-        #expect(!cases.isEmpty)
-        let path = "notes/a.lamp"
-        func pair(_ field: String) -> (String, UInt8)? {
-            guard field != "-" else { return nil }
-            let parts = field.split(separator: ":").map(String.init)
-            return (parts[0], UInt8(parts[1])!)
-        }
-        for f in cases {
-            let store = ScriptedRemoteStore()
-            if let (revision, content) = pair(f[2]) {
-                store.files[path] = LampSyncRemoteFile(data: Data([content]), revision: quoted(revision))
-            }
-            let base: String? = switch f[0] {
-            case "absent": nil
-            case let field where field.hasPrefix("revision:"): quoted(String(field.dropFirst("revision:".count)))
-            default: LampSyncContentRevision.digest(for: Data([UInt8(f[0].dropFirst("digest:".count))!]))
-            }
-            // The model's archive pair is (archived content, folder revision it superseded).
-            let archived = pair(f[1]).map { archivedContent, supersededRevision in
-                LampCompatibilityManifest.File(
-                    path: path, data: Data([UInt8(archivedContent)!]), baseRevision: quoted("\(supersededRevision)")
-                )
-            }
-            var allowed = true
-            do {
-                try await LampSyncObservedWrite.publish(
-                    Data([UInt8(f[3])!]), to: path, in: store, matching: base, supersededBy: archived
-                )
-            } catch LampSyncConditionalWrite.WriteError.conflict {
-                allowed = false
-            }
-            #expect(allowed == (f[4] == "true"), "observedCompatibilityWrite \(f.joined(separator: " "))")
-        }
-    }
-
     // MARK: - Capturing the library
 
     @Test func archiveCapture() throws {
@@ -1011,26 +677,6 @@ struct SyncModelConformanceTests {
                 choice = "reject"
             }
             return choice == f[3]
-        }
-    }
-
-    @Test func devotionalMediaUploads() async throws {
-        try #require(SyncModel.run.problem == nil)
-        let cases = SyncModel.cases("devotionalMediaUploadDecision")
-        #expect(cases.count == 3)
-        for f in cases {
-            let remote = Int(f[0]).map { LampSyncRemoteFile(data: Data([UInt8($0)]), revision: nil) }
-            let result: String
-            do {
-                let pending = try await LampSyncDevotionalMedia.pendingUploads(
-                    [.init(remotePath: "media/a.png", data: Data([1]))], readRemote: { _ in remote }
-                )
-                // A conditional create is the model's `some true`; nothing to send, `some false`.
-                result = pending.isEmpty ? "false" : pending.map { "\($0.condition == .ifAbsent)" }.joined()
-            } catch LampSyncDevotionalMedia.UploadError.conflictingRemoteFile {
-                result = "-"
-            }
-            #expect(result == f[1], "devotionalMediaUploadDecision \(f.joined(separator: " "))")
         }
     }
 

@@ -110,27 +110,5 @@ struct LampSyncDevotionalMediaTests {
         }
     }
 
-    @Test func mediaUploadSkipsIdenticalRemoteAndRejectsDifferentRemote() async throws {
-        let old = LampSyncDevotionalMedia.UploadFile(
-            remotePath: "DevotionalMedia/devotionals/daily/old.png",
-            data: Data("same".utf8)
-        )
-        let new = LampSyncDevotionalMedia.UploadFile(
-            remotePath: "DevotionalMedia/devotionals/daily/new.png",
-            data: Data("new".utf8)
-        )
-        let pending = try await LampSyncDevotionalMedia.pendingUploads([old, new]) { path in
-            path == old.remotePath
-                ? LampSyncRemoteFile(data: old.data, revision: "\"old\"") : nil
-        }
-        #expect(pending.map(\.remotePath) == [new.remotePath])
-        #expect(pending.first?.condition == .ifAbsent)
-        await #expect(throws: LampSyncDevotionalMedia.UploadError.self) {
-            try await LampSyncDevotionalMedia.pendingUploads([old]) { _ in
-                LampSyncRemoteFile(data: Data("different".utf8), revision: "\"old\"")
-            }
-        }
-    }
-
     private enum TestFailure: Error { case missing }
 }

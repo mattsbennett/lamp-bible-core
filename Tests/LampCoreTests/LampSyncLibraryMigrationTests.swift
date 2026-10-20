@@ -198,23 +198,20 @@ struct LampSyncLibraryMigrationTests {
         #expect(store.writes == 0)
     }
 
-    /// A folder the Mac's folder sync kept, published and captured as that
-    /// sync does; the phone then writes a module beside it. The move writes
+    /// A folder the Mac's folder sync kept, as that sync left it; the phone
+    /// then writes a module beside it. The move writes
     /// the bundle where nothing was; the next pass adopts the phone's module
     /// and the deck, and leaves the old tree's writings alone.
     @Test func aFolderTheMacKeptIsMovedByWritingTheFirstBundle() async throws {
-        let root = FileManager.default.temporaryDirectory
+        let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-mac-move-\(UUID().uuidString)", isDirectory: true)
-        let folder = root.appendingPathComponent("Library", isDirectory: true)
-        let tree = root.appendingPathComponent("Tree", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let (archive, _) = try macArchive()
-        try archive.extract(to: tree)
-        let observed = try await LampSyncFolderPublisher.capture(from: folder)
-        try await LampSyncFolderPublisher.publish(
-            LampSyncArchive.create(from: tree), to: folder, replacing: observed
-        )
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // The folder as the Mac's folder sync left it, captured from that sync.
+        for (path, data) in ArchiveEraFixtures.macFolder {
+            let url = folder.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
         let imported = try await LampSyncFolderPublisher.capture(from: folder)
         // The phone writes a module after the Mac's import, before the move.
         try FileManager.default.createDirectory(
