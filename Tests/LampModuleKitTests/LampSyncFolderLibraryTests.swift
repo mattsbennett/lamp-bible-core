@@ -283,6 +283,37 @@ struct LampSyncFolderLibraryTests {
         #expect(try await LampSyncSettingsStore.read(from: store)?.bundle.userSettings == Data("phone".utf8))
     }
 
+    /// A read just after a write, by any device, meets Apache's weak tag
+    /// and waits it out, instead of calling the server unversioned.
+    @Test func aReadJustAfterAWriteWaitsOutTheWeakTag() async throws {
+        let store = LaggingStore()
+        store.files[LampSyncSettingsStore.path] = (try LampSyncSettingsBundle().encoded(), "\"6946-65e4a2c28c82f\"")
+        store.justWritten(LampSyncSettingsStore.path, reads: 2)
+        let read = try #require(try await LampSyncSettingsStore.read(from: store, patience: slow))
+        #expect(read.revision == "\"6946-65e4a2c28c82f\"")
+
+        store.justWritten(LampSyncSettingsStore.path, reads: 2)
+        await #expect(throws: LampSyncSettingsStore.StoreError.unversioned) {
+            try await LampSyncSettingsStore.read(from: store, patience: .immediate)
+        }
+    }
+
+    /// The same weak second after this device's own write: the read-back
+    /// and the next update's read wait it out, and nothing is refused.
+    @Test func anUpdateRightAfterAWriteWaitsOutTheWeakTag() async throws {
+        let store = LaggingStore()
+        store.files[LampSyncSettingsStore.path] = (try LampSyncSettingsBundle().encoded(), "\"1\"")
+        store.weakFor = 2
+        let first = try await LampSyncSettingsStore.update(in: store, patience: slow) {
+            $0.userSettings = Data("one".utf8)
+        }
+        let second = try await LampSyncSettingsStore.update(in: store, patience: slow) {
+            $0.userSettings = Data("two".utf8)
+        }
+        #expect(first.bundle.userSettings == Data("one".utf8) && second.bundle.userSettings == Data("two".utf8))
+        #expect(store.writes == 2)
+    }
+
     /// Two devices starting the same library: the one whose claim is refused
     /// reads the other's bundle rather than failing or writing over it.
     @Test func aRefusedClaimReadsTheWinnersBundle() async throws {
@@ -403,22 +434,38 @@ private final class BundleStore: LampSyncRemoteStore, @unchecked Sendable {
 
 /// A server like the user's Synology after a PUT: it takes the write at once
 /// and names no revision, and the next `lag` reads of the path, HEADs
-/// included, still answer with what was there before.
+/// included, still answer with what was there before. After those, the next
+/// `weakFor` answer with the new body under a weak tag, as Apache does for
+/// the second after a file changes.
 private final class LaggingStore: LampSyncRemoteStore, @unchecked Sendable {
     var files: [String: (Data, String)] = [:]
     var lag = 0
+    var weakFor = 0
     private var before: [String: (Data, String)] = [:]
     private var remaining: [String: Int] = [:]
+    private var weakRemaining: [String: Int] = [:]
     private(set) var writes = 0
     private(set) var bodyReads = 0
     private var counter = 0
 
-    func settle() { remaining = [:] }
+    func settle() {
+        remaining = [:]
+        weakRemaining = [:]
+    }
+
+    /// The file as stored, still within its weak second.
+    func justWritten(_ path: String, reads: Int) { weakRemaining[path] = reads }
 
     private func visible(_ path: String) -> (Data, String)? {
-        guard let left = remaining[path], left > 0 else { return files[path] }
-        remaining[path] = left - 1
-        return before[path]
+        if let left = remaining[path], left > 0 {
+            remaining[path] = left - 1
+            return before[path]
+        }
+        if let left = weakRemaining[path], left > 0, let file = files[path] {
+            weakRemaining[path] = left - 1
+            return (file.0, "W/" + file.1)
+        }
+        return files[path]
     }
 
     func list(directory: String) async throws -> [LampSyncRemoteEntry]? { nil }
@@ -441,6 +488,7 @@ private final class LaggingStore: LampSyncRemoteStore, @unchecked Sendable {
         }
         before[path] = files[path]
         remaining[path] = lag
+        weakRemaining[path] = weakFor
         counter += 1
         files[path] = (data, "\"w\(counter)\"")
         writes += 1

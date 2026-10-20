@@ -191,7 +191,9 @@ public enum LampSyncLibraryMigration {
             do {
                 // While the server still reports the imported revision, one
                 // HEAD answers, and the library is not downloaded again.
-                snapshot = try await LampSyncSettingsStore.read(from: store, knownArchiveRevision: revision)
+                snapshot = try await LampSyncSettingsStore.read(
+                    from: store, knownArchiveRevision: revision, patience: patience
+                )
             } catch LampSyncSettingsStore.StoreError.notMigrated(let found) {
                 current = found
             }

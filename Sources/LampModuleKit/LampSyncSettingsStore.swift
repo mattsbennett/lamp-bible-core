@@ -141,16 +141,34 @@ public enum LampSyncSettingsStore {
     /// `notMigrated` with no revision. Only the migration creates a bundle
     /// over an earlier library; `update` never does.
     /// (`Verification/SyncMerge.lean`: `emptyBundlePath`.)
+    ///
+    /// A weak revision is waited out rather than refused. Apache, which the
+    /// user's Synology runs, tags a file weak for the second after it
+    /// changes, since it could change again within that second; so a read
+    /// just after any device's write sees `W/"…"`, and a second later the
+    /// same tag strong. Only a revision still weak after `patience` throws
+    /// `unversioned`.
     public static func read(
         from store: any LampSyncRemoteStore,
-        knownArchiveRevision: String? = nil
+        knownArchiveRevision: String? = nil,
+        patience: LampSyncConditionalWrite.Patience = .standard
     ) async throws -> Snapshot? {
         if let knownArchiveRevision, LampWebDAVStorage.isStrongETag(knownArchiveRevision),
            let current = try await store.revision(path: path),
            LampSyncConditionalWrite.namesSameRevision(current, knownArchiveRevision) {
             throw StoreError.notMigrated(revision: current)
         }
-        let snapshot = try await readBundle(from: store)
+        var snapshot: Snapshot?
+        var waits = Array(patience.confirm.dropFirst())[...]
+        while true {
+            do {
+                snapshot = try await readBundle(from: store)
+                break
+            } catch is WeakRevision {
+                guard let wait = waits.popFirst() else { throw StoreError.unversioned }
+                try? await Task.sleep(for: wait)
+            }
+        }
         if snapshot == nil, try await holdsEarlierLibrary(store) {
             throw StoreError.notMigrated(revision: nil)
         }
@@ -224,7 +242,9 @@ public enum LampSyncSettingsStore {
             var first = LampSyncSettingsBundle()
             var condition = LampSyncWriteCondition.ifAbsent
             do {
-                if let snapshot = try await read(from: store, knownArchiveRevision: knownArchiveRevision) {
+                if let snapshot = try await read(
+                    from: store, knownArchiveRevision: knownArchiveRevision, patience: patience
+                ) {
                     return snapshot
                 }
             } catch StoreError.notMigrated(revision: nil) where migratingPhone {
@@ -378,6 +398,9 @@ public enum LampSyncSettingsStore {
         marker || content
     }
 
+    /// A weak revision, which a server may give for a moment after a write.
+    private struct WeakRevision: Error {}
+
     private static func readBundle(from store: any LampSyncRemoteStore) async throws -> Snapshot? {
         try await LampSyncScratchFile.with { scratch in
             var body: LampSyncDownloadedFile?
@@ -396,6 +419,7 @@ public enum LampSyncSettingsStore {
             }
             let bundle = try LampSyncSettingsBundle.decode(data)
             guard let revision = body.revision, LampWebDAVStorage.isStrongETag(revision) else {
+                if body.revision?.hasPrefix("W/") == true { throw WeakRevision() }
                 throw StoreError.unversioned
             }
             var versions: [String: Version] = [:]
@@ -474,7 +498,7 @@ public enum LampSyncSettingsStore {
     ) async throws -> Snapshot {
         for attempt in 0..<max(attempts, 1) {
             try? await Task.sleep(for: patience.retryWait(before: attempt))
-            let current = try await read(from: store)
+            let current = try await read(from: store, patience: patience)
             let versions = current?.versions ?? []
             var bundle = current?.bundle ?? LampSyncSettingsBundle()
             if let mergingVersion {

@@ -600,3 +600,13 @@ a wait. `Patience.standard` allows about seven and a half seconds to show a
 write back, and waits 0.5 s, then 2 s, before retries. `StoreError` now
 describes itself.
 
+The Sync Now after that failed with `unversioned`. A read-only check of the
+server minutes later found the bundle there, format 3, with a strong ETag
+whether or not compression was offered, and no compression applied, so
+neither the move nor the encoding was at fault. The Synology runs Apache,
+which tags a file weak for the second after it changes, since it could
+change again within that second. A read in that second, such as a pass
+reading back what it just wrote, sees `W/"…"`. `read(from:)` now waits a
+weak revision out within `patience`, and throws `unversioned` only if it
+stays weak. The write's read-back already waits for a strong one.
+
