@@ -98,10 +98,10 @@
     },
     "Sources/LampCore/LampSyncPersonalExport.swift": {
       "rules": [
-        "macHighlightAllowsArchivePublish"
+        "macHighlightAllowsPublish"
       ],
       "conformance": [
-        "macHighlightAllowsArchivePublish"
+        "macHighlightAllowsPublish"
       ]
     },
     "Sources/LampCore/LampSyncSettingsBundleMerge.swift": {
@@ -398,7 +398,6 @@
     },
     "Sources/LampModuleKit/LampSyncReferencedMedia.swift": {
       "rules": [
-        "shouldFetchReferencedMedia",
         "mediaBatchComplete",
         "referencedMediaPhaseComplete"
       ],
@@ -554,8 +553,7 @@
     },
     "../lamp-bible-ios/Lamp Bible/Data/ModuleSyncManager.swift": {
       "rules": [
-        "needsImportByToken",
-        "maySkipEditableArchiveImport"
+        "needsImportByToken"
       ]
     },
     "../lamp-bible-ios/Lamp Bible/Data/NoteStorage.swift": {
@@ -564,20 +562,20 @@
     "../lamp-bible-ios/Lamp Bible/Data/Sync/LibrarySyncPass.swift": {
       "rules": [
         "filePlanAction",
-        "settingsUpdate"
+        "settingsUpdate",
+        "pendingModuleConflictBlocksExport",
+        "failedModuleWriteRetainsPublication"
       ],
       "boundary": "Design B's pass on the phone: it gathers what the phone holds and carries out LampSyncFilePlan's actions and the pass's one LampSyncSettingsStore.update. The decisions are core's."
     },
     "../lamp-bible-ios/Lamp Bible/Data/Sync/SyncCoordinator.swift": {
       "rules": [
-        "iosFullPassTrace",
-        "foregroundReconciliationTrace",
-        "iosForegroundSinglePassTrace",
         "deferredBackendWipe",
         "backendActivationOccurs",
-        "aQuietRoundConverges"
+        "aQuietRoundConverges",
+        "iosVisibleSettingsAfterPersist"
       ],
-      "boundary": "Pass order is modelled as traces; the coordinator's sequencing itself is iOS code held by iOS tests."
+      "boundary": "Provider switching runs through LampSyncBackendTransition; the coordinator's sequencing itself is iOS code held by iOS tests."
     },
     "../lamp-bible-ios/Lamp Bible/Data/Sync/SyncProvider.swift": {
       "boundary": "The provider protocol: types only, no sync decision."
@@ -623,10 +621,8 @@
     },
     "../lamp-bible-macos/Sources/LampBibleMac/App/LibrarySyncController.swift": {
       "rules": [
-        "runTrace",
         "landing",
         "settleByBytes",
-        "commitMacPull",
         "aQuietRoundConverges",
         "publishedContentIsNeverLost"
       ],

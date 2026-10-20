@@ -188,23 +188,14 @@ theorem differentWebDAVPathCannotSatisfyMKCOLConflict :
     webDAVDirectoryReady 409 207 false true = false := by decide
 
 -- A whole-file upload before reading the remote file cannot preserve a
--- remote-only edit. iOS now reads first and uses a three-way base. Its one-time
--- upgrade path without a base still requires an unchanged remote token, and
--- WebDAV enforces the same revision atomically during the write.
+-- remote-only edit, which is why every write is conditioned on the revision
+-- it read.
 
 def uploadBeforeRead (current _remote : Nat) : Nat × Nat := (current, current)
 
 theorem uploadFirstLosesRemoteOnlyEdit :
     (uploadBeforeRead 1 2).2 ≠ 2 := by
   decide
-
-def guardedUpload (baseToken remoteToken current : Nat) : Option Nat :=
-  if baseToken == remoteToken then some current else none
-
-theorem staleSnapshotCannotUpload (baseToken remoteToken current : Nat)
-    (h : baseToken ≠ remoteToken) :
-    guardedUpload baseToken remoteToken current = none := by
-  simp [guardedUpload, h]
 
 -- WebDAV If-Match and If-None-Match evaluate the revision at the write.
 -- `none` as an expected revision means the client requires an absent file.
@@ -343,9 +334,8 @@ theorem equalCompletionDifferentRowsConflict (time deviceRow remoteRow : Nat)
     chooseReading time time deviceRow remoteRow = .conflict := by
   simp [chooseReading, h]
 
--- The upgrade path has no membership base. Its caller guards a pending upload
--- with the last observed remote token (`uploadsBeforeMerge`). Settings use the
--- old timestamp rule, refusing an equal-time disagreement.
+-- Settings with no membership base use the timestamp rule, refusing an
+-- equal-time disagreement.
 def chooseWithoutBase (deviceTime remoteTime : Nat) (sameSettings : Bool) : ThreeWayChoice :=
   if deviceTime = remoteTime && !sameSettings then .conflict
   else if remoteTime > deviceTime then .remote
@@ -421,214 +411,35 @@ theorem newerDeviceSettingsWinWithoutBase (deviceTime remoteTime : Nat)
   have hnot : ¬ remoteTime > deviceTime := by omega
   simp [chooseWithoutBase, hne, hnot]
 
--- A body from one GET paired with a later HEAD revision can overwrite the
--- intervening edit. iOS WebDAV settings now carry body and ETag from one GET.
-theorem separateSettingsTokenCanAuthorizeStaleBody :
-    conditionalWrite (some 2) (some (2, 99)) 1 = some (3, 1) := by
-  decide
-
-theorem pairedSettingsSnapshotRejectsLaterRevision
-    (readRevision laterRevision laterBody mergedBody : Nat)
-    (h : readRevision ≠ laterRevision) :
-    conditionalWrite (some readRevision)
-      (some (laterRevision, laterBody)) mergedBody = none := by
-  exact staleConditionalWriteRejected readRevision laterRevision laterBody mergedBody h
-
--- Mac may rebuild all archive entries it owns, but its archive PUT retains the
--- iOS settings entry from the same revision that authorized that PUT.
-def preservedSettings (observed _outgoing : Option Nat) : Option Nat := observed
-
-def macArchivePublish (observedRevision currentRevision : Nat)
-    (observedSettings outgoingSettings : Option Nat) : Option (Nat × Option Nat) :=
-  if observedRevision == currentRevision then
-    some (currentRevision + 1, preservedSettings observedSettings outgoingSettings)
-  else none
-
-theorem macPublishRetainsObservedSettings
-    (revision settings : Nat) (outgoing : Option Nat) :
-    macArchivePublish revision revision (some settings) outgoing =
-      some (revision + 1, some settings) := by
-  simp [macArchivePublish, preservedSettings]
-
-theorem macDoesNotInventSettingsFromOutgoing
-    (revision : Nat) (outgoing : Option Nat) :
-    macArchivePublish revision revision none outgoing =
-      some (revision + 1, none) := by
-  simp [macArchivePublish, preservedSettings]
-
-theorem staleMacArchiveCannotReplaceSettings
-    (observedRevision currentRevision : Nat)
-    (observedSettings outgoingSettings : Option Nat)
-    (h : observedRevision ≠ currentRevision) :
-    macArchivePublish observedRevision currentRevision observedSettings outgoingSettings = none := by
-  simp [macArchivePublish, h]
-
--- Mac's iOS-compatible highlight export may skip an empty set. Any other
--- export error must stop the publish callback before its archive PUT.
+-- The Mac's highlight export may skip an empty set, and the pass carries on.
+-- Any other export error reaches the pass, so the set is never recorded as
+-- published.
 inductive MacHighlightExport where
   | ready | empty | failed
   deriving DecidableEq, Repr
 
-def macHighlightAllowsArchivePublish : MacHighlightExport → Bool
+def macHighlightAllowsPublish : MacHighlightExport → Bool
   | .ready | .empty => true
   | .failed => false
 
 theorem emptyMacHighlightSetMayBeSkipped :
-    macHighlightAllowsArchivePublish .empty = true := by
+    macHighlightAllowsPublish .empty = true := by
   rfl
 
-theorem failedMacHighlightExportStopsArchivePublish :
-    macHighlightAllowsArchivePublish .failed = false := by
+theorem failedMacHighlightExportStopsPublish :
+    macHighlightAllowsPublish .failed = false := by
   rfl
 
-def oldMacHighlightAllowsArchivePublish (_ : MacHighlightExport) : Bool := true
+def oldMacHighlightAllowsPublish (_ : MacHighlightExport) : Bool := true
 
 theorem swallowedMacHighlightFailureCouldPublish :
-    oldMacHighlightAllowsArchivePublish .failed = true := by
+    oldMacHighlightAllowsPublish .failed = true := by
   rfl
 
--- The archive's legacy-settings manifest records the standalone file observed
--- before commit. Matching archive bytes are a completed mirror; unchanged
--- older bytes are superseded. Any other bytes may be an older client edit.
-inductive LegacySettingsState where
-  | absent | mirrored | superseded | changed
-  deriving DecidableEq, Repr
-
-def classifyLegacySettings (archiveDigest : Nat)
-    (baseRevision baseDigest : Option Nat)
-    (legacy : Option (Nat × Nat)) : LegacySettingsState :=
-  match legacy with
-  | none => if baseRevision = none then .absent else .changed
-  | some (revision, digest) =>
-      if digest = archiveDigest then .mirrored
-      else if some revision = baseRevision && some digest = baseDigest then .superseded
-      else .changed
-
-theorem mirroredLegacyIsCurrent (archiveDigest revision : Nat)
-    (baseRevision baseDigest : Option Nat) :
-    classifyLegacySettings archiveDigest baseRevision baseDigest
-      (some (revision, archiveDigest)) = .mirrored := by
-  simp [classifyLegacySettings]
-
-theorem unchangedLegacyIsSuperseded (archiveDigest revision digest : Nat)
-    (h : digest ≠ archiveDigest) :
-    classifyLegacySettings archiveDigest (some revision) (some digest)
-      (some (revision, digest)) = .superseded := by
-  simp [classifyLegacySettings, h]
-
-theorem changedLegacyCannotBeIgnored (archiveDigest baseRevision baseDigest
-    revision digest : Nat)
-    (hArchive : digest ≠ archiveDigest)
-    (hBase : revision ≠ baseRevision ∨ digest ≠ baseDigest) :
-    classifyLegacySettings archiveDigest (some baseRevision) (some baseDigest)
-      (some (revision, digest)) = .changed := by
-  rcases hBase with hRevision | hDigest
-  · simp [classifyLegacySettings, hArchive, hRevision]
-  · simp [classifyLegacySettings, hArchive, hDigest]
-
-theorem removedObservedLegacyIsConflict (archiveDigest revision digest : Nat) :
-    classifyLegacySettings archiveDigest (some revision) (some digest) none = .changed := by
-  simp [classifyLegacySettings]
-
-theorem failedInitialLegacyMirrorCanRetry (archiveDigest : Nat) :
-    classifyLegacySettings archiveDigest none none none = .absent := by
-  simp [classifyLegacySettings]
-
--- `LampSyncSettingsArchive.readWithLegacy` selects the archive only after
--- checking whether an older client changed the standalone settings file.
-inductive SettingsReadSource where
-  | absent | legacy | archive | conflict
-  deriving DecidableEq, Repr
-
-def resolveSettingsSource (archiveDigest : Option Nat)
-    (baseRevision baseDigest : Option Nat)
-    (legacy : Option (Nat × Nat)) : SettingsReadSource :=
-  match archiveDigest with
-  | none => if legacy.isSome then .legacy else .absent
-  | some digest =>
-      if classifyLegacySettings digest baseRevision baseDigest legacy = .changed
-      then .conflict else .archive
-
-theorem legacySettingsUsedBeforeMigration (revision digest : Nat) :
-    resolveSettingsSource none none none (some (revision, digest)) = .legacy := by
-  simp [resolveSettingsSource]
-
-theorem supersededLegacyDoesNotReplaceArchive
-    (archiveDigest revision legacyDigest : Nat)
-    (h : legacyDigest ≠ archiveDigest) :
-    resolveSettingsSource (some archiveDigest)
-      (some revision) (some legacyDigest) (some (revision, legacyDigest)) = .archive := by
-  simp [resolveSettingsSource, unchangedLegacyIsSuperseded, h]
-
-theorem changedLegacyStopsArchiveRead (archiveDigest baseRevision baseDigest
-    revision digest : Nat)
-    (hArchive : digest ≠ archiveDigest)
-    (hBase : revision ≠ baseRevision ∨ digest ≠ baseDigest) :
-    resolveSettingsSource (some archiveDigest)
-      (some baseRevision) (some baseDigest) (some (revision, digest)) = .conflict := by
-  simp [resolveSettingsSource,
-    changedLegacyCannotBeIgnored archiveDigest baseRevision baseDigest
-      revision digest hArchive hBase]
-
--- A client's old reading/settings baseline can seed the archive merge only
--- when it names the same provider and the exact legacy revision superseded by
--- the archive. Otherwise a no-base conflict is required.
-def mayAdoptLegacyBase (savedSource currentSource savedRevision manifestRevision : Nat) : Bool :=
-  savedSource == currentSource && savedRevision == manifestRevision
-
-theorem matchingLegacyBaseMayBeAdopted (source revision : Nat) :
-    mayAdoptLegacyBase source source revision revision = true := by
-  simp [mayAdoptLegacyBase]
-
-theorem differentLegacyRevisionCannotSeedArchive (source savedRevision manifestRevision : Nat)
-    (h : savedRevision ≠ manifestRevision) :
-    mayAdoptLegacyBase source source savedRevision manifestRevision = false := by
-  simp [mayAdoptLegacyBase, h]
-
-theorem differentLegacySourceCannotSeedArchive (savedSource currentSource revision : Nat)
-    (h : savedSource ≠ currentSource) :
-    mayAdoptLegacyBase savedSource currentSource revision revision = false := by
-  simp [mayAdoptLegacyBase, h]
-
--- A settings poll may skip the GET only after both archive and compatibility
--- file HEADs return the strong revisions saved with the applied baseline.
-def maySkipArchivePoll (localPending sourceMatches archiveStrong legacyStrong : Bool)
-    (savedArchive currentArchive savedLegacy currentLegacy : Option Nat) : Bool :=
-  !localPending && sourceMatches && archiveStrong && legacyStrong &&
-    savedArchive.isSome && savedLegacy.isSome &&
-    savedArchive == currentArchive && savedLegacy == currentLegacy
-
-theorem unchangedStrongRevisionsMaySkipPoll (archive legacy : Nat) :
-    maySkipArchivePoll false true true true
-      (some archive) (some archive) (some legacy) (some legacy) = true := by
-  simp [maySkipArchivePoll]
-
-theorem changedArchiveForcesRead (saved current legacy : Nat)
-    (h : saved ≠ current) :
-    maySkipArchivePoll false true true true
-      (some saved) (some current) (some legacy) (some legacy) = false := by
-  simp [maySkipArchivePoll, h]
-
-theorem changedLegacyForcesRead (archive saved current : Nat)
-    (h : saved ≠ current) :
-    maySkipArchivePoll false true true true
-      (some archive) (some archive) (some saved) (some current) = false := by
-  simp [maySkipArchivePoll, h]
-
-theorem pendingLocalChangeForcesRead (archive legacy : Nat) :
-    maySkipArchivePoll true true true true
-      (some archive) (some archive) (some legacy) (some legacy) = false := by
-  simp [maySkipArchivePoll]
-
-theorem weakLegacyRevisionForcesRead (archive legacy : Nat) :
-    maySkipArchivePoll false true true false
-      (some archive) (some archive) (some legacy) (some legacy) = false := by
-  simp [maySkipArchivePoll]
-
--- iCloud offers no atomic conditional write. Bracketing its coordinated read
--- with content digests rejects changed bytes during the read, assuming the
--- SHA-256 digest distinguishes the particular bodies. A modification date
--- alone could remain equal across different writes.
+-- iCloud offers no atomic conditional write, so a revision on the folder
+-- provider is a content digest, assuming SHA-256 distinguishes the particular
+-- bodies. A modification date alone could remain equal across different
+-- writes.
 def modificationDateToken (_body date : Nat) : Nat := date
 
 theorem equalModificationDateCanHideChangedBody :
@@ -643,135 +454,24 @@ theorem differentBodiesHaveDifferentContentRevisions (first second : Nat)
     (h : first ≠ second) : contentRevision first ≠ contentRevision second := by
   simpa [contentRevision] using h
 
-def stableRead (before after : Option Nat) : Option Nat :=
-  if before = after then after else none
+def iCloudReadReady (unresolvedVersions : Bool) (body : Option Nat) : Option Nat :=
+  if unresolvedVersions then none else body
 
-theorem changedTokenDuringReadIsRejected (before after : Option Nat)
-    (h : before ≠ after) : stableRead before after = none := by
-  simp [stableRead, h]
-
-theorem missingTokenCannotAuthorizeExistingBody :
-    stableRead none none = none := by
-  rfl
-
--- A body digest is checked as well as the two probes. This catches A→B→A
--- around the body read, which comparing the probes alone would miss.
-def checkedContentRead
-    (before body after : Option Nat) : Option Nat :=
-  if before = after ∧ body = after then after else none
-
-theorem equalOuterTokensCanHideDifferentBody :
-    stableRead (some 1) (some 1) = some 1 ∧
-    checkedContentRead (some 1) (some 2) (some 1) = none := by
-  decide
-
-theorem matchingContentReadIsAccepted (revision : Nat) :
-    checkedContentRead (some revision) (some revision) (some revision) =
-      some revision := by
-  simp [checkedContentRead]
-
-def iCloudReadReady (unresolvedVersions : Bool)
-    (before body after : Option Nat) : Option Nat :=
-  if unresolvedVersions then none else checkedContentRead before body after
-
-theorem reportedICloudVersionConflictStopsRead
-    (before body after : Option Nat) :
-    iCloudReadReady true before body after = none := by
+theorem reportedICloudVersionConflictStopsRead (body : Option Nat) :
+    iCloudReadReady true body = none := by
   simp [iCloudReadReady]
 
--- A coordinated iCloud read can be stable and still be followed by another
+-- A coordinated iCloud read of revision 1 can still be followed by another
 -- device's write before this client's unconditional upload. The later upload
 -- then replaces that remote-only content. This is a verified limitation of
--- the provider path, not a guarantee supplied by the read check.
+-- the provider path, not a guarantee supplied by the read.
 def unconditionedSettingsWrite (_observedToken : Option Nat)
     (currentRemote : Nat × Nat) (localContent : Nat) : Nat × Nat :=
   (currentRemote.1 + 1, localContent)
 
 theorem stableICloudReadDoesNotProtectLaterWrite :
-    stableRead (some 1) (some 1) = some 1 ∧
     unconditionedSettingsWrite (some 1) (2, 99) 7 = (3, 7) := by
   decide
-
--- `LampSyncObservedWrite` compares a legacy module with the version imported
--- by the client before using the remote revision as its PUT precondition.
--- Digest equality here stands for a collision-free SHA-256 comparison; the
--- actual digest and ETag validation are exercised by Swift tests.
-inductive ObservedBase where
-  | absent | revision (value : Nat) | digest (content : Nat)
-  deriving DecidableEq, Repr
-
-def observedModuleWrite (base : ObservedBase)
-    (remote : Option (Nat × Nat)) (content : Nat) : Option (Nat × Nat) :=
-  match remote with
-  | none =>
-      match base with
-      | .revision _ => none
-      | _ => conditionalWrite none none content
-  | some (revision, remoteContent) =>
-      if content = remoteContent || base = .revision revision ||
-          base = .digest remoteContent then
-        conditionalWrite (some revision) remote content
-      else none
-
-theorem staleModuleRevisionCannotOverwrite (baseRevision remoteRevision oldContent newContent : Nat)
-    (hRevision : baseRevision ≠ remoteRevision)
-    (hContent : oldContent ≠ newContent) :
-    observedModuleWrite (.revision baseRevision)
-      (some (remoteRevision, oldContent)) newContent = none := by
-  simp [observedModuleWrite, hRevision, Ne.symm hContent]
-
-theorem staleModuleDigestCannotOverwrite (baseContent remoteContent newContent revision : Nat)
-    (hBase : baseContent ≠ remoteContent)
-    (hContent : newContent ≠ remoteContent) :
-    observedModuleWrite (.digest baseContent)
-      (some (revision, remoteContent)) newContent = none := by
-  simp [observedModuleWrite, hBase, hContent]
-
-theorem unknownModuleBaseCannotOverwrite (revision oldContent newContent : Nat)
-    (hContent : newContent ≠ oldContent) :
-    observedModuleWrite .absent (some (revision, oldContent)) newContent = none := by
-  simp [observedModuleWrite, hContent]
-
-theorem identicalLegacyUploadMayRepeat (revision content : Nat) :
-    observedModuleWrite .absent (some (revision, content)) content =
-      some (revision + 1, content) := by
-  simp [observedModuleWrite, conditionalWrite]
-
-theorem observedModuleWriteCreatesOnlyWhenAbsent (content : Nat) :
-    observedModuleWrite .absent none content = some (1, content) := by
-  simp [observedModuleWrite, conditionalWrite]
-
--- The compatibility manifest can authorize replacing the folder revision
--- superseded by an archived module, provided the imported digest identifies
--- that exact archive payload. A later folder edit remains protected.
-def observedCompatibilityWrite (base : ObservedBase)
-    (archive : Option (Nat × Nat)) (remote : Option (Nat × Nat))
-    (content : Nat) : Option (Nat × Nat) :=
-  match archive, remote with
-  | some (archiveContent, oldRevision), some (revision, remoteContent) =>
-      if base = .digest archiveContent && revision = oldRevision then
-        conditionalWrite (some revision) (some (revision, remoteContent)) content
-      else observedModuleWrite base remote content
-  | _, _ => observedModuleWrite base remote content
-
-theorem archivedModuleMayReplaceItsOldFolderRevision
-    (archiveContent oldRevision oldFolderContent newContent : Nat) :
-    observedCompatibilityWrite (.digest archiveContent)
-      (some (archiveContent, oldRevision))
-      (some (oldRevision, oldFolderContent)) newContent =
-        some (oldRevision + 1, newContent) := by
-  simp [observedCompatibilityWrite, conditionalWrite]
-
-theorem changedFolderRejectsArchivedModule
-    (archiveContent oldRevision laterRevision laterContent newContent : Nat)
-    (hRevision : laterRevision ≠ oldRevision)
-    (hBase : archiveContent ≠ laterContent)
-    (hContent : newContent ≠ laterContent) :
-    observedCompatibilityWrite (.digest archiveContent)
-      (some (archiveContent, oldRevision))
-      (some (laterRevision, laterContent)) newContent = none := by
-  simp [observedCompatibilityWrite, observedModuleWrite,
-    hRevision, hBase, hContent]
 
 -- The shared preference ledger compares a field with the version this device
 -- last applied. A local value change can be published when the remote revision
@@ -911,137 +611,6 @@ theorem cancelledInitialSyncWaiterCannotContinue (completed : Bool) :
     initialSyncCallerMayContinue completed true = false := by
   cases completed <;> rfl
 
-inductive DefaultModuleSyncAction where
-  | localOnly | pullRemote | unavailable
-  deriving DecidableEq
-
-def defaultModuleSyncAction
-    (backendConfigured storageAvailable : Bool) : DefaultModuleSyncAction :=
-  if !backendConfigured then .localOnly
-  else if storageAvailable then .pullRemote else .unavailable
-
-theorem localOnlyDefaultModuleSkipsRemote (storageAvailable : Bool) :
-    defaultModuleSyncAction false storageAvailable = .localOnly := by
-  cases storageAvailable <;> rfl
-
-theorem configuredUnavailableDefaultModuleDoesNotCreateLocalCopy :
-    defaultModuleSyncAction true false = .unavailable := by
-  rfl
-
--- iOS now treats the settings/archive pull and all module-type pulls as one
--- gate before any module publication. Individual local imports may still
--- have committed before the gate fails; the theorem concerns remote writes.
-def moduleBatchTrace
-    (earlierPullOK : Bool) (typePulls : List Bool) (publishOK : Bool) : List Nat :=
-  runTrace (earlierPullOK && typePulls.all id) publishOK
-
-theorem failedArchivePullStopsAllModulePublication
-    (typePulls : List Bool) (publishOK : Bool) :
-    moduleBatchTrace false typePulls publishOK = [0] := by
-  simp [moduleBatchTrace, runTrace]
-
-theorem failedModuleTypePullStopsBatchPublication
-    (earlierPullOK publishOK : Bool) (typePulls : List Bool)
-    (failed : typePulls.all id = false) :
-    moduleBatchTrace earlierPullOK typePulls publishOK = [0] := by
-  simp [moduleBatchTrace, failed, runTrace]
-
--- The foreground coordinator's legacy editable reconciliation only pulls.
--- The module pass runs afterward in the same shared engine pull phase.
-def foregroundReconciliationTrace
-    (editablePulls : List Bool) (laterPublishOK : Bool) : List Nat :=
-  runTrace (editablePulls.all id) laterPublishOK
-
-theorem failedEditablePullCannotStartForegroundPublication
-    (editablePulls : List Bool) (laterPublishOK : Bool)
-    (failed : editablePulls.all id = false) :
-    foregroundReconciliationTrace editablePulls laterPublishOK = [0] := by
-  simp [foregroundReconciliationTrace, failed, runTrace]
-
--- The iOS full pass imports the archive and pulls every module type before
--- publishing settings, shared preferences, or pending modules. The later
--- writes are still separate conditional operations.
-def iosFullPassTrace
-    (archivePullOK : Bool) (modulePulls : List Bool)
-    (settingsPublishOK preferencesPublishOK modulesPublishOK : Bool) : List Nat :=
-  if archivePullOK && modulePulls.all id then
-    if settingsPublishOK then
-      if preferencesPublishOK then
-        if modulesPublishOK then [0, 1, 2, 3, 4] else [0, 1, 2, 3]
-      else [0, 1, 2]
-    else [0, 1]
-  else [0]
-
-theorem failedModulePullPreventsSettingsPublication
-    (archivePullOK settingsPublishOK preferencesPublishOK modulesPublishOK : Bool)
-    (modulePulls : List Bool) (failed : modulePulls.all id = false) :
-    iosFullPassTrace archivePullOK modulePulls settingsPublishOK
-      preferencesPublishOK modulesPublishOK = [0] := by
-  simp [iosFullPassTrace, failed]
-
-theorem failedArchivePullPreventsAllIOSPublication
-    (modulePulls : List Bool)
-    (settingsPublishOK preferencesPublishOK modulesPublishOK : Bool) :
-    iosFullPassTrace false modulePulls settingsPublishOK
-      preferencesPublishOK modulesPublishOK = [0] := by
-  simp [iosFullPassTrace]
-
--- The foreground coordinator exports all editable legacy modules only after
--- archive and module pulls, settings, preferences, and module publication.
-def foregroundLegacyExportAllowed
-    (editablePulls modulePulls : List Bool)
-    (archivePullOK settingsPublishOK preferencesPublishOK modulesPublishOK : Bool) : Bool :=
-  editablePulls.all id && archivePullOK && modulePulls.all id &&
-    settingsPublishOK && preferencesPublishOK && modulesPublishOK
-
-theorem failedModulePullPreventsLegacyExport
-    (editablePulls modulePulls : List Bool)
-    (archivePullOK settingsPublishOK preferencesPublishOK modulesPublishOK : Bool)
-    (failed : modulePulls.all id = false) :
-    foregroundLegacyExportAllowed editablePulls modulePulls archivePullOK
-      settingsPublishOK preferencesPublishOK modulesPublishOK = false := by
-  simp [foregroundLegacyExportAllowed, failed]
-
--- The foreground coordinator and module manager share one top-level runner. Its pull
--- callback includes optional legacy reconciliation, archive import, and all
--- module types; its publish callback includes settings, preferences, modules,
--- optional legacy export, and a final settings reconciliation. The settings
--- operation has its own inner runner and can commit its baseline before a
--- later module write fails. Top-level completion is entered only after every
--- preceding callback succeeds.
-def iosForegroundSinglePassTrace
-    (editablePulls modulePulls : List Bool)
-    (archivePullOK settingsPublishOK preferencesPublishOK modulesPublishOK
-      legacyExportOK pendingSettingsOK : Bool) : List Nat :=
-  runTrace
-    (editablePulls.all id && archivePullOK && modulePulls.all id)
-    (settingsPublishOK && preferencesPublishOK && modulesPublishOK &&
-      legacyExportOK && pendingSettingsOK)
-
-theorem failedForegroundModulePullStopsBeforePublish
-    (editablePulls modulePulls : List Bool)
-    (archivePullOK settingsPublishOK preferencesPublishOK modulesPublishOK
-      legacyExportOK pendingSettingsOK : Bool)
-    (failed : modulePulls.all id = false) :
-    iosForegroundSinglePassTrace editablePulls modulePulls archivePullOK
-      settingsPublishOK preferencesPublishOK modulesPublishOK legacyExportOK
-      pendingSettingsOK = [0] := by
-  simp [iosForegroundSinglePassTrace, runTrace, failed]
-
-theorem failedForegroundLegacyExportCannotComplete
-    (editablePulls modulePulls : List Bool)
-    (settingsPublishOK preferencesPublishOK modulesPublishOK pendingSettingsOK : Bool)
-    (editableOK : editablePulls.all id = true)
-    (modulesOK : modulePulls.all id = true) :
-    iosForegroundSinglePassTrace editablePulls modulePulls true
-      settingsPublishOK preferencesPublishOK modulesPublishOK false
-      pendingSettingsOK = [0, 1] := by
-  simp [iosForegroundSinglePassTrace, runTrace, editableOK, modulesOK]
-
-theorem settingsCanCommitBeforeLaterModuleFailure :
-    iosFullPassTrace true [] true true false = [0, 1, 2, 3] := by
-  decide
-
 -- The coordinator exposes a new endpoint or completion marker in memory
 -- only after UserDatabase has persisted the same settings value.
 def iosVisibleSettingsAfterPersist
@@ -1057,17 +626,6 @@ theorem successfulIOSSettingsPersistExposesChoice
     (current selected : Nat) :
     iosVisibleSettingsAfterPersist current selected true = selected := by
   rfl
-
--- iOS inspects every portable archive module before installing the first.
--- A malformed later body therefore leaves the local library as it was.
-def iosArchiveAfterInspection
-    (installed candidate : List Nat) (valid : List Bool) : List Nat :=
-  if valid.all id then candidate else installed
-
-theorem invalidLaterArchiveModuleCannotInstallPrefix
-    (installed candidate : List Nat) :
-    iosArchiveAfterInspection installed candidate [true, false] = installed := by
-  simp [iosArchiveAfterInspection]
 
 -- A book identity row is insufficient for installation: the importer also
 -- needs its parent columns and complete sections table.
@@ -1087,15 +645,9 @@ theorem archiveBookInspectionRejectsMissingSections :
     bookInspectionAllows true true false = false := by
   rfl
 
-theorem missingLaterBookSectionsCannotInstallPrefix
-    (installed candidate : List Nat) :
-    iosArchiveAfterInspection installed candidate
-      [true, bookImportSchemaValid true false] = installed := by
-  simp [iosArchiveAfterInspection, bookImportSchemaValid]
-
--- Every iOS archive candidate now checks the columns read by its selected
--- import schema before the first candidate installs. Identity-only inspection
--- used by other callers does not impose that stricter schema contract.
+-- A module read by its legacy layout must carry the columns its import reads
+-- (the inspector's legacy fallback checks them). Identity-only inspection used
+-- by other callers does not impose that stricter schema contract.
 def importSchemaAllows (requireImportSchema : Bool) (requiredColumns : List Bool) : Bool :=
   !requireImportSchema || requiredColumns.all id
 
@@ -1103,16 +655,9 @@ theorem identityOnlyModuleInspectionKeepsLegacySchema (columns : List Bool) :
     importSchemaAllows false columns = true := by
   simp [importSchemaAllows]
 
-theorem missingLaterImportColumnCannotInstallPrefix
-    (installed candidate : List Nat) (columns : List Bool)
-    (h : columns.all id = false) :
-    iosArchiveAfterInspection installed candidate
-      [true, importSchemaAllows true columns] = installed := by
-  simp [iosArchiveAfterInspection, importSchemaAllows, h]
-
 -- Compiled plans carry content columns but omit local installation fields.
--- The iOS importer supplies path, revision, and timestamps from the observed
--- archive entry, so those source-only columns are not a preflight requirement.
+-- The iOS importer supplies path, revision, and timestamps itself, so those
+-- source-only columns are not a preflight requirement.
 def planSourceUsable (contentColumns _localInstallColumns : Bool) : Bool :=
   contentColumns
 
@@ -1122,72 +667,6 @@ theorem compiledPlanWithoutLocalColumnsCanImport :
 
 theorem planMissingContentColumnsCannotImport (localColumns : Bool) :
     planSourceUsable false localColumns = false := by
-  rfl
-
--- iOS now prepares every source before opening one local transaction. A
--- preparation error or any SQL error in the batch leaves the installed state
--- unchanged; only a successful commit exposes the entire candidate state.
-def iosArchiveBatchCommit
-    (installed : List Nat) (prepared : Option (List Nat)) (sqlOK : Bool) : List Nat :=
-  if sqlOK then prepared.getD installed else installed
-
-theorem failedIOSArchivePreparationKeepsInstalled
-    (installed : List Nat) (sqlOK : Bool) :
-    iosArchiveBatchCommit installed none sqlOK = installed := by
-  simp [iosArchiveBatchCommit]
-
-theorem lateIOSArchiveSQLFailureKeepsInstalled
-    (installed : List Nat) (prepared : Option (List Nat)) :
-    iosArchiveBatchCommit installed prepared false = installed := by
-  rfl
-
-theorem successfulIOSArchiveCommitInstallsWholeCandidate
-    (installed candidate : List Nat) :
-    iosArchiveBatchCommit installed (some candidate) true = candidate := by
-  rfl
-
--- The iOS archive importer leaves a newer local highlight set in place during
--- the transaction, including when its source is exposed through staging.
-def iosArchiveHighlightRows
-    (localTime remoteTime : Nat) (installed incoming : List Nat) : List Nat :=
-  if localTime >= remoteTime then installed else incoming
-
-theorem newerLocalHighlightsSurviveArchive
-    (localTime remoteTime : Nat) (installed incoming : List Nat)
-    (newer : localTime >= remoteTime) :
-    iosArchiveHighlightRows localTime remoteTime installed incoming = installed := by
-  simp [iosArchiveHighlightRows, newer]
-
--- The former per-module transaction could leave an installed prefix after a
--- later failure. This is a counterexample for that removed order.
-def oldIOSArchiveLocalStateAfterLateFailure
-    (_installed firstImported : List Nat) : List Nat :=
-  firstImported
-
-theorem sequentialIOSArchiveFailureCanLeaveLocalPrefix :
-    oldIOSArchiveLocalStateAfterLateFailure [1] [1, 2] ≠ [1] := by
-  decide
-
--- A cached local archive can replace a GET only when its installed modules
--- remain valid and the provider reports the same strong revision.
-def archiveGetRequired
-    (cacheValid strongRevision revisionMatches : Bool) : Bool :=
-  !(cacheValid && strongRevision && revisionMatches)
-
-theorem missingCacheRequiresArchiveGet (strongRevision revisionMatches : Bool) :
-    archiveGetRequired false strongRevision revisionMatches = true := by
-  simp [archiveGetRequired]
-
-theorem weakRevisionRequiresArchiveGet (cacheValid revisionMatches : Bool) :
-    archiveGetRequired cacheValid false revisionMatches = true := by
-  simp [archiveGetRequired]
-
-theorem changedRevisionRequiresArchiveGet (cacheValid strongRevision : Bool) :
-    archiveGetRequired cacheValid strongRevision false = true := by
-  simp [archiveGetRequired]
-
-theorem matchingStrongCacheSkipsArchiveGet :
-    archiveGetRequired true true true = false := by
   rfl
 
 -- The shared module-folder listing removes directories and unsupported
@@ -1230,75 +709,9 @@ theorem failedPublishStopsBeforeComplete :
     runTrace true false = [0, 1] := by
   simp [runTrace]
 
--- Mac folder publishing compares the whole observed tree before its first
--- write and then checks each file's observed bytes in its coordinated write.
--- The local file check is modeled as atomic with that one file write; this
--- does not give an atomic multi-file or cross-device transaction.
-def folderPreflight (observed current : List (Nat × Nat)) : Bool :=
-  observed == current
-
-def folderFileWrite (observed current : Option Nat) (outgoing : Nat) : Option Nat :=
-  if observed = current then some outgoing else none
-
-theorem changedFolderStopsBeforeFirstWrite
-    (observed current : List (Nat × Nat)) (h : observed ≠ current) :
-    folderPreflight observed current = false := by
-  simp [folderPreflight, h]
-
-theorem changedFolderFileCannotBeReplaced
-    (observed current : Option Nat) (outgoing : Nat)
-    (h : observed ≠ current) :
-    folderFileWrite observed current outgoing = none := by
-  simp [folderFileWrite, h]
-
-theorem newFolderFileCannotOverwriteConcurrentCreation
-    (remote outgoing : Nat) :
-    folderFileWrite none (some remote) outgoing = none := by
-  simp [folderFileWrite]
-
 theorem successfulRunReachesComplete :
     runTrace true true = [0, 1, 2] := by
   simp [runTrace]
-
--- Backend migration sends editable modules through the reconciled export.
--- Raw read-only files are created only when absent, and a different target
--- body is a conflict rather than permission to overwrite it.
-inductive MigrationCopyAction where
-  | publishMerged | create | alreadyPresent | conflict
-  deriving DecidableEq
-
-def migrationCopyAction
-    (editable : Bool) (source : Nat) (destination : Option Nat) : MigrationCopyAction :=
-  if editable then .publishMerged
-  else match destination with
-    | none => .create
-    | some current => if current == source then .alreadyPresent else .conflict
-
-def migrationRawWriteOccurs (action : MigrationCopyAction) : Bool :=
-  action == .create
-
-theorem editableMigrationNeverRawCopies (source : Nat) (destination : Option Nat) :
-    migrationRawWriteOccurs (migrationCopyAction true source destination) = false := by
-  simp [migrationRawWriteOccurs, migrationCopyAction]
-
-theorem absentReadOnlyDestinationMayBeCreated (source : Nat) :
-    migrationCopyAction false source none = .create := by
-  rfl
-
-theorem identicalReadOnlyDestinationNeedsNoWrite (source : Nat) :
-    migrationCopyAction false source (some source) = .alreadyPresent := by
-  simp [migrationCopyAction]
-
-theorem divergentReadOnlyDestinationIsConflict
-    (source destination : Nat) (different : source ≠ destination) :
-    migrationCopyAction false source (some destination) = .conflict := by
-  simp [migrationCopyAction, Ne.symm different]
-
-theorem divergentReadOnlyMigrationStopsBeforeBackendPublish
-    (source destination : Nat) (different : source ≠ destination) :
-    runTrace (migrationCopyAction false source (some destination) != .conflict) true = [0] := by
-  simp [divergentReadOnlyDestinationIsConflict source destination different,
-    runTrace]
 
 -- iOS's Switch Only operation persists the new provider configuration after
 -- remote publication, then wipes local modules, then activates the provider.
@@ -1383,81 +796,6 @@ theorem failedWipeCannotExposeNewBackend (persisted rollbackCleared : Bool) :
       (pendingBackendMarker true false rollbackCleared) = false := by
   simp [newBackendAvailable]
 
--- A wiped editable module must not be treated as installed merely because
--- its registry row and the remote archive revision are unchanged. iOS clears
--- file_hash with the rows, then requires a hash to skip an archive import.
-def maySkipEditableArchiveImport
-    (sameArchiveRevision modulePresent localHashPresent : Bool) : Bool :=
-  sameArchiveRevision && modulePresent && localHashPresent
-
-theorem wipedEditableHashForcesArchiveImport
-    (sameArchiveRevision modulePresent : Bool) :
-    maySkipEditableArchiveImport sameArchiveRevision modulePresent false = false := by
-  simp [maySkipEditableArchiveImport]
-
--- Compatibility files are a sequence of conditional writes after the archive
--- commit. A failed write leaves its successful prefix committed and prevents
--- all later writes and the runner's completion stage.
-def mirrorAttempts : List Bool → List Bool
-  | [] => []
-  | success :: rest =>
-      if success then true :: mirrorAttempts rest else [false]
-
-theorem failedMirrorStopsLaterWrites (remaining : List Bool) :
-    mirrorAttempts (false :: remaining) = [false] := by
-  simp [mirrorAttempts]
-
--- Mac puts devotional attachment PUTs before the compatible devotional
--- module PUT, so a failed attachment cannot publish a dangling folder module.
-theorem failedDevotionalMediaStopsModuleMirror (moduleWrite : Bool) :
-    mirrorAttempts [false, moduleWrite] = [false] := by
-  rfl
-
--- For an immutable attachment path, `some true` means a conditional create,
--- `some false` means the remote bytes already match, and `none` is a conflict.
-def devotionalMediaUploadDecision (remote : Option Nat) (authored : Nat) : Option Bool :=
-  match remote with
-  | none => some true
-  | some value => if value == authored then some false else none
-
-theorem missingDevotionalMediaRequiresConditionalCreate (authored : Nat) :
-    devotionalMediaUploadDecision none authored = some true := by
-  rfl
-
-theorem identicalDevotionalMediaNeedsNoWrite (authored : Nat) :
-    devotionalMediaUploadDecision (some authored) authored = some false := by
-  simp [devotionalMediaUploadDecision]
-
-theorem conflictingDevotionalMediaCannotPublish (remote authored : Nat)
-    (h : remote ≠ authored) :
-    devotionalMediaUploadDecision (some remote) authored = none := by
-  simp [devotionalMediaUploadDecision, h]
-
-theorem folderBatchCanCommitPrefixBeforeFailure :
-    mirrorAttempts [true, false, true] = [true, false] := by
-  rfl
-
-theorem successfulMirrorsBeforeFailureRemainAttempted
-    (count : Nat) (remaining : List Bool) :
-    mirrorAttempts (List.replicate count true ++ (false :: remaining)) =
-      List.replicate count true ++ [false] := by
-  induction count with
-  | zero => simp [mirrorAttempts]
-  | succ count ih => simpa [List.replicate_succ, mirrorAttempts] using congrArg (List.cons true) ih
-
-def mirrorBatchSucceeds : List Bool → Bool
-  | [] => true
-  | success :: rest => success && mirrorBatchSucceeds rest
-
-theorem failedMirrorPreventsCompletion (initial remaining : List Bool) :
-    runTrace true (mirrorBatchSucceeds (initial ++ (false :: remaining))) = [0, 1] := by
-  have failure : mirrorBatchSucceeds (initial ++ (false :: remaining)) = false := by
-    induction initial with
-    | nil => simp [mirrorBatchSucceeds]
-    | cons success rest ih =>
-        cases success <;> simp [mirrorBatchSucceeds, ih]
-  simp [failure, runTrace]
-
 -- iOS keeps unresolved module record conflicts in its local database. A
 -- matching remote hash is not permission to publish while any row remains.
 -- For iCloud, the hash comparison is a preflight and cannot make the later
@@ -1540,18 +878,13 @@ theorem legacyUsedWhenCanonicalMissing :
     selectModuleFormat (some .lamp) false true = some .json := by
   rfl
 
--- A legacy JSON envelope may contain several module identities. Choosing a
--- canonical successor for one identity must not discard the others.
+-- The format choice for one identity among a listing's files. Choosing a
+-- canonical successor for one identity must not discard another identity's.
 def selectModuleFormatForIdentity
     (identity : Nat) (files : List (Nat × ModuleFormat)) : Option ModuleFormat :=
   selectModuleFormat none
     (files.any fun file => if file.1 = identity ∧ file.2 = .lamp then true else false)
     (files.any fun file => if file.1 = identity ∧ file.2 = .json then true else false)
-
-theorem aggregateJSONKeepsUnshadowedModule :
-    selectModuleFormatForIdentity 1 [(1, .json), (2, .json), (1, .lamp)] = some .lamp ∧
-    selectModuleFormatForIdentity 2 [(1, .json), (2, .json), (1, .lamp)] = some .json := by
-  decide
 
 structure ModuleCandidate where
   identity : Nat
@@ -1766,7 +1099,7 @@ theorem canonicalHighlightUsesHeaderID (moduleID setID : Nat) :
     compactHighlightModuleID (some moduleID) setID = some moduleID := by
   rfl
 
--- Mac personal archive import and shared full-highlight inspection prefer a
+-- Mac personal study import and shared full-highlight inspection prefer a
 -- stored module owner over the temporary download filename when no header is
 -- present. Compact highlights have neither and keep the caller's path ID.
 def personalStudyModuleID
@@ -1849,39 +1182,6 @@ theorem unchangedLocalLibraryAcceptsStagedCommit
     (base incoming : List Nat) :
     guardedStagedBackupCommit base base incoming = some incoming := by
   simp [guardedStagedBackupCommit]
-
--- A Mac pull stages archive rows, canonical iOS rows, workspaces, and
--- settings before applying any of them to the live library/defaults. This
--- models the logical success or failure path, not a process crash between
--- the filesystem swap and the UserDefaults writes.
-structure MacPullState where
-  library : List Nat
-  workspaces : List Nat
-  settings : List Nat
-  highlightMapping : List Nat
-  deriving DecidableEq, Repr
-
-def commitMacPull (installed : MacPullState) (prepared : Option MacPullState) :
-    MacPullState :=
-  prepared.getD installed
-
-theorem failedMacPullKeepsEveryLocalPart (installed : MacPullState) :
-    commitMacPull installed none = installed := by
-  rfl
-
-theorem completedMacPullUsesEveryPreparedPart
-    (installed prepared : MacPullState) :
-    commitMacPull installed (some prepared) = prepared := by
-  rfl
-
-def guardedMacPull
-    (base current prepared : MacPullState) : Option MacPullState :=
-  if base == current then some prepared else none
-
-theorem changedMacLocalStateRejectsPreparedPull
-    (base current prepared : MacPullState) (changed : base ≠ current) :
-    guardedMacPull base current prepared = none := by
-  simp [guardedMacPull, changed]
 
 -- The library swap includes a durable settings journal. A crash can leave the
 -- old defaults visible, but the next launch can replay the intended value.
@@ -2005,44 +1305,6 @@ theorem laterRemoteUploadDoesNotChangeExportRevision
       contentRevision writtenBody := by
   rfl
 
--- iOS settings bootstrap has one ordered decision before the ordinary
--- pull/merge/publish runner. A required missing file cannot be created, and
--- a fresh device adopts a remote file before considering local upload.
-inductive SettingsBootstrapAction where
-  | missing | create | adopt | guarded | merge
-  deriving DecidableEq
-
-def settingsBootstrap
-    (remoteExists requireRemote hasBase hasToken fresh dirty : Bool) :
-    SettingsBootstrapAction :=
-  if !remoteExists then
-    if requireRemote then .missing else .create
-  else if !hasBase && !hasToken && fresh then .adopt
-  else if !hasBase && dirty then .guarded
-  else .merge
-
-theorem requiredMissingSettingsCannotBeCreated
-    (base token fresh dirty : Bool) :
-    settingsBootstrap false true base token fresh dirty = .missing := by
-  simp [settingsBootstrap]
-
-theorem optionalMissingSettingsCreateRemote
-    (base token fresh dirty : Bool) :
-    settingsBootstrap false false base token fresh dirty = .create := by
-  simp [settingsBootstrap]
-
-theorem freshRemoteSettingsAdoptBeforeUpload (dirty : Bool) :
-    settingsBootstrap true false false false true dirty = .adopt := by
-  simp [settingsBootstrap]
-
-theorem dirtySettingsWithoutBaseUseGuardedUpload (token : Bool) :
-    settingsBootstrap true false false token false true = .guarded := by
-  cases token <;> simp [settingsBootstrap]
-
-theorem settingsWithBaseUseMerge (token fresh dirty : Bool) :
-    settingsBootstrap true false true token fresh dirty = .merge := by
-  simp [settingsBootstrap]
-
 -- iCloud adapters now compare the observed body inside the coordinated
 -- write callback. This guards local changes visible at that handoff; it
 -- cannot guard a different device's later upload.
@@ -2059,67 +1321,12 @@ theorem absentExpectationCannotReplaceVisibleBody (observed : Nat) :
     coordinatedContentWriteAllowed none (some observed) = false := by
   simp [coordinatedContentWriteAllowed]
 
--- Media lacks a merge base. The shared content rule allows creation and an
--- identical retry, but cannot replace a different remote body. iCloud also
--- rechecks the body and placeholder inside its coordinated write callback.
-def unbasedContentWriteAllowed (outgoing : Nat) (observed : Option Nat) : Bool :=
-  observed == none || observed == some outgoing
-
-theorem absentMediaMayBeCreated (outgoing : Nat) :
-    unbasedContentWriteAllowed outgoing none = true := by
-  simp [unbasedContentWriteAllowed]
-
-theorem identicalMediaMayBeRetried (content : Nat) :
-    unbasedContentWriteAllowed content (some content) = true := by
-  simp [unbasedContentWriteAllowed]
-
-theorem differentMediaCannotBeReplacedWithoutBase
-    (outgoing remote : Nat) (different : outgoing ≠ remote) :
-    unbasedContentWriteAllowed outgoing (some remote) = false := by
-  simp [unbasedContentWriteAllowed, Ne.symm different]
-
--- Media is a dependency of the module pull. A saved module revision does not
--- certify its referenced files, so unchanged modules retry absent media.
-def shouldFetchReferencedMedia (moduleChanged mediaPresent : Bool) : Bool :=
-  moduleChanged || !mediaPresent
-
-theorem unchangedModuleRetriesMissingMedia :
-    shouldFetchReferencedMedia false false = true := by
-  rfl
-
-theorem unchangedModuleSkipsPresentMedia :
-    shouldFetchReferencedMedia false true = false := by
-  rfl
-
-def shouldDownloadUnchangedMedia
-    (pendingLocalUpload mediaPresent : Bool) : Bool :=
-  !pendingLocalUpload && !mediaPresent
-
-theorem pendingLocalMediaUploadWaitsForPublish (mediaPresent : Bool) :
-    shouldDownloadUnchangedMedia true mediaPresent = false := by
-  rfl
-
 def mediaBatchComplete (referencesAndTransfers : List Bool) : Bool :=
   referencesAndTransfers.all id
 
 theorem failedMediaTransferBlocksCompletion (before after : List Bool) :
     mediaBatchComplete (before ++ [false] ++ after) = false := by
   simp [mediaBatchComplete, List.all_append]
-
--- The publication marker is written before the module PUT and removed only
--- after its referenced media uploads. A successful module PUT alone is not a
--- complete publication and must remain retryable.
-def mediaPublicationPendingAfterAttempt
-    (moduleWritten mediaWritten : Bool) : Bool :=
-  !(moduleWritten && mediaWritten)
-
-theorem failedMediaUploadRetainsPublication :
-    mediaPublicationPendingAfterAttempt true false = true := by
-  rfl
-
-theorem completedMediaUploadClearsPublication :
-    mediaPublicationPendingAfterAttempt true true = false := by
-  rfl
 
 def coordinatedGenericFileWriteAllowed
     (expected observed : Option Nat) (placeholderVisible : Bool) : Bool :=
@@ -2200,15 +1407,6 @@ theorem missingPortableAttachmentStopsCommit (copiesSucceeded : Bool) :
 theorem failedPortableMediaCopyStopsCommit (allReferencedPresent : Bool) :
     portableMediaMayCommit allReferencedPresent false = false := by
   cases allReferencedPresent <;> rfl
-
-def mayReusePortableArchiveRevision
-    (bridgeReady modulesInstalled mediaPresent : Bool) : Bool :=
-  bridgeReady && modulesInstalled && mediaPresent
-
-theorem missingPortableMediaForcesArchiveRead
-    (bridgeReady modulesInstalled : Bool) :
-    mayReusePortableArchiveRevision bridgeReady modulesInstalled false = false := by
-  cases bridgeReady <;> cases modulesInstalled <;> rfl
 
 def macMediaMetadataAfterImport
     (stored incoming : Option Nat) : Option Nat :=
@@ -2363,32 +1561,6 @@ theorem committedFolderSealRejectsLaterEdit
     (committed changed : List Nat) (different : changed ≠ committed) :
     folderSealAccepts committed none changed = false := by
   simp [folderSealAccepts, different]
-
--- Recovery replays a staged payload only when its archive digest matches the
--- marker and the locally visible file is still old or already intended.
-def folderRecoveryStep
-    (stageValid : Bool) (old intended current : Option Nat) : Option (Option Nat) :=
-  if stageValid && (current == old || current == intended)
-  then some intended else none
-
-theorem missingFolderStageCannotRecover
-    (old intended current : Option Nat) :
-    folderRecoveryStep false old intended current = none := by
-  simp [folderRecoveryStep]
-
-theorem oldFolderFileCanResume (old intended : Option Nat) :
-    folderRecoveryStep true old intended old = some intended := by
-  simp [folderRecoveryStep]
-
-theorem completedFolderFileCanResume (old intended : Option Nat) :
-    folderRecoveryStep true old intended intended = some intended := by
-  simp [folderRecoveryStep]
-
-theorem unrelatedFolderEditCannotBeOverwritten
-    (old intended current : Option Nat)
-    (notOld : current ≠ old) (notIntended : current ≠ intended) :
-    folderRecoveryStep true old intended current = none := by
-  simp [folderRecoveryStep, notOld, notIntended]
 
 /-! ## Disagreements set aside
 
@@ -2670,64 +1842,6 @@ theorem deckPullIgnoresArrivalOrder (deleted : FileVersion → Bool)
     simp only [List.foldl, deckKeep, ha, hb, Bool.false_eq_true, ↓reduceIte] <;>
     first | rfl | rw [mergeFile_right_comm] | rw [mergeFile_comm]
 
-/-! ## Refused files
-
-`LampSyncCompatibilityPublisher.publishReportingRefusals` attempts every file
-and collects the ones the server refuses: a refusal is about one file. Any
-other failure — a dropped connection, a rejected credential — will meet every
-later write too, so it stops the batch. -/
-
-inductive WriteResult where
-  | wrote | refused | failed
-  deriving DecidableEq, Repr
-
-def publishReportingRefusals : List WriteResult → Option (List Bool)
-  | [] => some []
-  | .failed :: _ => none
-  | r :: rest => (publishReportingRefusals rest).map (fun tail => (r == .refused) :: tail)
-
-theorem refusalsDoNotStopTheBatch (results : List WriteResult)
-    (h : ∀ r ∈ results, r ≠ .failed) :
-    (publishReportingRefusals results).isSome = true := by
-  induction results with
-  | nil => rfl
-  | cons r rest ih =>
-    have hr : r ≠ .failed := h r (by simp)
-    have hrest : ∀ x ∈ rest, x ≠ .failed := fun x hx => h x (by simp [hx])
-    cases r with
-    | failed => exact absurd rfl hr
-    | wrote => simp [publishReportingRefusals, Option.isSome_map, ih hrest]
-    | refused => simp [publishReportingRefusals, Option.isSome_map, ih hrest]
-
-theorem everyFileIsAccountedFor (results : List WriteResult) (flags : List Bool)
-    (h : publishReportingRefusals results = some flags) : flags.length = results.length := by
-  induction results generalizing flags with
-  | nil => simp [publishReportingRefusals] at h; subst h; rfl
-  | cons r rest ih =>
-    cases r with
-    | failed => simp [publishReportingRefusals] at h
-    | wrote =>
-      simp [publishReportingRefusals] at h
-      obtain ⟨tail, htail, rfl⟩ := h
-      simp [ih tail htail]
-    | refused =>
-      simp [publishReportingRefusals] at h
-      obtain ⟨tail, htail, rfl⟩ := h
-      simp [ih tail htail]
-
-theorem aFailureStopsTheBatch (before after : List WriteResult)
-    (h : ∀ r ∈ before, r ≠ .failed) :
-    publishReportingRefusals (before ++ .failed :: after) = none := by
-  induction before with
-  | nil => rfl
-  | cons r rest ih =>
-    have hr : r ≠ .failed := h r (by simp)
-    have hrest : ∀ x ∈ rest, x ≠ .failed := fun x hx => h x (by simp [hx])
-    cases r with
-    | failed => exact absurd rfl hr
-    | wrote => simp [publishReportingRefusals, ih hrest]
-    | refused => simp [publishReportingRefusals, ih hrest]
-
 /-! ## Did a refused write land?
 
 `LampSyncConditionalWrite.landing` judges, after a write reported failure,
@@ -2905,154 +2019,6 @@ theorem textIsNeverTheSameAsJSONOrNothing (raw canonical : Nat) :
     sameColumn (.text raw) (.json canonical) = false ∧ sameColumn (.text raw) .nothing = false := by
   simp [sameColumn]
 
-/-! ## Archive index
-
-`LampSyncArchiveIndex` lists each archive entry's digest beside the archive
-revision it describes. It is written after the archive, unconditionally, so a
-slow publisher can leave an index for an older revision; a reader trusts an
-index only when it names the server's current strong revision, and otherwise
-fetches the archive as it would have anyway. -/
-
-structure ArchiveIndexFile where
-  describes : Nat
-  supported : Bool
-  deriving DecidableEq, Repr
-
--- `serverStrong` is the server's revision when it is a strong entity tag.
-def indexTrusted (serverStrong : Option Nat) (index : Option ArchiveIndexFile) : Bool :=
-  match serverStrong, index with
-  | some r, some i => i.supported && i.describes == r
-  | _, _ => false
-
-theorem trustedIndexDescribesTheServersRevision (r : Nat) (i : ArchiveIndexFile)
-    (h : indexTrusted (some r) (some i) = true) : i.describes = r := by
-  simp [indexTrusted] at h
-  exact h.2
-
-theorem lateIndexForAnOlderRevisionIsNotTrusted (older newer : Nat) (h : older ≠ newer) :
-    indexTrusted (some newer) (some ⟨older, true⟩) = false := by
-  simp [indexTrusted, h]
-
-theorem weakOrUnknownRevisionTrustsNoIndex (i : Option ArchiveIndexFile) :
-    indexTrusted none i = false := by
-  cases i <;> rfl
-
-theorem unsupportedIndexIsNotTrusted (r : Nat) :
-    indexTrusted (some r) (some ⟨r, false⟩) = false := rfl
-
--- A pass may take a moved archive revision as applied without fetching it
--- when the trusted index's importable entries are exactly those last
--- installed. Entries are (path, digest) pairs; the Swift fingerprint is a
--- digest of their sorted list, whose collision resistance is assumed.
-def mayAdvanceWithoutFetch (cacheUsable : Bool) (applied : Option (List (Nat × Nat)))
-    (trustedIndex : Option (List (Nat × Nat))) : Bool :=
-  match applied, trustedIndex with
-  | some a, some i => cacheUsable && a == i
-  | _, _ => false
-
-theorem advancingWithoutFetchMissesNothingInstallable (cacheUsable : Bool)
-    (applied current : List (Nat × Nat))
-    (h : mayAdvanceWithoutFetch cacheUsable (some applied) (some current) = true) :
-    applied = current := by
-  simp [mayAdvanceWithoutFetch] at h
-  exact h.2
-
-theorem untrustedIndexAlwaysFetches (cacheUsable : Bool) (applied : Option (List (Nat × Nat))) :
-    mayAdvanceWithoutFetch cacheUsable applied none = false := by
-  cases applied <;> rfl
-
-theorem unusableCacheAlwaysFetches (applied current : List (Nat × Nat)) :
-    mayAdvanceWithoutFetch false (some applied) (some current) = false := by
-  simp [mayAdvanceWithoutFetch]
-
--- Settings resolution may reuse an archive the pass already read, but only
--- while the server still holds that strong revision: what it reuses is then
--- what a fresh read would return (a strong revision names one body).
-def reuseArchive (candidate : Option Nat) (candidateStrong : Bool) (serverNow : Option Nat) : Bool :=
-  match candidate, serverNow with
-  | some c, some s => candidateStrong && c == s
-  | _, _ => false
-
-theorem reusedArchiveIsTheServersCurrentRevision (c s : Nat) (strong : Bool)
-    (h : reuseArchive (some c) strong (some s) = true) : c = s := by
-  simp [reuseArchive] at h
-  exact h.2
-
-theorem movedArchiveIsReadAgain (c s : Nat) (strong : Bool) (h : c ≠ s) :
-    reuseArchive (some c) strong (some s) = false := by
-  simp [reuseArchive, h]
-
-theorem weakCandidateIsReadAgain (c : Nat) :
-    reuseArchive (some c) false (some c) = false := rfl
-
-/-! ## Starting a pass again
-
-`LampSyncPassRetry`: a pass whose archive write lost to another device's
-publish — the server's revision moved off the one the pass read — runs once
-more from what won. Only once: a library someone keeps publishing to is
-reported rather than chased. -/
-
-def lostRace (read now : Option Nat) : Bool := read != now
-
-def shouldRunAgain (passesRun : Nat) (succeeded lost : Bool) : Bool :=
-  !succeeded && lost && passesRun < 2
-
--- Passes run by one request, given each pass's (succeeded, lostRace).
-def passesRun : Nat → List (Bool × Bool) → Nat
-  | n, [] => n
-  | n, (ok, lost) :: rest =>
-    if shouldRunAgain (n + 1) ok lost then passesRun (n + 1) rest else n + 1
-
-theorem aSyncRunsAtMostTwoPasses (outcomes : List (Bool × Bool)) :
-    passesRun 0 outcomes ≤ 2 := by
-  match outcomes with
-  | [] => simp [passesRun]
-  | [(ok, lost)] =>
-    simp only [passesRun]
-    split <;> simp
-  | (ok, lost) :: (ok2, lost2) :: rest =>
-    simp only [passesRun]
-    split
-    · simp [shouldRunAgain]
-    · simp
-
-theorem aSucceededPassIsNotRepeated (n : Nat) (lost : Bool) :
-    shouldRunAgain n true lost = false := by
-  simp [shouldRunAgain]
-
-theorem anUnmovedRevisionIsNotRepeated (n : Nat) (read : Option Nat) :
-    shouldRunAgain n false (lostRace read read) = false := by
-  simp [shouldRunAgain, lostRace]
-
-theorem anArchiveThatAppearedIsALostRace (now : Nat) :
-    lostRace none (some now) = true := rfl
-
-/-! ## A first settings upload
-
-`LampSyncSettingsBootstrap.uploadsBeforeMerge`: a guarded first upload writes
-before merging only while the server still holds the revision this device last
-observed — which an unknown revision on either side cannot show. Otherwise the
-merge runs alone (`baselessReading`); it used to refuse, which changed nothing
-and so refused on every poll. `staleSnapshotCannotUpload` is the same guard. -/
-
-def uploadsBeforeMerge (guarded : Bool) (observed remote : Option Nat) : Bool :=
-  match observed, remote with
-  | some o, some r => guarded && o == r
-  | _, _ => false
-
-theorem uploadFirstOnlyOverTheObservedRevision (guarded : Bool) (o r : Nat)
-    (h : uploadsBeforeMerge guarded (some o) (some r) = true) : o = r := by
-  simp [uploadsBeforeMerge] at h
-  exact h.2
-
-theorem movedRevisionMergesInsteadOfRefusing (o r : Nat) (h : o ≠ r) :
-    uploadsBeforeMerge true (some o) (some r) = false := by
-  simp [uploadsBeforeMerge, h]
-
-theorem unknownRevisionNeverUploadsFirst (guarded : Bool) (r : Option Nat) :
-    uploadsBeforeMerge guarded none r = false ∧ uploadsBeforeMerge guarded r none = false := by
-  cases r <;> simp [uploadsBeforeMerge]
-
 /-! ## Devices interleaving whole passes
 
 Everything above proves one decision at a time. This runs them together:
@@ -3080,8 +2046,6 @@ atomic: a device's pass is many steps here, and any interleaving of them is
 covered. -/
 
 namespace Interleaving
-
-
 
 abbrev Content := Nat → Nat
 
@@ -3300,7 +2264,7 @@ theorem refusedPublishChangesNothing (w : World) (who : Who)
   · rfl
 
 -- Reading and then publishing, with nobody else publishing in between, is
--- accepted: the second attempt `LampSyncPassRetry` makes after a lost race
+-- accepted: the bundle's update, reading again after a refused write,
 -- succeeds unless another device publishes again inside it.
 theorem pullThenPublishIsAccepted (w : World) (who : Who) :
     (run w [.pull who, .publish who]).server =
@@ -4371,20 +3335,6 @@ def fieldName (fresh : Nat) : Option PrefField → String
   | none => "-"
   | some f => optNat f.value ++ "@" ++ (if f.revision == fresh then "fresh" else toString f.revision)
 
-def indexName : Option ArchiveIndexFile → String
-  | none => "-"
-  | some i => toString i.describes ++ (if i.supported then "s" else "u")
-
-def entriesName : Option (List (Nat × Nat)) → String
-  | none => "-"
-  | some [(1, 1)] => "A"
-  | some _ => "B"
-
-def entriesFor : String → Option (List (Nat × Nat))
-  | "A" => some [(1, 1)]
-  | "B" => some [(1, 2)]
-  | _ => none
-
 #eval show IO Unit from do
   for c in [0, 1, 2] do
     for i in [0, 1, 2] do
@@ -4463,20 +3413,9 @@ def optFileName : Option FileVersion → String
 def choiceName : ThreeWayChoice → String
   | .local => "local" | .remote => "remote" | .conflict => "conflict"
 
-def bootstrapName : SettingsBootstrapAction → String
-  | .missing => "missing" | .create => "create" | .adopt => "adopt"
-  | .guarded => "guarded" | .merge => "merge"
-
-def baseName : ObservedBase → String
-  | .absent => "absent" | .revision r => "revision:" ++ toString r
-  | .digest c => "digest:" ++ toString c
-
 def optList : Option (List Nat) → String
   | none => "-"
   | some l => ",".intercalate (l.map toString)
-
-def resultName : WriteResult → String
-  | .wrote => "w" | .refused => "r" | .failed => "f"
 
 def readName : Option (Nat × Option Nat) → String
   | none => "-"
@@ -4538,20 +3477,6 @@ def readName : Option (Nat × Option Nat) → String
     for second in reads do
       IO.println <| conformanceLine "confirmWrite"
         [readName first, readName second, optNat (confirmWrite 5 [first, second])]
-
-def legacyStateName : LegacySettingsState → String
-  | .absent => "absent" | .mirrored => "mirrored" | .superseded => "superseded" | .changed => "changed"
-
-def readSourceName : SettingsReadSource → String
-  | .absent => "absent" | .legacy => "legacy" | .archive => "archive" | .conflict => "conflict"
-
-def migrationName : MigrationCopyAction → String
-  | .publishMerged => "publishMerged" | .create => "create"
-  | .alreadyPresent => "alreadyPresent" | .conflict => "conflict"
-
-def optPair : Option (Nat × Nat) → String
-  | none => "-"
-  | some (a, b) => toString a ++ ":" ++ toString b
 
 def optBool : Option Bool → String
   | none => "-"
@@ -4678,8 +3603,8 @@ def highlightName : MacHighlightExport → String
     IO.println <| conformanceLine "mediaBatchComplete"
       [bools outcomes, toString (mediaBatchComplete outcomes)]
   for outcome in [MacHighlightExport.ready, .empty, .failed] do
-    IO.println <| conformanceLine "macHighlightAllowsArchivePublish"
-      [highlightName outcome, toString (macHighlightAllowsArchivePublish outcome)]
+    IO.println <| conformanceLine "macHighlightAllowsPublish"
+      [highlightName outcome, toString (macHighlightAllowsPublish outcome)]
 
 def captureName : ArchiveCaptureChoice → String
   | .include => "include" | .skip => "skip" | .reject => "reject"
@@ -4816,7 +3741,6 @@ def directoryOutcomeName : DirectoryOutcome → String
           IO.println <| conformanceLine "directoryDelete"
             [conditionName c, optNat current, toString placeholder, toString unresolved,
              directoryOutcomeName (directoryDelete c current placeholder unresolved)]
-
 
 def settingsWriteName : SettingsWrite → String
   | .needsMerge => "needsMerge" | .resolve => "resolve" | .create => "create"

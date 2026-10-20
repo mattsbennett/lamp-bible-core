@@ -236,12 +236,12 @@ and so does the other (`resolvedChoiceWinsWhereItWasMade`,
 again.
 
 The phone keeps unresolved note and writing conflicts in its module database
-across restarts, and exports a module only once every conflict in it is
-resolved (`pendingModuleConflictBlocksExport`,
-`changedModuleRevisionBlocksResolvedExport`). Its publication marker survives
-a failed module upload and is retried after the next pull
-(`locallyKeptRowRequiresPublication`, `failedModuleWriteRetainsPublication`,
-`successfulModuleWriteClearsPublication`).
+across restarts. A module with an unsettled conflict is held back by the pass,
+neither published nor fetched as missing (`pendingModuleConflictBlocksExport`,
+`changedModuleRevisionBlocksResolvedExport`). Its publication marker is
+cleared only once the records show the module's export uploaded; a failed or
+unconfirmed write leaves it marked (`locallyKeptRowRequiresPublication`,
+`failedModuleWriteRetainsPublication`, `successfulModuleWriteClearsPublication`).
 
 **Deletion ledgers.** Personal content, decks and workspace files keep one
 ledger shape: per item, the latest save and the latest deletion, merged by
@@ -381,14 +381,13 @@ enriched, never dropped (`existingMediaMetadataIsPreserved`,
 
 `LampSyncReferencedMedia` transfers the files a module names and reports the
 first failure after trying the rest; a batch completes only if every file did
-(`mediaBatchComplete`). A failed transfer stops the pass, and an unchanged
-module retries missing media next time (`unchangedModuleRetriesMissingMedia`,
-`failedMediaTransferBlocksCompletion`). A media file has no merge base: an
-absent file may be created and identical bytes retried, while a different
-remote body stops the upload (`unbasedContentWriteAllowed`,
-`differentMediaCannotBeReplacedWithoutBase`). The Mac's highlight export skips
-only the one expected empty set; any other failure reaches the pass
-(`emptyMacHighlightSetMayBeSkipped`).
+(`mediaBatchComplete`, `failedMediaTransferBlocksCompletion`). In the pass, a
+media file is a library member like any other: one with no local copy is
+downloaded, and an upload is decided by digest against the records. The Mac's
+highlight export skips only the one expected empty set, and the pass carries
+on; any other failure reaches the pass, so the set is never recorded as
+published (`emptyMacHighlightSetMayBeSkipped`,
+`failedMacHighlightExportStopsPublish`).
 
 ### Switching provider on the phone
 
@@ -448,7 +447,7 @@ merge with no baseline, which may bring back an unseen deletion once.
 
 **Still outside the model.**
 
-- 53 tables ask 64 of the model's 217 definitions directly, and reach 91
+- 53 tables ask 64 of the model's 170 definitions directly, and reach 91
   counting the rules those call. Of the rest:
   - Counterexamples (`oldReplace`, `uploadBeforeRead`, `earlyBackendWipe` and
     the like) show what a rule prevents, and have no Swift counterpart by
@@ -466,17 +465,13 @@ merge with no baseline, which may bring back an unseen deletion once.
     - revising rich writing blocks (`reviseRichDevotionalBlock` and its kin,
       `devotionalStoredBody`);
     - portable media import (`mediaImportChoice`, `portableMediaMayCommit`,
-      `mediaMetadataAfterBridge`) and whether to fetch referenced media
-      (`shouldFetchReferencedMedia`);
+      `mediaMetadataAfterBridge`);
     - the provider-switch marker (`pendingBackendMarker`,
       `newBackendAvailable`).
 
     For module reads (`pairedModuleImport`, `contentModuleImport`), pairing a
     body with its own revision is fixed by the function's signature, so there
     is nothing for a table to ask.
-  - Rules whose code has been removed from core and the apps (`indexTrusted`,
-    `settingsBootstrap`, `stableRead`, `iosFullPassTrace`, `guardedMacPull`
-    and the like) are still in the model, and nothing checks them.
 
 - The phone serialises settings syncs — one in flight, later requests wait.
   That is Swift concurrency, not a decision.
@@ -497,7 +492,7 @@ merge with no baseline, which may bring back an unseen deletion once.
 | Mac settings journal | macOS `LampSyncSettingsCommit` | `recoverMacSettings`, `pendingMacSettingsReplayCompletesPull`, `distinctMacSettingsEditBlocksReplay`, `mixedMacSettingsReplayToWholePlan` | Property-list write, UserDefaults flush and journal removal surviving interruption |
 | Module files and import | `LampSyncModuleFiles`, `LampSyncModuleFolder`, `LampPortableModuleInspector` | `selectedCandidateIndex`, `needsImportByToken`, `moduleFolderListing` (conformance), `supersededCanonicalCannotHideActiveLegacy`, `missingRemoteRevisionRequiresImport`, `canonicalModuleRequiresEmbeddedIdentity`, `foreignSQLiteOwnerKeepsInstalled`, `sqliteImportAllowed`, `sqliteReplacementResult`, `failedEditableMergePreservesWholeState` | SQLite execution and JSON decoding |
 | Phone translation JSON | `LampSyncContentRevision` for the file revision; one GRDB transaction for metadata, books, verses and headings | `translationSchemaAllowed`, `failedTranslationSchemaReplacementKeepsInstalled`, `foreignImportKeyCollisionKeepsInstalled` | JSON decoding and SQLite execution |
-| Writing content and media | `LampPortableDevotionalContent`, `LampDevotionalMediaReference`, `LampPortableDevotionalMedia`, `LampSyncReferencedMedia`, `LampSyncDevotionalMedia`, `LampSyncPersonalExport` | `richDevotionalBlocksKeepTheirContent`, `unchangedRichDevotionalBlockIsExact`, `movedRichSectionKeepsIdentity`, `iosRichEditStoresRevisedBlocks`, `bracketedMarkdownWithoutBlockSchemaKeepsMarkdown`, `existingMediaMetadataIsPreserved`, `mediaBatchComplete` (conformance), `unbasedContentWriteAllowed`, `unchangedModuleRetriesMissingMedia`, `failedMediaTransferBlocksCompletion`, `emptyMacHighlightSetMayBeSkipped` | Media has no merge base; local media files and SQLite rows are separate writes |
+| Writing content and media | `LampPortableDevotionalContent`, `LampDevotionalMediaReference`, `LampPortableDevotionalMedia`, `LampSyncReferencedMedia`, `LampSyncDevotionalMedia`, `LampSyncPersonalExport` | `richDevotionalBlocksKeepTheirContent`, `unchangedRichDevotionalBlockIsExact`, `movedRichSectionKeepsIdentity`, `iosRichEditStoresRevisedBlocks`, `bracketedMarkdownWithoutBlockSchemaKeepsMarkdown`, `existingMediaMetadataIsPreserved`, `mediaBatchComplete` (conformance), `failedMediaTransferBlocksCompletion`, `macHighlightAllowsPublish` (conformance), `emptyMacHighlightSetMayBeSkipped` | Media has no merge base; local media files and SQLite rows are separate writes |
 | Phone provider switching | `LampSyncBackendTransition`, `LampSyncEngine`, local recovery record | `deferredBackendWipe`, `backendActivationOccurs`, `backendTransition` and `cancellableRunTrace` (conformance), `pendingBackendMarker` | Two local databases remain separate; sync is suspended until a failed rollback can be recovered |
 | Personal deletions (notes, writing, highlights, themes, sets) | `LampPersonalDeletionLedger`, `LampLibrary` ledger merge and apply, `LampSyncBundleLedgers` | `tombstoneDeletes` and `mergeTombstone` (conformance: `tombstone`, `tombstoneMerge`), `mergeTombstone_comm`, `mergeTombstone_assoc`, `mergeTombstone_idem`, `exchangedLedgersAgree`, `editAfterDeletionSurvives`, `equalTimeFavoursDeletion` | Device clocks are assumed comparable; the SQL upsert is the Swift `merged(with:)` rule |
 | Slide decks | `LampPresentationDeckDeletionLedger`, `LampPresentationDeckPortablePull`, macOS `LampPresentationDeckSync` | `tombstoneDeletes` (conformance: `tombstone`), `deckPull`, `deckPullNeverKeepsADeletedDeck`, `deckPullIgnoresArrivalOrder` | Assets have no ledger and are kept while any deck names them |

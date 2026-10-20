@@ -101,7 +101,7 @@ struct SyncModelConformanceTests {
         "stagedCommitAllowed", "confirmWrite", "webDAVPresence", "webDAVDirectoryReady",
         "guardedETagCondition", "cancellableRunTrace", "backendTransition",
         "selectedCandidateIndex", "resolvedRecordRevision", "moduleFolderListing", "initialSync",
-        "mediaBatchComplete", "macHighlightAllowsArchivePublish", "archiveCaptureChoice",
+        "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
         "filePlanAction", "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
@@ -627,7 +627,7 @@ struct SyncModelConformanceTests {
     @Test func highlightExportGatesThePublish() async throws {
         try #require(SyncModel.run.problem == nil)
         struct Failure: Error {}
-        let cases = SyncModel.cases("macHighlightAllowsArchivePublish")
+        let cases = SyncModel.cases("macHighlightAllowsPublish")
         #expect(cases.count == 3)
         for f in cases {
             // No highlights is a nil export, not a failure, so `try?` cannot tell them apart.
@@ -643,7 +643,7 @@ struct SyncModelConformanceTests {
             } catch {
                 allowed = false
             }
-            #expect(allowed == (f[1] == "true"), "macHighlightAllowsArchivePublish \(f.joined(separator: " "))")
+            #expect(allowed == (f[1] == "true"), "macHighlightAllowsPublish \(f.joined(separator: " "))")
         }
     }
 
