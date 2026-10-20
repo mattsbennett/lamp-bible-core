@@ -54,6 +54,16 @@
         "deckPull"
       ]
     },
+    "Sources/LampCore/LampSyncBundleLedgers.swift": {
+      "rules": [
+        "mergeTombstone_comm",
+        "mergeTombstone_assoc",
+        "mergeTombstone_idem",
+        "exchangedLedgersAgree",
+        "deckPullIgnoresArrivalOrder"
+      ],
+      "boundary": "The rules both apps follow with the bundle's deletion records: an unreadable personal ledger is skipped where it is read, a contribution joins rather than replaces, and a client with nothing of its own leaves the bundle's as it was. Applying them to a library is each app's."
+    },
     "Sources/LampCore/LampSyncConflict.swift": {
       "rules": [
         "portableImportOutcome",
@@ -758,7 +768,7 @@
         "exchangedLedgersAgree",
         "deckPullIgnoresArrivalOrder"
       ],
-      "boundary": "The Mac applies the bundle's deletion ledgers before reading what it holds, and contributes its own by joining them into the bundle's, never replacing them. An unreadable one is skipped, as on the phone."
+      "boundary": "The Mac's half: applying the bundle's deletion records to its library and decks, and reading its own. The rules are core's `LampSyncBundleLedgers`."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncBundleSettings.swift": {
       "rules": [

@@ -819,6 +819,59 @@ struct LampSyncBundlePassTests {
         #expect(outcome.uploaded == [path])
         #expect(store.operations.contains("read \(path)"))
     }
+
+    // MARK: - A deletion arriving for a file held here
+
+    /// A module deleted on another device, its file already reaped there:
+    /// this client removes its copy, neither fetches nor sends the path, and
+    /// the tombstone stays.
+    @Test func aDeletionFromElsewhereRemovesTheCopyHereWithoutFetchingOrSendingIt() async throws {
+        let path = "Dictionaries/x.lamp"
+        let store = try seeded(path: path, revision: "\"x1\"", deletedAt: 5_000)
+        store.bodies[path] = nil
+        store.revisions[path] = nil
+        let url = try makeFile("x")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: LampSyncContentRevision.digest(for: Data("x".utf8)), revision: "\"x1\"")
+        records.confirmRecorded([path: "\"x1\""], in: source)
+        let library = StubLibrary()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 6_000 }
+        ).run(gathering: { gathered([local(path, url, "x")]) }, records: &records, patience: immediate)
+
+        #expect(library.deleted == [path])
+        #expect(!store.operations.contains("read \(path)") && !store.operations.contains("write \(path)"))
+        let kept = try #require(outcome.written?.bundle.manifest.entry(at: path))
+        #expect(!kept.isMember)
+    }
+
+    /// The same deletion with the file still on the server: removed here,
+    /// and reaped there only at the revision the tombstone names. A copy
+    /// another device wrote since is not the one deleted, so it comes back
+    /// instead.
+    @Test func aDeletionFromElsewhereIsReapedOnlyAtTheRevisionItDeleted() async throws {
+        for (onServer, reaped) in [("\"x1\"", true), ("\"x2\"", false)] {
+            let path = "Dictionaries/x.lamp"
+            let store = try seeded(path: path, revision: "\"x1\"", deletedAt: 5_000)
+            store.revisions[path] = onServer
+            let url = try makeFile("x")
+            defer { try? FileManager.default.removeItem(at: url) }
+            var records = LampSyncFileRecords()
+            records.recordUpload(path, in: source, digest: LampSyncContentRevision.digest(for: Data("x".utf8)), revision: "\"x1\"")
+            records.confirmRecorded([path: "\"x1\""], in: source)
+            let library = StubLibrary()
+
+            _ = try await LampSyncBundlePass(
+                store: store, library: library, source: source, now: { 6_000 }
+            ).run(gathering: { gathered([local(path, url, "x")]) }, records: &records, patience: immediate)
+
+            #expect(store.operations.contains("delete \(path)") == reaped, "server at \(onServer)")
+            #expect(library.deleted == (reaped ? [path] : []), "server at \(onServer)")
+            #expect(library.installed == (reaped ? [] : [path]), "server at \(onServer)")
+        }
+    }
 }
 
 // MARK: - Doubles
