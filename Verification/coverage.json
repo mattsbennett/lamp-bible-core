@@ -749,6 +749,9 @@
       ],
       "boundary": "The Mac's per-source records behind `LampSyncFilePlan.Local`. No record reads as changed, which the plan turns into a download or merge, never an upload over the server's copy. Change is judged by a digest of the bytes every pass, never by size or date."
     },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncHighlightModules.swift": {
+      "boundary": "Which module each highlight set is published under, read back from the server's highlight modules' `highlight_meta.id` rather than minted, so a set never gets a second module. A Mac library question; the file-level decisions are the plan's."
+    },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLibraryLayout.swift": {
       "rules": [
         "bundleRead",

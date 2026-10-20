@@ -262,6 +262,23 @@ struct LampSyncFolderLibraryTests {
         #expect(store.bodyReads == 2)
     }
 
+    /// The same outcomes for a body sent from disk.
+    @Test func aWriteFromDiskSaysWhatBecameOfIt() async throws {
+        let store = LaggingStore()
+        store.lag = 2
+        let source = LampSyncScratchFile.url()
+        defer { try? FileManager.default.removeItem(at: source) }
+        try Data("module".utf8).write(to: source)
+        let written = try await LampSyncConditionalWrite.write(
+            fileAt: source, to: "Notes/notes.lamp", in: store, condition: .ifAbsent, patience: slow
+        )
+        #expect(written == .written("\"w1\""))
+        let refused = try await LampSyncConditionalWrite.write(
+            fileAt: source, to: "Notes/notes.lamp", in: store, condition: .ifAbsent, patience: slow
+        )
+        #expect(refused == .refused && store.writes == 1)
+    }
+
     @Test func aClaimWaitsForALaggingServer() async throws {
         let store = LaggingStore()
         store.lag = 2

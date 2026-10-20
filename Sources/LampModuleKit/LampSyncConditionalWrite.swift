@@ -207,14 +207,45 @@ public enum LampSyncConditionalWrite {
         condition: LampSyncWriteCondition,
         patience: Patience = .standard
     ) async throws -> Outcome {
+        try await outcome(
+            of: { try await store.write(data, to: path, condition: condition) },
+            sent: { LampSyncContentRevision.digest(for: data) },
+            at: path, in: store, condition: condition, patience: patience
+        )
+    }
+
+    /// `write` for a body on disk, sent from the file and read back by its
+    /// digest, so neither the upload nor the check holds it in memory.
+    public static func write(
+        fileAt url: URL,
+        to path: String,
+        in store: any LampSyncRemoteStore,
+        condition: LampSyncWriteCondition,
+        patience: Patience = .standard
+    ) async throws -> Outcome {
+        try await outcome(
+            of: { try await store.write(fileAt: url, to: path, condition: condition) },
+            sent: { try LampSyncContentRevision.digest(forFileAt: url) },
+            at: path, in: store, condition: condition, patience: patience
+        )
+    }
+
+    private static func outcome(
+        of put: () async throws -> String?,
+        sent sentDigest: () throws -> String,
+        at path: String,
+        in store: any LampSyncRemoteStore,
+        condition: LampSyncWriteCondition,
+        patience: Patience
+    ) async throws -> Outcome {
         let response: String?
         do {
-            response = try await store.write(data, to: path, condition: condition)
+            response = try await put()
         } catch where isRefusal(error) {
             return .refused
         }
         if let response, LampWebDAVStorage.isStrongETag(response) { return .written(response) }
-        let sent = LampSyncContentRevision.digest(for: data)
+        let sent = try sentDigest()
         let replaced: String? = if case .ifRevision(let revision) = condition { revision } else { nil }
         for wait in patience.confirm {
             if wait > .zero { try? await Task.sleep(for: wait) }
