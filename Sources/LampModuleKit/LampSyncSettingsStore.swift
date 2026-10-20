@@ -121,6 +121,41 @@ public enum LampSyncSettingsStore {
         return snapshot
     }
 
+    /// The bundle, or, in a library nobody has synced to yet, an empty one
+    /// written there first. Start a pass with this rather than `read`.
+    ///
+    /// A pass that found nothing and wrote its files before the bundle would
+    /// lock itself out: its own files are what make the next read call the
+    /// library an earlier one, so its closing `update` would throw
+    /// `notMigrated` on every pass. Claiming the path first means every read
+    /// after finds a bundle. The empty bundle is written only where still
+    /// absent; a device that loses that race reads the winner's.
+    /// (`Verification/SyncMerge.lean`: `bundleRead`,
+    /// `uploadingFirstLocksAFreshLibraryOut`.)
+    public static func readOrClaim(
+        from store: any LampSyncRemoteStore,
+        knownArchiveRevision: String? = nil,
+        attempts: Int = 3
+    ) async throws -> Snapshot {
+        var knownArchiveRevision = knownArchiveRevision
+        for _ in 0..<max(attempts, 1) {
+            if let snapshot = try await read(from: store, knownArchiveRevision: knownArchiveRevision) {
+                return snapshot
+            }
+            knownArchiveRevision = nil
+            let empty = LampSyncSettingsBundle()
+            do {
+                let revision = try await LampSyncConditionalWrite.writeAndConfirm(
+                    empty.encoded(), to: path, in: store, condition: .ifAbsent
+                )
+                return Snapshot(bundle: empty, revision: revision)
+            } catch where LampSyncConditionalWrite.isRefusal(error) {
+                continue
+            }
+        }
+        throw StoreError.tooManyAttempts
+    }
+
     /// Whether a store with nothing at the bundle path holds a library an
     /// earlier sync kept. A root listing, then one listing per kind folder
     /// present, and only when there is no bundle.

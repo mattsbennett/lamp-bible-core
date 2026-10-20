@@ -86,6 +86,39 @@ public actor LampLibrary {
             }
     }
 
+    /// Each installed module with the `.lamp` file that holds it, for a sync
+    /// that publishes modules as files. Modules shipped inside the app are
+    /// not here: they have no file of their own, and are never published.
+    public func installedModuleFiles() throws -> [LampInstalledModuleFile] {
+        try prepareDirectories()
+        let databaseURLs = try fileManager.contentsOfDirectory(
+            at: databasesURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        return databaseURLs
+            .filter { $0.pathExtension.lowercased() == "sqlite" }
+            .compactMap { databaseURL -> LampInstalledModuleFile? in
+                let lampURL = modulesURL
+                    .appendingPathComponent(databaseURL.deletingPathExtension().lastPathComponent)
+                    .appendingPathExtension("lamp")
+                guard let byteCount = try? lampURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                      let module = try? inspectDatabase(
+                          at: databaseURL,
+                          fallbackID: nil,
+                          compressedByteCount: byteCount,
+                          // Already verified when it was installed.
+                          verifyIntegrity: false
+                      ) else { return nil }
+                return LampInstalledModuleFile(module: module, fileURL: lampURL)
+            }
+            .sorted {
+                $0.module.kind != $1.module.kind
+                    ? $0.module.kind.rawValue < $1.module.kind.rawValue
+                    : $0.module.id < $1.module.id
+            }
+    }
+
     @discardableResult
     public func install(from sourceURL: URL) throws -> LampInstalledModule {
         // Installing replaces a database file that a cached connection may be

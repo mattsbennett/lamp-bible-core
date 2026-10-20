@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 3,546 cases across 65 decisions. `SyncModelConformanceTests` asks the
+  answer, 3,554 cases across 66 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -772,7 +772,11 @@ is never read as a bundle (`anArchiveIsNeverReadAsTheBundle`). That is judged
 from the unpacked header alone. Nothing at the bundle path is a new library
 only when no earlier sync's marker or module file is there either
 (`onlyAnEmptyLibraryIsNew`): a folder the Mac keeps holds its files loose,
-with no archive, and only the migration may create a bundle over them.
+with no archive, and only the migration may create a bundle over them. So a
+new library's first pass claims the path with an empty bundle before writing
+any file. Writing files first, its own files would make the closing update
+call the library an earlier one, and it could never finish
+(`uploadingFirstLocksAFreshLibraryOut`, `claimingFirstNeverMeetsItsOwnFiles`).
 
 On the folder provider, `directoryWrite` and `directoryDelete` decide a
 conditional write or delete inside the coordinated block, and a write goes
@@ -828,7 +832,7 @@ merge with no baseline, which may bring back an unseen deletion once.
 
 **Still outside the model.**
 
-- 65 tables ask 75 of the model's 207 definitions directly, and reach 101
+- 66 tables ask 76 of the model's 208 definitions directly, and reach 102
   counting the rules those call. Of the rest:
   - Counterexamples of former behaviour (`oldReplace`, `uploadBeforeRead`,
     `earlyBackendWipe` and the like) have no Swift counterpart by design.

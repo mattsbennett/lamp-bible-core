@@ -29,6 +29,26 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
     }
 }
 
+/// An installed module and the `.lamp` file that holds it.
+///
+/// The file is named by the library's own storage convention, never by the
+/// module's ID, so place it by `syncPath`, not by its filename.
+public struct LampInstalledModuleFile: Equatable, Sendable {
+    public let module: LampInstalledModule
+    public let fileURL: URL
+
+    public init(module: LampInstalledModule, fileURL: URL) {
+        self.module = module
+        self.fileURL = fileURL
+    }
+
+    /// Where the module belongs in a per-file library: its kind's folder,
+    /// with the module's ID as the stem, as every client names it.
+    public func syncPath() throws -> String {
+        try LampSyncFolderLayout.modulePath(kind: LampSyncContentKind(module.kind), moduleID: module.id)
+    }
+}
+
 /// Portable formats available when exporting an installed user module.
 public enum LampModuleExportFormat: String, CaseIterable, Identifiable, Sendable {
     case lamp

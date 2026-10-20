@@ -73,7 +73,18 @@ public enum LampSyncFolderLayout {
     /// the ID an app uses locally.
     public static func remoteModuleID(of path: String) -> String?
 }
+
+extension LampSyncContentKind {
+    public init(_ kind: LampModuleKind)                   // the folder a kind lives in
+}
 ```
+
+**A module file's stem is its content ID**: `<Kind>/<id>.lamp`, as
+`modulePath` builds it and `remoteModuleID` reads it back. A file whose stem
+names another module is refused on download (`matchesContentIdentity`), never
+misread. The Mac's installed files are named by a storage key, so the Mac
+places them by `LampInstalledModuleFile.syncPath()`, from
+`LampLibrary.installedModuleFiles()`, never by filename.
 
 ### Membership
 
@@ -101,6 +112,13 @@ public struct LampSyncLibraryManifest: Codable, Equatable, Sendable {
     public func pruned(now: Int64, present: Set<String>) -> Self
 }
 ```
+
+**Membership covers user content.** Modules an app bundles are never
+published and never offered to the plan: the manifest plus each app's own
+bundle is that client's library. The phone keeps its bundled modules in a
+database outside the pass, so a bundled module another client published would
+arrive as a member it doesn't hold, and download as a duplicate user module.
+`installedModuleFiles()` never lists them: they have no file of their own.
 
 **Revisions.** `revision` is the provider's revision for the latest write. On
 WebDAV that's the ETag. On the folder provider the store's revision is the
@@ -336,6 +354,12 @@ folder, or any file in a kind folder (`emptyBundlePath`). `update` never
 creates a bundle over an earlier library; only the migration does. The same
 rule holds on WebDAV, where it costs one listing and only when there is no
 bundle.
+
+So a pass starts with `readOrClaim(from:knownArchiveRevision:)`, not `read`.
+In a new library it writes an empty bundle `.ifAbsent` before any file. A
+pass that wrote its files first would find them at its closing `update` and
+be told `notMigrated`, on every pass. A device that loses the claim reads the
+winner's bundle (`bundleRead`).
 
 Open, for the user: a folder library only the phone ever kept would wait for a
 Mac forever, since the phone never migrates.

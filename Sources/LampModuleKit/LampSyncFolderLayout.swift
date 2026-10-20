@@ -164,3 +164,20 @@ public enum LampSyncFolderLayout {
         return path
     }
 }
+
+extension LampSyncContentKind {
+    /// The folder a module of this kind lives in.
+    public init(_ kind: LampModuleKind) {
+        switch kind {
+        case .translation: self = .translations
+        case .dictionary: self = .dictionaries
+        case .commentary: self = .commentaries
+        case .book: self = .books
+        case .devotional: self = .devotionals
+        case .notes: self = .notes
+        case .plan: self = .plans
+        case .highlights: self = .highlights
+        case .quiz: self = .quizzes
+        }
+    }
+}

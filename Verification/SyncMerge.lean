@@ -3924,6 +3924,25 @@ theorem onlyAnEmptyLibraryIsNew (marker content : Bool) :
     emptyBundlePath marker content = false ↔ marker = false ∧ content = false := by
   cases marker <;> cases content <;> simp [emptyBundlePath]
 
+inductive BundleRead where
+  | bundle | fresh | notMigrated
+  deriving DecidableEq, Repr
+
+-- What `read` answers: the bundle where there is one, whatever else is there;
+-- otherwise new, or an earlier library nobody has migrated.
+def bundleRead (bundle marker content : Bool) : BundleRead :=
+  if bundle then .bundle
+  else if emptyBundlePath marker content then .notMigrated else .fresh
+
+-- A fresh library's pass that wrote its files before the bundle would find
+-- its own files at the next read, and call the library an earlier one: it
+-- could never finish. So `readOrClaim` writes an empty bundle first.
+theorem uploadingFirstLocksAFreshLibraryOut : bundleRead false false true = .notMigrated := rfl
+
+-- Once the path is claimed, no file written after changes what a read finds.
+theorem claimingFirstNeverMeetsItsOwnFiles (marker content : Bool) :
+    bundleRead true marker content = .bundle := rfl
+
 -- Only a bundle this client reads is merged. Anything else stops the update:
 -- merging it is impossible, and dropping it loses another device's write.
 def versionMerges (c : BundleContents) : Bool := c == .bundle
@@ -4644,6 +4663,9 @@ def settingsWriteName : SettingsWrite → String
 
 def stampCode (s : Stamp) : String := optNat s.1 ++ ":" ++ optNat s.2
 
+def bundleReadName : BundleRead → String
+  | .bundle => "bundle" | .fresh => "fresh" | .notMigrated => "notMigrated"
+
 def bundleCopies : List BundleCopy :=
   let stamps : List Stamp :=
     [(none, some 1), (none, some 2), (some 5, some 1), (some 5, some 2), (some 7, some 1), (some 3, some 9)]
@@ -4654,6 +4676,12 @@ def bundleCopies : List BundleCopy :=
     for content in [true, false] do
       IO.println <| conformanceLine "emptyBundlePath"
         [toString marker, toString content, toString (emptyBundlePath marker content)]
+  for bundle in [true, false] do
+    for marker in [true, false] do
+      for content in [true, false] do
+        IO.println <| conformanceLine "bundleRead"
+          [toString bundle, toString marker, toString content,
+           bundleReadName (bundleRead bundle marker content)]
   for header in [BundleHeader.version 0, .version 1, .version 2, .version 3, .version 4,
                  .entriesFirst, .garbage] do
     IO.println <| conformanceLine "versionMerges"

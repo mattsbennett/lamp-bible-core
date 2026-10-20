@@ -488,13 +488,17 @@
         "settingsWrite",
         "aVersionIsMergedOrStops",
         "mergedVersionsAreAlwaysResolved",
-        "nothingIsWrittenOnlyOverAnUnchangedCopy"
+        "nothingIsWrittenOnlyOverAnUnchangedCopy",
+        "bundleRead",
+        "uploadingFirstLocksAFreshLibraryOut",
+        "claimingFirstNeverMeetsItsOwnFiles"
       ],
       "conformance": [
         "settingsUpdate",
         "emptyBundlePath",
         "versionMerges",
-        "settingsWrite"
+        "settingsWrite",
+        "bundleRead"
       ],
       "boundary": "Reading and the one-HEAD checks are Swift's; the retry and its bound, what an empty path means, which versions merge and what the write does with them are held by tables. `change` and `mergingVersion` must be merges that only compute, which the types cannot enforce."
     },
@@ -673,6 +677,16 @@
         "resolvedChoiceWinsOnTheOtherDevice"
       ],
       "boundary": "Shows a set-aside conflict and passes the person's choice to LampLibrary.resolveSyncConflict; the choice itself is core's."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncFileRecords.swift": {
+      "rules": [
+        "noRecordNeverOverwrites",
+        "filePlanAction"
+      ],
+      "boundary": "The Mac's per-source records behind `LampSyncFilePlan.Local`. No record reads as changed, which the plan turns into a download or merge, never an upload over the server's copy. Change is judged by a digest of the bytes every pass, never by size or date."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalFiles.swift": {
+      "boundary": "Gathers what the Mac holds as `LampSyncFilePlan.Local`: each installed module placed by core's `LampInstalledModuleFile.syncPath()`, never its storage-key filename, and a digest of the bytes on disk. It decides nothing; the plan does (`filePlanAction`)."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift": {
       "rules": [

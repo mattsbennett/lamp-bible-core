@@ -273,6 +273,23 @@ struct LampSyncDirectoryStoreTests {
         #expect(staged.count == 1)
     }
 
+    /// The pass a new library's first device runs: claim the path, then
+    /// write files, then record them. Writing files first would make the
+    /// closing update find them and call the library an earlier one.
+    @Test func aFreshLibraryIsClaimedBeforeItsFiles() async throws {
+        let store = store()
+        let claimed = try await LampSyncSettingsStore.readOrClaim(from: store)
+        #expect(claimed.bundle == LampSyncSettingsBundle())
+        let revision = try #require(
+            try await store.write(Data("notes".utf8), to: "Notes/notes.lamp", condition: .ifAbsent)
+        )
+        let recorded = try await LampSyncSettingsStore.update(in: store) {
+            $0.manifest = try $0.manifest.recordingWrite("Notes/notes.lamp", revision: revision, replacing: nil, at: 1)
+        }
+        #expect(recorded.bundle.manifest.members.map(\.path) == ["Notes/notes.lamp"])
+        #expect(try await LampSyncSettingsStore.readOrClaim(from: store) == recorded)
+    }
+
     @Test func nothingAtTheBundlePathIsNewOnlyInAnEmptyLibrary() async throws {
         #expect(try await LampSyncSettingsStore.read(from: store()) == nil)
         try FileManager.default.createDirectory(

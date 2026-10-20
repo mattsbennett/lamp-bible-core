@@ -133,6 +133,37 @@ struct LampLibraryTests {
         #expect(try await target.verseNotes(reference: 43_003_016).first?.content == "Remote note")
     }
 
+    /// A per-file sync needs each module's kind and file, and places it by
+    /// its ID: the file on disk is named by the library's storage key.
+    @Test func anInstalledModuleIsListedWithItsFileAndSyncPath() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-module-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("source.sqlite")
+        let archiveURL = root.appendingPathComponent("selected.lamp")
+        let queue = try DatabaseQueue(path: sourceURL.path)
+        try await queue.write { db in
+            try db.execute(sql: "CREATE TABLE module_format (module_id TEXT, module_type TEXT)")
+            try db.execute(sql: "INSERT INTO module_format VALUES ('selected', 'dictionary')")
+            try db.execute(sql: "CREATE TABLE module_metadata (id TEXT, name TEXT, language TEXT)")
+            try db.execute(sql: "INSERT INTO module_metadata VALUES ('selected', 'Installed dictionary', 'en')")
+            try db.execute(sql: "CREATE TABLE dictionary_entries (id TEXT, module_id TEXT)")
+            try db.execute(sql: "INSERT INTO dictionary_entries VALUES ('selected:G1', 'selected')")
+        }
+        try ((Data(contentsOf: sourceURL) as NSData).compressed(using: .zlib) as Data).write(to: archiveURL)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        _ = try await library.install(from: archiveURL)
+
+        let files = try await library.installedModuleFiles()
+        #expect(files.map(\.module.id) == ["selected"])
+        let file = try #require(files.first)
+        #expect(file.module.kind == .dictionary && !file.module.isBundled)
+        #expect(FileManager.default.fileExists(atPath: file.fileURL.path))
+        #expect(file.fileURL.lastPathComponent != "selected.lamp")
+        #expect(try file.syncPath() == "Dictionaries/selected.lamp")
+    }
+
     @Test func installRejectsForeignOwnedRowsBeforeReplacingModule() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-owned-install-\(UUID().uuidString)", isDirectory: true)

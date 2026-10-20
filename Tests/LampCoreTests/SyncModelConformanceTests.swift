@@ -110,7 +110,7 @@ struct SyncModelConformanceTests {
         "observedCompatibilityWrite", "archiveCaptureChoice", "devotionalMediaUploadDecision", "sameColumn",
         "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone", "filePlanAction",
         "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite", "directoryDelete",
-        "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge", "preferenceStamp",
+        "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge", "preferenceStamp", "bundleRead",
     ]
 
     // MARK: - The model itself
@@ -1217,25 +1217,44 @@ struct SyncModelConformanceTests {
         let cases = SyncModel.cases("emptyBundlePath")
         #expect(!cases.isEmpty)
         for f in cases {
-            let root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("lamp-empty-bundle-\(UUID().uuidString)", isDirectory: true)
-            defer { try? FileManager.default.removeItem(at: root) }
-            try FileManager.default.createDirectory(
-                at: root.appendingPathComponent("Notes"), withIntermediateDirectories: true
-            )
-            if f[0] == "true" {
-                try Data("{}".utf8).write(to: root.appendingPathComponent(LampSyncFolderPublisher.snapshotPath))
-            }
-            if f[1] == "true" {
-                try Data("notes".utf8).write(to: root.appendingPathComponent("Notes/notes.lamp"))
-            }
-            let earlier: Bool
-            do {
-                earlier = try await LampSyncSettingsStore.read(from: LampSyncDirectoryStore(root: root)) != nil
-            } catch LampSyncSettingsStore.StoreError.notMigrated(nil) {
-                earlier = true
-            }
-            #expect(earlier == (f[2] == "true"), "emptyBundlePath \(f.joined(separator: " "))")
+            let read = try await readFolder(bundle: false, marker: f[0] == "true", content: f[1] == "true")
+            #expect((read == "notMigrated") == (f[2] == "true"), "emptyBundlePath \(f.joined(separator: " "))")
+        }
+    }
+
+    /// A library with a bundle reads it, whatever else is there.
+    @Test func bundleRead() async throws {
+        let cases = SyncModel.cases("bundleRead")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let read = try await readFolder(bundle: f[0] == "true", marker: f[1] == "true", content: f[2] == "true")
+            #expect(read == f[3], "bundleRead \(f.joined(separator: " "))")
+        }
+    }
+
+    /// What `read` makes of a real folder holding a bundle, an earlier
+    /// sync's marker and a module file, as asked.
+    private func readFolder(bundle: Bool, marker: Bool, content: Bool) async throws -> String {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-bundle-read-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Notes"), withIntermediateDirectories: true
+        )
+        if bundle {
+            try LampSyncSettingsBundle().encoded().write(to: root.appendingPathComponent(LampSyncSettingsStore.path))
+        }
+        if marker {
+            try Data("{}".utf8).write(to: root.appendingPathComponent(LampSyncFolderPublisher.snapshotPath))
+        }
+        if content {
+            try Data("notes".utf8).write(to: root.appendingPathComponent("Notes/notes.lamp"))
+        }
+        do {
+            return try await LampSyncSettingsStore.read(from: LampSyncDirectoryStore(root: root)) == nil
+                ? "fresh" : "bundle"
+        } catch LampSyncSettingsStore.StoreError.notMigrated(nil) {
+            return "notMigrated"
         }
     }
 

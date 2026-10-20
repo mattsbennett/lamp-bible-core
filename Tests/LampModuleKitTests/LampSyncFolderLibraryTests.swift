@@ -153,6 +153,32 @@ struct LampSyncFolderLibraryTests {
         #expect(unchanged == written && store.writes == 1)
     }
 
+    /// Every module kind has a folder, and a module placed there by its ID
+    /// reads back as that kind and that ID.
+    @Test func eachModuleKindHasAFolderThatRoundTrips() throws {
+        #expect(Set(LampModuleKind.allCases.map(LampSyncContentKind.init)) == Set(LampSyncContentKind.allCases))
+        for kind in LampModuleKind.allCases {
+            let folder = LampSyncContentKind(kind)
+            let path = try LampSyncFolderLayout.modulePath(kind: folder, moduleID: "web")
+            #expect(path == "\(folder.rawValue)/web.lamp")
+            #expect(LampSyncFolderLayout.kind(of: path) == .module(folder))
+            #expect(LampSyncFolderLayout.remoteModuleID(of: path) == "web")
+        }
+    }
+
+    /// Two devices starting the same library: the one whose claim is refused
+    /// reads the other's bundle rather than failing or writing over it.
+    @Test func aRefusedClaimReadsTheWinnersBundle() async throws {
+        let store = BundleStore()
+        let theirs = LampSyncSettingsBundle(userSettings: Data("theirs".utf8))
+        store.beforeNextWrite = {
+            store.files[LampSyncSettingsStore.path] = (try theirs.encoded(), "\"theirs\"")
+        }
+        let claimed = try await LampSyncSettingsStore.readOrClaim(from: store)
+        #expect(claimed == LampSyncSettingsStore.Snapshot(bundle: theirs, revision: "\"theirs\""))
+        #expect(store.conditions == [.ifAbsent] && store.writes == 0)
+    }
+
     /// The change runs again against the newer bundle, so another device's
     /// edit survives the retry.
     @Test func aRefusedUpdateMergesIntoTheNewerBundle() async throws {
