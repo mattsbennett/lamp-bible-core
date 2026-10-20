@@ -641,13 +641,20 @@ Each app keeps what is its own to answer:
 - its version merge: `mergingVersion` is the caller's, since LampCore's
   `merge(version:)` is out of LampModuleKit's reach.
 
-Next in the engine, each with a test (the phone's R2–R10):
-- R2: planned kinds;
-- R3: re-preparing a contribution against a newer bundle;
-- R4: the written snapshot in the outcome;
-- R6: patience;
-- R9: save times;
-- R10: versions passed to `receiving`.
+Then the phone's requirements went into the engine, each with a test:
+- R2: `plannedKinds` says what a client syncs, while pruning still sees the
+  whole listing;
+- R3: `PrepareAgain`, thrown by `contributing` or `mergingVersion`, re-reads
+  the bundle, calls `receiving` again, and retries within `attempts`;
+- R4: `Outcome.written` is the bundle as written;
+- R6: `patience` reaches every read and write;
+- R9: `Gathered.savedAt` reaches the plan, so a collection saved after
+  another device deleted it survives instead of being deleted;
+- R10: `receiving` gets the whole snapshot, versions included;
+- R11: uploads go through `LampSyncConditionalWrite.write(fileAt:…)`. A file
+  is confirmed by reading it back where `confirmByReading` says, and by its
+  revision otherwise, never by a HEAD the server answers stale. One never
+  shown back is reported, not recorded.
 
-Then the pass order goes into the model.
+Next, the pass order goes into the model.
 

@@ -189,7 +189,7 @@
         "settingsUpdateIsBounded",
         "uploadingFirstLocksAFreshLibraryOut"
       ],
-      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core; the order is held by the engine's own tests, moved with it from the Mac."
+      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core; the order is held by the engine's own tests, moved with it from the Mac. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded."
     },
     "Sources/LampModuleKit/LampSyncCompatibilityPublisher.swift": {
       "rules": [
@@ -228,7 +228,7 @@
         "confirmWrite",
         "writeOutcome"
       ],
-      "boundary": "A read-back is compared with the upload by SHA-256 digest, streamed from disk; collision resistance is assumed, as for contentRevision. Which errors count as a refusal is a list of error cases, Swift's."
+      "boundary": "A read-back is compared with the upload by SHA-256 digest, streamed from disk; collision resistance is assumed, as for contentRevision. Which errors count as a refusal is a list of error cases, Swift's. A write may be confirmed by revision alone, waiting while the server still names the revision replaced or a weak tag, for bodies too large to fetch back."
     },
     "Sources/LampModuleKit/LampSyncContentRevision.swift": {
       "rules": [

@@ -598,6 +598,227 @@ struct LampSyncBundlePassTests {
         let writing = try #require(writes.firstIndex(of: "write Devotionals/devotionals.lamp"))
         #expect(picture < writing)
     }
+
+    // MARK: - What the phone needed of a shared engine
+
+    private var immediate: LampSyncConditionalWrite.Patience { .immediate }
+    private var slow: LampSyncConditionalWrite.Patience {
+        .init(confirm: Array(repeating: .zero, count: 5), retry: [.zero])
+    }
+
+    /// R9. A collection saved here after another device deleted it survives
+    /// the deletion and goes back up; saved before it, it goes. Without the
+    /// save time the plan cannot tell, and deleted the later edit.
+    @Test func aCollectionSavedHereAfterItsDeletionSurvivesIt() async throws {
+        for (savedAt, survives) in [(Int64(5_001), true), (Int64(4_999), false)] {
+            let path = "Notes/notes.lamp"
+            let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 5_000)
+            store.bodies[path] = nil
+            store.revisions[path] = nil
+            let url = try makeFile("mine")
+            defer { try? FileManager.default.removeItem(at: url) }
+            var records = LampSyncFileRecords()
+            records.recordUpload(path, in: source, digest: "old", revision: "\"n1\"")
+            records.confirmRecorded([path: "\"n1\""], in: source)
+            let library = StubLibrary()
+            var held = gathered([local(path, url, "mine")])
+            held.savedAt = [path: savedAt]
+
+            let outcome = try await LampSyncBundlePass(
+                store: store, library: library, source: source, now: { 6_000 }
+            ).run(gathering: { held }, records: &records, patience: immediate)
+
+            #expect(library.deleted.isEmpty == survives, "saved at \(savedAt)")
+            #expect(outcome.uploaded.contains(path) == survives, "saved at \(savedAt)")
+        }
+    }
+
+    /// R2 (a). A client that plans only modules and media leaves a deck it
+    /// does not hold alone: not fetched, not recorded.
+    @Test func whatAClientDoesNotPlanIsLeftAlone() async throws {
+        let deck = "Workspaces/Presentations/easter.lampdeck"
+        let store = FakeStore()
+        store.bodies[deck] = Data("deck".utf8)
+        store.revisions[deck] = "\"d1\""
+        var records = LampSyncFileRecords()
+        let library = StubLibrary()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([]) }, records: &records,
+            plannedKinds: { kind in
+                switch kind {
+                case .module, .devotionalMedia, .bookMedia: true
+                case .deck, .deckAsset, .workspaceFile: false
+                }
+            },
+            patience: immediate
+        )
+        #expect(library.installed.isEmpty)
+        #expect(outcome.written?.bundle.manifest.paths.isEmpty == true)
+
+        // The same server, planning everything, takes the deck.
+        var all = LampSyncFileRecords()
+        let everything = StubLibrary()
+        _ = try await LampSyncBundlePass(
+            store: store, library: everything, source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &all, patience: immediate)
+        #expect(everything.installed == [deck])
+    }
+
+    /// R2 (b). A deck tombstone past its lifetime, whose file still waits to
+    /// be reaped, survives a pass by a client that plans no decks: pruning
+    /// sees the whole listing, never the planned part of it.
+    @Test func pruningSeesTheWholeListingWhateverIsPlanned() async throws {
+        let deck = "Workspaces/Presentations/easter.lampdeck"
+        let store = try seeded(path: deck, revision: "\"d1\"", deletedAt: 1_000)
+        let now = 1_000 + LampSyncLibraryManifest.tombstoneLifetime + 10
+        var records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { now }
+        ).run(
+            gathering: { gathered([]) }, records: &records,
+            plannedKinds: { if case .module = $0 { true } else { false } },
+            patience: immediate
+        )
+        let kept = try #require(outcome.written?.bundle.manifest.entry(at: deck))
+        #expect(!kept.isMember)
+    }
+
+    /// R3. Another device writes between this pass's read and its update.
+    /// The contribution prepared against the old bundle is prepared again
+    /// against the new one, and the new one's other changes are kept.
+    @Test func aContributionPreparedAgainstAMovedBundleIsPreparedAgain() async throws {
+        let store = FakeStore()
+        let path = bundlePath
+        store.bodies[path] = try LampSyncSettingsBundle(userSettings: Data("one".utf8)).encoded()
+        store.revisions[path] = "\"b1\""
+        let b2 = try LampSyncSettingsBundle(
+            userSettings: Data("two".utf8), macSettings: Data("theirs".utf8)
+        ).encoded()
+        store.beforeRead = { read, earlier in
+            // The second read of the bundle is the update's: by then the other
+            // device has written.
+            if read == path, earlier == 1 {
+                store.bodies[path] = b2
+                store.revisions[path] = "\"b2\""
+            }
+        }
+        var prepared: [Data?] = []
+        var records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([]) }, records: &records, patience: immediate,
+            receiving: { prepared.append($0.bundle.userSettings) },
+            contributing: { bundle in
+                guard bundle.userSettings == prepared.last ?? nil else {
+                    throw LampSyncBundlePass.PrepareAgain()
+                }
+                bundle.userSettings = (bundle.userSettings ?? Data()) + Data("+mine".utf8)
+            }
+        )
+        #expect(prepared == [Data("one".utf8), Data("two".utf8)])
+        #expect(outcome.written?.bundle.userSettings == Data("two+mine".utf8))
+        #expect(outcome.written?.bundle.macSettings == Data("theirs".utf8))
+    }
+
+    /// R3, bounded: a bundle that moves on every attempt stops the pass, and
+    /// `receiving` is asked no more times than the attempts allowed.
+    @Test func aBundleThatAlwaysMovesStopsThePass() async throws {
+        let store = FakeStore()
+        var receivingCalls = 0
+        var records = LampSyncFileRecords()
+        await #expect(throws: LampSyncSettingsStore.StoreError.tooManyAttempts) {
+            _ = try await LampSyncBundlePass(
+                store: store, library: StubLibrary(), source: source, now: { 2_000 }
+            ).run(
+                gathering: { gathered([]) }, records: &records, patience: immediate, attempts: 3,
+                receiving: { _ in receivingCalls += 1 },
+                contributing: { _ in throw LampSyncBundlePass.PrepareAgain() }
+            )
+        }
+        #expect(receivingCalls == 3)
+    }
+
+    /// R4. The outcome carries the bundle as written, which is what is on
+    /// the server afterwards.
+    @Test func theOutcomeCarriesTheBundleAsWritten() async throws {
+        let store = FakeStore()
+        var records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([]) }, records: &records, patience: immediate,
+            contributing: { $0.personalDeletions = Data("ledger".utf8) }
+        )
+        let written = try #require(outcome.written)
+        #expect(written.revision == store.revisions[bundlePath])
+        let stored = try LampSyncSettingsBundle.decode(try #require(store.bodies[bundlePath]))
+        #expect(written.bundle == stored)
+        #expect(stored.personalDeletions == Data("ledger".utf8))
+    }
+
+    /// R11. A server that names no revision on PUT, and keeps naming the old
+    /// one for a moment: the upload is recorded under the new revision once
+    /// the server shows it, never under the stale one.
+    @Test func anUploadIsRecordedUnderTheRevisionTheServerShowsOnceItCatchesUp() async throws {
+        let path = "Translations/kjv.lamp"
+        let store = try seeded(path: path, revision: "\"v1\"")
+        store.namesRevisionOnWrite = false
+        store.revisionLag = 2
+        let url = try makeFile("edited")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "old", revision: "\"v1\"")
+        records.confirmRecorded([path: "\"v1\""], in: source)
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([local(path, url, "edited")]) }, records: &records, patience: slow)
+        #expect(outcome.uploaded == [path])
+        let recorded = records.record(path, in: source)?.effectiveRevision
+        #expect(recorded == store.revisions[path] && recorded != "\"v1\"")
+        // Confirmed by revision alone: a translation is not fetched back.
+        #expect(!store.operations.contains("read \(path)"))
+    }
+
+    /// R11. One the server never shows back is reported, not recorded under
+    /// a guess; the next pass compares it.
+    @Test func anUploadNeverShownBackIsReportedNotGuessed() async throws {
+        let path = "Translations/kjv.lamp"
+        let store = try seeded(path: path, revision: "\"v1\"")
+        store.namesRevisionOnWrite = false
+        store.revisionLag = 100
+        let url = try makeFile("edited")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "old", revision: "\"v1\"")
+        records.confirmRecorded([path: "\"v1\""], in: source)
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([local(path, url, "edited")]) }, records: &records, patience: immediate)
+        #expect(outcome.uploaded.isEmpty)
+        #expect(outcome.failures.contains { $0.hasPrefix(path) && $0.contains("not shown it back") })
+        #expect(outcome.written?.bundle.manifest.entry(at: path)?.revision == "\"v1\"")
+    }
+
+    /// R11. Kinds the caller asks to confirm by reading are read back.
+    @Test func kindsConfirmedByReadingAreReadBack() async throws {
+        let path = "Notes/notes.lamp"
+        let store = FakeStore()
+        store.namesRevisionOnWrite = false
+        let url = try makeFile("notes")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([local(path, url, "notes")]) }, records: &records,
+            confirmByReading: { $0 == .module(.notes) }, patience: immediate
+        )
+        #expect(outcome.uploaded == [path])
+        #expect(store.operations.contains("read \(path)"))
+    }
 }
 
 // MARK: - Doubles
@@ -635,6 +856,14 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
     var revisionAfterWrite: String?
     /// Some servers answer a PUT with no ETag at all.
     var namesRevisionOnWrite = true
+    /// After a write, this many revision asks still answer with what was
+    /// there before, as the user's Synology does for a moment after a PUT.
+    var revisionLag = 0
+    /// Called before each read of a path, with how many reads of it came
+    /// before: a test stands in for another device writing in between.
+    var beforeRead: ((String, Int) -> Void)?
+    private var reads: [String: Int] = [:]
+    private var lagging: [String: (left: Int, revision: String?)] = [:]
     private var counter = 0
 
     func list(directory: String) async throws -> [LampSyncRemoteEntry]? {
@@ -655,12 +884,18 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
 
     func read(path: String) async throws -> LampSyncRemoteFile? {
         operations.append("read \(path)")
+        beforeRead?(path, reads[path, default: 0])
+        reads[path, default: 0] += 1
         guard let data = bodies[path] else { return nil }
         return LampSyncRemoteFile(data: data, revision: revisions[path])
     }
 
     func revision(path: String) async throws -> String? {
         operations.append("revision \(path)")
+        if let lag = lagging[path], lag.left > 0 {
+            lagging[path] = (lag.left - 1, lag.revision)
+            return lag.revision
+        }
         return revisions[path]
     }
 
@@ -682,6 +917,7 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
         }
         counter += 1
         let revision = revisionAfterWrite ?? "\"\(path)-\(counter)\""
+        if revisionLag > 0 { lagging[path] = (revisionLag, revisions[path]) }
         bodies[path] = data
         revisions[path] = revision
         return namesRevisionOnWrite ? revision : nil

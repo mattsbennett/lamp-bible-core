@@ -87,6 +87,18 @@ public struct LampSyncBundlePass {
         public var failures: [String] = []
         /// The bundle revision this pass left behind.
         public var bundleRevision: String?
+        /// The bundle this pass wrote, as written: what a caller applies
+        /// afterwards, so it never reads the bundle back to learn it.
+        public var written: LampSyncSettingsStore.Snapshot?
+    }
+
+    /// Thrown by `contributing` when what it prepared was against a bundle
+    /// that has since moved: another device wrote between this pass's read
+    /// and its update. The pass reads the bundle again, hands it to
+    /// `receiving` again, and retries, so a contribution is never built from
+    /// a bundle older than the one it lands on.
+    public struct PrepareAgain: Error, Equatable {
+        public init() {}
     }
 
     private let store: any LampSyncRemoteStore
@@ -138,6 +150,12 @@ public struct LampSyncBundlePass {
         /// taken at that revision, unchanged since.
         public var heldWithoutAFile: Set<String> = []
 
+        /// When each path's content was last saved here, where the library
+        /// knows. A file saved after another device deleted it survives the
+        /// deletion and goes back up, so without this a collection edited
+        /// here after it was tombstoned elsewhere would be deleted instead.
+        public var savedAt: [String: Int64] = [:]
+
         public init() {}
     }
 
@@ -161,13 +179,32 @@ public struct LampSyncBundlePass {
     /// library read before them would publish the very notes and writings it
     /// had just been told were deleted, and the next pass on the other device
     /// would resurrect them.
+    ///
+    /// `receiving` gets the whole snapshot, versions included: on iCloud a
+    /// client prepares its contribution against the copies it will merge.
+    ///
+    /// `plannedKinds` says which kinds of file this client syncs. Others are
+    /// neither fetched, published, deleted nor recorded, and pruning still
+    /// sees the whole listing, so a tombstone waiting for its file to be
+    /// reaped is kept whoever plans what.
+    ///
+    /// `confirmByReading` says which uploads that come back without a
+    /// revision are confirmed by reading the body back; the rest are asked
+    /// for their revision only, so a translation is not downloaded again to
+    /// see it arrived. Either way the server is waited for within `patience`,
+    /// and an upload it has not shown back is reported, never recorded with
+    /// a guessed revision.
     public func run(
         gathering: () async throws -> Gathered,
         records: inout LampSyncFileRecords,
         mergingVersion: (
             (inout LampSyncSettingsBundle, LampSyncSettingsStore.Version) throws -> Void
         )? = nil,
-        receiving: (LampSyncSettingsBundle) async throws -> Void = { _ in },
+        plannedKinds: (LampSyncFileKind) -> Bool = { _ in true },
+        confirmByReading: (LampSyncFileKind) -> Bool = { _ in false },
+        patience: LampSyncConditionalWrite.Patience = .standard,
+        attempts: Int = 3,
+        receiving: (LampSyncSettingsStore.Snapshot) async throws -> Void = { _ in },
         contributing: (inout LampSyncSettingsBundle) throws -> Void = { _ in }
     ) async throws -> Outcome {
         var outcome = Outcome()
@@ -176,8 +213,8 @@ public struct LampSyncBundlePass {
         // still finds it there throws `notMigrated`. Handing it a bundle's
         // revision makes a migrated library report itself unmigrated on every
         // pass — which is what it did.
-        let opened = try await LampSyncSettingsStore.readOrClaim(from: store)
-        try await receiving(opened.bundle)
+        let opened = try await LampSyncSettingsStore.readOrClaim(from: store, patience: patience)
+        try await receiving(opened)
 
         // Only now: the library has had the other devices' deletions applied
         // to it, so this is what it actually holds.
@@ -192,7 +229,7 @@ public struct LampSyncBundlePass {
             gathered.local.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }
         )
         var locals = LampSyncLocalFiles.locals(
-            gathered.local, records: records, source: source
+            gathered.local, records: records, source: source, savedAt: { gathered.savedAt[$0] }
         )
         let described = Set(gathered.local.map(\.path))
         for path in gathered.heldWithoutAFile.sorted() where !described.contains(path) {
@@ -203,7 +240,7 @@ public struct LampSyncBundlePass {
                 path: path,
                 changedSinceUpload: false,
                 lastRevision: revision,
-                savedAt: nil
+                savedAt: gathered.savedAt[path]
             ))
         }
 
@@ -212,7 +249,7 @@ public struct LampSyncBundlePass {
             local: locals,
             deletedLocally: gathered.deletedLocally,
             listing: listing
-        )
+        ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
 
         // 1. Take what the other side has.
         for path in plan.downloads.sorted() {
@@ -291,56 +328,52 @@ public struct LampSyncBundlePass {
                 outcome.failures.append("\(path): its file could not be read")
                 continue
             }
+            // A PUT that answers without an ETag leaves this client with no
+            // revision for a file it has just written. The next pass then
+            // finds a revision in the listing where it recorded none, reads
+            // that as the other side having changed the file, and downloads
+            // its own upload back — 601 of them, on the first pass after the
+            // workspaces went up. Media is worse still: with no revision it
+            // is offered `.ifAbsent` for ever against a file plainly there.
+            //
+            // So a write that names no revision is confirmed, waiting out a
+            // server still showing what it held before, or a tag Apache marks
+            // weak for the second after a change. By reading the body back
+            // where the caller asks, by revision alone otherwise. One it has
+            // not shown back is reported and left unrecorded, never recorded
+            // under a guess; the next pass compares it.
+            let kind = LampSyncFolderLayout.kind(of: path)
             do {
-                // A PUT that answers without an ETag leaves this client with
-                // no revision for a file it has just written. The next pass
-                // then finds a revision in the listing where it recorded
-                // none, reads that as the other side having changed the file,
-                // and downloads its own upload back — 601 of them, on the
-                // first pass after the workspaces went up. Media is worse
-                // still: with no revision it is offered `.ifAbsent` for ever
-                // against a file that is plainly there, and every attempt is
-                // refused.
-                //
-                // So a write that names no revision is asked for one. A HEAD,
-                // not a read-back: the PUT was accepted, and what is wanted
-                // here is the name of what is now there, not proof that it
-                // arrived.
-                //
-                // Deliberately not `LampSyncConditionalWrite.write`, which
-                // confirms by reading the body back. The phone uses it for
-                // its module uploads and is right to; here the bodies are
-                // the Mac's own modules, and confirming a translation would
-                // mean downloading it again to see it had arrived. A server
-                // that answers 2xx without storing the file would go unseen,
-                // and that is the trade: a module-sized download on every
-                // publish, against a server that lies about success.
-                var revision = try await store.write(fileAt: url, to: path, condition: condition)
-                if revision == nil {
-                    revision = try? await store.revision(path: path)
-                }
-                records.recordUpload(path, in: source, digest: digest, revision: revision)
-                written[path] = (revision, condition.revision)
-                outcome.uploaded.append(path)
-            } catch where LampSyncConditionalWrite.isRefusal(error)
-                && condition == .ifAbsent
-                && (LampSyncFolderLayout.kind(of: path)?.isMedia ?? false) {
-                // A refused `.ifAbsent` means the file is already there, and
-                // for media that is the whole answer: a path's bytes never
-                // change, so an existing copy is either ours or a genuine
-                // clash. Without settling it the pass offers the same write
-                // every time and is refused every time — which is what two
-                // deck images did, on every pass, for ever.
-                do {
+                switch try await LampSyncConditionalWrite.write(
+                    fileAt: url, to: path, in: store, condition: condition, patience: patience,
+                    confirm: kind.map(confirmByReading) == true ? .reading : .revision
+                ) {
+                case .written(let revision):
+                    records.recordUpload(path, in: source, digest: digest, revision: revision)
+                    written[path] = (revision, condition.revision)
+                    outcome.uploaded.append(path)
+                case .writtenUnconfirmed:
+                    outcome.failures.append(
+                        "\(path): sent, but the server has not shown it back yet; the next sync settles it"
+                    )
+                case .refused where condition == .ifAbsent && (kind?.isMedia ?? false):
+                    // A refused `.ifAbsent` means the file is already there,
+                    // and for media that is the whole answer: a path's bytes
+                    // never change, so an existing copy is either ours or a
+                    // genuine clash. Without settling it the pass offers the
+                    // same write every time and is refused every time — which
+                    // is what two deck images did, on every pass, for ever.
                     try await settleExistingMedia(
                         at: path, ours: digest, records: &records, outcome: &outcome
                     )
-                } catch {
-                    outcome.failures.append("\(path): \(error.localizedDescription)")
+                case .refused:
+                    // Another device wrote first; the next pass plans again
+                    // from what won.
+                    outcome.failures.append(
+                        "\(path): \(LampSyncConditionalWrite.WriteError.conflict.localizedDescription)"
+                    )
                 }
             } catch {
-                // A refusal is another device having written first, which the
-                // next pass plans again from what won. Neither is fatal here.
                 outcome.failures.append("\(path): \(error.localizedDescription)")
             }
         }
@@ -360,8 +393,67 @@ public struct LampSyncBundlePass {
         let time = now()
         let adopt = plan.adopt
         let tombstone = plan.tombstone
-        let snapshot = try await LampSyncSettingsStore.update(
+        var snapshot: LampSyncSettingsStore.Snapshot?
+        for attempt in 0..<max(attempts, 1) {
+            if attempt > 0 {
+                // The contribution was prepared against a bundle that moved.
+                // Hand the one there now to `receiving`, so it prepares again.
+                guard let current = try await LampSyncSettingsStore.read(from: store, patience: patience) else {
+                    throw LampSyncSettingsStore.StoreError.tooManyAttempts
+                }
+                try await receiving(current)
+            }
+            do {
+                snapshot = try await update(
+                    adopt: adopt, tombstone: tombstone, written: written, listing: listing,
+                    time: time, mergingVersion: mergingVersion, patience: patience,
+                    attempts: attempts, contributing: contributing
+                )
+                break
+            } catch is PrepareAgain {
+                continue
+            }
+        }
+        guard let snapshot else { throw LampSyncSettingsStore.StoreError.tooManyAttempts }
+        outcome.bundleRevision = snapshot.revision
+        outcome.written = snapshot
+        outcome.tombstoned = tombstone.keys.sorted()
+        records.confirmRecorded(
+            written.compactMapValues(\.revision), in: source
+        )
+
+        // 7. Only now may the bytes go. Before the bundle named the deletion,
+        //    a missing file reads as one nobody has uploaded yet.
+        for (path, revision) in plan.reap.sorted(by: { $0.key < $1.key }) {
+            do {
+                try await store.delete(path: path, condition: .ifRevision(revision))
+                records.forget(path, in: source)
+                outcome.reaped.append(path)
+            } catch {
+                outcome.failures.append("\(path): \(error.localizedDescription)")
+            }
+        }
+
+        return outcome
+    }
+
+    /// The pass's one bundle update: this client's contribution, then every
+    /// write, adoption and tombstone the pass made, then pruning.
+    private func update(
+        adopt: [String: String],
+        tombstone: [String: Int64],
+        written: [String: (revision: String?, previous: String?)],
+        listing: [String: String],
+        time: Int64,
+        mergingVersion: ((inout LampSyncSettingsBundle, LampSyncSettingsStore.Version) throws -> Void)?,
+        patience: LampSyncConditionalWrite.Patience,
+        attempts: Int,
+        contributing: (inout LampSyncSettingsBundle) throws -> Void
+    ) async throws -> LampSyncSettingsStore.Snapshot {
+        try await LampSyncSettingsStore.update(
             in: store,
+            attempts: attempts,
+            patience: patience,
             mergingVersion: mergingVersion
         ) { bundle in
             try contributing(&bundle)
@@ -388,25 +480,6 @@ public struct LampSyncBundlePass {
                 now: time, present: Set(listing.keys)
             )
         }
-        outcome.bundleRevision = snapshot.revision
-        outcome.tombstoned = tombstone.keys.sorted()
-        records.confirmRecorded(
-            written.compactMapValues(\.revision), in: source
-        )
-
-        // 7. Only now may the bytes go. Before the bundle named the deletion,
-        //    a missing file reads as one nobody has uploaded yet.
-        for (path, revision) in plan.reap.sorted(by: { $0.key < $1.key }) {
-            do {
-                try await store.delete(path: path, condition: .ifRevision(revision))
-                records.forget(path, in: source)
-                outcome.reaped.append(path)
-            } catch {
-                outcome.failures.append("\(path): \(error.localizedDescription)")
-            }
-        }
-
-        return outcome
     }
 
     /// Downloads everything the plan says both sides changed, and merges what
@@ -496,6 +569,21 @@ public struct LampSyncBundlePass {
         let republish = try await library.reconcile(downloaded)
         outcome.reconciled = downloaded.keys.sorted()
         return republish
+    }
+}
+
+private extension LampSyncFilePlan.Plan {
+    /// The plan for the paths `keep` admits, and nothing else.
+    func only(_ keep: (String) -> Bool) -> Self {
+        var plan = LampSyncFilePlan.Plan()
+        plan.downloads = downloads.filter(keep)
+        plan.merge = merge.filter { keep($0.key) }
+        plan.uploads = uploads.filter { keep($0.key) }
+        plan.deleteLocally = deleteLocally.filter(keep)
+        plan.adopt = adopt.filter { keep($0.key) }
+        plan.tombstone = tombstone.filter { keep($0.key) }
+        plan.reap = reap.filter { keep($0.key) }
+        return plan
     }
 }
 

@@ -180,6 +180,18 @@ public enum LampSyncConditionalWrite {
         case refused
     }
 
+    /// How a write that named no revision is confirmed.
+    public enum Confirmation: Sendable, Equatable {
+        /// Read the body back and compare its bytes with what was sent: proof
+        /// the server stored them, at the cost of downloading them.
+        case reading
+        /// Ask only for the revision: what is now there, not proof that it is
+        /// these bytes. For bodies too large to fetch again just to look,
+        /// such as a translation. A server that answers 2xx without storing
+        /// the file goes unseen; that is the trade.
+        case revision
+    }
+
     /// A write the server took and has not shown back yet. It is on the
     /// server, so the next read finds it. Never a refusal.
     public struct Unconfirmed: Error, LocalizedError, Equatable {
@@ -205,12 +217,13 @@ public enum LampSyncConditionalWrite {
         to path: String,
         in store: any LampSyncRemoteStore,
         condition: LampSyncWriteCondition,
-        patience: Patience = .standard
+        patience: Patience = .standard,
+        confirm: Confirmation = .reading
     ) async throws -> Outcome {
         try await outcome(
             of: { try await store.write(data, to: path, condition: condition) },
             sent: { LampSyncContentRevision.digest(for: data) },
-            at: path, in: store, condition: condition, patience: patience
+            at: path, in: store, condition: condition, patience: patience, confirm: confirm
         )
     }
 
@@ -221,12 +234,13 @@ public enum LampSyncConditionalWrite {
         to path: String,
         in store: any LampSyncRemoteStore,
         condition: LampSyncWriteCondition,
-        patience: Patience = .standard
+        patience: Patience = .standard,
+        confirm: Confirmation = .reading
     ) async throws -> Outcome {
         try await outcome(
             of: { try await store.write(fileAt: url, to: path, condition: condition) },
             sent: { try LampSyncContentRevision.digest(forFileAt: url) },
-            at: path, in: store, condition: condition, patience: patience
+            at: path, in: store, condition: condition, patience: patience, confirm: confirm
         )
     }
 
@@ -236,7 +250,8 @@ public enum LampSyncConditionalWrite {
         at path: String,
         in store: any LampSyncRemoteStore,
         condition: LampSyncWriteCondition,
-        patience: Patience
+        patience: Patience,
+        confirm: Confirmation
     ) async throws -> Outcome {
         let response: String?
         do {
@@ -245,8 +260,21 @@ public enum LampSyncConditionalWrite {
             return .refused
         }
         if let response, LampWebDAVStorage.isStrongETag(response) { return .written(response) }
-        let sent = try sentDigest()
         let replaced: String? = if case .ifRevision(let revision) = condition { revision } else { nil }
+        if confirm == .revision {
+            // Still the revision replaced, or nothing yet, or a tag Apache
+            // marks weak for the second after a change: the server has not
+            // caught up. Anything else strong names what is there now.
+            for wait in patience.confirm {
+                if wait > .zero { try? await Task.sleep(for: wait) }
+                guard let current = try await store.revision(path: path),
+                      LampWebDAVStorage.isStrongETag(current),
+                      !namesSameRevision(current, replaced) else { continue }
+                return .written(current)
+            }
+            return .writtenUnconfirmed
+        }
+        let sent = try sentDigest()
         for wait in patience.confirm {
             if wait > .zero { try? await Task.sleep(for: wait) }
             if let replaced, namesSameRevision(try await store.revision(path: path), replaced) { continue }
