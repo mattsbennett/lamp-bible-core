@@ -33,6 +33,69 @@ struct LampSyncLibraryMigrationTests {
         return (archive, preferences)
     }
 
+    /// A real export, not a hand-made list: the library's own portable
+    /// backup, with what the Mac adds beside it, as its archive pass packs
+    /// it. Every entry must have a place, or the person's move would refuse.
+    @Test func everyEntryOfARealExportHasAPlace() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mac-move-export-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let libraryRoot = root.appendingPathComponent("Library", isDirectory: true)
+        let library = LampLibrary(rootURL: libraryRoot)
+        try await library.savePersonalDevotional(LampDevotional(
+            id: "daily", moduleID: "personal-devotionals", moduleName: "My Writing", title: "Daily",
+            content: "![A](lamp-media://daily/a.png)",
+            mediaJSON: #"[{"id":"a","type":"image","filename":"a.png"}]"#
+        ))
+        try await library.savePersonalDevotional(LampDevotional(
+            id: "gone", moduleID: "personal-devotionals", moduleName: "My Writing", title: "Gone", content: "x"
+        ))
+        try await library.deletePersonalDevotional(id: "gone")
+        _ = try await library.setPersonalVerseNote(reference: 43_003_016, content: "Note")
+        _ = try await library.saveVerseHighlight(
+            translationID: "TEST", reference: 43_003_016, startOffset: 0, endOffset: 4, color: "#FFCC00"
+        )
+        let media = libraryRoot.appendingPathComponent("Media/Devotionals/daily", isDirectory: true)
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        try Data("png".utf8).write(to: media.appendingPathComponent("a.png"))
+        try Data().write(to: libraryRoot.appendingPathComponent("Media/.DS_Store"))
+
+        let outgoing = root.appendingPathComponent("Outgoing", isDirectory: true)
+        _ = try await library.exportPortableBackup(to: outgoing)
+        // What the Mac writes beside the backup, and what the phone adds.
+        let beside: [String: Data] = [
+            LampPortableBackupLayout.settingsPath: Data("plist".utf8),
+            LampPortableBackupLayout.sharedPreferencesPath: try LampSyncPreferenceState.encode(.init()),
+            "Workspaces/Skills/build-lamp-deck/SKILL.md": Data("skill".utf8),
+            "Workspaces/Devotionals/daily/Documents/draft.md": Data("draft".utf8),
+            "Workspaces/Devotionals/daily/EnabledSkills.json": Data("[]".utf8),
+            "Workspaces/Presentations/easter.lampdeck": Data("deck".utf8),
+            "Workspaces/Presentations/Assets/slide.png": Data("png".utf8),
+            LampPresentationDeckPortableLayout.deletionsPath: deckLedger,
+            LampPortableBackupLayout.compatibilityManifestPath: Data("{}".utf8),
+            "Compatibility/Notes/notes.lamp": Data("notes".utf8),
+            "Compatibility/Devotionals/devotionals.lamp": Data("writing".utf8),
+            LampSyncSettingsArchive.path: Data("phone".utf8),
+            LampSyncSettingsArchive.legacyManifestPath: Data("{}".utf8),
+        ]
+        for (path, data) in beside {
+            let url = outgoing.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
+        let archive = try LampSyncArchive.create(from: outgoing)
+        #expect(archive.entries.contains { $0.path == LampPortableBackupLayout.deletionLedgerPath })
+        #expect(archive.entries.contains { $0.path.hasPrefix("Study/") })
+        #expect(LampSyncLibraryMigration.unplaceableEntries(in: archive).isEmpty)
+        let bundle = try LampSyncLibraryMigration.firstBundle(from: archive)
+        #expect(bundle.personalDeletions != nil && bundle.macSettings == Data("plist".utf8))
+    }
+
+    @Test func everyUnplaceableEntryIsNamedAtOnce() throws {
+        let (archive, _) = try macArchive(adding: ["Backups/old.zip": Data(), "notes.txt": Data()])
+        #expect(LampSyncLibraryMigration.unplaceableEntries(in: archive) == ["Backups/old.zip", "notes.txt"])
+    }
+
     @Test func theFirstBundleCarriesEverySettingAndLedger() throws {
         let (archive, preferences) = try macArchive()
         let bundle = try LampSyncLibraryMigration.firstBundle(from: archive)

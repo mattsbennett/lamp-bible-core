@@ -470,6 +470,16 @@ When it writes (`macMigrationStep`):
 - A bundle already there is returned, so a second run, or a second Mac,
   writes nothing.
 
+Before asking, the Mac can name everything that would stop the move with
+`unplaceableEntries(in:)`, so a stray file is reported up front, not found by
+a refusal. The fates are tested against a real `exportPortableBackup`, with
+what the Mac and phone add beside it. The Mac's own workspace and
+compatibility exports should be checked the same way in the Mac's tests.
+
+The migration's `macSettings` is only a starting point. It's the same bytes as
+`settings.plist`, a snapshot of `syncedKeys`, and every pass re-encodes it
+from the live defaults.
+
 `macSettings` carries only the synced `settings.plist` keys
 (`LampPortableSettingsCodec.syncedKeys`). The Mac's highlight set to module
 mapping is not among them: it lives in the Mac's defaults and is re-derived

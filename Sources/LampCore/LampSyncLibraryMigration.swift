@@ -104,6 +104,12 @@ public enum LampSyncLibraryMigration {
         return LampSyncFolderLayout.kind(of: path) == nil ? .unknown : .inPlace
     }
 
+    /// Every entry the move cannot place, so the Mac can name them all
+    /// before it asks the person, rather than stop at the first.
+    public static func unplaceableEntries(in archive: LampSyncArchive) -> [String] {
+        archive.entries.map(\.path).filter { fate(of: $0) == .unknown }.sorted()
+    }
+
     /// The first bundle: every setting and ledger the archive holds. Throws
     /// for an entry it cannot place, before anything is written.
     public static func firstBundle(from archive: LampSyncArchive) throws -> LampSyncSettingsBundle {
