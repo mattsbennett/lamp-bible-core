@@ -237,6 +237,54 @@ struct SyncVerificationCoverageTests {
         #expect(missing.isEmpty, "System models the model does not have: \(missing.sorted())")
     }
 
+    /// A Swift comment that cites a model rule names one the model has. A
+    /// citation outlives its rule silently otherwise, and tells the next
+    /// reader the code does something the model no longer says — as one did,
+    /// and a peer reasoned from it to a bug that could not happen.
+    ///
+    /// A citation is a backticked lower-case name on a comment line that
+    /// mentions the model or puts the name in parentheses. A conformance
+    /// table's name is one; a Swift name of that spelling in the sources or
+    /// the tests is not one.
+    @Test func everyCitedRuleIsInTheModel() throws {
+        let manifest = try manifest()
+        let names = try Set(modelDeclarations().declarations.map(\.name)).union(modelNames())
+            .union(SyncModelConformanceTests.checkedRules)
+        var paths = Set(manifest.sources.keys)
+        paths.formUnion(manifest.platformSources.keys.filter(siblingIsPresent))
+        for directory in ["Sources", "Tests"] {
+            let root = Self.root.appendingPathComponent(directory).path
+            for case let path as String in FileManager.default.enumerator(atPath: root) ?? .init()
+            where path.hasSuffix(".swift") {
+                paths.insert("\(directory)/\(path)")
+            }
+        }
+        var comments: [(path: String, line: String)] = []
+        var code = Set<String>()
+        for path in paths {
+            guard let text = try? String(contentsOf: Self.root.appendingPathComponent(path), encoding: .utf8)
+            else { continue }
+            for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("//") {
+                    comments.append((path, trimmed))
+                } else {
+                    code.formUnion(identifiers(in: String(line)))
+                }
+            }
+        }
+        let backticked = try NSRegularExpression(pattern: "`([a-z][A-Za-z0-9_']*)`")
+        var stale: [String] = []
+        for (path, line) in comments where line.contains("SyncMerge") || line.contains("(`") {
+            let range = NSRange(line.startIndex..., in: line)
+            for match in backticked.matches(in: line, range: range) {
+                guard let cited = Range(match.range(at: 1), in: line).map({ String(line[$0]) }) else { continue }
+                if !names.contains(cited) && !code.contains(cited) { stale.append("\(path): \(cited)") }
+            }
+        }
+        #expect(stale.isEmpty, "Comments citing rules the model does not define: \(stale.sorted())")
+    }
+
     /// Every conformance table is claimed by the source it holds to the
     /// model, and every claim is a table the conformance tests check.
     @Test func everyConformanceTableBelongsToASource() throws {

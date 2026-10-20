@@ -55,9 +55,9 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     }
 
     /// Whether a library carries this deletion out, and so whether a removal
-    /// here may be recorded as one. A tombstone from an older client can still
-    /// name a path this refuses; the plan asks to delete it regardless
-    /// (`aTombstonedCollectionIsAskedForAndRefused`).
+    /// here may be recorded as one. The plan never asks for one it refuses: a
+    /// tombstone an older client recorded on such a path is superseded by the
+    /// copy going back up (`thePlanNeverAsksForARefusedDeletion`).
     public var isAllowed: Bool {
         switch self {
         case .module, .deck, .deckAsset: true

@@ -634,9 +634,11 @@ struct LampSyncBundlePassTests {
     }
 
     /// The notes collection is one file holding every note, which no library
-    /// deletes. A tombstone some older client recorded for it, even one later
-    /// than the last save here, is neither carried out nor reaped: the copy
-    /// goes back up, which supersedes it.
+    /// deletes. A tombstone some older client recorded for it — as the phone's
+    /// old Delete button did for the writing collection — even one later than
+    /// the last save here, is neither carried out nor reaped, and reports no
+    /// failure: the copy goes back up, which supersedes it. Such a tombstone
+    /// heals on the next pass, without anyone being told.
     @Test func theNotesCollectionSurvivesEveryTombstone() async throws {
         let path = "Notes/notes.lamp"
         let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 5_000)
@@ -655,6 +657,7 @@ struct LampSyncBundlePassTests {
 
         #expect(library.deleted.isEmpty)
         #expect(outcome.reaped.isEmpty)
+        #expect(outcome.failures.isEmpty)
         #expect(outcome.uploaded.contains(path))
     }
 
