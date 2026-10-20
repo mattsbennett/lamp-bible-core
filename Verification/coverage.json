@@ -72,6 +72,24 @@
         "devotionalMediaUploadDecision"
       ]
     },
+    "Sources/LampCore/LampSyncLibraryMigration.swift": {
+      "rules": [
+        "entryFate",
+        "onlyBookkeepingIsDropped",
+        "everySettingAndLedgerIsCarried",
+        "macMigrationStep",
+        "theMigrationWritesOnlyOverTheArchiveItImported",
+        "theMigrationMovesOnlyTheMacsLibrary",
+        "aMigratedLibraryIsLeftAlone",
+        "archiveKeeper",
+        "earlierLibrary"
+      ],
+      "conformance": [
+        "entryFate",
+        "macMigrationStep"
+      ],
+      "boundary": "Which entries are carried, and when the first bundle is written, are held by tables. That the Mac's next pass publishes the library it imported is the Mac's, as is importing it first."
+    },
     "Sources/LampCore/LampSyncPersonalExport.swift": {
       "rules": [
         "macHighlightAllowsArchivePublish"

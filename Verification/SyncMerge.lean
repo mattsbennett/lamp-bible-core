@@ -4114,6 +4114,106 @@ theorem versionsFoldInAnyOrder (a b c : BundleCopy) :
   · rw [mergeManifestEntry_assoc, mergeManifestEntry_comm b.entry, ← mergeManifestEntry_assoc]
   · rw [laterStamp_assoc, laterStamp_comm b.preference, ← laterStamp_assoc]
 
+/-! ### The Mac's migration
+
+The Mac moves a library it kept by writing the first bundle, carrying only
+what lives nowhere else under the per-file layout: its settings, the phone's
+settings, the shared preferences and both deletion ledgers. The library's
+content it publishes from the library on its next pass, as every pass does;
+files already in the per-file layout are adopted there. So it must have just
+imported the library it moves, and it writes over that archive only. -/
+
+-- What an entry of the archive or folder tree the Mac imported can be.
+inductive ArchivePath where
+  | macSettings | phoneSettings | preferences | personalLedger | deckLedger
+  | legacyManifest | compatibilityManifest | portableManifest | seal | archiveIndex | hidden
+  | portableModule | study | writingDocument | media | workspaceFile | compatibleModule
+  | perFile | unknown
+  deriving DecidableEq, Repr
+
+inductive EntryFate where
+  | carried | republished | inPlace | dropped | unknown
+  deriving DecidableEq, Repr
+
+def entryFate : ArchivePath → EntryFate
+  | .macSettings | .phoneSettings | .preferences | .personalLedger | .deckLedger => .carried
+  | .legacyManifest | .compatibilityManifest | .portableManifest | .seal | .archiveIndex
+  | .hidden => .dropped
+  | .portableModule | .study | .writingDocument | .media | .workspaceFile
+  | .compatibleModule => .republished
+  | .perFile => .inPlace
+  | .unknown => .unknown
+
+-- Only the old layout's own bookkeeping is dropped: nothing a person made.
+theorem onlyBookkeepingIsDropped (p : ArchivePath) (h : entryFate p = .dropped) :
+    p = .legacyManifest ∨ p = .compatibilityManifest ∨ p = .portableManifest ∨ p = .seal
+      ∨ p = .archiveIndex ∨ p = .hidden := by
+  cases p <;> simp_all [entryFate]
+
+-- Every setting and ledger goes into the bundle: none is left to a pass that
+-- would not know to carry it.
+theorem everySettingAndLedgerIsCarried :
+    [ArchivePath.macSettings, .phoneSettings, .preferences, .personalLedger, .deckLedger].all
+      (entryFate · == .carried) = true := rfl
+
+inductive MigrationStep where
+  | alreadyMigrated | write (c : WriteCondition) | importAgain | notTheMacs
+  deriving DecidableEq, Repr
+
+-- One step of the migration, from whether a bundle is there, the archive
+-- revision the Mac imported (none for a folder tree), the one there now,
+-- and who kept the library.
+def macMigrationStep (bundle : Bool) (imported current : Option Nat)
+    (keeper : Option EarlierLibrary) : MigrationStep :=
+  if bundle then .alreadyMigrated
+  else match imported, current with
+    | some i, some c =>
+      if i = c then (if keeper = some .mac then .write (.ifRevision c) else .notTheMacs)
+      else .importAgain
+    | none, none => if keeper = some .mac then .write .ifAbsent else .notTheMacs
+    | _, _ => .importAgain
+
+-- It writes over an archive only at the revision the Mac imported.
+theorem theMigrationWritesOnlyOverTheArchiveItImported
+    (bundle : Bool) (imported current : Option Nat) (keeper : Option EarlierLibrary) (r : Nat)
+    (h : macMigrationStep bundle imported current keeper = .write (.ifRevision r)) :
+    imported = some r ∧ current = some r := by
+  unfold macMigrationStep at h
+  split at h
+  · cases h
+  · split at h
+    · rename_i i c
+      split at h
+      · split at h
+        · cases h; subst_vars; exact ⟨rfl, rfl⟩
+        · cases h
+      · cases h
+    · split at h <;> cases h
+    · cases h
+
+-- It never moves a library the Mac did not keep.
+theorem theMigrationMovesOnlyTheMacsLibrary
+    (bundle : Bool) (imported current : Option Nat) (keeper : Option EarlierLibrary)
+    (c : WriteCondition) (h : macMigrationStep bundle imported current keeper = .write c) :
+    keeper = some .mac := by
+  unfold macMigrationStep at h
+  split at h
+  · cases h
+  · split at h
+    · split at h
+      · split at h
+        · assumption
+        · cases h
+      · cases h
+    · split at h
+      · assumption
+      · cases h
+    · cases h
+
+-- Run again once it has written, it writes nothing.
+theorem aMigratedLibraryIsLeftAlone (imported current : Option Nat) (keeper : Option EarlierLibrary) :
+    macMigrationStep true imported current keeper = .alreadyMigrated := rfl
+
 /-! ## Conformance tables
 
 Each line below names a model decision, its inputs and its answer. Swift's
@@ -4741,6 +4841,16 @@ def settingsWriteName : SettingsWrite → String
 
 def stampCode (s : Stamp) : String := optNat s.1 ++ ":" ++ optNat s.2
 
+def archivePathName (p : ArchivePath) : String := ((reprStr p).splitOn ".").getLast!
+
+def entryFateName : EntryFate → String
+  | .carried => "carried" | .republished => "republished" | .inPlace => "inPlace"
+  | .dropped => "dropped" | .unknown => "unknown"
+
+def migrationStepName : MigrationStep → String
+  | .alreadyMigrated => "alreadyMigrated" | .write c => "write:" ++ conditionName c
+  | .importAgain => "importAgain" | .notTheMacs => "notTheMacs"
+
 def archiveEntryName : ArchiveEntry → String
   | .phoneSettings => "phoneSettings" | .legacyManifest => "legacyManifest"
   | .preferences => "preferences" | .portableManifest => "portableManifest"
@@ -4768,6 +4878,18 @@ def bundleCopies : List BundleCopy :=
         IO.println <| conformanceLine "earlierLibrary"
           [toString mac, toString phone, toString content,
            earlierLibraryName (earlierLibrary mac phone content)]
+  for p in [ArchivePath.macSettings, .phoneSettings, .preferences, .personalLedger, .deckLedger,
+            .legacyManifest, .compatibilityManifest, .portableManifest, .seal, .archiveIndex, .hidden,
+            .portableModule, .study, .writingDocument, .media, .workspaceFile, .compatibleModule,
+            .perFile, .unknown] do
+    IO.println <| conformanceLine "entryFate" [archivePathName p, entryFateName (entryFate p)]
+  for bundle in [true, false] do
+    for imported in [none, some 1] do
+      for current in [none, some 1, some 2] do
+        for keeper in [none, some EarlierLibrary.phone, some .mac] do
+          IO.println <| conformanceLine "macMigrationStep"
+            [toString bundle, optNat imported, optNat current, earlierLibraryName keeper,
+             migrationStepName (macMigrationStep bundle imported current keeper)]
   let kinds := [ArchiveEntry.phoneSettings, .legacyManifest, .preferences, .portableManifest,
                 .macSettings, .module]
   for mask in List.range 64 do

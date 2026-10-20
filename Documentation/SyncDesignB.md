@@ -410,64 +410,86 @@ bundle path.
   judged. If the Mac publishes in between, the write is refused, the phone
   judges again, and stops.
 
-### The Mac's one-time migration
+### The Mac's one-time migration (done)
 
 ```swift
-public enum LampSyncFolderMigration {
-    public struct Plan: Sendable { archiveRevision; files: [Entry]; bundle: LampSyncSettingsBundle }
-    public struct Outcome: Sendable { written; alreadyPresent; conflicts }
-    public static func plan(_ archive: LampSyncArchiveRemote.Snapshot) throws -> Plan
-    public static func apply(_ plan: Plan, to store:, canonicalBytes:) async throws -> Outcome
+public enum LampSyncLibraryMigration {                    // LampCore
+    public enum Fate { carried, republished, inPlace, dropped, unknown }
+    public static func fate(of path: String) -> Fate
+    public static func firstBundle(from archive: LampSyncArchive) throws -> LampSyncSettingsBundle
+    public static func migrate(in store:, imported archive: LampSyncArchive, revision: String?) async throws
+        -> LampSyncSettingsStore.Snapshot
 }
 ```
 
-- It writes each file `.ifAbsent`, then the bundle
-  `.ifRevision(archiveRevision)`.
-  - Every step is idempotent.
-  - A conflict leaves the archive in place.
-  - Two Macs migrating at once is safe: the second Mac's bundle write is
-    refused.
-- `macSettings` carries only the synced `settings.plist` keys
-  (`LampPortableSettingsCodec.syncedKeys`). The Mac's highlight set to module
-  mapping is not among them: it lives in the Mac's defaults and is re-derived
-  from each remote highlight module's `highlight_meta.id`. Under B an
-  unchanged module isn't downloaded, so with no local record for a set the
-  Mac must read that set's remote module rather than mint an ID, or it
-  publishes a duplicate. That's the Mac's per-path record store, not the
-  migration's.
-- Ledgers go into the bundle, never into `files`, wherever the archive keeps
-  them. `Workspaces/Presentations/deleted-decks.json` sits in the listed deck
-  folder but becomes `bundle.deckDeletions`, and `Deletions/ledger.json`
-  becomes `personalDeletions`.
-  - A ledger written as a member file is won, not merged. Two Macs deleting
-    different decks would lose one deletion.
-  - `kind(of:)` already returns nil for the deck ledger, and the plan and the
-    listing skip any path with no kind. So a copy left on the server is never
-    adopted (`aLedgerInAListedFolderIsNeverAdopted`).
-  - `plan` checks every archive entry against `kind(of:)`, and an entry that
-    is neither a library file nor a known ledger or setting stops the
-    migration.
-  - The one exception is a hidden file, any entry whose last component starts
-    with `.`. It's dropped, not fatal. `LampSyncArchive.create(from:)` keeps
-    dotfiles under `Media/`, so the folder provider's archive can carry
-    Finder's `Media/.DS_Store`. Stopping on it would leave the user unable to
-    migrate, with no visible reason. Tests: an archive holding
-    `Media/.DS_Store` migrates without it, and a genuinely unknown entry still
-    stops the migration.
-- Devices still on format 1 or 2 stop receiving deletions once the bundle is
-  written.
-  - Today the deletion ledger travels inside the archive, which they read. In
-    format 3 it's in the bundle, which they refuse.
-  - Nothing is corrupted: the Mac's ledger suppresses those items on import.
-    Deleted items just linger on the old device until it's updated.
-  - So the migration asks the user to update their other devices first, and
-    confirms before it runs.
-- The phone never migrates. It reads `notMigrated` and keeps its archive pass.
-- On the folder provider there is no archive to plan from: the plan has to read
-  the loose portable tree the folder publisher wrote (`exportPortableBackup`'s
-  layout, `LampPortableBackupLayout`). Its `Devotionals/` and `Workspaces/`
-  share names with B's folders but are not B's layout, so never pass those
-  paths to `LampSyncFolderLayout.kind(of:)`: it answers plausibly and wrongly.
+The earlier proposal wrote every library file `.ifAbsent` from the archive,
+converted by the Mac, before the bundle. That's replaced by something
+smaller. The migration writes only the first bundle, carrying what lives
+nowhere else under B. The Mac's next pass publishes the library from the
+library, as every pass does. Every byte the Mac would have converted, its
+pass already produces: installed modules by `syncPath()`, personal modules in
+the phone's format, media, decks and workspace files. Files already in the
+per-file layout, the phone's and the compatibility publisher's, are adopted
+by that pass.
+
+The Mac's sequence:
+1. Run the old pass's import to completion, and keep what it read: on
+   WebDAV the archive and its revision, on a folder the captured tree
+   (`LampSyncFolderPublisher.capture`) with `revision` nil.
+2. Ask the person, saying to update their other devices first.
+3. `migrate(in:imported:revision:)`.
+4. Run the new pass, starting with `readOrClaim`, which now finds the bundle.
+
+`importAgain` means the archive moved since step 1: import again and retry.
+
+What each entry of the archive or tree becomes (`entryFate`):
+- **Carried** into the first bundle: `settings.plist` → `macSettings`,
+  `UserData/user-settings.db` → `userSettings`,
+  `Settings/shared-preferences.json` → `preferences`, `Deletions/ledger.json`
+  → `personalDeletions` (an unreadable one stops the move, as it stops a
+  pass), `Workspaces/Presentations/deleted-decks.json` → `deckDeletions`.
+  Ledgers go into the bundle, never into files: a ledger written as a member
+  file is won, not merged, so two Macs deleting different decks would lose
+  one deletion. The deck ledger left in the deck folder is never adopted
+  (`aLedgerInAListedFolderIsNeverAdopted`).
+- **Republished** by the Mac's next pass: `Modules/`, `Study/`, `Media/`,
+  `Compatibility/` modules, `Workspaces/`, and the portable writings
+  `Devotionals/*.json`.
+- **In place**: a file already in the per-file layout, such as
+  `Translations/kjv.lamp` or `Devotionals/daily.lamp`, which the pass adopts.
+- **Dropped**: the old layout's bookkeeping. That covers the legacy and
+  compatibility manifests, the portable `manifest.json`, the folder seal, the
+  archive index, and any hidden file, such as Finder's `Media/.DS_Store`.
+- **Unknown**: anything else stops the move before it writes, naming the path.
+
+When it writes (`macMigrationStep`):
+- On WebDAV, over the archive `.ifRevision` of the revision imported, and
+  only if the imported archive is the Mac's (`archiveKeeper`).
+- On a folder, `.ifAbsent`, and only if the folder is the Mac's
+  (`earlierLibrary`).
+- A bundle already there is returned, so a second run, or a second Mac,
+  writes nothing.
+
+`macSettings` carries only the synced `settings.plist` keys
+(`LampPortableSettingsCodec.syncedKeys`). The Mac's highlight set to module
+mapping is not among them: it lives in the Mac's defaults and is re-derived
+from each remote highlight module's `highlight_meta.id`. Under B an unchanged
+module isn't downloaded, so with no local record for a set the Mac must read
+that set's remote module rather than mint an ID, or it publishes a duplicate.
+That's the Mac's per-path record store, not the migration's.
+
+Nothing old is deleted. The archive is replaced; a folder's old tree stays.
+Its `Devotionals/*.json` are not `.lamp`, so the listing skips them, and its
+`Workspaces/` already is B's workspace layout. The Mac's folder sync before
+B, still running on another Mac, stops at the new files: its seal no longer
+matches what it captures. It never deletes, so it can't wipe the new layout.
+
+Devices still on format 1 or 2 stop receiving deletions once the bundle is
+written. Today the deletion ledger travels inside the archive, which they
+read; in format 3 it's in the bundle, which they refuse. Nothing is
+corrupted, since the Mac's ledger suppresses those items on import, but
+deleted items linger on the old device until it's updated. So the Mac asks
+the person to update their other devices first, and confirms before it runs.
 
 ## Step 1, streaming (done)
 
@@ -519,3 +541,6 @@ Swift.
   dropped. The joined parts ignore which copy is current, and a later
   preference edit survives either way.
 - **An empty bundle path:** a new library only when nothing earlier is there.
+- **The Mac's migration:** every setting and ledger is carried, only
+  bookkeeping is dropped, and it writes over an archive only at the revision
+  it imported.

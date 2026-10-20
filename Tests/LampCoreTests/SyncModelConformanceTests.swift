@@ -111,7 +111,7 @@ struct SyncModelConformanceTests {
         "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone", "filePlanAction",
         "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite", "directoryDelete",
         "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge", "preferenceStamp", "bundleRead",
-        "earlierLibrary", "mayClaim", "archiveKeeper",
+        "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate", "macMigrationStep",
     ]
 
     // MARK: - The model itself
@@ -1299,6 +1299,57 @@ struct SyncModelConformanceTests {
             )
             let keeper = try await LampSyncSettingsStore.earlierLibrary(in: store)
             #expect(keeper.map { "\($0)" } == f[1], "archiveKeeper \(f.joined(separator: " "))")
+        }
+    }
+
+    /// A path of each kind an archive or folder tree can hold.
+    @Test func entryFate() throws {
+        let paths: [String: [String]] = [
+            "macSettings": ["settings.plist"],
+            "phoneSettings": ["UserData/user-settings.db"],
+            "preferences": ["Settings/shared-preferences.json"],
+            "personalLedger": ["Deletions/ledger.json"],
+            "deckLedger": ["Workspaces/Presentations/deleted-decks.json"],
+            "legacyManifest": ["Settings/legacy-ios-settings.json"],
+            "compatibilityManifest": ["Compatibility/manifest.json"],
+            "portableManifest": ["manifest.json"],
+            "seal": ["lamp-sync-snapshot.json"],
+            "archiveIndex": ["lamp-bible.lampsync.index.json"],
+            "hidden": ["Media/.DS_Store", ".DS_Store", "Translations/.kjv.lamp.icloud"],
+            "portableModule": ["Modules/9f86d081884c7d65.lamp"],
+            "study": ["Study/Notes/john.json", "Study/Highlights/set.json"],
+            "writingDocument": ["Devotionals/daily.json"],
+            "media": ["Media/Devotionals/daily/a.png"],
+            "workspaceFile": ["Workspaces/Presentations/easter.lampdeck", "Workspaces/sermon/notes.md"],
+            "compatibleModule": ["Compatibility/Notes/notes.lamp"],
+            "perFile": ["Translations/kjv.lamp", "Devotionals/daily.lamp", "DevotionalMedia/w/d/a.png"],
+            "unknown": ["Backups/old.zip", "Devotionals/daily.md", "UserData/other.db", "notes.txt"],
+        ]
+        try conform("entryFate") { f in
+            try #require(paths[f[0]]).allSatisfy { "\(LampSyncLibraryMigration.fate(of: $0))" == f[1] }
+        }
+    }
+
+    @Test func macMigrationStep() throws {
+        try conform("macMigrationStep") { f in
+            let keeper: LampSyncSettingsStore.EarlierLibrary? = switch f[3] {
+            case "mac": .mac
+            case "phone": .phone
+            default: nil
+            }
+            let step = LampSyncLibraryMigration.step(
+                bundlePresent: f[0] == "true", imported: f[1] == "-" ? nil : quoted(f[1]),
+                current: f[2] == "-" ? nil : quoted(f[2]), keeper: keeper
+            )
+            let name: String = switch step {
+            case .alreadyMigrated: "alreadyMigrated"
+            case .write(.ifAbsent): "write:ifAbsent"
+            case .write(.ifRevision(let revision)): "write:ifRevision:" + LampSyncConditionalWrite.token(for: revision)
+            case .write(.unconditional): "write:unconditional"
+            case .importAgain: "importAgain"
+            case .notTheMacs: "notTheMacs"
+            }
+            return name == f[4]
         }
     }
 

@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 3,632 cases across 69 decisions. `SyncModelConformanceTests` asks the
+  answer, 3,687 cases across 71 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -790,6 +790,16 @@ writes sorts before `Settings/`, so judging by a first entry before it never
 misjudges a phone's archive and spares unpacking a library
 (`thePeekNeverMisjudgesAPhoneArchive`).
 
+The Mac moves a library it kept by writing the first bundle, carrying only
+what lives nowhere else under the per-file layout: every setting and ledger
+is carried (`everySettingAndLedgerIsCarried`), only the old layout's
+bookkeeping is dropped (`onlyBookkeepingIsDropped`), and anything it cannot
+place stops it. The content the Mac publishes from its library on its next
+pass. It writes over an archive only at the revision it imported
+(`theMigrationWritesOnlyOverTheArchiveItImported`), moves only a library the
+Mac kept (`theMigrationMovesOnlyTheMacsLibrary`), and run again writes nothing
+(`aMigratedLibraryIsLeftAlone`).
+
 On the folder provider, `directoryWrite` and `directoryDelete` decide a
 conditional write or delete inside the coordinated block, and a write goes
 ahead exactly when the folder publisher's coordinated check allowed it
@@ -844,7 +854,7 @@ merge with no baseline, which may bring back an unseen deletion once.
 
 **Still outside the model.**
 
-- 69 tables ask 79 of the model's 213 definitions directly, and reach 106
+- 71 tables ask 81 of the model's 215 definitions directly, and reach 108
   counting the rules those call. Of the rest:
   - Counterexamples of former behaviour (`oldReplace`, `uploadBeforeRead`,
     `earlyBackendWipe` and the like) have no Swift counterpart by design.
