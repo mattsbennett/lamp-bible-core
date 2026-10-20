@@ -3418,7 +3418,8 @@ structure Copy where
 structure Device where
   copy : Option Copy
   deletedHere : Option Nat
-  plan : Option (PlanAction × Option Nat)
+  -- A pass under way: what it planned, the revision listed, and the copy it saw.
+  plan : Option (PlanAction × Option Nat × Option Copy)
   deriving DecidableEq, Repr
 
 structure ServerFile where
@@ -3496,7 +3497,7 @@ def read (p : Policy) (w : World) (who : Who) : World :=
   let listed := w.server.map (·.revision)
   w.setDevice who
     { d with plan := some (filePlanAction .listed (entryOf w.entry) (held p who d) d.deletedHere listed w.deletable,
-        listed) }
+        listed, d.copy) }
 
 -- Sends `content` if the server still satisfies `c`: the new revision, and
 -- the revision it replaced, for the bundle update.
@@ -3512,9 +3513,15 @@ def send (w : World) (who : Who) (content : Nat) (seen : List Nat) (c : WriteCon
 def act (p : Policy) (w : World) (who : Who) : World :=
   match (w.device who).plan with
   | none => w
-  | some (action, listed) =>
+  | some (action, listed, planned) =>
+    -- A copy is acted on only while it is the one the plan saw. One that
+    -- was not there when the pass planned has nothing to compare with, and
+    -- one gone now cannot be read: both are acted on as before. Refusing on
+    -- an unreadable copy would never install a collection whose exported
+    -- snapshot is gone by then.
+    let unchanged := planned.isNone || (w.device who).copy.isNone || (w.device who).copy == planned
     -- Take what came down.
-    let w := if action.download then
+    let w := if action.download && unchanged then
         match w.server with
         | some f =>
           let d := w.device who
@@ -3533,7 +3540,7 @@ def act (p : Policy) (w : World) (who : Who) : World :=
       | some cond, some c, none => send w who c.content c.seen cond
       | _, _, _ => (w, written)
     -- Delete here.
-    let w := if action.deleteLocally then
+    let w := if action.deleteLocally && unchanged then
         let d := w.device who
         w.setDevice who { d with copy := none }
       else w
@@ -3586,7 +3593,8 @@ def quiet (p : Policy) (w : World) : Bool :=
 
 -- What happened, in time order: each edit's version, and each deletion with
 -- whether the deleting device's copy incorporated every edit made so far.
--- `duringPass` is each edit made while its own device's pass was under way.
+-- `duringPass` is each edit that made a copy while its own device's pass,
+-- planned when it held none, was under way.
 structure History where
   edits : List Nat
   deletions : List (Nat × Bool)
@@ -3595,17 +3603,20 @@ structure History where
 
 def record (h : History) (w : World) : Step → History
   | .edit who =>
-    let during := if (w.device who).plan.isSome then h.duringPass ++ [w.clock] else h.duringPass
+    let created := match (w.device who).plan with
+      | some (_, _, none) => true
+      | _ => false
+    let during := if created then h.duringPass ++ [w.clock] else h.duringPass
     { h with edits := h.edits ++ [w.clock], duringPass := during }
   | .delete who => match (w.device who).copy with
     | some c => { h with deletions := h.deletions ++ [(w.clock, h.edits.all c.seen.contains)] }
     | none => h
   | _ => h
 
--- An edit is lost only to a deletion made after it. An edit made while its
--- own device's pass is under way is not held to this: a pass installs what
--- it planned to take without checking the copy is still the one it planned
--- against (`anEditDuringAPassCanBeOverwritten`).
+-- An edit is lost only to a deletion made after it. A copy made while its
+-- own device's pass is under way, one the pass planned without, is not held
+-- to this: there was nothing to compare it with
+-- (`aCopyMadeDuringAPassCanBeOverwritten`).
 def noLostEdit (final : World) (h : History) : Bool :=
   h.edits.all fun t =>
     h.duringPass.contains t || final.server.any (·.content ≥ t) || h.deletions.any (·.1 > t)
@@ -3654,11 +3665,20 @@ def runs (p : Policy) (start : World) (n : Nat) : List (World × History) :=
 def runSteps (p : Policy) (start : World) (taken : List Step) : World × History :=
   taken.foldl (fun (w, h) s => (step p w s, record h w s)) (start, ⟨[], [], []⟩)
 
--- B plans to take A's edit, its person edits before the pass acts, and the
--- pass installs A's copy over the edit. Installing only over the copy the
--- plan saw would keep it.
-theorem anEditDuringAPassCanBeOverwritten :
-    let (w, _) := runSteps shipped (startHeld true) [.edit .a, .read .a, .act .a, .read .b, .edit .b, .act .b]
+-- B plans to take A's edit, and its person edits before the pass acts. The
+-- pass leaves the copy, since it is no longer the one it planned against, and
+-- the next pass merges the two.
+theorem anEditDuringAPassSurvives :
+    let (w, h) := runSteps shipped (startHeld true) [.edit .a, .read .a, .act .a, .read .b, .edit .b, .act .b]
+    contentOf w.b.copy = some 4 ∧ noLostEdit (settle shipped w) h = true := by
+  decide +kernel
+
+-- B planned to take A's file while holding none, and its person makes one
+-- before the pass acts: with no copy planned against there is nothing to
+-- compare, and the pass installs over it. A file made at the very path
+-- another device's copy is arriving at, during one pass.
+theorem aCopyMadeDuringAPassCanBeOverwritten :
+    let (w, _) := runSteps shipped (startEmpty true) [.edit .a, .read .a, .act .a, .read .b, .edit .b, .act .b]
     contentOf w.b.copy = some 1 := by
   decide +kernel
 

@@ -525,11 +525,16 @@ Assumed: an edit made while a deletion waits to be recorded cancels it;
 tombstones outlive the run; the bundle update is one step, as its
 read-merge-retry makes it.
 
-**Found by it.** An edit made while its own device's pass is under way can be
-overwritten: the pass installs what it planned to take without checking the
-copy is still the one it planned against (`anEditDuringAPassCanBeOverwritten`).
-Collections are merged on install, so this reaches only files installed whole,
-such as decks. The loss-of-edits check leaves those edits out, and names them.
+**An edit made during a pass.** The pass acts on a local copy — installs the
+other device's over it, or deletes it — only while it is still the one the
+plan saw, as a write to the server is conditioned on the revision it read. An
+edit made in between is left for the next pass, which merges it or keeps it
+(`anEditDuringAPassSurvives`; the engine lists such paths as
+`changedDuringPass`, not as failures). A copy made at a path the pass planned
+to take while holding none has nothing to compare with, and is installed over
+(`aCopyMadeDuringAPassCanBeOverwritten`): a file made at the very path another
+device's copy is arriving at, within one pass. The loss-of-edits check leaves
+those copies out, and names them.
 
 **Still outside the model.**
 
@@ -589,7 +594,7 @@ such as decks. The loss-of-edits check leaves those edits out, and names them.
 | Workspace files (macOS) | `LampWorkspaceSync` and its `WorkspaceFileLedger`, shared file order | `tombstoneDeletes`, `workspaceDeletionTime`, `documentDeletionSparesALaterEdit`, `mergeFile` | Context files' deletions use the time they were noticed, not a comparable modification time |
 | Conflicts set aside and resolved | `LampSyncMerge.importOutcome`, `LampSyncConflict`, `LampLibrary.resolveSyncConflict` | `portableImportOutcome` (conformance: `importOutcome`), `syncImportNeverStops`, `resolvedChoiceWinsWhereItWasMade`, `resolvedChoiceWinsOnTheOtherDevice`, `sameColumn` | Choosing in the UI and the stored payload are Swift; JSON classification is JSONSerialization's |
 | Two devices exchanging whole content (system model) | the per-item orders of `LampSyncMerge` and the deletion ledgers, over `LampSyncConditionalWrite` | `serverNeverLosesAlongRun`, `agreesAlongRun`, `publishedContentIsNeverLost`, `refusedPublishChangesNothing`, `pullThenPublishIsAccepted`, `aQuietRoundConverges`, `conditionalPublishKeepsTheOtherEdit`, `unconditionalPublishLosesTheOtherEdit` | The server honours conditions and issues new revisions; steps are atomic; storage is durable; equal-time record disagreements and baseless settings merges are not joins |
-| Two devices running the per-file pass (system model, checked to a bound) | `filePlanAction`, `recordWrite`, `adoptFile` and `removeFile` as `LampSyncFilePlan`, `LampSyncLibraryManifest` and `LampSyncBundlePass` run them | `converges`, `quiet`, `noLostEdit`, `deletionSticks`, `neverDeleted` (system checks), `anEditDuringAPassCanBeOverwritten`, `recordingTheDownloadedBytesNeverSettles`, `anUnreportedSaveLosesAnEditMadeAfterTheDeletion` | One path; up to five steps; an install does not check the copy is still the one planned against |
+| Two devices running the per-file pass (system model, checked to a bound) | `filePlanAction`, `recordWrite`, `adoptFile` and `removeFile` as `LampSyncFilePlan`, `LampSyncLibraryManifest` and `LampSyncBundlePass` run them | `converges`, `quiet`, `noLostEdit`, `deletionSticks`, `neverDeleted` (system checks), `anEditDuringAPassSurvives`, `aCopyMadeDuringAPassCanBeOverwritten`, `recordingTheDownloadedBytesNeverSettles`, `anUnreportedSaveLosesAnEditMadeAfterTheDeletion` | One path; up to five steps; a copy made during a pass at a path it planned to take while holding none is installed over |
 
 The listed Lean rules prove properties of models that correspond to shared
 Swift decisions. Swift tests exercise each shared implementation with the

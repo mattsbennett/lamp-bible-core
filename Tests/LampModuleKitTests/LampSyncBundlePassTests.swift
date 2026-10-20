@@ -661,6 +661,81 @@ struct LampSyncBundlePassTests {
         #expect(outcome.uploaded.contains(path))
     }
 
+    /// A file the person edits while the pass is taking the other device's
+    /// copy is not installed over: the pass left it, and the next one, seeing
+    /// both sides changed, merges rather than losing the edit.
+    @Test func anEditMadeDuringThePassIsNotInstalledOver() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r2\"")
+        let url = try makeFile("mine")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: LampSyncContentRevision.digest(for: Data("mine".utf8)),
+                             revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        store.beforeRead = { read, _ in
+            if read == path { try? Data("edited during the pass".utf8).write(to: url) }
+        }
+        let library = StubLibrary()
+
+        let first = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { gathered([local(path, url, "mine")]) }, records: &records, patience: immediate)
+
+        #expect(library.installed.isEmpty)
+        #expect(first.changedDuringPass == [path])
+        #expect(first.failures.isEmpty)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "edited during the pass")
+
+        store.beforeRead = nil
+        _ = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { gathered([local(path, url, "edited during the pass")]) },
+                 records: &records, patience: immediate)
+        #expect(library.reconcileCalls == 1)
+        #expect(library.installed.isEmpty)
+    }
+
+    /// A copy the person edits after the pass planned to delete it is not
+    /// deleted: the edit came after the deletion, which the next pass, given
+    /// its save time, keeps.
+    @Test func aCopyEditedDuringThePassIsNotDeleted() async throws {
+        let deck = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let other = try LampSyncFolderLayout.modulePath(kind: .translations, moduleID: "kjv")
+        var manifest = LampSyncLibraryManifest()
+        manifest = try manifest.recordingWrite(deck, revision: "\"d1\"", replacing: nil, at: 1_000)
+        manifest = try manifest.removing(deck, at: 5_000, revision: "\"d1\"")
+        manifest = try manifest.recordingWrite(other, revision: "\"k2\"", replacing: nil, at: 1_000)
+        var bundle = LampSyncSettingsBundle()
+        bundle.manifest = manifest
+        let store = FakeStore()
+        store.bodies[bundlePath] = try bundle.encoded()
+        store.revisions[bundlePath] = "\"bundle-1\""
+        store.bodies[deck] = Data("theirs".utf8)
+        store.revisions[deck] = "\"d1\""
+        store.bodies[other] = Data("remote".utf8)
+        store.revisions[other] = "\"k2\""
+        let url = try makeFile("mine")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(deck, in: source, digest: LampSyncContentRevision.digest(for: Data("mine".utf8)),
+                             revision: "\"d1\"")
+        records.confirmRecorded([deck: "\"d1\""], in: source)
+        // Taking the other module comes first; the person saves the deck then.
+        store.beforeRead = { read, _ in
+            if read == other { try? Data("edited during the pass".utf8).write(to: url) }
+        }
+        let library = StubLibrary()
+        var held = gathered([local(deck, url, "mine")])
+        held.savedAt = [deck: 4_000]
+
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { held }, records: &records, patience: immediate)
+
+        #expect(library.installed == [other])
+        #expect(library.deleted.isEmpty)
+        #expect(outcome.changedDuringPass == [deck])
+        #expect(outcome.failures.isEmpty)
+    }
+
     /// R2 (a). A client that plans only modules and media leaves a deck it
     /// does not hold alone: not fetched, not recorded.
     @Test func whatAClientDoesNotPlanIsLeftAlone() async throws {

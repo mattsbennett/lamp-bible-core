@@ -184,9 +184,10 @@
         "pruneWaitsForTheReap",
         "settingsUpdateIsBounded",
         "uploadingFirstLocksAFreshLibraryOut",
-        "anEditDuringAPassCanBeOverwritten"
+        "anEditDuringAPassSurvives",
+        "aCopyMadeDuringAPassCanBeOverwritten"
       ],
-      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core, and the order is held by the `passTrace` table, run through the engine for every combination of work. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded. The per-file system model (FilePasses) runs this pass's plan and bundle update across two interleaved devices; it shows an install does not check the copy is still the one the plan saw, so an edit made during a pass can be overwritten by what the pass takes.",
+      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core, and the order is held by the `passTrace` table, run through the engine for every combination of work. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded. The per-file system model (FilePasses) runs this pass's plan and bundle update across two interleaved devices. A local copy is installed over or deleted only while its digest is the one gathered; a copy made during a pass at a path gathered as absent has nothing to compare with.",
       "conformance": [
         "passTrace"
       ]

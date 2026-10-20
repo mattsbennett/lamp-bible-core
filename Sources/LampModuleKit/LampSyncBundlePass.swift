@@ -82,6 +82,10 @@ public struct LampSyncBundlePass {
         /// Files the server's copy turned out to be byte-for-byte the one
         /// this client already held: fetched, compared, and left alone.
         public var alreadyInStep: [String] = []
+        /// Files changed here while the pass ran, after it planned to take
+        /// the other side's copy or delete this one. Left alone: the next
+        /// pass sees the edit and merges it, or keeps the copy. Not a failure.
+        public var changedDuringPass: [String] = []
         /// A file the server would not take, or one whose work failed. The
         /// pass carries on and reports, rather than abandoning the rest.
         public var failures: [String] = []
@@ -251,6 +255,23 @@ public struct LampSyncBundlePass {
             listing: listing
         ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
 
+        // A local copy is acted on — installed over or deleted — only while
+        // it is still the one the plan saw, as a write to the server is
+        // conditioned on the revision it read. The person may have changed it
+        // since; the next pass then sees both sides changed and merges, or
+        // sees a save after the deletion and keeps it. An exported
+        // collection's file is a snapshot merged on install, so it reads
+        // unchanged. One that cannot be read now is acted on as before, not
+        // refused: a collection whose exported snapshot is gone by then would
+        // otherwise never be installed.
+        // (`Verification/SyncMerge.lean`: `anEditDuringAPassSurvives`.)
+        func unchangedSincePlanned(_ path: String) -> Bool {
+            guard let planned = filesByPath[path],
+                  let now = try? LampSyncContentRevision.digest(forFileAt: planned.url)
+            else { return true }
+            return now == planned.digest
+        }
+
         // 1. Take what the other side has.
         for path in plan.downloads.sorted() {
             do {
@@ -258,6 +279,10 @@ public struct LampSyncBundlePass {
                     guard let downloaded = try await store.read(path: path, into: scratch) else {
                         // Nothing there. For media that is "not uploaded yet",
                         // and for anything else the next pass sees it again.
+                        return
+                    }
+                    guard unchangedSincePlanned(path) else {
+                        outcome.changedDuringPass.append(path)
                         return
                     }
                     let held = try await library.install(path, from: downloaded.url)
@@ -380,6 +405,10 @@ public struct LampSyncBundlePass {
 
         // 5. Drop what was deleted elsewhere.
         for path in plan.deleteLocally.sorted() {
+            guard unchangedSincePlanned(path) else {
+                outcome.changedDuringPass.append(path)
+                continue
+            }
             do {
                 try await library.deleteLocally(path)
                 records.forget(path, in: source)
