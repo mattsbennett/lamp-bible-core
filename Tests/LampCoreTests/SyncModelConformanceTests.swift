@@ -103,7 +103,7 @@ struct SyncModelConformanceTests {
         "selectedCandidateIndex", "resolvedRecordRevision", "moduleFolderListing", "initialSync",
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
-        "filePlanAction", "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite",
+        "filePlanAction", "deleteTarget", "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
         "macMigrationStep", "writeOutcome", "passTrace",
@@ -117,8 +117,21 @@ struct SyncModelConformanceTests {
         #expect(run.status == 0, "Lean rejected the model:\n\(run.lines.prefix(40).joined(separator: "\n"))")
         // A warning — `sorry`, an unused hypothesis gone stale — is something
         // to read, so anything printed besides the tables fails too.
-        let other = run.lines.filter { !$0.hasPrefix("CONFORMANCE ") }
+        let other = run.lines.filter { !$0.hasPrefix("CONFORMANCE ") && !$0.hasPrefix("SYSTEMCHECK ") }
         #expect(other.isEmpty, "Lean printed more than its tables:\n\(other.prefix(40).joined(separator: "\n"))")
+    }
+
+    /// The per-file system model's checks: every run up to the model's bound,
+    /// settled, holds each property. Each line is a check, the runs made and
+    /// the runs that failed.
+    @Test func filePassesHold() throws {
+        let run = SyncModel.run
+        if let problem = run.problem { Issue.record("\(problem)"); return }
+        let checks = run.lines.filter { $0.hasPrefix("SYSTEMCHECK ") }.map { $0.split(separator: " ").map(String.init) }
+        #expect(Set(checks.map { $0[1] }) == ["converges", "quiet", "noLostEdit", "deletionSticks", "neverDeleted"])
+        for check in checks {
+            #expect(check.count == 4 && (Int(check[2]) ?? 0) > 0 && check[3] == "0", "\(check.joined(separator: " "))")
+        }
     }
 
     /// A table nobody checks is a model nobody holds to the code, and a
@@ -748,7 +761,17 @@ struct SyncModelConformanceTests {
     }
 
     @Test func filePlanAction() throws {
-        let paths = ["media": "DevotionalMedia/m/w/a.png", "listed": "Notes/notes.lamp", "unlisted": "Workspaces/a.md"]
+        // One real path of each class, deletable by a library or not.
+        let paths = [
+            "media:true": try LampSyncFolderLayout.deckAssetPath(filename: "a.png"),
+            "media:false": "DevotionalMedia/m/w/a.png",
+            "listed:true": try LampSyncFolderLayout.modulePath(kind: .translations, moduleID: "kjv"),
+            "listed:false": "Notes/notes.lamp",
+            "unlisted:false": "Workspaces/a.md",
+        ]
+        for (key, path) in paths {
+            #expect(LampSyncLocalDeletion.target(of: path).isAllowed == key.hasSuffix(":true"), "\(path)")
+        }
         func held(_ field: String, at path: String) -> [LampSyncFilePlan.Local] {
             guard field != "-" else { return [] }
             let parts = field.split(separator: ":").map(String.init)
@@ -775,14 +798,57 @@ struct SyncModelConformanceTests {
             return tokens.isEmpty ? "-" : tokens.joined(separator: ",")
         }
         try conform("filePlanAction") { f in
-            let path = paths[f[0]]!
+            let path = paths["\(f[0]):\(f[1])"]!
             let plan = LampSyncFilePlan.plan(
-                manifest: manifest(holding: f[1], at: path),
-                local: held(f[2], at: path),
-                deletedLocally: f[3] == "-" ? [:] : [path: Int64(f[3])!],
-                listing: f[4] == "-" ? [:] : [path: quoted(f[4])]
+                manifest: manifest(holding: f[2], at: path),
+                local: held(f[3], at: path),
+                deletedLocally: f[4] == "-" ? [:] : [path: Int64(f[4])!],
+                listing: f[5] == "-" ? [:] : [path: quoted(f[5])]
             )
-            return code(plan, at: path) == f[5]
+            return code(plan, at: path) == f[6]
+        }
+    }
+
+    /// Every path of a kind, as each client deletes it: a module names its
+    /// own ID, and the two collections, whatever folder they share, are
+    /// refused while any other module in that folder is not.
+    @Test func deleteTarget() throws {
+        let paths: [String: [String]] = [
+            "module": [
+                try LampSyncFolderLayout.modulePath(kind: .translations, moduleID: "kjv"),
+                try LampSyncFolderLayout.modulePath(kind: .notes, moduleID: "grandads-notes"),
+                try LampSyncFolderLayout.modulePath(kind: .devotionals, moduleID: "sermons"),
+                try LampSyncFolderLayout.modulePath(kind: .highlights, moduleID: "set-1"),
+            ],
+            "collection": [
+                try LampSyncFolderLayout.modulePath(kind: .notes, moduleID: LampSyncLocalDeletion.notesCollectionID),
+                try LampSyncFolderLayout.modulePath(kind: .devotionals, moduleID: LampSyncLocalDeletion.writingCollectionID),
+            ],
+            "deck": [try LampSyncFolderLayout.deckPath(deckID: "easter")],
+            "deckAsset": [try LampSyncFolderLayout.deckAssetPath(filename: "a.png")],
+            "media": [
+                try LampSyncFolderLayout.devotionalMediaPath(moduleID: "m", devotionalID: "w", filename: "a.png"),
+                try LampSyncFolderLayout.bookMediaPath(moduleID: "b", path: "plates/a.png"),
+            ],
+            "workspaceFile": ["Workspaces/a.md"],
+            "outside": ["Elsewhere/a.txt"],
+        ]
+        func name(_ target: LampSyncLocalDeletion, at path: String) -> String {
+            switch target {
+            case .module(let id):
+                return id == LampSyncFolderLayout.remoteModuleID(of: path) ? "module:own" : "module:other"
+            case .deck: return "deck"
+            case .deckAsset: return "deckAsset"
+            case .collection: return "collection"
+            case .unsupported: return "unsupported"
+            }
+        }
+        try conform("deleteTarget") { f in
+            let examples = try #require(paths[f[0]])
+            return examples.allSatisfy { path in
+                let target = LampSyncLocalDeletion.target(of: path)
+                return name(target, at: path) == f[1] && String(target.isAllowed) == f[2]
+            }
         }
     }
 

@@ -8,7 +8,8 @@ import Testing
 /// deliberately left unmodelled. A new sync source with no entry fails here,
 /// so new sync behaviour cannot arrive without someone deciding how it is
 /// verified. So does an entry for a file that is gone, or a rule the model no
-/// longer defines. None of this needs Lean, so it runs everywhere.
+/// longer defines, or a definition in the model that nothing holds to code.
+/// None of this needs Lean, so it runs everywhere.
 struct SyncVerificationCoverageTests {
     private struct Manifest: Decodable {
         struct Entry: Decodable {
@@ -16,10 +17,24 @@ struct SyncVerificationCoverageTests {
             let conformance: [String]?
             let boundary: String?
         }
+        struct ModelOnly: Decodable {
+            let systemModels: [String: String]
+            let counterexamples: [String: String]
+        }
         let patterns: [String]
         let sources: [String: Entry]
         let platformPatterns: [String]
         let platformSources: [String: Entry]
+        let modelOnly: ModelOnly
+    }
+
+    /// One top-level declaration in the model, before its conformance tables.
+    private struct Declaration {
+        let kind: String
+        let name: String
+        let text: String
+        /// The namespace it sits in, below the model's own.
+        let namespace: String?
     }
 
     private static let root = SyncModel.packageRoot
@@ -43,6 +58,61 @@ struct SyncVerificationCoverageTests {
             names.insert(String(words[1]))
         }
         return names
+    }
+
+    /// The model's declarations, and the text of its conformance tables.
+    ///
+    /// A declaration starts at a line in the first column with a keyword, and
+    /// runs until the next line in the first column.
+    private func modelDeclarations() throws -> (declarations: [Declaration], tables: String) {
+        let lines = try String(contentsOf: SyncModel.modelURL, encoding: .utf8).components(separatedBy: "\n")
+        let marker = try #require(lines.firstIndex { $0.hasPrefix("/-! ## Conformance tables") })
+        let keywords: Set<String> = ["def", "theorem", "structure", "inductive", "abbrev", "instance", "lemma"]
+        var declarations: [Declaration] = []
+        var namespace: String?
+        var current: (kind: String, name: String, lines: [String], namespace: String?)?
+        func flush() {
+            if let current {
+                declarations.append(Declaration(
+                    kind: current.kind, name: current.name,
+                    text: current.lines.joined(separator: "\n"), namespace: current.namespace
+                ))
+            }
+            current = nil
+        }
+        for line in lines[..<marker] {
+            if line.isEmpty || line.first!.isWhitespace {
+                current?.lines.append(line)
+                continue
+            }
+            flush()
+            var words = line.split(separator: " ").map(String.init)
+            if words.first == "namespace", words.count > 1, words[1] != "LampSyncVerification" { namespace = words[1] }
+            if words.first == "end", words.count > 1, words[1] == namespace { namespace = nil }
+            while let first = words.first, first == "private" || first == "protected" || first.hasPrefix("@[") {
+                words.removeFirst()
+            }
+            guard let kind = words.first, keywords.contains(kind) else { continue }
+            current = (kind, words.count > 1 ? words[1] : "", [line], namespace)
+        }
+        flush()
+        return (declarations, lines[marker...].joined(separator: "\n"))
+    }
+
+    /// The identifiers in Lean text; a dotted name is its parts.
+    private func identifiers(in text: String) -> Set<String> {
+        var found = Set<String>()
+        var word = ""
+        for character in text {
+            if character.isLetter || character.isNumber || character == "_" || character == "'" {
+                word.append(character)
+            } else if !word.isEmpty {
+                found.insert(word)
+                word = ""
+            }
+        }
+        if !word.isEmpty { found.insert(word) }
+        return found
     }
 
     /// Files matching `pattern`, a path whose last component is a shell
@@ -117,6 +187,54 @@ struct SyncVerificationCoverageTests {
             let unknown = (entry.rules ?? []).filter { !names.contains($0) }
             #expect(unknown.isEmpty, "\(path) names rules the model does not define: \(unknown)")
         }
+    }
+
+    /// Every definition in the model is held to something: reached from a
+    /// source's rules, a conformance table, a system model, or a listed
+    /// counterexample, directly or through the definitions those use. A rule
+    /// whose code is removed loses its entry, and then fails here until it
+    /// goes from the model too — which is how the model once kept a hundred
+    /// and fifty rules for code that no longer existed. A theorem goes with
+    /// the definitions it is about, so only definitions are checked.
+    @Test func everyDefinitionIsHeldToSomething() throws {
+        let manifest = try manifest()
+        let (declarations, tables) = try modelDeclarations()
+        let byName = Dictionary(grouping: declarations.filter { !$0.name.isEmpty }, by: \.name)
+        var reached = Set<String>()
+        var frontier: [String] = []
+        func reach(_ names: some Sequence<String>) {
+            for name in names where byName[name] != nil && reached.insert(name).inserted {
+                frontier.append(name)
+            }
+        }
+        let entries = Array(manifest.sources.values) + Array(manifest.platformSources.values)
+        reach(entries.flatMap { $0.rules ?? [] })
+        reach(identifiers(in: tables))
+        reach(manifest.modelOnly.counterexamples.keys)
+        reach(declarations.filter { $0.namespace.map { manifest.modelOnly.systemModels[$0] != nil } ?? false }.map(\.name))
+        while let name = frontier.popLast() {
+            for declaration in byName[name] ?? [] { reach(identifiers(in: declaration.text)) }
+        }
+        let unheld = declarations.filter { declaration in
+            guard declaration.kind != "theorem", declaration.kind != "lemma",
+                  declaration.kind != "instance", !declaration.name.isEmpty,
+                  !reached.contains(declaration.name) else { return false }
+            // A function on a type goes with the type.
+            if let dot = declaration.name.firstIndex(of: "."),
+               reached.contains(String(declaration.name[..<dot])) { return false }
+            return true
+        }.map(\.name)
+        #expect(unheld.isEmpty, """
+            Definitions in SyncMerge.lean that nothing holds to code: \(unheld.sorted()). \
+            Name each in the coverage entry of the source it models, list it as a counterexample \
+            under modelOnly, or remove it with the code it described.
+            """)
+        let names = Set(declarations.map(\.name))
+        let unknown = manifest.modelOnly.counterexamples.keys.filter { !names.contains($0) }
+        #expect(unknown.isEmpty, "Counterexamples the model does not define: \(unknown.sorted())")
+        let namespaces = Set(declarations.compactMap(\.namespace))
+        let missing = manifest.modelOnly.systemModels.keys.filter { !namespaces.contains($0) }
+        #expect(missing.isEmpty, "System models the model does not have: \(missing.sorted())")
     }
 
     /// Every conformance table is claimed by the source it holds to the

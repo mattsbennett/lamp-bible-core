@@ -974,20 +974,6 @@ theorem iCloudModuleRevisionDescribesReadBody (body : Nat) :
     (contentModuleImport body).1 = (contentModuleImport body).2 := by
   rfl
 
--- Read-only JSON replacement checks decode and payload identity before its
--- database transaction. Failure leaves the installed rows as the result.
-def replaceReadOnlyRows
-    (installed incoming : Nat) (decoded identityMatches : Bool) : Nat :=
-  if decoded && identityMatches then incoming else installed
-
-theorem invalidRemoteJSONKeepsInstalledRows (installed incoming : Nat) :
-    replaceReadOnlyRows installed incoming false true = installed := by
-  rfl
-
-theorem mismatchedModuleIdentityKeepsInstalledRows (installed incoming : Nat) :
-    replaceReadOnlyRows installed incoming true false = installed := by
-  rfl
-
 inductive ModuleInspection where
   | matched | mismatched | missingIdentity | damaged
   deriving DecidableEq
@@ -1183,21 +1169,21 @@ theorem unchangedLocalLibraryAcceptsStagedCommit
     guardedStagedBackupCommit base base incoming = some incoming := by
   simp [guardedStagedBackupCommit]
 
--- The library swap includes a durable settings journal. A crash can leave the
--- old defaults visible, but the next launch can replay the intended value.
--- A distinct edit after the swap blocks replay instead of being overwritten.
+-- The Mac writes the settings a pass brings down through a journal kept with
+-- the library: staged first, then applied to UserDefaults and cleared. A crash
+-- between the two leaves the journal, and the next launch or pass replays it.
+-- Staging refuses when the live settings moved after the plan was made, so a
+-- preference changed during the pass is never reverted by a plan made before
+-- it. A distinct edit after staging blocks replay instead of being overwritten.
 structure MacJournalState where
-  library : Nat
   settings : Nat
   pending : Option (Nat × Nat)
   deriving DecidableEq, Repr
 
-def swapMacLibraryWithJournal
-    (installed : MacJournalState) (preparedLibrary preparedSettings : Nat) :
-    MacJournalState :=
-  { installed with
-    library := preparedLibrary
-    pending := some (installed.settings, preparedSettings) }
+def stageMacSettings (state : MacJournalState) (baseline planned : Nat) :
+    Option MacJournalState :=
+  if state.settings == baseline then some { state with pending := some (baseline, planned) }
+  else none
 
 def recoverMacSettings (state : MacJournalState) : Option MacJournalState :=
   match state.pending with
@@ -1207,26 +1193,25 @@ def recoverMacSettings (state : MacJournalState) : Option MacJournalState :=
         some { state with settings := prepared, pending := none }
       else none
 
-theorem swappedMacLibraryRetainsRecoveryJournal
-    (installed : MacJournalState) (newLibrary newSettings : Nat) :
-    (swapMacLibraryWithJournal installed newLibrary newSettings).settings =
-      installed.settings ∧
-    (swapMacLibraryWithJournal installed newLibrary newSettings).pending =
-      some (installed.settings, newSettings) := by
-  simp [swapMacLibraryWithJournal]
+theorem aSettingChangedDuringThePassIsNeverReverted
+    (state : MacJournalState) (baseline planned : Nat) (moved : state.settings ≠ baseline) :
+    stageMacSettings state baseline planned = none := by
+  simp [stageMacSettings, moved]
 
-theorem pendingMacSettingsReplayCompletesPull
-    (installed : MacJournalState) (newLibrary newSettings : Nat) :
-    recoverMacSettings (swapMacLibraryWithJournal installed newLibrary newSettings) =
-      some { library := newLibrary, settings := newSettings, pending := none } := by
-  simp [recoverMacSettings, swapMacLibraryWithJournal]
+theorem stagedMacSettingsKeepTheJournal (state : MacJournalState) (planned : Nat) :
+    stageMacSettings state state.settings planned =
+      some { state with pending := some (state.settings, planned) } := by
+  simp [stageMacSettings]
+
+theorem pendingMacSettingsReplayCompletesPull (settings planned : Nat) :
+    recoverMacSettings { settings := settings, pending := some (settings, planned) } =
+      some { settings := planned, pending := none } := by
+  simp [recoverMacSettings]
 
 theorem distinctMacSettingsEditBlocksReplay
-    (baseline prepared changed library : Nat)
+    (baseline prepared changed : Nat)
     (notBase : changed ≠ baseline) (notPrepared : changed ≠ prepared) :
-    recoverMacSettings {
-      library := library, settings := changed, pending := some (baseline, prepared)
-    } = none := by
+    recoverMacSettings { settings := changed, pending := some (baseline, prepared) } = none := by
   simp [recoverMacSettings, notBase, notPrepared]
 
 -- UserDefaults may contain a mixture of old and planned values after a crash
@@ -1292,34 +1277,6 @@ theorem wrongTranslationSchemaTypeCannotImport (validID : Bool) :
 theorem invalidTranslationSchemaIDCannotImport (translationType : Bool) :
     translationSchemaAllowed false translationType = false := by
   simp [translationSchemaAllowed]
-
--- After a coordinated upload, the saved baseline describes the body just
--- written. A later remote upload will then differ on the next observation;
--- rereading to choose the baseline could instead save that later body's hash.
-def contentModuleExportRevision (writtenBody _laterRemoteBody : Nat) : Nat :=
-  contentRevision writtenBody
-
-theorem laterRemoteUploadDoesNotChangeExportRevision
-    (writtenBody laterRemoteBody : Nat) :
-    contentModuleExportRevision writtenBody laterRemoteBody =
-      contentRevision writtenBody := by
-  rfl
-
--- iCloud adapters now compare the observed body inside the coordinated
--- write callback. This guards local changes visible at that handoff; it
--- cannot guard a different device's later upload.
-def coordinatedContentWriteAllowed
-    (expected observed : Option Nat) : Bool :=
-  expected == observed
-
-theorem changedBodyInsideCoordinationIsRejected
-    (expected observed : Option Nat) (h : expected ≠ observed) :
-    coordinatedContentWriteAllowed expected observed = false := by
-  simp [coordinatedContentWriteAllowed, h]
-
-theorem absentExpectationCannotReplaceVisibleBody (observed : Nat) :
-    coordinatedContentWriteAllowed none (some observed) = false := by
-  simp [coordinatedContentWriteAllowed]
 
 def mediaBatchComplete (referencesAndTransfers : List Bool) : Bool :=
   referencesAndTransfers.all id
@@ -2643,9 +2600,12 @@ def savedAfter (h : HeldFile) (d : Nat) : Bool :=
   | some s => Decidable.decide (d < s)
   | none => false
 
+-- `deletable` is whether a library carries out a deletion of the path
+-- (`deleteTarget`). One it never does is never tombstoned, asked to be deleted
+-- here, or reaped: a held copy survives a tombstone and goes back up.
 def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Option HeldFile)
-    (deletedHere listed : Option Nat) : PlanAction :=
-  match deletedHere with
+    (deletedHere listed : Option Nat) (deletable : Bool := true) : PlanAction :=
+  match if deletable then deletedHere else none with
   | some d =>
     let after := removeFile (entry.getD emptyEntry) d listed
     if entryIsMember after then
@@ -2674,14 +2634,20 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
           | some r =>
             if !deletesRevision e r then { changeAction cls held listed with adopt := some r }
             else match held with
-              | some h => if savedAfter h d then
+              | some h => if !deletable || savedAfter h d then
                   uploadAction (if cls == .media then .ifAbsent else .ifRevision r)
                 else { deleteLocally := true, reap := some r }
-              | none => { reap := some r }
+              | none => if deletable then { reap := some r } else {}
           | none =>
             match held with
-            | some h => if savedAfter h d then uploadAction .ifAbsent else { deleteLocally := true }
+            | some h => if !deletable || savedAfter h d then uploadAction .ifAbsent
+                else { deleteLocally := true }
             | none => {}
+
+theorem changeActionNeverReaps (cls : FileClass) (held : Option HeldFile) (listed : Option Nat) :
+    (changeAction cls held listed).reap = none ∧ (changeAction cls held listed).tombstone = none := by
+  unfold changeAction
+  split <;> (try split) <;> (try split) <;> exact ⟨rfl, rfl⟩
 
 theorem changeActionNeverDeletes (cls : FileClass) (held : Option HeldFile) (listed : Option Nat) :
     (changeAction cls held listed).deleteLocally = false
@@ -2731,6 +2697,116 @@ theorem noRecordNeverOverwrites (cls : FileClass) (e : ManifestEntry) (h : HeldF
   | listed | unlisted =>
     have hne : ((none : Option Nat) != some r) = true := rfl
     cases hch : h.changed <;> simp [changeAction, hr, hch, hne]
+
+/-! ### When nothing has changed
+
+A pass over a file nobody has touched since the last one does nothing: a
+member held unchanged at the revision listed, or a deletion every device has
+carried out. Every loop the apps have hit — the same file installed on every
+pass, two devices trading one encoding for another — broke this. -/
+
+theorem aSettledFileNeedsNothing (cls : FileClass) (e : ManifestEntry) (r : Nat)
+    (saved : Option Nat) (member : entryIsMember e = true) :
+    filePlanAction cls (some e) (some ⟨false, some r, saved⟩) none (some r) = {} := by
+  cases cls <;> simp [filePlanAction, member, changeAction]
+
+theorem aSettledDeletionNeedsNothing (cls : FileClass) (e : ManifestEntry) (d : Nat)
+    (gone : entryIsMember e = false) (deleted : e.deletedAt = some d) :
+    filePlanAction cls (some e) none none none = {} := by
+  simp [filePlanAction, gone, deleted]
+
+/-! ### Save times
+
+The plan settles a tombstone against a copy by the copy's last save: saved
+after the deletion, it survives and goes back up; otherwise it goes. A copy
+with no save time always goes, since nothing says the edit came after. So a
+client must report a save time for every copy that holds a person's own
+writing — notes, writing, highlights and decks. Modules and media may go
+without: the server can always supply them again. Each app's gather is held to
+this by its own tests. -/
+
+theorem anUnreportedSaveLosesToADeletion (changed : Bool) (last : Option Nat) (r d : Nat) :
+    (filePlanAction .listed (some ⟨some 0, some r, some d, some r⟩)
+      (some ⟨changed, last, none⟩) none (some r)).deleteLocally = true := by
+  simp [filePlanAction, entryIsMember, deletesRevision, savedAfter]
+
+theorem aSaveAfterTheDeletionSurvives (changed : Bool) (last : Option Nat) (r d s : Nat)
+    (after : d < s) :
+    filePlanAction .listed (some ⟨some 0, some r, some d, some r⟩)
+      (some ⟨changed, last, some s⟩) none (some r) = uploadAction (.ifRevision r) := by
+  simp [filePlanAction, entryIsMember, deletesRevision, savedAfter, after]
+
+/-! ### Deleting a copy here
+
+`LampSyncLocalDeletion.target`: what deleting a path from a device's library
+removes, decided alike on both sides — whether a removal here may be recorded
+as a deletion, and whether one recorded elsewhere is carried out. The notes
+and writing collections are one file each holding every note or writing, so
+deleting the file would delete them all; their items are deleted through the
+ledger instead. Any other notes or writing module is a module, and so is a
+highlight set: one file per set, so deleting a set deletes it everywhere. -/
+
+inductive LocalKind where
+  | module | collection | deck | deckAsset | media | workspaceFile | outside
+  deriving DecidableEq, Repr
+
+inductive LocalDeletion where
+  | module (id : Nat) | deck | deckAsset | collection | unsupported
+  deriving DecidableEq, Repr
+
+def deleteTarget : LocalKind → Option Nat → LocalDeletion
+  | .collection, _ => .collection
+  | .module, some id => .module id
+  | .module, none => .unsupported
+  | .deck, _ => .deck
+  | .deckAsset, _ => .deckAsset
+  | .media, _ | .workspaceFile, _ | .outside, _ => .unsupported
+
+def deleteAllowed : LocalDeletion → Bool
+  | .module _ | .deck | .deckAsset => true
+  | .collection | .unsupported => false
+
+-- A removal here is recorded as a deletion only where the library would carry
+-- one out: the same rule on both sides, so no client records a tombstone
+-- another refuses.
+def mayRecordRemoval (kind : LocalKind) (id : Option Nat) : Bool :=
+  deleteAllowed (deleteTarget kind id)
+
+theorem everyRecordedRemovalIsCarriedOut (kind : LocalKind) (id : Option Nat)
+    (recorded : mayRecordRemoval kind id = true) :
+    deleteAllowed (deleteTarget kind id) = true := recorded
+
+theorem aCollectionIsNeverDeletedWhole (id : Option Nat) :
+    deleteAllowed (deleteTarget .collection id) = false := rfl
+
+theorem aModuleRemovalNamesItsPathsID (id : Nat) :
+    deleteTarget .module (some id) = .module id := rfl
+
+-- A copy no library deletes survives any tombstone and goes back up, which
+-- supersedes the tombstone; the plan never asks for a deletion the library
+-- refuses, which would be refused again on every pass.
+theorem aRefusedDeletionGoesBackUp (r d s : Nat) (changed : Bool) (last : Option Nat) :
+    filePlanAction .listed (some ⟨some 0, some r, some d, some r⟩)
+      (some ⟨changed, last, some s⟩) none (some r) false = uploadAction (.ifRevision r) := by
+  simp [filePlanAction, entryIsMember, deletesRevision]
+
+-- One tactic covers every case, each needing a different one of its lemmas.
+set_option linter.unusedSimpArgs false in
+theorem thePlanNeverAsksForARefusedDeletion (cls : FileClass) (entry : Option ManifestEntry)
+    (held : Option HeldFile) (deletedHere listed : Option Nat) :
+    (filePlanAction cls entry held deletedHere listed false).deleteLocally = false ∧
+      (filePlanAction cls entry held deletedHere listed false).reap = none ∧
+      (filePlanAction cls entry held deletedHere listed false).tombstone = none := by
+  unfold filePlanAction
+  rcases entry with _ | e <;> simp only [Bool.false_eq_true, ↓reduceIte]
+  · rcases listed with _ | r <;> rcases held with _ | h <;>
+      simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction]
+  · by_cases hm : entryIsMember e
+    · simp [hm, changeActionNeverDeletes, changeActionNeverReaps]
+    · simp only [hm, Bool.false_eq_true, ↓reduceIte]
+      rcases e.deletedAt with _ | d <;> rcases listed with _ | r <;> rcases held with _ | h <;>
+        simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction]
+      all_goals (split <;> simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction])
 
 /-! ### Listing revisions
 
@@ -3293,6 +3369,339 @@ theorem oneBundleWriteAtMost (w : PassWork) : (passTrace w).count .writeBundle �
   cases w with
   | mk d m um u l x => cases d <;> cases m <;> cases um <;> cases u <;> cases l <;> cases x <;> decide
 
+/-! ## Devices running the per-file pass
+
+Two devices and the server, one path: the plan and the manifest both decide
+path by path, so paths do not interact. A pass reads the bundle's entry and
+the listing and plans with `filePlanAction`; it then acts — takes what came
+down, merges, uploads conditioned on the revision it planned against,
+deletes locally, makes one bundle update recording each write and adoption at
+the pass's time and each tombstone at its deletion's time, and reaps
+conditioned on the revision listed. Reading and acting are separate steps,
+so the other device can act in between, and a write it beats is refused.
+
+Content is a version: a later edit is a larger one, its save time, and a
+merge keeps the later. Each device encodes content its own way, so the digest
+a device records for a copy it took is its own export's, as the engine
+records it: recording the downloaded bytes instead reads as a change on the
+next pass, and two devices trade the file for ever
+(`recordingTheDownloadedBytesNeverSettles`).
+
+Assumed: an edit made while a deletion waits to be recorded cancels it, as
+re-adding a removed module does; tombstones outlive the run, which is far
+shorter than 180 days; the bundle update is one step, as its read-merge-retry
+makes it.
+
+Checked, not proved: every sequence of up to `bound` steps from an empty
+library and from one both devices hold is run, followed by any pass still
+under way and two rounds of passes, and each result is checked. Each check
+prints a `SYSTEMCHECK` line with the runs made and the runs that failed; the
+suite requires runs and no failures. -/
+
+namespace FilePasses
+
+inductive Who where | a | b
+  deriving DecidableEq, Repr
+
+def encode (who : Who) (content : Nat) : Nat :=
+  2 * content + (if who = .a then 0 else 1)
+
+-- `seen` is every edit the copy incorporates, for the checks only: the plan
+-- never reads it.
+structure Copy where
+  content : Nat
+  lastRevision : Option Nat
+  recorded : Option Nat
+  seen : List Nat
+  deriving DecidableEq, Repr
+
+structure Device where
+  copy : Option Copy
+  deletedHere : Option Nat
+  plan : Option (PlanAction × Option Nat)
+  deriving DecidableEq, Repr
+
+structure ServerFile where
+  revision : Nat
+  content : Nat
+  writer : Who
+  seen : List Nat
+  deriving DecidableEq, Repr
+
+-- `deletable`: whether a library deletes this path (`deleteTarget`). The
+-- notes and writing collections are not, and a removal of one is never
+-- recorded.
+structure World where
+  server : Option ServerFile
+  entry : ManifestEntry
+  a : Device
+  b : Device
+  clock : Nat
+  deletable : Bool
+  deriving DecidableEq, Repr
+
+-- What a client reports and records. The shipped behaviour is both.
+structure Policy where
+  reportsSaves : Bool
+  recordsOwnExport : Bool
+  deriving DecidableEq, Repr
+
+def shipped : Policy := ⟨true, true⟩
+
+def World.device (w : World) : Who → Device
+  | .a => w.a
+  | .b => w.b
+
+def World.setDevice (w : World) : Who → Device → World
+  | .a, d => { w with a := d }
+  | .b, d => { w with b := d }
+
+def held (p : Policy) (who : Who) (d : Device) : Option HeldFile :=
+  d.copy.map fun c =>
+    { changed := c.recorded != some (encode who c.content),
+      lastRevision := c.lastRevision,
+      savedAt := if p.reportsSaves then some c.content else none }
+
+def entryOf (e : ManifestEntry) : Option ManifestEntry :=
+  if e = emptyEntry then none else some e
+
+def conditionHolds (server : Option ServerFile) : WriteCondition → Bool
+  | .unconditional => true
+  | .ifAbsent => server.isNone
+  | .ifRevision r => server.map (·.revision) == some r
+
+inductive Step where
+  | edit (who : Who) | delete (who : Who) | read (who : Who) | act (who : Who)
+  deriving DecidableEq, Repr
+
+def edit (w : World) (who : Who) : World :=
+  let d := w.device who
+  let copy := match d.copy with
+    | some c => { c with content := w.clock, seen := c.seen ++ [w.clock] }
+    | none => ⟨w.clock, none, none, [w.clock]⟩
+  let w' := w.setDevice who { d with copy := some copy, deletedHere := none }
+  { w' with clock := w.clock + 1 }
+
+def delete (w : World) (who : Who) : World :=
+  let d := w.device who
+  match d.copy with
+  | none => w
+  | some _ =>
+    let w' := w.setDevice who
+      { d with copy := none, deletedHere := if w.deletable then some w.clock else none }
+    { w' with clock := w.clock + 1 }
+
+def read (p : Policy) (w : World) (who : Who) : World :=
+  let d := w.device who
+  let listed := w.server.map (·.revision)
+  w.setDevice who
+    { d with plan := some (filePlanAction .listed (entryOf w.entry) (held p who d) d.deletedHere listed w.deletable,
+        listed) }
+
+-- Sends `content` if the server still satisfies `c`: the new revision, and
+-- the revision it replaced, for the bundle update.
+def send (w : World) (who : Who) (content : Nat) (seen : List Nat) (c : WriteCondition) :
+    World × Option (Nat × Option Nat) :=
+  if conditionHolds w.server c then
+    let previous := w.server.map (·.revision)
+    let d := w.device who
+    let w' := w.setDevice who { d with copy := some ⟨content, some w.clock, some (encode who content), seen⟩ }
+    ({ w' with server := some ⟨w.clock, content, who, seen⟩, clock := w.clock + 1 }, some (w.clock, previous))
+  else (w, none)
+
+def act (p : Policy) (w : World) (who : Who) : World :=
+  match (w.device who).plan with
+  | none => w
+  | some (action, listed) =>
+    -- Take what came down.
+    let w := if action.download then
+        match w.server with
+        | some f =>
+          let d := w.device who
+          let recorded := if p.recordsOwnExport then encode who f.content else encode f.writer f.content
+          w.setDevice who { d with copy := some ⟨f.content, some f.revision, some recorded, f.seen⟩ }
+        | none => w
+      else w
+    -- Merge, then send the merge over the revision merged with.
+    let (w, written) := match action.merge, (w.device who).copy, w.server with
+      | some r, some c, some f =>
+        if f.revision == r then send w who (max c.content f.content) (c.seen ++ f.seen) (.ifRevision r)
+        else (w, none)
+      | _, _, _ => (w, none)
+    -- Upload.
+    let (w, written) := match action.upload, (w.device who).copy, written with
+      | some cond, some c, none => send w who c.content c.seen cond
+      | _, _, _ => (w, written)
+    -- Delete here.
+    let w := if action.deleteLocally then
+        let d := w.device who
+        w.setDevice who { d with copy := none }
+      else w
+    -- One bundle update.
+    let time := w.clock
+    let entry := match written with
+      | some (rev, previous) => recordWrite w.entry (some rev) previous time
+      | none => match action.adopt with
+        | some r => adoptFile w.entry r time
+        | none => w.entry
+    let entry := match action.tombstone with
+      | some d => removeFile entry d listed
+      | none => entry
+    let d := w.device who
+    let kept := if action.tombstone.isSome then none else d.deletedHere
+    let w' := w.setDevice who { d with plan := none, deletedHere := kept }
+    let w := { w' with entry := entry, clock := w.clock + 1 }
+    -- Reap.
+    match action.reap with
+    | some r => if conditionHolds w.server (.ifRevision r) then { w with server := none } else w
+    | none => w
+
+def step (p : Policy) (w : World) : Step → World
+  | .edit who => edit w who
+  | .delete who => delete w who
+  | .read who => read p w who
+  | .act who => act p w who
+
+def pass (p : Policy) (w : World) (who : Who) : World := act p (read p w who) who
+
+-- Finish any pass under way, then two rounds.
+def settle (p : Policy) (w : World) : World :=
+  let w := act p (act p w .a) .b
+  let w := pass p (pass p w .a) .b
+  pass p (pass p w .a) .b
+
+def contentOf (c : Option Copy) : Option Nat := c.map (·.content)
+
+def converged (w : World) : Bool :=
+  contentOf w.a.copy == w.server.map (·.content)
+    && contentOf w.b.copy == w.server.map (·.content)
+    && w.a.deletedHere.isNone && w.b.deletedHere.isNone
+    && (w.a.copy.map (·.lastRevision)).all (· == w.server.map (·.revision))
+    && (w.b.copy.map (·.lastRevision)).all (· == w.server.map (·.revision))
+
+def withoutClock (w : World) : World := { w with clock := 0 }
+
+def quiet (p : Policy) (w : World) : Bool :=
+  withoutClock (pass p (pass p w .a) .b) == withoutClock w
+
+-- What happened, in time order: each edit's version, and each deletion with
+-- whether the deleting device's copy incorporated every edit made so far.
+-- `duringPass` is each edit made while its own device's pass was under way.
+structure History where
+  edits : List Nat
+  deletions : List (Nat × Bool)
+  duringPass : List Nat
+  deriving Repr
+
+def record (h : History) (w : World) : Step → History
+  | .edit who =>
+    let during := if (w.device who).plan.isSome then h.duringPass ++ [w.clock] else h.duringPass
+    { h with edits := h.edits ++ [w.clock], duringPass := during }
+  | .delete who => match (w.device who).copy with
+    | some c => { h with deletions := h.deletions ++ [(w.clock, h.edits.all c.seen.contains)] }
+    | none => h
+  | _ => h
+
+-- An edit is lost only to a deletion made after it. An edit made while its
+-- own device's pass is under way is not held to this: a pass installs what
+-- it planned to take without checking the copy is still the one it planned
+-- against (`anEditDuringAPassCanBeOverwritten`).
+def noLostEdit (final : World) (h : History) : Bool :=
+  h.edits.all fun t =>
+    h.duringPass.contains t || final.server.any (·.content ≥ t) || h.deletions.any (·.1 > t)
+
+-- A deletion made by a device whose copy incorporated every edit, with no
+-- edit after it, leaves the file gone everywhere.
+def deletionSticks (final : World) (h : History) : Bool :=
+  !final.deletable || match h.deletions.getLast? with
+  | some (d, informed) =>
+    if informed && h.edits.all (· < d) then final.server.isNone && final.a.copy.isNone && final.b.copy.isNone
+    else true
+  | none => true
+
+-- A path a library never deletes is never deleted: whoever held it still does.
+def neverDeleted (start final : World) : Bool :=
+  final.deletable || start.server.isNone || (final.server.isSome && final.a.copy.isSome && final.b.copy.isSome)
+
+def startEmpty (deletable : Bool) : World :=
+  ⟨none, emptyEntry, ⟨none, none, none⟩, ⟨none, none, none⟩, 1, deletable⟩
+
+def startHeld (deletable : Bool) : World :=
+  ⟨some ⟨0, 0, .a, [0]⟩, ⟨some 0, some 0, none, none⟩,
+   ⟨some ⟨0, some 0, some (encode .a 0), [0]⟩, none, none⟩,
+   ⟨some ⟨0, some 0, some (encode .b 0), [0]⟩, none, none⟩, 1, deletable⟩
+
+def steps : List Step :=
+  [.edit .a, .edit .b, .delete .a, .delete .b, .read .a, .read .b, .act .a, .act .b]
+
+-- A step that may be taken: a pass reads once, then acts once.
+def allowed (w : World) : Step → Bool
+  | .read who => (w.device who).plan.isNone
+  | .act who => (w.device who).plan.isSome
+  | _ => true
+
+-- Every run of exactly `n` steps: the world it reaches and its history.
+def runsOf (p : Policy) (start : World) : Nat → List (World × History)
+  | 0 => [(start, ⟨[], [], []⟩)]
+  | n + 1 => (runsOf p start n).flatMap fun (w, h) =>
+      (steps.filter (allowed w)).map fun s => (step p w s, record h w s)
+
+-- Every run of up to `n` steps.
+def runs (p : Policy) (start : World) (n : Nat) : List (World × History) :=
+  (List.range (n + 1)).flatMap (runsOf p start)
+
+-- One run of the given steps.
+def runSteps (p : Policy) (start : World) (taken : List Step) : World × History :=
+  taken.foldl (fun (w, h) s => (step p w s, record h w s)) (start, ⟨[], [], []⟩)
+
+-- B plans to take A's edit, its person edits before the pass acts, and the
+-- pass installs A's copy over the edit. Installing only over the copy the
+-- plan saw would keep it.
+theorem anEditDuringAPassCanBeOverwritten :
+    let (w, _) := runSteps shipped (startHeld true) [.edit .a, .read .a, .act .a, .read .b, .edit .b, .act .b]
+    contentOf w.b.copy = some 1 := by
+  decide +kernel
+
+-- A deletes; B edits afterwards. Reporting B's save time keeps the edit;
+-- without it the tombstone takes it.
+theorem anUnreportedSaveLosesAnEditMadeAfterTheDeletion :
+    let (w, h) := runSteps shipped (startHeld true) [.delete .a, .read .a, .act .a, .edit .b]
+    let (w', h') := runSteps ⟨false, true⟩ (startHeld true) [.delete .a, .read .a, .act .a, .edit .b]
+    noLostEdit (settle shipped w) h = true ∧ noLostEdit (settle ⟨false, true⟩ w') h' = false := by
+  decide +kernel
+
+-- Recording the bytes downloaded rather than this device's own export: the
+-- next pass reads its own encoding as a change, and the devices never settle.
+theorem recordingTheDownloadedBytesNeverSettles :
+    let (w, _) := runSteps ⟨true, false⟩ (startHeld true) [.edit .a, .read .a, .act .a]
+    let (w', _) := runSteps shipped (startHeld true) [.edit .a, .read .a, .act .a]
+    quiet ⟨true, false⟩ (settle ⟨true, false⟩ w) = false ∧ quiet shipped (settle shipped w') = true := by
+  decide +kernel
+
+def bound : Nat := 5
+
+-- Every run from each start, for a path a library deletes and one it never
+-- does, settled and checked.
+#eval show IO Unit from do
+  let checks : List (String × (World → World → History → Bool)) := [
+    ("converges", fun _ w _ => converged w),
+    ("quiet", fun _ w _ => quiet shipped w),
+    ("noLostEdit", fun _ w h => noLostEdit w h),
+    ("deletionSticks", fun _ w h => deletionSticks w h),
+    ("neverDeleted", fun s w _ => neverDeleted s w)]
+  let mut made := 0
+  let mut failed : List Nat := checks.map fun _ => 0
+  for deletable in [true, false] do
+    for start in [startEmpty deletable, startHeld deletable] do
+      for (w, h) in runs shipped start bound do
+        made := made + 1
+        let final := settle shipped w
+        failed := (checks.zip failed).map fun ((_, check), n) => if check start final h then n else n + 1
+  for ((name, _), n) in checks.zip failed do
+    IO.println s!"SYSTEMCHECK {name} {made} {n}"
+
+end FilePasses
+
 /-! ## Conformance tables
 
 Each line below names a model decision, its inputs and its answer. Swift's
@@ -3697,14 +4106,34 @@ def manifestEntries : List ManifestEntry :=
   let helds : List (Option HeldFile) :=
     [none, some ⟨false, some 1, some 6⟩, some ⟨true, some 1, some 8⟩, some ⟨false, some 2, some 6⟩,
      some ⟨true, none, some 8⟩, some ⟨false, none, none⟩]
-  for cls in [FileClass.media, .listed, .unlisted] do
+  -- Unlisted paths are workspace files, which no library deletes.
+  for (cls, deletable) in [(FileClass.media, true), (.media, false), (.listed, true), (.listed, false),
+                           (.unlisted, false)] do
     for entry in entries do
       for held in helds do
         for deletedHere in [none, some 6, some 10] do
           for listed in [none, some 1, some 2, some 3] do
             IO.println <| conformanceLine "filePlanAction"
-              [fileClassName cls, optEntryCode entry, heldCode held, optNat deletedHere, optNat listed,
-               actionCode (filePlanAction cls entry held deletedHere listed)]
+              [fileClassName cls, toString deletable, optEntryCode entry, heldCode held,
+               optNat deletedHere, optNat listed,
+               actionCode (filePlanAction cls entry held deletedHere listed deletable)]
+
+def localKindName : LocalKind → String
+  | .module => "module" | .collection => "collection" | .deck => "deck"
+  | .deckAsset => "deckAsset" | .media => "media" | .workspaceFile => "workspaceFile"
+  | .outside => "outside"
+
+-- A module removal is checked to name the path's own ID, 7 here.
+def localDeletionName : LocalDeletion → String
+  | .module id => if id == 7 then "module:own" else "module:other"
+  | .deck => "deck" | .deckAsset => "deckAsset" | .collection => "collection"
+  | .unsupported => "unsupported"
+
+#eval show IO Unit from do
+  for kind in [LocalKind.module, .collection, .deck, .deckAsset, .media, .workspaceFile, .outside] do
+    IO.println <| conformanceLine "deleteTarget"
+      [localKindName kind, localDeletionName (deleteTarget kind (some 7)),
+       toString (mayRecordRemoval kind (some 7))]
 
 #eval show IO Unit from do
   -- The manifest's view of a listed file: unknown, a member with or without

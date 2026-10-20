@@ -92,7 +92,8 @@ public enum LampSyncFilePlan {
                 entry: manifest.entry(at: path),
                 local: held[path],
                 deletedHere: deletedLocally[path],
-                listed: listing[path]
+                listed: listing[path],
+                deletable: LampSyncLocalDeletion.target(of: path).isAllowed
             )
             plan.apply(action, at: path)
         }
@@ -114,14 +115,20 @@ public enum LampSyncFilePlan {
         static func upload(_ condition: LampSyncWriteCondition) -> Action { Action(upload: condition) }
     }
 
+    /// `deletable` is whether a library carries out a deletion of this path
+    /// (`LampSyncLocalDeletion`). One it never does is never tombstoned,
+    /// asked to be deleted here, or reaped: a copy anyone holds survives a
+    /// tombstone some older client recorded and goes back up, which
+    /// supersedes it, rather than being asked for on every pass and refused.
     static func action(
         kind: LampSyncFileKind,
         entry: LampSyncLibraryManifest.Entry?,
         local: Local?,
         deletedHere: Int64?,
-        listed: String?
+        listed: String?,
+        deletable: Bool = true
     ) -> Action {
-        if let deletedHere {
+        if deletable, let deletedHere {
             var after = entry ?? .init(path: "")
             (after.deletedAt, after.deletedRevision) = LampSyncLibraryManifest.Entry.later(
                 (after.deletedAt, after.deletedRevision), (deletedHere, listed)
@@ -155,10 +162,12 @@ public enum LampSyncFilePlan {
             action.adopt = listed
             return action
         }
-        if let local, let deletedAt = entry.deletedAt, (local.savedAt ?? .min) > deletedAt {
-            // Saved here after the deletion: it survives, and goes back up.
+        if let local, let deletedAt = entry.deletedAt, !deletable || (local.savedAt ?? .min) > deletedAt {
+            // Saved here after the deletion, or a copy no library deletes: it
+            // survives, and goes back up.
             return .upload(kind.isMedia ? .ifAbsent : listed.map { .ifRevision($0) } ?? .ifAbsent)
         }
+        guard deletable else { return .none }
         return Action(deleteLocally: local != nil, reap: listed)
     }
 

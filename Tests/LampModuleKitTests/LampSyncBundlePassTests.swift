@@ -606,12 +606,12 @@ struct LampSyncBundlePassTests {
         .init(confirm: Array(repeating: .zero, count: 5), retry: [.zero])
     }
 
-    /// R9. A collection saved here after another device deleted it survives
-    /// the deletion and goes back up; saved before it, it goes. Without the
-    /// save time the plan cannot tell, and deleted the later edit.
+    /// R9. A highlight set saved here after another device deleted it
+    /// survives the deletion and goes back up; saved before it, it goes.
+    /// Without the save time the plan cannot tell, and deleted the later edit.
     @Test func aCollectionSavedHereAfterItsDeletionSurvivesIt() async throws {
         for (savedAt, survives) in [(Int64(5_001), true), (Int64(4_999), false)] {
-            let path = "Notes/notes.lamp"
+            let path = "Highlights/set-1.lamp"
             let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 5_000)
             store.bodies[path] = nil
             store.revisions[path] = nil
@@ -631,6 +631,31 @@ struct LampSyncBundlePassTests {
             #expect(library.deleted.isEmpty == survives, "saved at \(savedAt)")
             #expect(outcome.uploaded.contains(path) == survives, "saved at \(savedAt)")
         }
+    }
+
+    /// The notes collection is one file holding every note, which no library
+    /// deletes. A tombstone some older client recorded for it, even one later
+    /// than the last save here, is neither carried out nor reaped: the copy
+    /// goes back up, which supersedes it.
+    @Test func theNotesCollectionSurvivesEveryTombstone() async throws {
+        let path = "Notes/notes.lamp"
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 5_000)
+        let url = try makeFile("mine")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "old", revision: "\"n1\"")
+        records.confirmRecorded([path: "\"n1\""], in: source)
+        let library = StubLibrary()
+        var held = gathered([local(path, url, "mine")])
+        held.savedAt = [path: 4_999]
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 6_000 }
+        ).run(gathering: { held }, records: &records, patience: immediate)
+
+        #expect(library.deleted.isEmpty)
+        #expect(outcome.reaped.isEmpty)
+        #expect(outcome.uploaded.contains(path))
     }
 
     /// R2 (a). A client that plans only modules and media leaves a deck it

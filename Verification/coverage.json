@@ -18,7 +18,11 @@
         "tombstoneDeletes",
         "ownedSQLiteReplacement",
         "stagedCommitAllowed",
-        "stagedCommitAllowedIsTheGuard"
+        "stagedCommitAllowedIsTheGuard",
+        "personalStudyModuleID",
+        "personalStudyArchiveImport",
+        "macMediaMetadataAfterImport",
+        "macStructuredContentAfterSave"
       ],
       "boundary": "Only the library's sync paths are modelled: personal import, staged backup import and the deletion ledger. SQLite and filesystem behaviour are assumed.",
       "conformance": [
@@ -158,7 +162,8 @@
         "deferredBackendWipe",
         "backendActivationOccurs",
         "pendingBackendMarker",
-        "rollbackAttempted"
+        "rollbackAttempted",
+        "localDataWiped"
       ],
       "conformance": [
         "backendTransition"
@@ -178,9 +183,10 @@
         "passTrace",
         "pruneWaitsForTheReap",
         "settingsUpdateIsBounded",
-        "uploadingFirstLocksAFreshLibraryOut"
+        "uploadingFirstLocksAFreshLibraryOut",
+        "anEditDuringAPassCanBeOverwritten"
       ],
-      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core, and the order is held by the `passTrace` table, run through the engine for every combination of work. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded.",
+      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core, and the order is held by the `passTrace` table, run through the engine for every combination of work. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded. The per-file system model (FilePasses) runs this pass's plan and bundle update across two interleaved devices; it shows an install does not check the copy is still the one the plan saw, so an edit made during a pass can be overwritten by what the pass takes.",
       "conformance": [
         "passTrace"
       ]
@@ -254,18 +260,25 @@
         "anUnknownFileIsAdopted",
         "noRecordNeverOverwrites",
         "listedRevision",
-        "aRecordedMemberIsNeverRead"
+        "aRecordedMemberIsNeverRead",
+        "thePlanNeverAsksForARefusedDeletion",
+        "aRefusedDeletionGoesBackUp",
+        "aSettledFileNeedsNothing",
+        "aSettledDeletionNeedsNothing",
+        "anUnreportedSaveLosesToADeletion",
+        "aSaveAfterTheDeletionSurvives"
       ],
       "conformance": [
         "filePlanAction",
         "listedRevision"
       ],
-      "boundary": "Gathering the plan's inputs per path and listing each folder is Swift's; the decision for one path, and which revision a listed file is compared by, are held by tables."
+      "boundary": "Gathering the plan's inputs per path and listing each folder is Swift's; the decision for one path, and which revision a listed file is compared by, are held by tables. A path no library deletes is never tombstoned, asked to be deleted here, or reaped; a held copy survives a tombstone and goes back up, which supersedes it. A copy's save time is the caller's to report: one with none loses to any tombstone."
     },
     "Sources/LampModuleKit/LampSyncFileRecords.swift": {
       "rules": [
         "noRecordNeverOverwrites",
-        "filePlanAction"
+        "filePlanAction",
+        "recordingTheDownloadedBytesNeverSettles"
       ],
       "boundary": "Per-source records behind `LampSyncFilePlan.Local`. No record reads as changed, which the plan turns into a download or merge, never an upload over the server's copy. An install records this client's own digest of what it holds, so two clients that encode the same content differently do not trade it for ever. Change is judged by a digest of the bytes every pass, never by size or date."
     },
@@ -436,7 +449,8 @@
         "chooseWithoutBase",
         "baselessReading",
         "baselessMergeKeepsEveryRow",
-        "baselessMergeRevivesAnUnseenDeletion"
+        "baselessMergeRevivesAnUnseenDeletion",
+        "baselessNeedsPublish"
       ],
       "conformance": [
         "baselessReading",
@@ -521,6 +535,52 @@
         "guardedETagCondition"
       ],
       "boundary": "HTTP transport and PROPFIND XML parsing are Swift's; the presence, directory and entity-tag decisions are held by tables. A conditional DELETE sends the PUT's preconditions, so guardedETagCondition holds it too. A PUT that meets a missing folder (409, RFC 4918) makes the folders and is asked once more under the same condition; nothing was written by the first."
+    },
+    "Sources/LampModuleKit/LampSyncLocalDeletion.swift": {
+      "rules": [
+        "deleteTarget",
+        "mayRecordRemoval",
+        "everyRecordedRemovalIsCarriedOut",
+        "aCollectionIsNeverDeletedWhole",
+        "aModuleRemovalNamesItsPathsID"
+      ],
+      "conformance": [
+        "deleteTarget"
+      ],
+      "boundary": "What deleting a path from a library removes, called on both sides: whether a removal may be recorded, and whether one recorded elsewhere is carried out. Only the two collection paths, Notes/notes.lamp and Devotionals/devotionals.lamp, are refused; any other notes or writing module, and every highlight set, is a module. The table holds it against several real paths of each kind."
+    },
+    "Sources/LampModuleKit/LampPortableModuleInspector.swift": {
+      "rules": [
+        "remoteSQLiteImportAllowed",
+        "importSchemaAllows",
+        "bookInspectionAllows",
+        "canonicalModuleRequiresEmbeddedIdentity",
+        "legacyModuleWithoutIdentityCanUseFilename",
+        "foreignSQLiteOwnerKeepsInstalled"
+      ],
+      "boundary": "Which downloaded module body may replace an installed one: its kind, identity and owner columns, and for a legacy body the columns its import reads. SQLite schema parsing and file integrity are SQLite's; Swift tests cover the inspection."
+    },
+    "Sources/LampModuleKit/LampPortableDevotionalMedia.swift": {
+      "rules": [
+        "compatibleDevotionalContent",
+        "mediaMetadataAfterBridge",
+        "existingMediaMetadataIsPreserved"
+      ],
+      "boundary": "Writing media references and the plain-paragraph shape a writing with no blocks is exported in. JSON parsing is Swift's."
+    },
+    "Sources/LampModuleKit/LampPortableDevotionalContentEditing.swift": {
+      "rules": [
+        "reviseRichDevotionalBlock",
+        "reviseRichDevotionalSection",
+        "reviseRichDevotionalOutline"
+      ],
+      "boundary": "Revising a writing's rich blocks after an edit: block alignment and title matching are Swift's, tested in Swift; which fields survive is modelled."
+    },
+    "Sources/LampModuleKit/LampPortableDevotionalContent.swift": {
+      "rules": [
+        "decodedDevotionalBlocks"
+      ],
+      "boundary": "Projecting a writing's rich blocks for reading and editing; a body is rich only when it carries the block schema and decodes."
     }
   },
   "platformSources": {
@@ -532,14 +592,9 @@
     },
     "../lamp-bible-ios/Lamp Bible/Data/ICloudModuleStorage.swift": {
       "rules": [
-        "coordinatedContentWriteAllowed",
-        "changedBodyInsideCoordinationIsRejected",
-        "reportedICloudVersionConflictStopsRead",
-        "laterRemoteUploadDoesNotChangeExportRevision",
-        "stableICloudReadDoesNotProtectLaterWrite",
-        "unconditionalPublishLosesTheOtherEdit"
+        "reportedICloudVersionConflictStopsRead"
       ],
-      "boundary": "File coordination and NSFileVersion are the OS's; iCloud offers no server-side precondition, so a later upload from another device can replace a checked write."
+      "boundary": "Reads only: every iCloud write goes through core's LampSyncDirectoryStore. A read stops on an unresolved NSFileVersion conflict, which the OS must report."
     },
     "../lamp-bible-ios/Lamp Bible/Data/ModuleMediaStorage.swift": {
       "boundary": "Local media files for modules; transfer decisions are core's LampSyncReferencedMedia."
@@ -553,8 +608,17 @@
     },
     "../lamp-bible-ios/Lamp Bible/Data/ModuleSyncManager.swift": {
       "rules": [
-        "needsImportByToken"
-      ]
+        "needsImportByToken",
+        "sqliteImportAllowed",
+        "sqliteReplacementResult",
+        "sqliteCopyWithMetadata",
+        "collisionSafeReplacement",
+        "translationSchemaAllowed",
+        "planSourceUsable",
+        "bookImportSchemaValid",
+        "pendingPublicationAfterMerge"
+      ],
+      "boundary": "The phone's module import: SQLite bodies only, inspected by core's LampPortableModuleInspector, replaced inside one write transaction with their registry metadata. Runtime atomicity is SQLite's. Translation JSON import is the person's own, not sync."
     },
     "../lamp-bible-ios/Lamp Bible/Data/NoteStorage.swift": {
       "boundary": "Local note rows and the conflict record iOS persists; the conflict gate is pendingModuleConflictBlocksExport."
@@ -564,16 +628,19 @@
         "filePlanAction",
         "settingsUpdate",
         "pendingModuleConflictBlocksExport",
-        "failedModuleWriteRetainsPublication"
+        "failedModuleWriteRetainsPublication",
+        "pendingPublicationAfterMerge",
+        "anUnreportedSaveLosesToADeletion"
       ],
-      "boundary": "Design B's pass on the phone: it gathers what the phone holds and carries out LampSyncFilePlan's actions and the pass's one LampSyncSettingsStore.update. The decisions are core's."
+      "boundary": "Design B's pass on the phone: it gathers what the phone holds and carries out LampSyncFilePlan's actions and the pass's one LampSyncSettingsStore.update. The decisions are core's. Every held editable module (notes, writing, highlights), including one held back for an unsettled conflict, reports its save time; installed modules and media have none, by design."
     },
     "../lamp-bible-ios/Lamp Bible/Data/Sync/SyncCoordinator.swift": {
       "rules": [
         "deferredBackendWipe",
         "backendActivationOccurs",
         "aQuietRoundConverges",
-        "iosVisibleSettingsAfterPersist"
+        "iosVisibleSettingsAfterPersist",
+        "newBackendAvailable"
       ],
       "boundary": "Provider switching runs through LampSyncBackendTransition; the coordinator's sequencing itself is iOS code held by iOS tests."
     },
@@ -617,7 +684,7 @@
         "deckPull",
         "tombstoneDeletes"
       ],
-      "boundary": "Reads decks and the deletion ledger from the archive and applies core's plan."
+      "boundary": "Mirrors decks from the library's deck folder through ModuleStorage on either provider, applies the bundle's deck deletions or failing that the ledger file, and merges images newest-wins; which copy wins is core's LampPresentationDeckPortablePull."
     },
     "../lamp-bible-macos/Sources/LampBibleMac/App/LibrarySyncController.swift": {
       "rules": [
@@ -648,7 +715,9 @@
       "rules": [
         "preferenceMerge",
         "preferenceStamp",
-        "preferenceJoin"
+        "preferenceJoin",
+        "stageMacSettings",
+        "aSettingChangedDuringThePassIsNeverReverted"
       ],
       "boundary": "`macSettings` has no merge of its own: the newer copy stands. The shared keys go through the preference ledger, which wins where both carry a key."
     },
@@ -674,13 +743,19 @@
       "boundary": "Modules removed on this Mac, written down as they go, for the engine's `Gathered.deletedLocally`. A module leaves no other trace, so without it a removed module is a member nobody holds and is fetched back. What a local deletion becomes, a tombstone and a reap, is the plan's."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSavedAt.swift": {
-      "boundary": "When the Mac last saved each collection it publishes, read from its library, for the engine's `Gathered.savedAt`. The decision it feeds, a file saved after its deletion survives, is the plan's (`filePlanAction`)."
+      "boundary": "When the Mac last saved each collection it publishes, read from its library, for the engine's `Gathered.savedAt`. The decision it feeds, a file saved after its deletion survives, is the plan's (`filePlanAction`).",
+      "rules": [
+        "anUnreportedSaveLosesToADeletion"
+      ]
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift": {
       "rules": [
         "recoverMacSettings",
-        "recoverMacSettingKeys"
-      ]
+        "recoverMacSettingKeys",
+        "stagedMacSettingsKeepTheJournal",
+        "pendingMacSettingsReplayCompletesPull"
+      ],
+      "boundary": "A write-ahead journal for the settings a pass brings down: staged in the library, applied to UserDefaults, cleared, and replayed at launch and before each pass after a crash. The runtime guarantee depends on the property-list write, the UserDefaults flush and the journal's removal surviving interruption in that order."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/PresentationDeckSyncSupport.swift": {
       "rules": [
@@ -694,6 +769,21 @@
         "documentDeletionSparesALaterEdit",
         "mergeFile"
       ]
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/ModuleDatabase.swift": {
+      "rules": [
+        "pendingPublicationAfterMerge",
+        "newBackendAvailable",
+        "pendingMarkerSuspendsNewBackend",
+        "pendingModuleConflictBlocksExport"
+      ],
+      "boundary": "Holds the file records, the deletion ledger, the conflict and publication markers and the provider-switch marker; the decisions about them are the rules named. SQLite durability is assumed."
+    },
+    "../lamp-bible-ios/Lamp Bible/Data/DevotionalModels.swift": {
+      "rules": [
+        "devotionalStoredBody"
+      ],
+      "boundary": "How a writing's body is stored: authored Markdown kept for plain drafts, revised blocks for rich sources."
     }
   },
   "platformPatterns": [
@@ -703,6 +793,22 @@
     "../lamp-bible-ios/Lamp Bible/Data/*Storage.swift",
     "../lamp-bible-ios/Lamp Bible/Data/*Sync*.swift",
     "../lamp-bible-ios/Lamp Bible/Presentation/*Sync*.swift",
-    "../lamp-bible-ios/Lamp Bible/Presentation/*Storage.swift"
-  ]
+    "../lamp-bible-ios/Lamp Bible/Presentation/*Storage.swift",
+    "../lamp-bible-ios/Lamp Bible/Data/ModuleDatabase.swift"
+  ],
+  "modelOnly": {
+    "about": "Model definitions held to no source, each for a stated reason. SyncVerificationCoverageTests requires every definition in the model to be reached from a source's rules, a conformance table, a system model, or a counterexample listed here.",
+    "systemModels": {
+      "Interleaving": "Two devices exchanging whole content against one conditional server: why the per-item rules' being joins makes a sync lose nothing.",
+      "FilePasses": "Two devices running the per-file plan and bundle update, interleaved, checked exhaustively to a bound."
+    },
+    "counterexamples": {
+      "uploadBeforeRead": "Why every write is conditioned on the revision it read (staleConditionalWriteRejected).",
+      "modificationDateToken": "Why a folder revision is a content digest, never a modification date (contentRevision).",
+      "earlyBackendWipe": "Why a provider switch wipes only after persisting the new provider (deferredBackendWipe).",
+      "oldSQLiteReplacementResult": "Why the phone retires and copies rows inside one transaction (sqliteReplacementResult).",
+      "oldPartialBackupImport": "Why a backup import is staged and committed whole (stagedBackupImport).",
+      "oldMacHighlightAllowsPublish": "Why a failed highlight export stops the publish (macHighlightAllowsPublish)."
+    }
+  }
 }

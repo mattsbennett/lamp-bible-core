@@ -18,20 +18,20 @@ elan run leanprover/lean4:v4.34.0 lean Verification/SyncMerge.lean
 ```
 
 A clean run prints only the conformance tables (lines starting
-`CONFORMANCE`). Anything else — an error, or a warning such as a `sorry` —
+`CONFORMANCE`) and the system checks (`SYSTEMCHECK`). Anything else — an error, or a warning such as a `sorry` —
 fails the suite. On a machine without elan, `LAMP_SKIP_LEAN=1 swift test`
 skips the Lean-backed tests by name rather than letting them pass.
 
 ## Keeping the model and the code together
 
-Three checks run with the core suite, so the model cannot quietly fall behind
+Four checks run with the core suite, so the model cannot quietly fall behind
 the code it describes:
 
 - **The proofs check.** `theModelChecks` runs Lean on the model and fails on
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 3,131 cases across 53 decisions. `SyncModelConformanceTests` asks the
+  answer, 4,146 cases across 54 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -44,6 +44,16 @@ the code it describes:
   (`platformPatterns`): wherever they are checked out beside this one, a sync
   file in either app with no entry fails too, so sync logic written into an
   app cannot arrive unaccounted for.
+- **Every definition is held to something.** `everyDefinitionIsHeldToSomething`
+  fails on a definition in the model that nothing reaches: not a coverage
+  entry's rules, a conformance table, a system model, or a counterexample, nor
+  anything those use. Code that is removed takes its entry with it, and its
+  rules then fail here until they leave the model too. The system models and
+  the counterexamples are listed in `coverage.json` under `modelOnly`, each
+  with the reason it is there.
+
+`filePassesHold` reads the system checks: each must have made runs, and none
+may have failed.
 
 When you change a sync decision, change the model in the same commit, update
 its conformance table if it has one, and give any new sync source a
@@ -142,6 +152,46 @@ order. A pass takes a subset of eleven steps, always in one order
 The `passTrace` table runs the engine itself for every combination of work and
 compares the steps it took, in order.
 
+### When nothing has changed
+
+A pass over a file nobody has touched since the last does nothing: a member
+held unchanged at the revision listed, or a deletion every device has carried
+out (`aSettledFileNeedsNothing`, `aSettledDeletionNeedsNothing`). The engine
+records a client's own digest of a copy it takes, not the downloaded bytes', so
+two devices that encode alike content differently settle rather than trade
+it for ever (`recordingTheDownloadedBytesNeverSettles`).
+
+### Save times
+
+A tombstone is settled against a copy by the copy's last save: saved after
+the deletion, the copy survives and goes back up; otherwise it goes
+(`aSaveAfterTheDeletionSurvives`). A copy with no save time always goes,
+since nothing says the edit came after (`anUnreportedSaveLosesToADeletion`).
+So each client must report a save time for every copy that holds a person's
+own writing — notes, writing, highlights and decks — and each app's coverage
+entry for its gather says which kinds it reports. Modules and media may go
+without, since the server can always supply them again.
+
+### Deleting a copy here
+
+`LampSyncLocalDeletion.target` decides what deleting a path removes, and both
+sides call it: whether a removal here may be recorded as a deletion, and
+whether one recorded elsewhere is carried out, so no client records a
+tombstone another refuses (`mayRecordRemoval`,
+`everyRecordedRemovalIsCarriedOut`). `Notes/notes.lamp` and
+`Devotionals/devotionals.lamp` are each one file holding every note or every
+writing, so they are never deleted as files; their items are deleted through
+the ledger (`aCollectionIsNeverDeletedWhole`). Any other notes or writing
+module is a module, and so is a highlight set: deleting a set on one device
+deletes it on the others. A module removal names the ID its path carries
+(`aModuleRemovalNamesItsPathsID`).
+
+The plan agrees with it. A path no library deletes is never tombstoned,
+asked to be deleted here, or reaped (`thePlanNeverAsksForARefusedDeletion`): a
+held copy survives a tombstone some older client recorded and goes back up,
+which supersedes it (`aRefusedDeletionGoesBackUp`), rather than being asked for
+and refused on every pass.
+
 ### Writes and revisions
 
 WebDAV sends an atomic HTTP precondition on each conditional write;
@@ -211,11 +261,9 @@ past the field it replaced, and the later edit survives the join either way
 
 iCloud offers no server-side precondition, so a later device upload can
 supersede a locally checked write (`stableICloudReadDoesNotProtectLaterWrite`).
-The phone compares the observed body again inside the coordinated write
-(`changedBodyInsideCoordinationIsRejected`) and stops on a conflict the OS
-reports (`reportedICloudVersionConflictStopsRead`). After an export it saves
-the digest of the bytes it wrote, so a later remote upload cannot make its
-baseline describe another body (`laterRemoteUploadDoesNotChangeExportRevision`).
+Every iCloud write goes through `LampSyncDirectoryStore`'s coordinated check;
+the phone's reads stop on a conflict the OS reports
+(`reportedICloudVersionConflictStopsRead`).
 
 ### Records, conflicts and deletions
 
@@ -292,9 +340,13 @@ from the next merge on there is a baseline. The uploaded database omits
 device-local provider configuration.
 
 The Mac writes the settings a pass brings down through a journal kept with the
-library, and replays it at startup and before each sync after a crash. A
-distinct settings edit blocks the replay and leaves the journal for repair
-(`pendingMacSettingsReplayCompletesPull`, `distinctMacSettingsEditBlocksReplay`);
+library: staged, applied to UserDefaults, cleared, and replayed at startup and
+before each sync after a crash. Staging refuses when the live settings moved
+after the plan was made, so a preference changed during a pass is never
+reverted by a plan made before it (`aSettingChangedDuringThePassIsNeverReverted`).
+A distinct settings edit after staging blocks the replay and leaves the
+journal for repair (`pendingMacSettingsReplayCompletesPull`,
+`distinctMacSettingsEditBlocksReplay`);
 when a crash leaves some keys written and others not, the check is per key
 (`mixedMacSettingsReplayToWholePlan`, `unrelatedMacSettingBlocksWholeReplay`).
 The runtime guarantee depends on the property-list write, the UserDefaults
@@ -349,10 +401,8 @@ Copied child rows use plain `INSERT`, so a key belonging to another module
 fails and rolls back (`foreignImportKeyCollisionKeepsInstalled`). Editable note
 and writing reconciliation reads, merges and saves rows, conflicts and
 publication markers in one transaction
-(`failedEditableMergePreservesWholeState`). JSON modules are decoded before
-anything is replaced, and an embedded ID that differs from the listed one is
-refused (`invalidRemoteJSONKeepsInstalledRows`,
-`mismatchedModuleIdentityKeepsInstalledRows`). The translation-schema importer
+(`failedEditableMergePreservesWholeState`). The phone imports SQLite modules
+only. The importer for a translation the person opens themselves
 checks the schema type and ID first and replaces in one transaction
 (`wrongTranslationSchemaTypeCannotImport`,
 `invalidTranslationSchemaIDCannotImport`,
@@ -412,7 +462,9 @@ success, so a failed attempt can retry (`failedInitialSyncCanRetry`,
 `successfulInitialSyncClosesGate`); a cancelled caller stops at the gate even if
 another caller finishes the attempt (`cancelledInitialSyncWaiterCannotContinue`).
 
-## What the system model proves
+## What the system models prove
+
+### Whole content
 
 The section "Devices interleaving whole passes" runs the decisions together:
 two devices editing, pulling and publishing in any interleaving, against one
@@ -445,15 +497,49 @@ a join, and so outside this model: an equal-time disagreement over a record,
 which each device keeps its own copy of until someone chooses, and a settings
 merge with no baseline, which may bring back an unseen deletion once.
 
+### The per-file pass
+
+The section "Devices running the per-file pass" runs the plan and the bundle
+update across two devices over one path — the plan and the manifest both
+decide path by path, so paths do not interact. A pass reads, then acts:
+downloads and merges, uploads conditioned on the revision it planned against,
+deletes locally, makes one bundle update stamping each write and adoption at
+the pass's time and each tombstone at its deletion's, and reaps conditioned on
+the revision listed. Reading and acting are separate steps, so the other device
+can act in between and a write it beats is refused. Each device encodes
+content its own way.
+
+This is checked, not proved: every sequence of up to five edits, deletions,
+reads and acts, from an empty library and from one both devices hold, for a
+path libraries delete and one they never do, is run, followed by any pass
+still under way and two rounds of passes — 37,324 runs. Every run:
+
+- **converges:** both devices and the server hold the same copy, or none;
+- **is quiet afterwards:** another round changes nothing;
+- **loses no edit** except to a deletion made after it;
+- **keeps a deletion** made by a device that had every edit, when nothing was
+  edited after it;
+- **never deletes** a path no library deletes.
+
+Assumed: an edit made while a deletion waits to be recorded cancels it;
+tombstones outlive the run; the bundle update is one step, as its
+read-merge-retry makes it.
+
+**Found by it.** An edit made while its own device's pass is under way can be
+overwritten: the pass installs what it planned to take without checking the
+copy is still the one it planned against (`anEditDuringAPassCanBeOverwritten`).
+Collections are merged on install, so this reaches only files installed whole,
+such as decks. The loss-of-edits check leaves those edits out, and names them.
+
 **Still outside the model.**
 
-- 53 tables ask 64 of the model's 170 definitions directly, and reach 91
+- 54 tables ask 70 of the model's 198 definitions directly, and reach 112
   counting the rules those call. Of the rest:
-  - Counterexamples (`oldReplace`, `uploadBeforeRead`, `earlyBackendWipe` and
-    the like) show what a rule prevents, and have no Swift counterpart by
-    design.
-  - The system model's own parts (`step`, `run`, `Agrees`) describe devices,
-    not code.
+  - Counterexamples (`uploadBeforeRead`, `earlyBackendWipe` and the like,
+    listed under `modelOnly`) show what a rule prevents, and have no Swift
+    counterpart by design.
+  - The system models' own parts (`step`, `run`, `Agrees`, `settle`) describe
+    devices, not code.
   - Decisions made in the apps are held by the apps' own tests: the phone's
     import checks (`sqliteImportAllowed`, `importSchemaAllows` and their kin)
     and the Mac's settings recovery (`recoverMacSettings`). A table needs the
@@ -464,6 +550,8 @@ merge with no baseline, which may bring back an unseen deletion once.
       `preferenceBasesAfterPublish`);
     - revising rich writing blocks (`reviseRichDevotionalBlock` and its kin,
       `devotionalStoredBody`);
+    - which kinds each app reports a save time for: the obligation is
+      modelled, the reporting is each app's.
     - portable media import (`mediaImportChoice`, `portableMediaMayCommit`,
       `mediaMetadataAfterBridge`);
     - the provider-switch marker (`pendingBackendMarker`,
@@ -484,12 +572,14 @@ merge with no baseline, which may bring back an unseen deletion once.
 | --- | --- | --- | --- |
 | Per-file library and settings bundle | `LampSyncFolderLayout`, `LampSyncLibraryManifest`, `LampSyncFilePlan`, `LampSyncSettingsBundle`, `LampSyncSettingsStore`, conditional `delete(path:condition:)` | `mergeManifestEntry`, `recordWrite`, `adoptFile`, `pruneTombstone`, `filePlanAction`, `listedRevision`, `settingsUpdate` and `bundlePathHolds` (conformance), `bundleRead`, `mayClaim` and `settingsWrite` (conformance), `deletingNeedsATombstone`, `anUnknownFileIsAdopted`, `noRecordNeverOverwrites`, `aRecordedMemberIsNeverRead`, `tombstoneLifetimeCost` | Revisions are compared within one provider; a value-equal import must not mark content changed, which each app's importer keeps |
 | Pass engine | `LampSyncBundlePass`, `LampSyncFileRecords`, `LampSyncLocalFile`, `LampSyncLibraryLayout`, `LampSyncBundleLedgers` | `passTrace` (conformance), `aPassKeepsTheOrder`, `aPassStartsByClaimingTheBundle`, `oneBundleWriteAtMost`, `aReapComesWithItsBundleWrite` | What each app gathers, imports and applies is the app's |
+| Deleting a copy here | `LampSyncLocalDeletion`, the plan's `deletable` | `deleteTarget` (conformance), `mayRecordRemoval`, `everyRecordedRemovalIsCarriedOut`, `aCollectionIsNeverDeletedWhole`, `aModuleRemovalNamesItsPathsID`, `thePlanNeverAsksForARefusedDeletion`, `aRefusedDeletionGoesBackUp` | Each app must call it on both sides; its library carries the deletion out |
+| Save times and quiet passes | `LampSyncFilePlan`, `LampSyncFileRecords`, each app's gather | `aSaveAfterTheDeletionSurvives`, `anUnreportedSaveLosesToADeletion`, `aSettledFileNeedsNothing`, `aSettledDeletionNeedsNothing` | Which kinds report a save time is each app's, held by its own tests |
 | Moving an earlier library | `LampSyncSettingsStore.earlierLibrary`, `migratePhoneLibrary`, `LampSyncLibraryMigration`, `LampSyncArchiveRemote.read`, `LampSyncFolderPublisher.capture` | `earlierLibrary`, `archiveKeeper`, `entryFate` and `macMigrationStep` (conformance), `onlyAnEmptyLibraryIsNew`, `anEntryThePhoneNeverWritesSettlesIt`, `everySettingAndLedgerIsCarried`, `onlyBookkeepingIsDropped`, `theMigrationWritesOnlyOverTheArchiveItImported`, `aMigratedLibraryIsLeftAlone` | Reading the old files is format conversion, tested against captured fixtures |
 | Writes and revisions | `LampSyncConditionalWrite`, `LampWebDAVStorage`, `LampSyncRemoteDirectories`, `LampSyncContentRevision` | `conditionalWrite`, `landing` (conformance), `landingIsSound`, `settleByBytes`, `confirmWrite`, `writeOutcome` (conformance), `namesSameRevision` (conformance), `collectionConfirmed`, `combinedETagsCannotAuthorizeWrite`, `forbiddenWebDAVHeadIsNotAbsence` | The server must honour strong ETag preconditions; transport behaviour is Swift-tested |
 | Folder provider | `LampSyncDirectoryStore`, `LampSyncSettingsBundle.merge(version:)`, `LampSharedPreferenceLedger` | `directoryWrite`, `directoryDelete`, `versionMerges` and `versionMerge` (conformance), `directoryWriteIsTheCoordinatedCheck`, `unresolvedVersionsStopTheFile`, `aVersionIsMergedOrStops`, `versionMergeIgnoresWhichCopyIsCurrent`, `aLaterEditSurvivesEitherWay` | No server-side precondition against a later remote upload; file coordination and `NSFileVersion` are the OS's |
 | Shared preferences | `LampSharedPreferenceLedger`, `LampSyncPreferenceState` | `choosePreference`, `preferenceMerge` (conformance), `disputedPreferenceKeepsTheServersValue`, `firstMeetingKeepsTheServersValue`, `failedPreferencePublishKeepsEveryBase`, `publishedPreferenceUpdatesItsSource`, `publishedPreferenceKeepsAnotherSource` | UserDefaults persistence and each app's local preference mapping |
 | Phone settings merge | `LampSyncSettingsPlanner`, `LampSyncThreeWaySet`, `LampSyncThreeWayValue` | `mergeMembership`, `chooseWholeValue`, `chooseReading`, `baselessReading` (conformance), `chooseWithoutBase` | SQLite serialisation of the settings database |
-| Mac settings journal | macOS `LampSyncSettingsCommit` | `recoverMacSettings`, `pendingMacSettingsReplayCompletesPull`, `distinctMacSettingsEditBlocksReplay`, `mixedMacSettingsReplayToWholePlan` | Property-list write, UserDefaults flush and journal removal surviving interruption |
+| Mac settings journal | macOS `LampSyncSettingsCommit`, `LampSyncBundleSettings` | `stageMacSettings`, `aSettingChangedDuringThePassIsNeverReverted`, `recoverMacSettings`, `pendingMacSettingsReplayCompletesPull`, `distinctMacSettingsEditBlocksReplay`, `mixedMacSettingsReplayToWholePlan` | Property-list write, UserDefaults flush and journal removal surviving interruption |
 | Module files and import | `LampSyncModuleFiles`, `LampSyncModuleFolder`, `LampPortableModuleInspector` | `selectedCandidateIndex`, `needsImportByToken`, `moduleFolderListing` (conformance), `supersededCanonicalCannotHideActiveLegacy`, `missingRemoteRevisionRequiresImport`, `canonicalModuleRequiresEmbeddedIdentity`, `foreignSQLiteOwnerKeepsInstalled`, `sqliteImportAllowed`, `sqliteReplacementResult`, `failedEditableMergePreservesWholeState` | SQLite execution and JSON decoding |
 | Phone translation JSON | `LampSyncContentRevision` for the file revision; one GRDB transaction for metadata, books, verses and headings | `translationSchemaAllowed`, `failedTranslationSchemaReplacementKeepsInstalled`, `foreignImportKeyCollisionKeepsInstalled` | JSON decoding and SQLite execution |
 | Writing content and media | `LampPortableDevotionalContent`, `LampDevotionalMediaReference`, `LampPortableDevotionalMedia`, `LampSyncReferencedMedia`, `LampSyncDevotionalMedia`, `LampSyncPersonalExport` | `richDevotionalBlocksKeepTheirContent`, `unchangedRichDevotionalBlockIsExact`, `movedRichSectionKeepsIdentity`, `iosRichEditStoresRevisedBlocks`, `bracketedMarkdownWithoutBlockSchemaKeepsMarkdown`, `existingMediaMetadataIsPreserved`, `mediaBatchComplete` (conformance), `failedMediaTransferBlocksCompletion`, `macHighlightAllowsPublish` (conformance), `emptyMacHighlightSetMayBeSkipped` | Media has no merge base; local media files and SQLite rows are separate writes |
@@ -498,7 +588,8 @@ merge with no baseline, which may bring back an unseen deletion once.
 | Slide decks | `LampPresentationDeckDeletionLedger`, `LampPresentationDeckPortablePull`, macOS `LampPresentationDeckSync` | `tombstoneDeletes` (conformance: `tombstone`), `deckPull`, `deckPullNeverKeepsADeletedDeck`, `deckPullIgnoresArrivalOrder` | Assets have no ledger and are kept while any deck names them |
 | Workspace files (macOS) | `LampWorkspaceSync` and its `WorkspaceFileLedger`, shared file order | `tombstoneDeletes`, `workspaceDeletionTime`, `documentDeletionSparesALaterEdit`, `mergeFile` | Context files' deletions use the time they were noticed, not a comparable modification time |
 | Conflicts set aside and resolved | `LampSyncMerge.importOutcome`, `LampSyncConflict`, `LampLibrary.resolveSyncConflict` | `portableImportOutcome` (conformance: `importOutcome`), `syncImportNeverStops`, `resolvedChoiceWinsWhereItWasMade`, `resolvedChoiceWinsOnTheOtherDevice`, `sameColumn` | Choosing in the UI and the stored payload are Swift; JSON classification is JSONSerialization's |
-| Two devices running whole passes (system model) | `LampSyncBundlePass`, `LampSyncConditionalWrite`, and the per-item orders of `LampSyncMerge` and the deletion ledgers | `serverNeverLosesAlongRun`, `agreesAlongRun`, `publishedContentIsNeverLost`, `refusedPublishChangesNothing`, `pullThenPublishIsAccepted`, `aQuietRoundConverges`, `conditionalPublishKeepsTheOtherEdit`, `unconditionalPublishLosesTheOtherEdit` | The server honours conditions and issues new revisions; steps are atomic; storage is durable; equal-time record disagreements and baseless settings merges are not joins |
+| Two devices exchanging whole content (system model) | the per-item orders of `LampSyncMerge` and the deletion ledgers, over `LampSyncConditionalWrite` | `serverNeverLosesAlongRun`, `agreesAlongRun`, `publishedContentIsNeverLost`, `refusedPublishChangesNothing`, `pullThenPublishIsAccepted`, `aQuietRoundConverges`, `conditionalPublishKeepsTheOtherEdit`, `unconditionalPublishLosesTheOtherEdit` | The server honours conditions and issues new revisions; steps are atomic; storage is durable; equal-time record disagreements and baseless settings merges are not joins |
+| Two devices running the per-file pass (system model, checked to a bound) | `filePlanAction`, `recordWrite`, `adoptFile` and `removeFile` as `LampSyncFilePlan`, `LampSyncLibraryManifest` and `LampSyncBundlePass` run them | `converges`, `quiet`, `noLostEdit`, `deletionSticks`, `neverDeleted` (system checks), `anEditDuringAPassCanBeOverwritten`, `recordingTheDownloadedBytesNeverSettles`, `anUnreportedSaveLosesAnEditMadeAfterTheDeletion` | One path; up to five steps; an install does not check the copy is still the one planned against |
 
 The listed Lean rules prove properties of models that correspond to shared
 Swift decisions. Swift tests exercise each shared implementation with the
