@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 3,714 cases across 72 decisions. `SyncModelConformanceTests` asks the
+  answer, 3,778 cases across 73 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -810,6 +810,21 @@ sent names its revision (`aWriteIsNamedOnlyByItsOwnBytes`). So the bundle's
 update, the claim and the move wait for the server instead of retrying into a
 refusal of their own write.
 
+Both apps run one pass engine, `LampSyncBundlePass`, whose substance is an
+order. A pass takes a subset of eleven steps, always in one order
+(`aPassKeepsTheOrder`):
+- it claims the bundle first (`aPassStartsByClaimingTheBundle`);
+- it applies what the bundle carries before gathering the library;
+- it takes what came down before anything goes up;
+- media goes before the modules that name it;
+- the bundle is written once, after every upload and local deletion
+  (`oneBundleWriteAtMost`);
+- bytes are reaped only with the bundle write that records their deletion
+  (`aReapComesWithItsBundleWrite`).
+
+The `passTrace` table runs the engine itself for every combination of work and
+compares the steps it took, in order.
+
 On the folder provider, `directoryWrite` and `directoryDelete` decide a
 conditional write or delete inside the coordinated block, and a write goes
 ahead exactly when the folder publisher's coordinated check allowed it
@@ -864,7 +879,7 @@ merge with no baseline, which may bring back an unseen deletion once.
 
 **Still outside the model.**
 
-- 72 tables ask 82 of the model's 217 definitions directly, and reach 110
+- 73 tables ask 83 of the model's 221 definitions directly, and reach 114
   counting the rules those call. Of the rest:
   - Counterexamples of former behaviour (`oldReplace`, `uploadBeforeRead`,
     `earlyBackendWipe` and the like) have no Swift counterpart by design.

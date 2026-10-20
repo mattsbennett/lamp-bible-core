@@ -4267,6 +4267,77 @@ theorem theMigrationMovesOnlyTheMacsLibrary
 theorem aMigratedLibraryIsLeftAlone (imported current : Option Nat) (keeper : Option EarlierLibrary) :
     macMigrationStep true imported current keeper = .alreadyMigrated := rfl
 
+/-! ### The pass engine's order
+
+`LampSyncBundlePass` is one pass for both apps, and its substance is an
+order: each step is decided elsewhere, but done in the wrong order each loses
+data somewhere other than where the mistake is. A pass does a subset of the
+steps below, always in this order. -/
+
+inductive PassStep where
+  | claim | receive | gather | download | merge | finishInstalling
+  | uploadMedia | uploadModule | deleteLocally | writeBundle | reap
+  deriving DecidableEq, Repr
+
+def PassStep.rank : PassStep → Nat
+  | .claim => 0 | .receive => 1 | .gather => 2 | .download => 3 | .merge => 4
+  | .finishInstalling => 5 | .uploadMedia => 6 | .uploadModule => 7
+  | .deleteLocally => 8 | .writeBundle => 9 | .reap => 10
+
+def passOrder : List PassStep :=
+  [.claim, .receive, .gather, .download, .merge, .finishInstalling,
+   .uploadMedia, .uploadModule, .deleteLocally, .writeBundle, .reap]
+
+theorem passOrderIsRanked : passOrder.Pairwise (fun a b => a.rank < b.rank) := by decide
+
+-- The work a plan hands a pass, one flag per kind.
+structure PassWork where
+  download : Bool
+  merge : Bool
+  uploadMedia : Bool
+  uploadModule : Bool
+  deleteLocally : Bool
+  reap : Bool
+  deriving DecidableEq, Repr
+
+-- Which steps a pass takes. A merge is published, so it uploads a module.
+-- The bundle is written when something changes what it records: an upload
+-- or a tombstone. A download or a local deletion records nothing new.
+def PassWork.does (w : PassWork) : PassStep → Bool
+  | .claim | .receive | .gather | .finishInstalling => true
+  | .download => w.download
+  | .merge => w.merge
+  | .uploadMedia => w.uploadMedia
+  | .uploadModule => w.uploadModule || w.merge
+  | .deleteLocally => w.deleteLocally
+  | .writeBundle => w.merge || w.uploadMedia || w.uploadModule || w.reap
+  | .reap => w.reap
+
+def passTrace (w : PassWork) : List PassStep := passOrder.filter w.does
+
+-- Whatever the work, its steps keep the order: the bundle is claimed first;
+-- what the bundle carries is applied before the library is gathered; what
+-- came down is taken before anything goes up; media goes before the modules
+-- that name it; the bundle is written after every upload and local deletion;
+-- and bytes are reaped only after the bundle records their deletion.
+theorem aPassKeepsTheOrder (w : PassWork) :
+    (passTrace w).Pairwise (fun a b => a.rank < b.rank) :=
+  passOrderIsRanked.filter _
+
+theorem aPassStartsByClaimingTheBundle (w : PassWork) : (passTrace w).head? = some .claim := rfl
+
+-- A reap never happens without the bundle write that records it.
+theorem aReapComesWithItsBundleWrite (w : PassWork) (h : PassStep.reap ∈ passTrace w) :
+    PassStep.writeBundle ∈ passTrace w := by
+  cases w with
+  | mk d m um u l x => cases d <;> cases m <;> cases um <;> cases u <;> cases l <;> cases x <;>
+      simp_all [passTrace, passOrder, PassWork.does, List.filter]
+
+-- Never more than one bundle write in a pass.
+theorem oneBundleWriteAtMost (w : PassWork) : (passTrace w).count .writeBundle ≤ 1 := by
+  cases w with
+  | mk d m um u l x => cases d <;> cases m <;> cases um <;> cases u <;> cases l <;> cases x <;> decide
+
 /-! ## Conformance tables
 
 Each line below names a model decision, its inputs and its answer. Swift's
@@ -4894,6 +4965,8 @@ def settingsWriteName : SettingsWrite → String
 
 def stampCode (s : Stamp) : String := optNat s.1 ++ ":" ++ optNat s.2
 
+def passStepName (s : PassStep) : String := ((reprStr s).splitOn ".").getLast!
+
 def readBacksCode (rb : List (Option (Nat × Nat))) : String :=
   if rb.isEmpty then "empty"
   else ",".intercalate (rb.map fun | none => "-" | some (d, r) => toString d ++ ":" ++ toString r)
@@ -4939,6 +5012,12 @@ def bundleCopies : List BundleCopy :=
         IO.println <| conformanceLine "earlierLibrary"
           [toString mac, toString phone, toString content,
            earlierLibraryName (earlierLibrary mac phone content)]
+  for mask in List.range 64 do
+    let bit := fun (i : Nat) => (mask >>> i) % 2 == 1
+    let w : PassWork := ⟨bit 0, bit 1, bit 2, bit 3, bit 4, bit 5⟩
+    IO.println <| conformanceLine "passTrace"
+      [toString w.download, toString w.merge, toString w.uploadMedia, toString w.uploadModule,
+       toString w.deleteLocally, toString w.reap, ",".intercalate ((passTrace w).map passStepName)]
   let readBacks : List (Option (Nat × Nat)) := [none, some (1, 7), some (2, 8)]
   let lists := [[]] ++ readBacks.map ([·]) ++ (readBacks.flatMap fun a => readBacks.map fun b => [a, b])
   for accepted in [true, false] do

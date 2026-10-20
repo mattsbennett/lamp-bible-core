@@ -181,15 +181,24 @@
     },
     "Sources/LampModuleKit/LampSyncBundlePass.swift": {
       "rules": [
+        "aPassKeepsTheOrder",
+        "aPassStartsByClaimingTheBundle",
+        "aReapComesWithItsBundleWrite",
         "anAcceptedWriteIsNeverRefused",
         "anUnknownFileIsAdopted",
         "claimingFirstNeverMeetsItsOwnFiles",
         "filePlanAction",
+        "oneBundleWriteAtMost",
+        "passOrderIsRanked",
+        "passTrace",
         "pruneWaitsForTheReap",
         "settingsUpdateIsBounded",
         "uploadingFirstLocksAFreshLibraryOut"
       ],
-      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core; the order is held by the engine's own tests, moved with it from the Mac. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded."
+      "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core, and the order is held by the `passTrace` table, run through the engine for every combination of work. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded.",
+      "conformance": [
+        "passTrace"
+      ]
     },
     "Sources/LampModuleKit/LampSyncCompatibilityPublisher.swift": {
       "rules": [
@@ -773,6 +782,15 @@
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMoveOffer.swift": {
       "boundary": "What the person is told before a move or a join. Which one is offered is core's `earlierLibrary`; the move itself is core's `LampSyncLibraryMigration`."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncRemovedModules.swift": {
+      "rules": [
+        "filePlanAction"
+      ],
+      "boundary": "Modules removed on this Mac, written down as they go, for the engine's `Gathered.deletedLocally`. A module leaves no other trace, so without it a removed module is a member nobody holds and is fetched back. What a local deletion becomes, a tombstone and a reap, is the plan's."
+    },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSavedAt.swift": {
+      "boundary": "When the Mac last saved each collection it publishes, read from its library, for the engine's `Gathered.savedAt`. The decision it feeds, a file saved after its deletion survives, is the plan's (`filePlanAction`)."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSettingsCommit.swift": {
       "rules": [

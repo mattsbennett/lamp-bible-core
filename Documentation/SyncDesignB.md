@@ -656,5 +656,8 @@ Then the phone's requirements went into the engine, each with a test:
   revision otherwise, never by a HEAD the server answers stale. One never
   shown back is reported, not recorded.
 
-Next, the pass order goes into the model.
+The pass order is in the model (`passTrace`). Eleven steps, always in one
+order, a subset per pass. The table runs the engine for all 64 combinations
+of work and compares the steps it logs. Swapping media and modules fails 24
+of them.
 

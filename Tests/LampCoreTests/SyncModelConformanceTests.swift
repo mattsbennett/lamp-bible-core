@@ -111,7 +111,7 @@ struct SyncModelConformanceTests {
         "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone", "filePlanAction",
         "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite", "directoryDelete",
         "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge", "preferenceStamp", "bundleRead",
-        "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate", "macMigrationStep", "writeOutcome",
+        "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate", "macMigrationStep", "writeOutcome", "passTrace",
     ]
 
     // MARK: - The model itself
@@ -1163,6 +1163,107 @@ struct SyncModelConformanceTests {
         }
     }
 
+    /// Through the engine itself: for each combination of work, a pass over a
+    /// library holding exactly that work, with every step it takes written to
+    /// one log, in the order it took them.
+    @Test func passTrace() async throws {
+        let cases = SyncModel.cases("passTrace")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let flags = f[0..<6].map { $0 == "true" }
+            let observed = try await passSteps(
+                download: flags[0], merge: flags[1], uploadMedia: flags[2],
+                uploadModule: flags[3], deleteLocally: flags[4], reap: flags[5]
+            )
+            #expect(observed == f[6], "passTrace \(f.joined(separator: " "))")
+        }
+    }
+
+    /// One pass over a library holding exactly the work asked for, one file
+    /// per kind, and the steps it took, in order.
+    private func passSteps(
+        download: Bool, merge: Bool, uploadMedia: Bool,
+        uploadModule: Bool, deleteLocally: Bool, reap: Bool
+    ) async throws -> String {
+        let log = PassLog()
+        let store = PassOrderStore(log: log)
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/sync/")!)
+        var manifest = LampSyncLibraryManifest()
+        var records = LampSyncFileRecords()
+        var gathered = LampSyncBundlePass.Gathered()
+        var scratch: [URL] = []
+        defer { for url in scratch { try? FileManager.default.removeItem(at: url) } }
+        func file(_ text: String) throws -> URL {
+            let url = LampSyncScratchFile.url()
+            try Data(text.utf8).write(to: url)
+            scratch.append(url)
+            return url
+        }
+        func hold(_ path: String, _ text: String) throws {
+            gathered.local.append(LampSyncLocalFile(
+                path: path, kind: try #require(LampSyncFolderLayout.kind(of: path)), url: try file(text),
+                digest: LampSyncContentRevision.digest(for: Data(text.utf8))
+            ))
+        }
+        func onServer(_ path: String, _ revision: String) {
+            store.bodies[path] = Data("server \(path)".utf8)
+            store.revisions[path] = quoted(revision)
+        }
+        func member(_ path: String, _ revision: String) throws {
+            manifest = try manifest.recordingWrite(path, revision: quoted(revision), replacing: nil, at: 1_000)
+        }
+        func uploaded(_ path: String, _ text: String, _ revision: String) {
+            records.recordUpload(
+                path, in: source, digest: LampSyncContentRevision.digest(for: Data(text.utf8)),
+                revision: quoted(revision)
+            )
+            records.confirmRecorded([path: quoted(revision)], in: source)
+        }
+        if download {
+            try member("Translations/kjv.lamp", "k1")
+            onServer("Translations/kjv.lamp", "k1")
+        }
+        if merge {
+            try member("Notes/notes.lamp", "n1")
+            onServer("Notes/notes.lamp", "n2")
+            try hold("Notes/notes.lamp", "mine")
+            uploaded("Notes/notes.lamp", "before", "n1")
+        }
+        if uploadMedia {
+            try hold("DevotionalMedia/w/d/a.png", "png")
+        }
+        if uploadModule {
+            try member("Commentaries/c1.lamp", "c1")
+            onServer("Commentaries/c1.lamp", "c1")
+            try hold("Commentaries/c1.lamp", "edited")
+            uploaded("Commentaries/c1.lamp", "before", "c1")
+        }
+        if deleteLocally {
+            try member("Dictionaries/d1.lamp", "d1")
+            manifest = try manifest.removing("Dictionaries/d1.lamp", at: 2_000, revision: quoted("d1"))
+            try hold("Dictionaries/d1.lamp", "dictionary")
+            uploaded("Dictionaries/d1.lamp", "dictionary", "d1")
+        }
+        if reap {
+            try member("Plans/p1.lamp", "p1")
+            onServer("Plans/p1.lamp", "p1")
+            gathered.deletedLocally["Plans/p1.lamp"] = 2_500
+        }
+        var bundle = LampSyncSettingsBundle()
+        bundle.manifest = manifest
+        store.bodies[LampSyncSettingsStore.path] = try bundle.encoded()
+        store.revisions[LampSyncSettingsStore.path] = quoted("b1")
+        let merged = try file("merged")
+        let library = PassOrderLibrary(log: log, merged: merged)
+        let held = gathered
+        _ = try await LampSyncBundlePass(store: store, library: library, source: source, now: { 3_000 }).run(
+            gathering: { log.events.append("gather"); return held },
+            records: &records, patience: .immediate,
+            receiving: { _ in log.events.append("receive") }
+        )
+        return log.steps()
+    }
+
     /// Through `LampSyncConditionalWrite.write` over a server that names no
     /// revision on PUT, as the user's Synology does, so every revision comes
     /// from a read-back.
@@ -1655,3 +1756,113 @@ private final class InMemoryRemoteStore: LampSyncRemoteStore, @unchecked Sendabl
         return "\"r\""
     }
 }
+
+/// One timeline for a pass: the store's requests and the library's calls,
+/// in the order they happened.
+private final class PassLog: @unchecked Sendable {
+    var events: [String] = []
+
+    /// The steps the events amount to, in the model's names.
+    func steps() -> String {
+        var steps: [String] = []
+        var claimed = false
+        for event in events {
+            let parts = event.split(separator: " ", maxSplits: 1).map(String.init)
+            let path = parts.count > 1 ? parts[1] : ""
+            let step: String? = switch parts[0] {
+            case "read" where path == LampSyncSettingsStore.path && !claimed: "claim"
+            case "receive": "receive"
+            case "gather": "gather"
+            case "install": "download"
+            case "reconcile": "merge"
+            case "finish": "finishInstalling"
+            case "write" where path == LampSyncSettingsStore.path: "writeBundle"
+            case "write": (LampSyncFolderLayout.kind(of: path)?.isMedia ?? false) ? "uploadMedia" : "uploadModule"
+            case "deleteLocally": "deleteLocally"
+            case "delete": "reap"
+            default: nil
+            }
+            if step == "claim" { claimed = true }
+            if let step, steps.last != step { steps.append(step) }
+        }
+        return steps.joined(separator: ",")
+    }
+}
+
+/// A WebDAV server with strong revisions that logs each request to the pass's
+/// timeline.
+private final class PassOrderStore: LampSyncRemoteStore, @unchecked Sendable {
+    let log: PassLog
+    var bodies: [String: Data] = [:]
+    var revisions: [String: String] = [:]
+    private var counter = 0
+
+    init(log: PassLog) { self.log = log }
+
+    func list(directory: String) async throws -> [LampSyncRemoteEntry]? {
+        let prefix = directory.hasSuffix("/") ? directory : directory + "/"
+        let entries = bodies.keys.filter { $0.hasPrefix(prefix) }.sorted().map { path in
+            LampSyncRemoteEntry(
+                path: path, name: String(path.dropFirst(prefix.count)), isDirectory: false,
+                revision: revisions[path], modifiedAt: nil, size: nil
+            )
+        }
+        return entries.isEmpty ? nil : entries
+    }
+
+    func read(path: String) async throws -> LampSyncRemoteFile? {
+        log.events.append("read \(path)")
+        return bodies[path].map { LampSyncRemoteFile(data: $0, revision: revisions[path]) }
+    }
+
+    func revision(path: String) async throws -> String? { revisions[path] }
+
+    func write(_ data: Data, to path: String, condition: LampSyncWriteCondition) async throws -> String? {
+        switch condition {
+        case .ifAbsent where bodies[path] != nil:
+            throw LampSyncConditionalWrite.WriteError.conflict
+        case .ifRevision(let expected) where revisions[path] != expected:
+            throw LampSyncConditionalWrite.WriteError.conflict
+        default:
+            break
+        }
+        log.events.append("write \(path)")
+        counter += 1
+        bodies[path] = data
+        revisions[path] = "\"w\(counter)\""
+        return revisions[path]
+    }
+
+    func delete(path: String, condition: LampSyncWriteCondition) async throws {
+        log.events.append("delete \(path)")
+        bodies[path] = nil
+        revisions[path] = nil
+    }
+}
+
+/// A library that logs each call to the pass's timeline. A merge publishes
+/// the file `merged`.
+private final class PassOrderLibrary: LampSyncPassLibrary, @unchecked Sendable {
+    let log: PassLog
+    let merged: URL
+
+    init(log: PassLog, merged: URL) {
+        self.log = log
+        self.merged = merged
+    }
+
+    func install(_ path: String, from url: URL) async throws -> String? {
+        log.events.append("install \(path)")
+        return nil
+    }
+
+    func reconcile(_ downloaded: [String: URL]) async throws -> [String: URL] {
+        log.events.append("reconcile")
+        return downloaded.mapValues { _ in merged }
+    }
+
+    func deleteLocally(_ path: String) async throws { log.events.append("deleteLocally \(path)") }
+
+    func finishInstalling() async throws { log.events.append("finish") }
+}
+
