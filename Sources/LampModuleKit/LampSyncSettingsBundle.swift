@@ -14,8 +14,11 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
 
     /// iOS's settings database, today's `UserData/user-settings.db` entry.
     public var userSettings: Data?
-    /// The Mac's `settings.plist`. Load-bearing for the Mac's sync, not just
-    /// its look: it maps each highlight set to its module.
+    /// The Mac's `settings.plist`: its half of the synced preferences, the
+    /// `LampPortableSettingsCodec.syncedKeys` only. Re-encoded from the live
+    /// defaults by every pass. The Mac's highlight set to module mapping is
+    /// not in it; the Mac keeps that per sync source, and reads it back from
+    /// each highlight module's `highlight_meta.id`.
     public var macSettings: Data?
     public var preferences: LampSharedPreferenceLedger
     /// An encoded `LampPersonalDeletionLedger`, per note, writing and
