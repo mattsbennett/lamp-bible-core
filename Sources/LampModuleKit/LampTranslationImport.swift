@@ -23,20 +23,20 @@ public enum LampTranslationSourceFormat: String, CaseIterable, Sendable {
 /// What an import kept, left out, or couldn't read, so a user sees it rather
 /// than finding a gap later.
 public struct LampTranslationImportReport: Equatable, Sendable {
-    public internal(set) var bookCount = 0
-    public internal(set) var chapterCount = 0
-    public internal(set) var verseCount = 0
+    public var bookCount = 0
+    public var chapterCount = 0
+    public var verseCount = 0
     /// Books outside the 66 — deuterocanonical books, for instance — named as
     /// the source names them. Their text is left out.
-    public internal(set) var skippedBooks: [String] = []
+    public var skippedBooks: [String] = []
     /// Markup the reader doesn't know, with how often it appeared. The text
     /// inside it is kept.
-    public internal(set) var unrecognizedMarkup: [String: Int] = [:]
+    public var unrecognizedMarkup: [String: Int] = [:]
     /// The first reference (BBCCCVVV) of each bridged range such as 16–17,
     /// whose text is kept under its first verse.
-    public internal(set) var verseBridges: [Int] = []
+    public var verseBridges: [Int] = []
     /// References that appeared a second time; the second copy is left out.
-    public internal(set) var duplicateVerses: [Int] = []
+    public var duplicateVerses: [Int] = []
 
     public init() {}
 }
