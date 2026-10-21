@@ -179,7 +179,9 @@
         "uploadingFirstLocksAFreshLibraryOut",
         "anEditDuringAPassSurvives",
         "aCopyMadeDuringAPassCanBeOverwritten",
-        "aWriteSupersedesATombstoneFromAFastClock"
+        "aWriteSupersedesATombstoneFromAFastClock",
+        "aPartialTreeImportIsCompletedByTheNextPass",
+        "recordingAStagedInstallSendsTheOldCopyBack"
       ],
       "boundary": "The engine both apps run: it orders core's decisions. Claim before any file, apply what the bundle carries before gathering, downloads and merges before uploads, media before the modules that name it, one bundle update, reaps after it, and a tombstone kept while its file is listed. Each step is decided in core, and the order is held by the `passTrace` table, run through the engine for every combination of work. A client chooses what it plans (`plannedKinds`), while pruning sees the whole listing; a contribution prepared against a bundle that moved is prepared again (`PrepareAgain`), bounded by its attempts; save times reach the plan, so a file saved after its deletion survives; uploads are confirmed through `writeOutcome`, by revision or by reading back, and one never shown back is reported, not recorded. The per-file system model (FilePasses) runs this pass's plan and bundle update across two interleaved devices. A local copy is installed over or deleted only while its digest is the one gathered; a copy made during a pass at a path gathered as absent has nothing to compare with.",
       "conformance": [
@@ -723,13 +725,20 @@
       "boundary": "Sentences for sync errors shown to the person. Core's errors now carry their own descriptions; this decides nothing."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncHighlightModules.swift": {
-      "boundary": "Which module each highlight set is published under, read back from the server's highlight modules' `highlight_meta.id` rather than minted, so a set never gets a second module. A Mac library question; the file-level decisions are the plan's."
+      "boundary": "Which module each highlight set is published under, read back from the server's highlight modules' `highlight_meta.id` rather than minted, so a set never gets a second module. A Mac library question; the file-level decisions are the plan's.",
+      "rules": [
+        "setForModule",
+        "aModuleIDResolvesToASetThatExists"
+      ]
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalFiles.swift": {
       "boundary": "Gathers what the Mac holds as `LampSyncFilePlan.Local`: each installed module placed by core's `LampInstalledModuleFile.syncPath()`, never its storage-key filename, and a digest of the bytes on disk. It decides nothing; the plan does (`filePlanAction`)."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift": {
-      "boundary": "The Mac's install, merge and removal of single files for its pass, through the same library calls the archive pass made. Merges import by value, and what goes back up is the re-export from the merged library. Record decisions are core's (`decide`, `importOutcome`); the file-level ones are the plan's (`filePlanAction`)."
+      "boundary": "The Mac's install, merge and removal of single files for its pass, through the same library calls the archive pass made. Merges import by value, and what goes back up is the re-export from the merged library. Record decisions are core's (`decide`, `importOutcome`); the file-level ones are the plan's (`filePlanAction`).",
+      "rules": [
+        "aPartialTreeImportIsCompletedByTheNextPass"
+      ]
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMoveOffer.swift": {
       "boundary": "What the person is told before a move or a join. Which one is offered is core's `earlierLibrary`; the move itself is core's `LampSyncLibraryMigration`."
@@ -805,7 +814,8 @@
       "modificationDateToken": "Why a folder revision is a content digest, never a modification date (contentRevision).",
       "earlyBackendWipe": "Why a provider switch wipes only after persisting the new provider (deferredBackendWipe).",
       "oldSQLiteReplacementResult": "Why the phone retires and copies rows inside one transaction (sqliteReplacementResult).",
-      "oldMacHighlightAllowsPublish": "Why a failed highlight export stops the publish (macHighlightAllowsPublish)."
+      "oldMacHighlightAllowsPublish": "Why a failed highlight export stops the publish (macHighlightAllowsPublish).",
+      "setForModuleFromTheWholeMapping": "Why a highlight module ID is resolved through the sets that exist (setForModule)."
     }
   }
 }

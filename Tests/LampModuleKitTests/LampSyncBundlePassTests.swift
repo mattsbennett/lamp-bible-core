@@ -695,6 +695,39 @@ struct LampSyncBundlePassTests {
         }
     }
 
+    /// A workspace file is staged by `install` and taken in by
+    /// `finishInstalling`, which can stop partway. Recorded only once that
+    /// succeeds, a failed import leaves the old record over the old copy, so
+    /// the next pass takes the file again. Recorded when staged, the record
+    /// would name the new revision over the old copy, and the next pass would
+    /// send that copy back over the other device's.
+    @Test func aWorkspaceFileIsRecordedOnlyOnceTakenIn() async throws {
+        let path = "Workspaces/Sermons/Documents/easter.md"
+        let store = try seeded(path: path, revision: "\"w2\"")
+        let url = try makeFile("mine")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: LampSyncContentRevision.digest(for: Data("mine".utf8)),
+                             revision: "\"w1\"")
+        records.confirmRecorded([path: "\"w1\""], in: source)
+        var held = gathered([local(path, url, "mine")])
+        held.extraListing = [path: "\"w2\""]
+        let library = StubLibrary()
+        library.finishFails = true
+
+        let failed = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { held }, records: &records, patience: immediate)
+        #expect(library.installed == [path])
+        #expect(failed.installed.isEmpty)
+        #expect(failed.failures.count == 1)
+
+        library.finishFails = false
+        let next = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { held }, records: &records, patience: immediate)
+        #expect(next.uploaded.isEmpty, "the old copy never goes back up")
+        #expect(next.installed == [path])
+    }
+
     /// A file the person edits while the pass is taking the other device's
     /// copy is not installed over: the pass left it, and the next one, seeing
     /// both sides changed, merges rather than losing the edit.
@@ -1034,6 +1067,14 @@ final class StubLibrary: LampSyncPassLibrary, @unchecked Sendable {
     }
 
     func deleteLocally(_ path: String) async throws { deleted.append(path) }
+
+    /// Makes taking in a staged tree fail, as a workspace import can partway.
+    var finishFails = false
+    struct FinishFailed: Error {}
+
+    func finishInstalling() async throws {
+        if finishFails { throw FinishFailed() }
+    }
 }
 
 /// A WebDAV server with strong revisions, which records the order it was

@@ -161,6 +161,28 @@ records a client's own digest of a copy it takes, not the downloaded bytes', so
 two devices that encode alike content differently settle rather than trade
 it for ever (`recordingTheDownloadedBytesNeverSettles`).
 
+### A tree taken in together
+
+A workspace's files are staged as they arrive and taken in together once
+every download is done, and that import can stop partway. A staged file is
+recorded as installed only once the tree is in. Then nothing has to record how
+far the import got: a file it did not reach is absent here, or still the copy
+this device last recorded, and either way the next pass takes it again
+(`aPartialTreeImportIsCompletedByTheNextPass`). Recorded when staged, a failed
+import would leave the record naming the new revision over the old copy, which
+the next pass would read as an edit here and send back over the other
+device's (`recordingAStagedInstallSendsTheOldCopyBack`).
+
+### Which highlight set a module ID names
+
+The Mac publishes each highlight set under a module ID, and a pass acting on a
+path resolves that ID back to a set. The recorded mapping outlives the sets in
+it — a set deleted here keeps its entry, and the phone gives a new set on the
+same translation the same ID — so the Mac resolves an ID only through the sets
+that exist (`setForModule`, `aModuleIDResolvesToASetThatExists`). Inverting the
+whole mapping instead let a deleted set's entry win, by whichever entry came
+first (`invertingTheWholeMappingCanNameADeletedSet`).
+
 ### Save times
 
 A tombstone is settled against a copy by the copy's last save: saved after

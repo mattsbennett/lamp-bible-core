@@ -2674,6 +2674,66 @@ theorem aSettledDeletionNeedsNothing (cls : FileClass) (e : ManifestEntry) (d : 
     filePlanAction cls (some e) none none none = {} := by
   simp [filePlanAction, gone, deleted]
 
+/-! ### A tree taken in together
+
+A workspace's files are staged as they arrive and taken in together once
+every download is done (`isTakenInTogether`), and that import can stop
+partway. A staged file is recorded as installed only once the tree is in. Then
+nothing has to record how far the import got: a file it did not reach is
+absent here, or still the copy this device last recorded, and either way the
+next pass takes it again, since only the server moved. -/
+
+theorem aPartialTreeImportIsCompletedByTheNextPass (cls : FileClass) (e : ManifestEntry)
+    (old r : Nat) (saved : Option Nat) (member : entryIsMember e = true) (moved : old ≠ r)
+    (notMedia : cls ≠ .media) :
+    filePlanAction cls (some e) none none (some r) = { download := true } ∧
+      filePlanAction cls (some e) (some ⟨false, some old, saved⟩) none (some r) = { download := true } := by
+  have differs : (some old != some r) = true := by simp [moved]
+  cases cls
+  · exact absurd rfl notMedia
+  all_goals
+    refine ⟨by simp [filePlanAction, member, changeAction], ?_⟩
+    simp only [filePlanAction, member, ↓reduceIte, changeAction]
+    split <;> simp_all
+
+-- Recorded when staged, a failed import leaves the record naming the new
+-- revision over the old copy: it reads as an edit here, and goes up over the
+-- other device's.
+theorem recordingAStagedInstallSendsTheOldCopyBack (cls : FileClass) (e : ManifestEntry)
+    (r : Nat) (saved : Option Nat) (member : entryIsMember e = true) (notMedia : cls ≠ .media) :
+    filePlanAction cls (some e) (some ⟨true, some r, saved⟩) none (some r) =
+      uploadAction (.ifRevision r) := by
+  cases cls <;> simp_all [filePlanAction, changeAction]
+
+/-! ### Which highlight set a module ID names
+
+`LampSyncHighlightModules.setIDsByModule` (macOS): the set a highlight
+module's ID stands for, when a pass acts on a path rather than on a set. The
+recorded mapping outlives the sets in it — a set deleted here keeps its entry,
+and the phone gives a new set on the same translation the same module ID — so
+it is read only through the sets that exist, the first of them in the
+library's order. -/
+
+def setForModule (moduleOf : Nat → Option Nat) (existing : List Nat) (m : Nat) : Option Nat :=
+  existing.find? fun s => moduleOf s == some m
+
+theorem aModuleIDResolvesToASetThatExists (moduleOf : Nat → Option Nat) (existing : List Nat)
+    (m s : Nat) (h : setForModule moduleOf existing m = some s) :
+    s ∈ existing ∧ moduleOf s = some m := by
+  unfold setForModule at h
+  exact ⟨List.mem_of_find?_eq_some h, by simpa using List.find?_some h⟩
+
+-- Inverting the whole mapping instead: a deleted set's entry left under the
+-- same module ID can win, decided only by which entry the inversion meets
+-- first — in Swift, a dictionary's order, seeded per process.
+def setForModuleFromTheWholeMapping (entries : List (Nat × Nat)) (m : Nat) : Option Nat :=
+  (entries.find? fun e => e.2 == m).map (·.1)
+
+theorem invertingTheWholeMappingCanNameADeletedSet :
+    setForModuleFromTheWholeMapping [(1, 7), (2, 7)] 7 = some 1 ∧
+      setForModule (fun s => if s = 1 ∨ s = 2 then some 7 else none) [2] 7 = some 2 := by
+  decide
+
 /-! ### Save times
 
 The plan settles a tombstone against a copy by the copy's last save: saved

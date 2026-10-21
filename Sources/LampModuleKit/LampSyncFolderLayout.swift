@@ -25,6 +25,14 @@ public enum LampSyncFileKind: Hashable, Sendable {
         }
     }
 
+    /// Whether it is part of a tree taken in together: a workspace's files
+    /// are staged by `LampSyncPassLibrary.install` as they arrive and taken
+    /// in by `finishInstalling`, which can stop partway. Such a file is
+    /// recorded as installed only once that succeeds.
+    public var isTakenInTogether: Bool {
+        self == .workspaceFile
+    }
+
     /// Whether a pass learns about it from a listing of its folder. Media and
     /// workspace files are never listed: media because the manifest names
     /// every file and a path never changes its bytes, and workspace files

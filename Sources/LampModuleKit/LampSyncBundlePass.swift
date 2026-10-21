@@ -272,7 +272,13 @@ public struct LampSyncBundlePass {
             return now == planned.digest
         }
 
-        // 1. Take what the other side has.
+        // 1. Take what the other side has. A file staged for a tree taken in
+        //    together is recorded once the tree is in, at step 3: recorded
+        //    now, a failed import would leave the record naming the new
+        //    revision over the old copy, which the next pass would read as an
+        //    edit here and send back over the other device's.
+        //    (`Verification/SyncMerge.lean`: `aPartialTreeImportIsCompletedByTheNextPass`.)
+        var staged: [(path: String, revision: String?, digest: String?)] = []
         for path in plan.downloads.sorted() {
             do {
                 try await LampSyncScratchFile.with { scratch in
@@ -286,11 +292,12 @@ public struct LampSyncBundlePass {
                         return
                     }
                     let held = try await library.install(path, from: downloaded.url)
-                    records.recordInstall(
-                        path, in: source, revision: downloaded.revision,
-                        digest: held
-                            ?? (try? LampSyncContentRevision.digest(forFileAt: downloaded.url))
-                    )
+                    let digest = held ?? (try? LampSyncContentRevision.digest(forFileAt: downloaded.url))
+                    if LampSyncFolderLayout.kind(of: path)?.isTakenInTogether == true {
+                        staged.append((path, downloaded.revision, digest))
+                        return
+                    }
+                    records.recordInstall(path, in: source, revision: downloaded.revision, digest: digest)
                     outcome.installed.append(path)
                 }
             } catch {
@@ -311,9 +318,14 @@ public struct LampSyncBundlePass {
             }
         }
 
-        // 3. Let whatever arrived as part of a tree be taken in together.
+        // 3. Let whatever arrived as part of a tree be taken in together,
+        //    and only then record it.
         do {
             try await library.finishInstalling()
+            for file in staged {
+                records.recordInstall(file.path, in: source, revision: file.revision, digest: file.digest)
+                outcome.installed.append(file.path)
+            }
         } catch {
             outcome.failures.append("installing: \(error.localizedDescription)")
         }
