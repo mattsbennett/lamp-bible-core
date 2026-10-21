@@ -55,7 +55,9 @@ struct USFMTranslationReader {
     private var note: Note?
     private var spans: [CharacterSpan] = []
     private var skippingMilestoneAttributes = false
-    private var skippingHeadingAttributes = false
+    /// After a `|` in a heading or note, the rest up to the next marker is the
+    /// attributes of the marker it is in (`\ref Mark 1:3|MRK 1:3\ref*`).
+    private var skippingAttributes = false
 
     mutating func read(_ text: String) {
         var tokenizer = Tokenizer(text)
@@ -93,7 +95,7 @@ struct USFMTranslationReader {
             return
         }
         skippingMilestoneAttributes = false
-        skippingHeadingAttributes = false
+        skippingAttributes = false
 
         switch token {
         case .line(let name, let content):
@@ -306,10 +308,15 @@ struct USFMTranslationReader {
 
         switch note {
         case .footnote(var noteText, let awaitingCaller, let skippingReference):
+            guard !skippingAttributes else { return }
             var text = text
             if awaitingCaller {
                 // The caller (+, -, or a letter) comes first and isn't content.
                 text = text.drop(while: \.isWhitespace).drop(while: { !$0.isWhitespace })
+            }
+            if let bar = text.firstIndex(of: "|") {
+                text = text[..<bar]
+                skippingAttributes = true
             }
             if !skippingReference {
                 noteText += text
@@ -326,10 +333,10 @@ struct USFMTranslationReader {
         case .skipped:
             return
         case .heading(let level, var heading):
-            guard !skippingHeadingAttributes else { return }
+            guard !skippingAttributes else { return }
             if let bar = text.firstIndex(of: "|") {
                 heading += text[..<bar]
-                skippingHeadingAttributes = true
+                skippingAttributes = true
             } else {
                 heading += text
             }

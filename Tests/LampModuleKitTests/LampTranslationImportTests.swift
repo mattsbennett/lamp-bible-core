@@ -98,6 +98,19 @@ struct LampTranslationImportTests {
         #expect(verse(imported, 41_001_018).map { spans($0, "red-letter") } == ["and I will make you fishers of men."])
     }
 
+    @Test func usfmNotesLeaveOutWhereTheirReferencesPoint() throws {
+        let imported = try read(#"""
+            \id GEN
+            \c 1
+            \p
+            \v 3 And God said, “Let there be light,”\f + \fr 1:3 \ft Cited in \ref 2 Corinthians 4:6|2CO 4:6\ref*\f* and there was light.
+            \v 4 God saw the light.\f + \fr 1:4 \ft See \ref Psalm 104:2|PSA 104:2\ref*, and \xt John 1:5|JHN 1:5\xt*.\f*
+            """#)
+
+        #expect(verse(imported, 1_001_003)?.footnotes.map(\.content) == ["Cited in 2 Corinthians 4:6"])
+        #expect(verse(imported, 1_001_004)?.footnotes.map(\.content) == ["See Psalm 104:2, and John 1:5."])
+    }
+
     @Test func aHeadingInsideAVerseGoesBeforeTheNextVerseOnlyIfItIsTheLast() throws {
         let imported = try read(#"""
             \id SNG
