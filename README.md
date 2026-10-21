@@ -4,13 +4,15 @@ Shared Swift code for the Lamp Bible iOS and macOS applications.
 
 ## Products
 
-- `LampModuleKit`: module detection, validation, SQLite compilation, and `.lamp` packaging.
+- `LampModuleKit`: module detection, validation, SQLite compilation, and `.lamp` packaging, and importing a Bible the user already has into a translation module.
 - `LampPresentationUI`: the SwiftUI slide canvas shared by the Mac's Slide Studio and presenter and by the iOS deck viewer and remote, including deck image loading and caching. Kept apart from `LampCore` so the module CLI and the MCP server do not link a UI framework.
 - `LampCore`: persistent module installation, translation reading and full-text search, rich verse annotation and poetry metadata, study lookups, reading-plan progress, personal notes and span-based highlights, portable study-data import/export and deterministic merging, plus shared database, sync, and domain services as they are extracted from the iOS app.
 
 `LampCore` also owns the versioned, semantic `.lampdeck` presentation model, validation, and library-backed document store shared by the Mac Slide Studio and the iOS/iPadOS deck viewer and remote, plus the portable deck paths, deletion ledger, and merge decision that keep the Mac's read-write deck sync and the read-only iOS mirror in agreement. The versioned remote contract defines QR/manual pairing material, fresh connection challenges, and length-prefixed ChaCha20-Poly1305 frames for commands and presenter state, so both apps use the same authenticated framing and slide semantics.
 
 The package currently provides JSON module detection, structural validation, BBCCCVVV reference validation, duplicate and span checks, summary statistics, and installable `.lamp` compilation for translations, dictionaries, commentaries, reading plans, devotionals, quizzes, notes, and highlights. Compiler output is SQLite with a versioned format marker, integrity checked, zlib compressed, round-trip verified, and SHA-256 hashed.
+
+`LampTranslationImporter` reads USFM, OSIS, Zefania and plain book/chapter/verse XML Bibles — a file, a folder, or a zip — into the 66-book grid every translation shares, with headings, paragraphs, poetry, footnotes, words of Christ, added words, the divine name, Selah and Strong's numbers where the source has them. Books outside the 66, bridged and repeated verses, and markup it doesn't know are listed in the import's report. Copyrighted translations reach Lamp only this way, from a copy the user owns; they are never bundled.
 
 `LampCore` can also open a combined `bundled_modules.db.zlib` archive, lazily expand and cache it, and merge its read-only modules with user-installed `.lamp` files. A user-installed module with the same type and ID takes precedence over its bundled counterpart.
 
@@ -27,6 +29,7 @@ swift test
 swift run lamp-module inspect ../lamp-bible-modules/outputs/ESV.json
 swift run lamp-module build ../lamp-bible-modules/outputs/ESV.json /tmp/ESV.lamp
 swift run lamp-module verify /tmp/ESV.lamp
+swift run lamp-module import ~/Downloads/engwebp_usfm.zip /tmp --abbreviation WEB --name "World English Bible"
 ```
 
 The output filename must match the module ID because Lamp Bible uses the `.lamp` filename as part of its import identity.

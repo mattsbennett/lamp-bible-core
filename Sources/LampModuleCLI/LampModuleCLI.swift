@@ -20,6 +20,12 @@ enum LampModuleCLI {
             succeeded = build(sourcePath: arguments[1], outputPath: arguments.count == 3 ? arguments[2] : nil)
         case "verify" where arguments.count == 2:
             succeeded = await verify(path: arguments[1])
+        case "import" where arguments.count >= 3:
+            guard let options = importOptions(Array(arguments.dropFirst(3))) else {
+                printUsage()
+                exit(EXIT_FAILURE)
+            }
+            succeeded = importTranslation(sourcePath: arguments[1], outputDirectory: arguments[2], options: options)
         default:
             printUsage()
             exit(EXIT_FAILURE)
@@ -67,6 +73,59 @@ enum LampModuleCLI {
             return true
         } catch {
             writeError("Build failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private static func importOptions(_ arguments: [String]) -> [String: String]? {
+        var options: [String: String] = [:]
+        var remaining = arguments[...]
+        while let flag = remaining.popFirst() {
+            guard ["--name", "--abbreviation", "--language"].contains(flag), let value = remaining.popFirst() else {
+                return nil
+            }
+            options[String(flag.dropFirst(2))] = value
+        }
+        return options
+    }
+
+    private static func importTranslation(sourcePath: String, outputDirectory: String, options: [String: String]) -> Bool {
+        let sourceURL = URL(fileURLWithPath: sourcePath)
+        do {
+            let imported = try LampTranslationImporter().read(sourceURL)
+            let stem = sourceURL.deletingPathExtension().lastPathComponent
+            let abbreviation = options["abbreviation"] ?? imported.suggestedAbbreviation ?? stem
+            let name = options["name"] ?? imported.suggestedName ?? abbreviation
+            let result = try imported.compile(
+                into: URL(fileURLWithPath: outputDirectory),
+                id: LampTranslationImporter.moduleID(forAbbreviation: abbreviation),
+                name: name,
+                abbreviation: abbreviation,
+                language: options["language"]
+            )
+            let report = imported.report
+            print("Imported \(sourceURL.lastPathComponent) (\(imported.format.displayName)) as \(result.outputURL.path)")
+            print("  name: \(name) (\(abbreviation))")
+            print("  contents: books=\(report.bookCount), chapters=\(report.chapterCount), verses=\(report.verseCount)")
+            if !report.skippedBooks.isEmpty {
+                print("  left out: \(report.skippedBooks.joined(separator: ", "))")
+            }
+            if !report.verseBridges.isEmpty {
+                print("  bridged verses kept under their first number: \(report.verseBridges.count)")
+            }
+            if !report.duplicateVerses.isEmpty {
+                print("  repeated verses left out: \(report.duplicateVerses.map(String.init).joined(separator: ", "))")
+            }
+            if !report.unrecognizedMarkup.isEmpty {
+                let markup = report.unrecognizedMarkup
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key)×\($0.value)" }
+                    .joined(separator: ", ")
+                print("  unrecognized markup (text kept): \(markup)")
+            }
+            return true
+        } catch {
+            writeError("Import failed: \(error.localizedDescription)")
             return false
         }
     }
@@ -167,6 +226,7 @@ enum LampModuleCLI {
               lamp-module inspect <module.json> [module.json ...]
               lamp-module build <module.json> [output.lamp]
               lamp-module verify <module.lamp>
+              lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE]
             """)
     }
 }

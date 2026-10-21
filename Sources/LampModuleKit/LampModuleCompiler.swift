@@ -54,7 +54,26 @@ public struct LampModuleCompiler: Sendable {
         sourceFilename: String,
         destinationURL requestedDestinationURL: URL? = nil
     ) throws -> ModuleCompilationResult {
-        let inspection = try ModuleJSONInspector().inspect(data)
+        let jsonValue: Any
+        do {
+            jsonValue = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw ModuleInspectionError.invalidJSON(error.localizedDescription)
+        }
+        guard let root = jsonValue as? [String: Any] else {
+            throw ModuleInspectionError.rootMustBeObject
+        }
+        return try compile(root: root, sourceFilename: sourceFilename, destinationURL: requestedDestinationURL)
+    }
+
+    /// For module JSON built in memory, which needn't be written out and
+    /// parsed back to be checked and compiled.
+    func compile(
+        root: [String: Any],
+        sourceFilename: String,
+        destinationURL requestedDestinationURL: URL? = nil
+    ) throws -> ModuleCompilationResult {
+        let inspection = ModuleJSONInspector().inspect(root: root)
         let errors = inspection.issues.filter { $0.severity == .error }
         guard errors.isEmpty else {
             throw ModuleCompilationError.validationFailed(inspection.issues)
@@ -65,14 +84,6 @@ public struct LampModuleCompiler: Sendable {
         guard Self.supportedKinds.contains(kind) else {
             throw ModuleCompilationError.unsupportedModuleType(kind)
         }
-
-        let jsonValue: Any
-        do {
-            jsonValue = try JSONSerialization.jsonObject(with: data)
-        } catch {
-            throw ModuleInspectionError.invalidJSON(error.localizedDescription)
-        }
-        let root = try JSONSupport.requiredObject(jsonValue, path: "/")
 
         let sourceStem = URL(fileURLWithPath: sourceFilename).deletingPathExtension().lastPathComponent
         let moduleID = inspection.metadata.id ?? sourceStem

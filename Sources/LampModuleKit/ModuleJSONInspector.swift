@@ -19,7 +19,10 @@ public struct ModuleJSONInspector: Sendable {
         guard let root = json as? [String: Any] else {
             throw ModuleInspectionError.rootMustBeObject
         }
+        return inspect(root: root)
+    }
 
+    func inspect(root: [String: Any]) -> ModuleInspection {
         let meta = object(root["meta"]) ?? root
         let declaredType = string(meta["type"]) ?? string(root["type"])
         let kind = declaredType.flatMap(LampModuleKind.init(schemaValue:)) ?? inferKind(root: root, meta: meta)
