@@ -31,7 +31,10 @@ swift run lamp-module build ../lamp-bible-modules/outputs/ESV.json /tmp/ESV.lamp
 swift run lamp-module verify /tmp/ESV.lamp
 swift run lamp-module import ~/Downloads/engwebp_usfm.zip /tmp --abbreviation WEB --name "World English Bible"
 swift run lamp-module import ~/Downloads/ESV2011.zip /tmp --key UNLOCK-KEY
+swift run lamp-module convert ../lamp-bible-modules/sources/bibles/BSB_strongs_usfm /tmp/BSBs.json --id BSBs
 ```
+
+`convert` writes the translation JSON instead of a `.lamp`; `lamp-bible-modules` builds its bundled USFM translations with it, so users and the bundle read Bibles the same way.
 
 The output filename must match the module ID because Lamp Bible uses the `.lamp` filename as part of its import identity.
 

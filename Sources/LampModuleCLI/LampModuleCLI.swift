@@ -26,6 +26,12 @@ enum LampModuleCLI {
                 exit(EXIT_FAILURE)
             }
             succeeded = importTranslation(sourcePath: arguments[1], outputDirectory: arguments[2], options: options)
+        case "convert" where arguments.count >= 3:
+            guard let options = importOptions(Array(arguments.dropFirst(3))), let id = options["id"] else {
+                printUsage()
+                exit(EXIT_FAILURE)
+            }
+            succeeded = convertTranslation(sourcePath: arguments[1], outputPath: arguments[2], id: id, options: options)
         default:
             printUsage()
             exit(EXIT_FAILURE)
@@ -81,7 +87,7 @@ enum LampModuleCLI {
         var options: [String: String] = [:]
         var remaining = arguments[...]
         while let flag = remaining.popFirst() {
-            guard ["--name", "--abbreviation", "--language", "--key"].contains(flag), let value = remaining.popFirst() else {
+            guard ["--name", "--abbreviation", "--language", "--key", "--id", "--license"].contains(flag), let value = remaining.popFirst() else {
                 return nil
             }
             options[String(flag.dropFirst(2))] = value
@@ -103,30 +109,44 @@ enum LampModuleCLI {
                 abbreviation: abbreviation,
                 language: options["language"]
             )
-            let report = imported.report
-            print("Imported \(sourceURL.lastPathComponent) (\(imported.format.displayName)) as \(result.outputURL.path)")
+            printReport(imported, source: sourceURL, destination: result.outputURL.path)
             print("  name: \(name) (\(abbreviation))")
-            print("  contents: books=\(report.bookCount), chapters=\(report.chapterCount), verses=\(report.verseCount)")
-            if !report.skippedBooks.isEmpty {
-                print("  left out: \(report.skippedBooks.joined(separator: ", "))")
-            }
-            if !report.verseBridges.isEmpty {
-                print("  bridged verses kept under their first number: \(report.verseBridges.count)")
-            }
-            if !report.duplicateVerses.isEmpty {
-                print("  repeated verses left out: \(report.duplicateVerses.map(String.init).joined(separator: ", "))")
-            }
-            if !report.unrecognizedMarkup.isEmpty {
-                let markup = report.unrecognizedMarkup
-                    .sorted { $0.key < $1.key }
-                    .map { "\($0.key)×\($0.value)" }
-                    .joined(separator: ", ")
-                print("  unrecognized markup (text kept): \(markup)")
-            }
             return true
         } catch {
             writeError("Import failed: \(error.localizedDescription)")
             return false
+        }
+    }
+
+    /// Translation JSON rather than a `.lamp`, for a pipeline — the bundle's —
+    /// that finishes the JSON itself.
+    private static func convertTranslation(sourcePath: String, outputPath: String, id: String, options: [String: String]) -> Bool {
+        let sourceURL = URL(fileURLWithPath: sourcePath)
+        do {
+            let imported = try LampTranslationImporter().read(sourceURL, unlockKey: options["key"])
+            let abbreviation = options["abbreviation"] ?? imported.suggestedAbbreviation ?? id
+            let json = try imported.moduleJSON(
+                id: id,
+                name: options["name"] ?? imported.suggestedName ?? abbreviation,
+                abbreviation: abbreviation,
+                language: options["language"],
+                license: options["license"] ?? LampImportedTranslation.importedLicense
+            )
+            try json.write(to: URL(fileURLWithPath: outputPath), options: [.atomic])
+            printReport(imported, source: sourceURL, destination: outputPath)
+            return true
+        } catch {
+            writeError("Conversion failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private static func printReport(_ imported: LampImportedTranslation, source: URL, destination: String) {
+        let report = imported.report
+        print("Read \(source.lastPathComponent) (\(imported.format.displayName)) into \(destination)")
+        print("  contents: \(report.contentsDescription)")
+        for notice in report.notices {
+            print("  \(notice)")
         }
     }
 
@@ -227,6 +247,7 @@ enum LampModuleCLI {
               lamp-module build <module.json> [output.lamp]
               lamp-module verify <module.lamp>
               lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY]
+              lamp-module convert <bible file, folder or zip> <output.json> --id ID [--name NAME] [--abbreviation ABBR] [--language CODE] [--license TEXT] [--key UNLOCK-KEY]
             """)
     }
 }

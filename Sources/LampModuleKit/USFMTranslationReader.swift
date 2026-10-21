@@ -15,6 +15,10 @@ struct USFMTranslationReader {
         case verse(String)
         /// `\*`, which ends a milestone's attributes.
         case milestoneEnd
+        /// A marker written straight on to its attributes and closed by `\*`,
+        /// as `\vid|MRK 7:9\*` in the official BSB: it marks a place and
+        /// holds no text.
+        case milestone(name: String)
         case text(Substring)
     }
 
@@ -45,6 +49,9 @@ struct USFMTranslationReader {
     private var bookCount = 0
     private var inChapter = false
     private var block = Block.skipped
+    /// What began the heading being read: an acrostic letter can come in
+    /// two lines (`\qa ב`, `\qa BETH`) that are one heading.
+    private var headingMarker: String?
     private var note: Note?
     private var spans: [CharacterSpan] = []
     private var skippingMilestoneAttributes = false
@@ -117,7 +124,7 @@ struct USFMTranslationReader {
             block = .text
         case .marker(let name, let closing):
             closing ? close(name) : open(name)
-        case .milestoneEnd, .text:
+        case .milestoneEnd, .milestone, .text:
             break
         }
     }
@@ -167,8 +174,13 @@ struct USFMTranslationReader {
         if note != nil { return }
 
         if let level = Self.headingLevels[name] {
+            if name == "qa", headingMarker == "qa", case .heading(let level, let text) = block {
+                block = .heading(level: level, text: text + " ")
+                return
+            }
             endBlock()
             block = inChapter ? .heading(level: level, text: "") : .skipped
+            headingMarker = name
             return
         }
         if Self.paragraphMarkers.contains(name) {
@@ -283,6 +295,7 @@ struct USFMTranslationReader {
         if case .heading(let level, let text) = block {
             collector.addHeading(text, level: level)
         }
+        headingMarker = nil
         block = inChapter ? .text : .skipped
     }
 
@@ -485,6 +498,14 @@ struct USFMTranslationReader {
             if cursor < bytes.count, bytes[cursor] == UInt8(ascii: "*") {
                 position = cursor + 1
                 return .marker(name: name, closing: true)
+            }
+            if cursor < bytes.count, bytes[cursor] == UInt8(ascii: "|") {
+                position = cursor + 1
+                while position + 1 < bytes.count, !(bytes[position] == Self.backslash && bytes[position + 1] == UInt8(ascii: "*")) {
+                    position += 1
+                }
+                position = min(bytes.count, position + 2)
+                return .milestone(name: name)
             }
             position = cursor
             skipOneSpace()

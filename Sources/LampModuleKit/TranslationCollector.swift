@@ -99,6 +99,9 @@ struct VerseTextBuilder {
     /// A space written before a note's marker ("Mahanaim \f…\f*?") belongs
     /// to the note, not to punctuation that follows it.
     private var spaceIsBeforeNote = false
+    /// A note between a clause's punctuation and the next word, with no
+    /// space either side (`Hebrew,\f…\f*\wj ‘Saul`): the word still needs one.
+    private var noteFollowsPunctuation = false
 
     var isEmpty: Bool { characters.isEmpty }
     var length: Int { characters.count }
@@ -112,7 +115,14 @@ struct VerseTextBuilder {
             defer { isFirst = false }
             if Self.isSpace(character) {
                 spaceIsPending = !characters.isEmpty
+                noteFollowsPunctuation = false
                 continue
+            }
+            if noteFollowsPunctuation {
+                noteFollowsPunctuation = false
+                if character.isLetter || Self.openingQuotes.contains(character) {
+                    characters.append(" ")
+                }
             }
             if spaceIsPending {
                 spaceIsPending = false
@@ -147,8 +157,12 @@ struct VerseTextBuilder {
     /// space still to come.
     mutating func anchorNote() -> Int {
         spaceIsBeforeNote = spaceIsPending
+        noteFollowsPunctuation = !spaceIsPending && characters.last.map(Self.clausePunctuation.contains) == true
         return characters.count
     }
+
+    private static let clausePunctuation: Set<Character> = [",", ";", ":", ".", "!", "?"]
+    private static let openingQuotes: Set<Character> = ["‘", "“", "\"", "'", "(", "["]
 
     private static let closingPunctuation: Set<Character> = [
         ".", ",", ";", ":", "!", "?", ")", "]", "}", "\u{2019}", "\u{201D}", "\u{00BB}", "\u{203A}", "\u{2026}",

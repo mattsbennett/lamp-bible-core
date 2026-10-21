@@ -113,12 +113,31 @@ public struct LampImportedTranslation: Sendable {
     public let report: LampTranslationImportReport
     let books: [ImportedBook]
 
+    /// What an import says of its own licence: the user's copy, for their use.
+    public static let importedLicense = "Imported by the user from their own copy, for personal use."
+
+    /// Translation JSON, as `LampModuleCompiler` takes it and as Lamp's own
+    /// module sources keep it, for a pipeline that finishes the JSON itself.
+    public func moduleJSON(
+        id: String,
+        name: String,
+        abbreviation: String,
+        language: String? = nil,
+        license: String = importedLicense
+    ) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: moduleRoot(id: id, name: name, abbreviation: abbreviation, language: language, license: license),
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
+    }
+
     /// Translation JSON, as `LampModuleCompiler` takes it.
     func moduleRoot(
         id: String,
         name: String,
         abbreviation: String,
-        language: String? = nil
+        language: String? = nil,
+        license: String = importedLicense
     ) -> [String: Any] {
         let language = language ?? self.language ?? "en"
         var meta: [String: Any] = [
@@ -129,7 +148,7 @@ public struct LampImportedTranslation: Sendable {
             "abbreviation": abbreviation,
             "language": language,
             "textDirection": Locale.Language(identifier: language).characterDirection == .rightToLeft ? "rtl" : "ltr",
-            "license": "Imported by the user from their own copy, for personal use.",
+            "license": license,
             "features": features,
             "versification": "standard",
         ]

@@ -161,6 +161,44 @@ struct LampTranslationImportTests {
         }
     }
 
+    /// The official BSB marks continuation paragraphs with `\vid|MRK 7:9\*`,
+    /// inside verses as well as around headings.
+    @Test func attributeMilestonesHoldNoTextAndEndNothing() throws {
+        let imported = try read(#"""
+            \id MRK
+            \c 7
+            \s1 What Defiles a Man
+            \vid|MRK 7:9\*
+            \r (\ref Matthew 15:10–20|MAT 15:10-20\ref*)
+            \vid|MRK 7:9\*
+            \p \v 14 \w Once again|strong="G3825"\w* Jesus called the crowd to Him
+            \p \vid|MRK 7:14\* and said, “All of you, listen.”
+            """#)
+        #expect(headings(imported, book: 41, chapter: 7) == [ImportedHeading(beforeVerse: 14, level: 1, text: "What Defiles a Man")])
+        #expect(verse(imported, 41_007_014)?.text == "Once again Jesus called the crowd to Him and said, “All of you, listen.”")
+        #expect(imported.report.unrecognizedMarkup.isEmpty)
+    }
+
+    @Test func aWordAfterANoteAndPunctuationKeepsItsSpaceAndAcrosticLettersAreOneHeading() throws {
+        let imported = try read(#"""
+            \id PSA
+            \c 119
+            \q1
+            \v 8 I will keep Your statutes;
+            \q2 do not utterly forsake me.
+            \qa ב
+            \qa BETH
+            \b
+            \q1
+            \v 9 How can a young man keep his way pure?\f + \ft Or \fqa clean\f*\wj “By guarding it”\wj*
+            """#)
+        #expect(verse(imported, 19_119_008)?.text == "I will keep Your statutes; do not utterly forsake me.")
+        #expect(headings(imported, book: 19, chapter: 119) == [ImportedHeading(beforeVerse: 9, level: 2, text: "ב BETH")])
+        let nine = try #require(verse(imported, 19_119_009))
+        #expect(nine.text == "How can a young man keep his way pure? “By guarding it”")
+        #expect(spans(nine, "red-letter") == ["“By guarding it”"])
+    }
+
     @Test func unknownMarkersKeepTheirTextAndAreCounted() throws {
         let imported = try read("\\id JHN\n\\c 1\n\\p\n\\v 1 In the \\zz beginning\\zz* was the Word.\n")
         #expect(verse(imported, 43_001_001)?.text == "In the beginning was the Word.")
