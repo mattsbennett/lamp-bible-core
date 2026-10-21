@@ -187,10 +187,20 @@ deletes it on the others. A module removal names the ID its path carries
 (`aModuleRemovalNamesItsPathsID`).
 
 The plan agrees with it. A path no library deletes is never tombstoned,
-asked to be deleted here, or reaped (`thePlanNeverAsksForARefusedDeletion`): a
-held copy survives a tombstone some older client recorded and goes back up,
-which supersedes it (`aRefusedDeletionGoesBackUp`), rather than being asked for
-and refused on every pass.
+asked to be deleted here, or reaped (`thePlanNeverAsksForARefusedDeletion`).
+Under a tombstone some older client recorded, it is planned as a member: a
+device holding none takes the server's copy, one the server has lost is sent
+back (`aRefusedTombstoneHidesNothing`), changes go up or are merged as their
+revisions say, and the next write supersedes the tombstone
+(`aRefusedDeletionGoesBackUp`).
+
+**A tombstone from a fast clock.** A tombstone carries its deleting device's
+time. A write that survives one — saved after it, or on a path no library
+deletes — is recorded after it, whatever this device's clock says, so it
+supersedes the tombstone; recorded at the pass's own time, a write under a
+tombstone dated ahead would leave it in place, and a surviving copy would go
+up again on every pass until the clocks met
+(`aWriteSupersedesATombstoneFromAFastClock`).
 
 ### Writes and revisions
 
@@ -510,9 +520,10 @@ can act in between and a write it beats is refused. Each device encodes
 content its own way.
 
 This is checked, not proved: every sequence of up to five edits, deletions,
-reads and acts, from an empty library and from one both devices hold, for a
+reads and acts — from an empty library, from one both devices hold, and from
+one a device with a fast clock has tombstoned — for a
 path libraries delete and one they never do, is run, followed by any pass
-still under way and two rounds of passes — 37,324 runs. Every run:
+still under way and two rounds of passes — 55,986 runs. Every run:
 
 - **converges:** both devices and the server hold the same copy, or none;
 - **is quiet afterwards:** another round changes nothing;
@@ -577,7 +588,7 @@ those copies out, and names them.
 | --- | --- | --- | --- |
 | Per-file library and settings bundle | `LampSyncFolderLayout`, `LampSyncLibraryManifest`, `LampSyncFilePlan`, `LampSyncSettingsBundle`, `LampSyncSettingsStore`, conditional `delete(path:condition:)` | `mergeManifestEntry`, `recordWrite`, `adoptFile`, `pruneTombstone`, `filePlanAction`, `listedRevision`, `settingsUpdate` and `bundlePathHolds` (conformance), `bundleRead`, `mayClaim` and `settingsWrite` (conformance), `deletingNeedsATombstone`, `anUnknownFileIsAdopted`, `noRecordNeverOverwrites`, `aRecordedMemberIsNeverRead`, `tombstoneLifetimeCost` | Revisions are compared within one provider; a value-equal import must not mark content changed, which each app's importer keeps |
 | Pass engine | `LampSyncBundlePass`, `LampSyncFileRecords`, `LampSyncLocalFile`, `LampSyncLibraryLayout`, `LampSyncBundleLedgers` | `passTrace` (conformance), `aPassKeepsTheOrder`, `aPassStartsByClaimingTheBundle`, `oneBundleWriteAtMost`, `aReapComesWithItsBundleWrite` | What each app gathers, imports and applies is the app's |
-| Deleting a copy here | `LampSyncLocalDeletion`, the plan's `deletable` | `deleteTarget` (conformance), `mayRecordRemoval`, `everyRecordedRemovalIsCarriedOut`, `aCollectionIsNeverDeletedWhole`, `aModuleRemovalNamesItsPathsID`, `thePlanNeverAsksForARefusedDeletion`, `aRefusedDeletionGoesBackUp` | Each app must call it on both sides; its library carries the deletion out |
+| Deleting a copy here | `LampSyncLocalDeletion`, the plan's `deletable` | `deleteTarget` (conformance), `mayRecordRemoval`, `everyRecordedRemovalIsCarriedOut`, `aCollectionIsNeverDeletedWhole`, `aModuleRemovalNamesItsPathsID`, `thePlanNeverAsksForARefusedDeletion`, `aRefusedDeletionGoesBackUp`, `aRefusedTombstoneHidesNothing`, `aWriteSupersedesATombstoneFromAFastClock` | Each app must call it on both sides; its library carries the deletion out |
 | Save times and quiet passes | `LampSyncFilePlan`, `LampSyncFileRecords`, each app's gather | `aSaveAfterTheDeletionSurvives`, `anUnreportedSaveLosesToADeletion`, `aSettledFileNeedsNothing`, `aSettledDeletionNeedsNothing` | Which kinds report a save time is each app's, held by its own tests |
 | Moving an earlier library | `LampSyncSettingsStore.earlierLibrary`, `migratePhoneLibrary`, `LampSyncLibraryMigration`, `LampSyncArchiveRemote.read`, `LampSyncFolderPublisher.capture` | `earlierLibrary`, `archiveKeeper`, `entryFate` and `macMigrationStep` (conformance), `onlyAnEmptyLibraryIsNew`, `anEntryThePhoneNeverWritesSettlesIt`, `everySettingAndLedgerIsCarried`, `onlyBookkeepingIsDropped`, `theMigrationWritesOnlyOverTheArchiveItImported`, `aMigratedLibraryIsLeftAlone` | Reading the old files is format conversion, tested against captured fixtures |
 | Writes and revisions | `LampSyncConditionalWrite`, `LampWebDAVStorage`, `LampSyncRemoteDirectories`, `LampSyncContentRevision` | `conditionalWrite`, `landing` (conformance), `landingIsSound`, `settleByBytes`, `confirmWrite`, `writeOutcome` (conformance), `namesSameRevision` (conformance), `collectionConfirmed`, `combinedETagsCannotAuthorizeWrite`, `forbiddenWebDAVHeadIsNotAbsence` | The server must honour strong ETag preconditions; transport behaviour is Swift-tested |
@@ -594,7 +605,7 @@ those copies out, and names them.
 | Workspace files (macOS) | `LampWorkspaceSync` and its `WorkspaceFileLedger`, shared file order | `tombstoneDeletes`, `workspaceDeletionTime`, `documentDeletionSparesALaterEdit`, `mergeFile` | Context files' deletions use the time they were noticed, not a comparable modification time |
 | Conflicts set aside and resolved | `LampSyncMerge.importOutcome`, `LampSyncConflict`, `LampLibrary.resolveSyncConflict` | `portableImportOutcome` (conformance: `importOutcome`), `syncImportNeverStops`, `resolvedChoiceWinsWhereItWasMade`, `resolvedChoiceWinsOnTheOtherDevice`, `sameColumn` | Choosing in the UI and the stored payload are Swift; JSON classification is JSONSerialization's |
 | Two devices exchanging whole content (system model) | the per-item orders of `LampSyncMerge` and the deletion ledgers, over `LampSyncConditionalWrite` | `serverNeverLosesAlongRun`, `agreesAlongRun`, `publishedContentIsNeverLost`, `refusedPublishChangesNothing`, `pullThenPublishIsAccepted`, `aQuietRoundConverges`, `conditionalPublishKeepsTheOtherEdit`, `unconditionalPublishLosesTheOtherEdit` | The server honours conditions and issues new revisions; steps are atomic; storage is durable; equal-time record disagreements and baseless settings merges are not joins |
-| Two devices running the per-file pass (system model, checked to a bound) | `filePlanAction`, `recordWrite`, `adoptFile` and `removeFile` as `LampSyncFilePlan`, `LampSyncLibraryManifest` and `LampSyncBundlePass` run them | `converges`, `quiet`, `noLostEdit`, `deletionSticks`, `neverDeleted` (system checks), `anEditDuringAPassSurvives`, `aCopyMadeDuringAPassCanBeOverwritten`, `recordingTheDownloadedBytesNeverSettles`, `anUnreportedSaveLosesAnEditMadeAfterTheDeletion` | One path; up to five steps; a copy made during a pass at a path it planned to take while holding none is installed over |
+| Two devices running the per-file pass (system model, checked to a bound) | `filePlanAction`, `recordWrite`, `adoptFile` and `removeFile` as `LampSyncFilePlan`, `LampSyncLibraryManifest` and `LampSyncBundlePass` run them | `converges`, `quiet`, `noLostEdit`, `deletionSticks`, `neverDeleted` (system checks), `anEditDuringAPassSurvives`, `aCopyMadeDuringAPassCanBeOverwritten`, `recordingTheDownloadedBytesNeverSettles`, `anUnreportedSaveLosesAnEditMadeAfterTheDeletion` | One path; up to five steps from three starts; a copy made during a pass at a path it planned to take while holding none is installed over |
 
 The listed Lean rules prove properties of models that correspond to shared
 Swift decisions. Swift tests exercise each shared implementation with the

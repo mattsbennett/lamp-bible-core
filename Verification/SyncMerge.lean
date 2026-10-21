@@ -2576,6 +2576,10 @@ structure PlanAction where
   adopt : Option Nat := none
   tombstone : Option Nat := none
   reap : Option Nat := none
+  -- An upload that survives a tombstone, with its time: the write is recorded
+  -- after it, so it supersedes the tombstone however fast the clock that
+  -- dated it.
+  supersede : Option Nat := none
   deriving DecidableEq, Repr
 
 def uploadAction (c : WriteCondition) : PlanAction := { upload := some c }
@@ -2594,6 +2598,16 @@ def changeAction (cls : FileClass) (held : Option HeldFile) (listed : Option Nat
     | false, true => uploadAction (.ifRevision r)
     | true, false => { download := true }
     | true, true => { merge := some r }
+
+-- A path no library deletes, under a tombstone some older client recorded:
+-- planned as a member, a copy the server has lost sent back, and any write
+-- recorded after the tombstone, which it then supersedes.
+def refusedTombstoneAction (cls : FileClass) (held : Option HeldFile) (listed : Option Nat)
+    (d : Nat) : PlanAction :=
+  let a := match held, listed with
+    | some _, none => uploadAction .ifAbsent
+    | _, _ => changeAction cls held listed
+  if a.upload.isSome || a.merge.isSome then { a with supersede := some d } else a
 
 def savedAfter (h : HeldFile) (d : Nat) : Bool :=
   match h.savedAt with
@@ -2624,6 +2638,7 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
       | some r => { changeAction cls held listed with adopt := some r }
     | some e =>
       if entryIsMember e then changeAction cls held listed
+      else if !deletable && e.deletedAt.isSome then refusedTombstoneAction cls held listed (e.deletedAt.getD 0)
       else match e.deletedAt with
         | none =>
           match listed with
@@ -2634,13 +2649,13 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
           | some r =>
             if !deletesRevision e r then { changeAction cls held listed with adopt := some r }
             else match held with
-              | some h => if !deletable || savedAfter h d then
-                  uploadAction (if cls == .media then .ifAbsent else .ifRevision r)
+              | some h => if savedAfter h d then
+                  { uploadAction (if cls == .media then .ifAbsent else .ifRevision r) with supersede := some d }
                 else { deleteLocally := true, reap := some r }
-              | none => if deletable then { reap := some r } else {}
+              | none => { reap := some r }
           | none =>
             match held with
-            | some h => if !deletable || savedAfter h d then uploadAction .ifAbsent
+            | some h => if savedAfter h d then { uploadAction .ifAbsent with supersede := some d }
                 else { deleteLocally := true }
             | none => {}
 
@@ -2733,7 +2748,8 @@ theorem anUnreportedSaveLosesToADeletion (changed : Bool) (last : Option Nat) (r
 theorem aSaveAfterTheDeletionSurvives (changed : Bool) (last : Option Nat) (r d s : Nat)
     (after : d < s) :
     filePlanAction .listed (some ⟨some 0, some r, some d, some r⟩)
-      (some ⟨changed, last, some s⟩) none (some r) = uploadAction (.ifRevision r) := by
+      (some ⟨changed, last, some s⟩) none (some r) =
+        { uploadAction (.ifRevision r) with supersede := some d } := by
   simp [filePlanAction, entryIsMember, deletesRevision, savedAfter, after]
 
 /-! ### Deleting a copy here
@@ -2785,10 +2801,31 @@ theorem aModuleRemovalNamesItsPathsID (id : Nat) :
 -- A copy no library deletes survives any tombstone and goes back up, which
 -- supersedes the tombstone; the plan never asks for a deletion the library
 -- refuses, which would be refused again on every pass.
-theorem aRefusedDeletionGoesBackUp (r d s : Nat) (changed : Bool) (last : Option Nat) :
+theorem aRefusedDeletionGoesBackUp (r d : Nat) (saved : Option Nat) :
     filePlanAction .listed (some ⟨some 0, some r, some d, some r⟩)
-      (some ⟨changed, last, some s⟩) none (some r) false = uploadAction (.ifRevision r) := by
-  simp [filePlanAction, entryIsMember, deletesRevision]
+      (some ⟨true, some r, saved⟩) none (some r) false =
+        { uploadAction (.ifRevision r) with supersede := some d } := by
+  simp [filePlanAction, entryIsMember, refusedTombstoneAction, changeAction, uploadAction]
+
+-- A device holding none of it takes the server's copy, and one the server
+-- has lost is sent back: the tombstone neither hides the path nor keeps it
+-- off the server.
+theorem aRefusedTombstoneHidesNothing (r d : Nat) (held : HeldFile) :
+    filePlanAction .listed (some ⟨some 0, some r, some d, some r⟩) none none (some r) false =
+        { download := true } ∧
+      filePlanAction .listed (some ⟨some 0, some r, some d, some r⟩) (some held) none none false =
+        { uploadAction .ifAbsent with supersede := some d } := by
+  simp [filePlanAction, entryIsMember, refusedTombstoneAction, changeAction, uploadAction]
+
+theorem refusedTombstoneActionNeverDeletes (cls : FileClass) (held : Option HeldFile)
+    (listed : Option Nat) (d : Nat) :
+    (refusedTombstoneAction cls held listed d).deleteLocally = false ∧
+      (refusedTombstoneAction cls held listed d).reap = none ∧
+      (refusedTombstoneAction cls held listed d).tombstone = none := by
+  unfold refusedTombstoneAction
+  rcases held with _ | h <;> rcases listed with _ | r <;>
+    simp only [] <;> split <;>
+    simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction]
 
 -- One tactic covers every case, each needing a different one of its lemmas.
 set_option linter.unusedSimpArgs false in
@@ -2805,8 +2842,10 @@ theorem thePlanNeverAsksForARefusedDeletion (cls : FileClass) (entry : Option Ma
     · simp [hm, changeActionNeverDeletes, changeActionNeverReaps]
     · simp only [hm, Bool.false_eq_true, ↓reduceIte]
       rcases e.deletedAt with _ | d <;> rcases listed with _ | r <;> rcases held with _ | h <;>
-        simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction]
-      all_goals (split <;> simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction])
+        simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction,
+          refusedTombstoneActionNeverDeletes]
+      all_goals (split <;> simp [changeActionNeverDeletes, changeActionNeverReaps, uploadAction,
+        refusedTombstoneActionNeverDeletes])
 
 /-! ### Listing revisions
 
@@ -3441,13 +3480,15 @@ structure World where
   deletable : Bool
   deriving DecidableEq, Repr
 
--- What a client reports and records. The shipped behaviour is both.
+-- What a client reports and records, and whether a write that survives a
+-- tombstone is stamped past it. The shipped behaviour is all three.
 structure Policy where
   reportsSaves : Bool
   recordsOwnExport : Bool
+  stampsPastTombstone : Bool
   deriving DecidableEq, Repr
 
-def shipped : Policy := ⟨true, true⟩
+def shipped : Policy := ⟨true, true, true⟩
 
 def World.device (w : World) : Who → Device
   | .a => w.a
@@ -3544,10 +3585,13 @@ def act (p : Policy) (w : World) (who : Who) : World :=
         let d := w.device who
         w.setDevice who { d with copy := none }
       else w
-    -- One bundle update.
+    -- One bundle update. A write that survives a tombstone is recorded after it.
     let time := w.clock
+    let stamp := match action.supersede with
+      | some d => if p.stampsPastTombstone then max time (d + 1) else time
+      | none => time
     let entry := match written with
-      | some (rev, previous) => recordWrite w.entry (some rev) previous time
+      | some (rev, previous) => recordWrite w.entry (some rev) previous stamp
       | none => match action.adopt with
         | some r => adoptFile w.entry r time
         | none => w.entry
@@ -3613,7 +3657,8 @@ def record (h : History) (w : World) : Step → History
     | none => h
   | _ => h
 
--- An edit is lost only to a deletion made after it. A copy made while its
+-- An edit is lost only to a deletion made after it — on a path no library
+-- deletes, only to the person removing their own copy. A copy made while its
 -- own device's pass is under way, one the pass planned without, is not held
 -- to this: there was nothing to compare it with
 -- (`aCopyMadeDuringAPassCanBeOverwritten`).
@@ -3642,6 +3687,16 @@ def startHeld (deletable : Bool) : World :=
    ⟨some ⟨0, some 0, some (encode .a 0), [0]⟩, none, none⟩,
    ⟨some ⟨0, some 0, some (encode .b 0), [0]⟩, none, none⟩, 1, deletable⟩
 
+-- Both devices hold the file, and a device whose clock runs far ahead
+-- tombstoned it at 100; the others' clocks start at 1.
+def startAhead (deletable : Bool) : World :=
+  { startHeld deletable with entry := ⟨some 0, some 0, some 100, some 0⟩ }
+
+-- What a start already holds: a tombstone in it is a deletion made by nobody
+-- who held every edit — and, on a path no library deletes, no deletion at all.
+def startHistory (w : World) : History :=
+  ⟨[], if w.deletable then (w.entry.deletedAt.map fun d => [(d, false)]).getD [] else [], []⟩
+
 def steps : List Step :=
   [.edit .a, .edit .b, .delete .a, .delete .b, .read .a, .read .b, .act .a, .act .b]
 
@@ -3653,7 +3708,7 @@ def allowed (w : World) : Step → Bool
 
 -- Every run of exactly `n` steps: the world it reaches and its history.
 def runsOf (p : Policy) (start : World) : Nat → List (World × History)
-  | 0 => [(start, ⟨[], [], []⟩)]
+  | 0 => [(start, startHistory start)]
   | n + 1 => (runsOf p start n).flatMap fun (w, h) =>
       (steps.filter (allowed w)).map fun s => (step p w s, record h w s)
 
@@ -3663,7 +3718,7 @@ def runs (p : Policy) (start : World) (n : Nat) : List (World × History) :=
 
 -- One run of the given steps.
 def runSteps (p : Policy) (start : World) (taken : List Step) : World × History :=
-  taken.foldl (fun (w, h) s => (step p w s, record h w s)) (start, ⟨[], [], []⟩)
+  taken.foldl (fun (w, h) s => (step p w s, record h w s)) (start, startHistory start)
 
 -- B plans to take A's edit, and its person edits before the pass acts. The
 -- pass leaves the copy, since it is no longer the one it planned against, and
@@ -3686,16 +3741,30 @@ theorem aCopyMadeDuringAPassCanBeOverwritten :
 -- without it the tombstone takes it.
 theorem anUnreportedSaveLosesAnEditMadeAfterTheDeletion :
     let (w, h) := runSteps shipped (startHeld true) [.delete .a, .read .a, .act .a, .edit .b]
-    let (w', h') := runSteps ⟨false, true⟩ (startHeld true) [.delete .a, .read .a, .act .a, .edit .b]
-    noLostEdit (settle shipped w) h = true ∧ noLostEdit (settle ⟨false, true⟩ w') h' = false := by
+    let (w', h') := runSteps ⟨false, true, true⟩ (startHeld true) [.delete .a, .read .a, .act .a, .edit .b]
+    noLostEdit (settle shipped w) h = true ∧ noLostEdit (settle ⟨false, true, true⟩ w') h' = false := by
   decide +kernel
 
 -- Recording the bytes downloaded rather than this device's own export: the
 -- next pass reads its own encoding as a change, and the devices never settle.
 theorem recordingTheDownloadedBytesNeverSettles :
-    let (w, _) := runSteps ⟨true, false⟩ (startHeld true) [.edit .a, .read .a, .act .a]
+    let (w, _) := runSteps ⟨true, false, true⟩ (startHeld true) [.edit .a, .read .a, .act .a]
     let (w', _) := runSteps shipped (startHeld true) [.edit .a, .read .a, .act .a]
-    quiet ⟨true, false⟩ (settle ⟨true, false⟩ w) = false ∧ quiet shipped (settle shipped w') = true := by
+    quiet ⟨true, false, true⟩ (settle ⟨true, false, true⟩ w) = false ∧ quiet shipped (settle shipped w') = true := by
+  decide +kernel
+
+-- A collection edited under a tombstone from a clock far ahead: the edit goes
+-- up, recorded after the tombstone, so it supersedes it and the path is a
+-- member again. Recorded at the pass's own time, the write lands under the
+-- tombstone and leaves it in place. A copy that survives a deletion by its
+-- save time is recorded after it the same way, which matters where that save
+-- time came from a faster clock than the pass's.
+theorem aWriteSupersedesATombstoneFromAFastClock :
+    let w := (runSteps shipped (startAhead false) [.edit .a]).1
+    let w' := (runSteps ⟨true, true, false⟩ (startAhead false) [.edit .a]).1
+    entryIsMember (settle shipped w).entry = true ∧ converged (settle shipped w) = true ∧
+      quiet shipped (settle shipped w) = true ∧
+      entryIsMember (settle ⟨true, true, false⟩ w').entry = false := by
   decide +kernel
 
 def bound : Nat := 5
@@ -3712,7 +3781,7 @@ def bound : Nat := 5
   let mut made := 0
   let mut failed : List Nat := checks.map fun _ => 0
   for deletable in [true, false] do
-    for start in [startEmpty deletable, startHeld deletable] do
+    for start in [startEmpty deletable, startHeld deletable, startAhead deletable] do
       for (w, h) in runs shipped start bound do
         made := made + 1
         let final := settle shipped w
@@ -4079,6 +4148,7 @@ def actionCode (a : PlanAction) : String :=
     ++ (a.adopt.map fun r => ["adopt:" ++ toString r]).getD []
     ++ (a.tombstone.map fun t => ["tombstone:" ++ toString t]).getD []
     ++ (a.reap.map fun r => ["reap:" ++ toString r]).getD []
+    ++ (a.supersede.map fun t => ["supersede:" ++ toString t]).getD []
   if tokens.isEmpty then "-" else ",".intercalate tokens
 
 def headerName : BundleHeader → String

@@ -661,6 +661,40 @@ struct LampSyncBundlePassTests {
         #expect(outcome.uploaded.contains(path))
     }
 
+    /// A tombstone dated by a clock running far ahead. A write that survives
+    /// it is recorded after it, so the path is a member again and the next
+    /// pass is quiet. Recorded at this pass's own time, the write would land
+    /// under the tombstone, and the copy would go up again on every pass until
+    /// the clocks met.
+    @Test func aWriteSupersedesATombstoneFromAFastClock() async throws {
+        // A collection no library deletes, and a highlight set whose save
+        // time came from the faster clock that deleted it.
+        let cases: [(path: String, savedAt: Int64?)] = [
+            ("Notes/notes.lamp", nil),
+            (try LampSyncFolderLayout.modulePath(kind: .highlights, moduleID: "set-1"), 9_500_000),
+        ]
+        for (path, savedAt) in cases {
+            let store = try seeded(path: path, revision: "\"r1\"", deletedAt: 9_000_000)
+            let url = try makeFile("mine")
+            defer { try? FileManager.default.removeItem(at: url) }
+            var records = LampSyncFileRecords()
+            records.recordUpload(path, in: source, digest: "old", revision: "\"r1\"")
+            records.confirmRecorded([path: "\"r1\""], in: source)
+            var held = gathered([local(path, url, "mine")])
+            if let savedAt { held.savedAt = [path: savedAt] }
+            let pass = LampSyncBundlePass(store: store, library: StubLibrary(), source: source, now: { 6_000 })
+
+            let first = try await pass.run(gathering: { held }, records: &records, patience: immediate)
+            let written = try #require(store.bodies[bundlePath])
+            let entry = try #require(LampSyncSettingsBundle.decode(written).manifest.entry(at: path))
+            #expect(first.uploaded == [path], "\(path)")
+            #expect(entry.isMember, "\(path): the write is recorded after the tombstone")
+
+            let second = try await pass.run(gathering: { held }, records: &records, patience: immediate)
+            #expect(second.uploaded.isEmpty, "\(path): and nothing goes up again")
+        }
+    }
+
     /// A file the person edits while the pass is taking the other device's
     /// copy is not installed over: the pass left it, and the next one, seeing
     /// both sides changed, merges rather than losing the edit.

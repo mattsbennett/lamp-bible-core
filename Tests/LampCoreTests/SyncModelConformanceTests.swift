@@ -795,6 +795,7 @@ struct SyncModelConformanceTests {
             if let revision = plan.adopt[path] { tokens.append("adopt:\(token(revision))") }
             if let time = plan.tombstone[path] { tokens.append("tombstone:\(time)") }
             if let revision = plan.reap[path] { tokens.append("reap:\(token(revision))") }
+            if let time = plan.supersede[path] { tokens.append("supersede:\(time)") }
             return tokens.isEmpty ? "-" : tokens.joined(separator: ",")
         }
         try conform("filePlanAction") { f in

@@ -64,6 +64,12 @@ public enum LampSyncFilePlan {
         public var adopt: [String: String] = [:]
         /// Deleted here: record each with `removing`.
         public var tombstone: [String: Int64] = [:]
+        /// Uploads that survive a tombstone, with its time: record each write
+        /// after that time, so it supersedes the tombstone however far ahead
+        /// the deleting device's clock ran. Recorded at the pass's own time,
+        /// a write under a tombstone from a faster clock leaves it in place,
+        /// and the copy goes up again on every pass until the clocks meet.
+        public var supersede: [String: Int64] = [:]
         /// Tombstoned files still on the server. Delete each, conditionally
         /// on this revision, only after the bundle that tombstones it is
         /// written, so no device reads the deletion as a missing upload.
@@ -109,6 +115,7 @@ public enum LampSyncFilePlan {
         var adopt: String?
         var tombstone: Int64?
         var reap: String?
+        var supersede: Int64?
 
         static let none = Action()
         static let download = Action(download: true)
@@ -117,9 +124,10 @@ public enum LampSyncFilePlan {
 
     /// `deletable` is whether a library carries out a deletion of this path
     /// (`LampSyncLocalDeletion`). One it never does is never tombstoned,
-    /// asked to be deleted here, or reaped: a copy anyone holds survives a
-    /// tombstone some older client recorded and goes back up, which
-    /// supersedes it, rather than being asked for on every pass and refused.
+    /// asked to be deleted here, or reaped: under a tombstone some older
+    /// client recorded it is planned as a member, and its next write
+    /// supersedes the tombstone, rather than the deletion being asked for on
+    /// every pass and refused.
     static func action(
         kind: LampSyncFileKind,
         entry: LampSyncLibraryManifest.Entry?,
@@ -155,6 +163,18 @@ public enum LampSyncFilePlan {
         if entry.isMember {
             return change(kind: kind, local: local, listed: listed)
         }
+        if !deletable, let deletedAt = entry.deletedAt {
+            // A path no library deletes, under a tombstone some older client
+            // recorded: never carried out. Planned as a member — taken,
+            // merged or sent as the revisions say, and sent if the server has
+            // lost it — and any write is recorded after the tombstone, which
+            // it then supersedes.
+            var action = local != nil && listed == nil
+                ? Action.upload(.ifAbsent)
+                : change(kind: kind, local: local, listed: listed)
+            if action.upload != nil || action.merge != nil { action.supersede = deletedAt }
+            return action
+        }
         // Tombstoned.
         if let listed, !entry.deletes(revision: listed) {
             // Put back by hand after the deletion.
@@ -162,12 +182,13 @@ public enum LampSyncFilePlan {
             action.adopt = listed
             return action
         }
-        if let local, let deletedAt = entry.deletedAt, !deletable || (local.savedAt ?? .min) > deletedAt {
-            // Saved here after the deletion, or a copy no library deletes: it
-            // survives, and goes back up.
-            return .upload(kind.isMedia ? .ifAbsent : listed.map { .ifRevision($0) } ?? .ifAbsent)
+        if let local, let deletedAt = entry.deletedAt, (local.savedAt ?? .min) > deletedAt {
+            // Saved here after the deletion: it survives, and goes back up,
+            // recorded after the deletion.
+            var action = Action.upload(kind.isMedia ? .ifAbsent : listed.map { .ifRevision($0) } ?? .ifAbsent)
+            action.supersede = deletedAt
+            return action
         }
-        guard deletable else { return .none }
         return Action(deleteLocally: local != nil, reap: listed)
     }
 
@@ -232,5 +253,6 @@ extension LampSyncFilePlan.Plan {
         if let revision = action.adopt { adopt[path] = revision }
         if let time = action.tombstone { tombstone[path] = time }
         if let revision = action.reap { reap[path] = revision }
+        if let time = action.supersede { supersede[path] = time }
     }
 }

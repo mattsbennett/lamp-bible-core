@@ -435,6 +435,7 @@ public struct LampSyncBundlePass {
             do {
                 snapshot = try await update(
                     adopt: adopt, tombstone: tombstone, written: written, listing: listing,
+                    supersede: plan.supersede,
                     time: time, mergingVersion: mergingVersion, patience: patience,
                     attempts: attempts, contributing: contributing
                 )
@@ -473,6 +474,7 @@ public struct LampSyncBundlePass {
         tombstone: [String: Int64],
         written: [String: (revision: String?, previous: String?)],
         listing: [String: String],
+        supersede: [String: Int64],
         time: Int64,
         mergingVersion: ((inout LampSyncSettingsBundle, LampSyncSettingsStore.Version) throws -> Void)?,
         patience: LampSyncConditionalWrite.Patience,
@@ -486,9 +488,13 @@ public struct LampSyncBundlePass {
             mergingVersion: mergingVersion
         ) { bundle in
             try contributing(&bundle)
+            // A copy that survived a tombstone is recorded after it, however
+            // far ahead the deleting device's clock ran.
+            // (`Verification/SyncMerge.lean`: `aWriteSupersedesATombstoneFromAFastClock`.)
             for (path, write) in written {
                 bundle.manifest = try bundle.manifest.recordingWrite(
-                    path, revision: write.revision, replacing: write.previous, at: time
+                    path, revision: write.revision, replacing: write.previous,
+                    at: supersede[path].map { max(time, $0 + 1) } ?? time
                 )
             }
             for (path, revision) in adopt where written[path] == nil {
@@ -612,6 +618,7 @@ private extension LampSyncFilePlan.Plan {
         plan.adopt = adopt.filter { keep($0.key) }
         plan.tombstone = tombstone.filter { keep($0.key) }
         plan.reap = reap.filter { keep($0.key) }
+        plan.supersede = supersede.filter { keep($0.key) }
         return plan
     }
 }
