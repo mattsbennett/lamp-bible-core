@@ -76,6 +76,9 @@ private class XMLBibleDelegate: NSObject, XMLParserDelegate {
         case none
         case finishVerse
         case closeSpan(Int)
+        /// Closes added words, which some sources run straight into the
+        /// next word: `<transChange>he made</transChange><w>the</w>`.
+        case closeAddition(Int)
         case endCapture
         case breakLine
     }
@@ -84,6 +87,7 @@ private class XMLBibleDelegate: NSObject, XMLParserDelegate {
     var metadata: [String: String] = [:]
     var effects: [Effect] = []
     var captures: [Capture] = []
+    private var separatesNextWord = false
 
     func start(_ name: String, attributes: [String: String]) -> Effect { .none }
 
@@ -111,6 +115,9 @@ private class XMLBibleDelegate: NSObject, XMLParserDelegate {
             collector.finishVerse()
         case .closeSpan(let id):
             collector.closeSpan(id)
+        case .closeAddition(let id):
+            collector.closeSpan(id)
+            separatesNextWord = true
         case .breakLine:
             collector.breakLine()
         case .endCapture:
@@ -140,6 +147,12 @@ private class XMLBibleDelegate: NSObject, XMLParserDelegate {
 
     private func text(_ string: String) {
         guard let capture = captures.last else {
+            if separatesNextWord {
+                separatesNextWord = false
+                if let first = string.first, first.isLetter || first.isNumber, collector.lastCharacter?.isLetter == true {
+                    collector.breakLine()
+                }
+            }
             collector.appendText(string)
             return
         }
@@ -169,6 +182,22 @@ private class XMLBibleDelegate: NSObject, XMLParserDelegate {
         }
         captures.append(capture)
         return .endCapture
+    }
+
+    /// After a parse that stopped partway: close what it opened, so nothing
+    /// half-read spills into the next document.
+    func abandonOpenElements() {
+        while let effect = effects.popLast() {
+            switch effect {
+            case .closeSpan(let id), .closeAddition(let id):
+                collector.closeSpan(id)
+            case .endCapture:
+                _ = captures.popLast()
+            case .none, .finishVerse, .breakLine:
+                break
+            }
+        }
+        captures = []
     }
 
     func ensureLocation(book: Int, chapter: Int) {
@@ -205,6 +234,9 @@ private final class OSISDelegate: XMLBibleDelegate {
             return startInHeader(name, attributes: attributes)
         }
 
+        // Most of a Bible with Strong's numbers is words: check for one first.
+        if name == "w" { return word(attributes) }
+
         let isStart = attributes["eID"] == nil
         let isContainer = attributes["sID"] == nil && attributes["eID"] == nil
 
@@ -213,7 +245,7 @@ private final class OSISDelegate: XMLBibleDelegate {
              "inscription", "mentioned", "date", "a", "salute", "signed", "closer":
             return .none
         case "transChange":
-            return attributes["type"] == "added" ? .closeSpan(collector.openSpan(.added)) : .none
+            return attributes["type"] == "added" ? .closeAddition(collector.openSpan(.added)) : .none
         case "seg":
             return attributes["type"] == "x-selah" ? .closeSpan(collector.openSpan(.selah)) : .none
         case "osisText":
@@ -260,8 +292,6 @@ private final class OSISDelegate: XMLBibleDelegate {
             return quote(attributes, isStart: isStart, isContainer: isContainer)
         case "divineName":
             return .closeSpan(collector.openSpan(.divineName))
-        case "w":
-            return word(attributes)
         case "p":
             if isStart { collector.markParagraph() }
             return isContainer ? .breakLine : .none
@@ -334,7 +364,7 @@ private final class OSISDelegate: XMLBibleDelegate {
             }
             quoteSpans = [:]
             return .none
-        case "paragraph":
+        case "paragraph", "x-p":
             collector.markParagraph()
             return isContainer ? .breakLine : .none
         case "introduction", "front", "back", "preface", "titlePage", "glossary", "coverPage", "index":
@@ -378,9 +408,9 @@ private final class OSISDelegate: XMLBibleDelegate {
     }
 
     private func word(_ attributes: [String: String]) -> Effect {
-        let lemmas = (attributes["lemma"] ?? "").split(whereSeparator: \.isWhitespace)
+        guard let lemmaAttribute = attributes["lemma"], lemmaAttribute.contains("strong:") else { return .none }
+        let lemmas = lemmaAttribute.split(whereSeparator: \.isWhitespace)
         let strongs = lemmas.compactMap { $0.hasPrefix("strong:") ? String($0.dropFirst("strong:".count)) : nil }
-        guard !strongs.isEmpty else { return .none }
         let lemma = lemmas.first { $0.hasPrefix("lemma.") }
             .flatMap { $0.split(separator: ":", maxSplits: 1).last.map(String.init) }
         let morphology = (attributes["morph"] ?? "").split(whereSeparator: \.isWhitespace)
@@ -407,6 +437,77 @@ private final class OSISDelegate: XMLBibleDelegate {
         case "alternative": "alternate"
         case "explanation", "study": "explanation"
         default: "translation"
+        }
+    }
+}
+
+/// OSIS a verse at a time, as SWORD stores it. One delegate reads every
+/// verse, so what runs across verses — words of Christ given as milestones —
+/// carries on from one to the next.
+final class OSISFragmentReader {
+    private let delegate = OSISDelegate()
+
+    var collector: TranslationCollector {
+        get { delegate.collector }
+        set { delegate.collector = newValue }
+    }
+
+    func read(_ fragment: String, osisID: String) {
+        let parser = XMLParser(data: Data("<verse osisID=\"\(osisID)\">\(fragment)</verse>".utf8))
+        parser.shouldResolveExternalEntities = false
+        parser.delegate = delegate
+        guard !parser.parse() else { return }
+        // A verse that isn't well-formed keeps its words, without its markup.
+        delegate.abandonOpenElements()
+        delegate.collector.discardVerseText()
+        delegate.collector.appendText(TagText.plain(fragment))
+        delegate.collector.finishVerse()
+        delegate.collector.noteUnrecognized("malformed OSIS")
+    }
+}
+
+/// Text with its tags taken out and its entities read.
+enum TagText {
+    static func plain(_ markup: String) -> String {
+        decodingEntities(markup.replacingOccurrences(of: "<[^>]*>", with: " ", options: .regularExpression))
+    }
+
+    static func decodingEntities(_ text: String) -> String {
+        guard text.contains("&") else { return text }
+        var result = ""
+        var rest = Substring(text)
+        while let ampersand = rest.firstIndex(of: "&") {
+            result += rest[..<ampersand]
+            let afterAmpersand = rest[rest.index(after: ampersand)...]
+            guard let semicolon = afterAmpersand.prefix(10).firstIndex(of: ";") else {
+                result += "&"
+                rest = afterAmpersand
+                continue
+            }
+            let name = afterAmpersand[..<semicolon]
+            if let character = character(forEntity: String(name)) {
+                result.append(character)
+            } else {
+                result += "&\(name);"
+            }
+            rest = afterAmpersand[afterAmpersand.index(after: semicolon)...]
+        }
+        return result + rest
+    }
+
+    private static func character(forEntity name: String) -> Character? {
+        switch name {
+        case "amp": return "&"
+        case "lt": return "<"
+        case "gt": return ">"
+        case "quot": return "\""
+        case "apos": return "'"
+        case "nbsp": return "\u{00A0}"
+        default:
+            let number = name.hasPrefix("#x") || name.hasPrefix("#X")
+                ? UInt32(name.dropFirst(2), radix: 16)
+                : name.hasPrefix("#") ? UInt32(name.dropFirst()) : nil
+            return number.flatMap(Unicode.Scalar.init).map(Character.init)
         }
     }
 }

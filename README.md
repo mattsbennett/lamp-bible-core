@@ -12,7 +12,7 @@ Shared Swift code for the Lamp Bible iOS and macOS applications.
 
 The package currently provides JSON module detection, structural validation, BBCCCVVV reference validation, duplicate and span checks, summary statistics, and installable `.lamp` compilation for translations, dictionaries, commentaries, reading plans, devotionals, quizzes, notes, and highlights. Compiler output is SQLite with a versioned format marker, integrity checked, zlib compressed, round-trip verified, and SHA-256 hashed.
 
-`LampTranslationImporter` reads USFM, OSIS, Zefania and plain book/chapter/verse XML Bibles — a file, a folder, or a zip — into the 66-book grid every translation shares, with headings, paragraphs, poetry, footnotes, words of Christ, added words, the divine name, Selah and Strong's numbers where the source has them. Books outside the 66, bridged and repeated verses, and markup it doesn't know are listed in the import's report. Copyrighted translations reach Lamp only this way, from a copy the user owns; they are never bundled.
+`LampTranslationImporter` reads USFM, OSIS, Zefania and plain book/chapter/verse XML Bibles — a file, a folder, or a zip — and CrossWire SWORD modules (zText and RawText, OSIS, ThML, GBF or plain text, KJV/KJVA/NRSV/NRSVA verse numbering), including locked ones opened with the key the user bought, into the 66-book grid every translation shares, with headings, paragraphs, poetry, footnotes, words of Christ, added words, the divine name, Selah and Strong's numbers where the source has them. Books outside the 66, bridged and repeated verses, and markup it doesn't know are listed in the import's report. Copyrighted translations reach Lamp only this way, from a copy the user owns; they are never bundled.
 
 `LampCore` can also open a combined `bundled_modules.db.zlib` archive, lazily expand and cache it, and merge its read-only modules with user-installed `.lamp` files. A user-installed module with the same type and ID takes precedence over its bundled counterpart.
 
@@ -30,6 +30,7 @@ swift run lamp-module inspect ../lamp-bible-modules/outputs/ESV.json
 swift run lamp-module build ../lamp-bible-modules/outputs/ESV.json /tmp/ESV.lamp
 swift run lamp-module verify /tmp/ESV.lamp
 swift run lamp-module import ~/Downloads/engwebp_usfm.zip /tmp --abbreviation WEB --name "World English Bible"
+swift run lamp-module import ~/Downloads/ESV2011.zip /tmp --key UNLOCK-KEY
 ```
 
 The output filename must match the module ID because Lamp Bible uses the `.lamp` filename as part of its import identity.

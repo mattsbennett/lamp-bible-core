@@ -81,7 +81,7 @@ enum LampModuleCLI {
         var options: [String: String] = [:]
         var remaining = arguments[...]
         while let flag = remaining.popFirst() {
-            guard ["--name", "--abbreviation", "--language"].contains(flag), let value = remaining.popFirst() else {
+            guard ["--name", "--abbreviation", "--language", "--key"].contains(flag), let value = remaining.popFirst() else {
                 return nil
             }
             options[String(flag.dropFirst(2))] = value
@@ -92,7 +92,7 @@ enum LampModuleCLI {
     private static func importTranslation(sourcePath: String, outputDirectory: String, options: [String: String]) -> Bool {
         let sourceURL = URL(fileURLWithPath: sourcePath)
         do {
-            let imported = try LampTranslationImporter().read(sourceURL)
+            let imported = try LampTranslationImporter().read(sourceURL, unlockKey: options["key"])
             let stem = sourceURL.deletingPathExtension().lastPathComponent
             let abbreviation = options["abbreviation"] ?? imported.suggestedAbbreviation ?? stem
             let name = options["name"] ?? imported.suggestedName ?? abbreviation
@@ -226,7 +226,7 @@ enum LampModuleCLI {
               lamp-module inspect <module.json> [module.json ...]
               lamp-module build <module.json> [output.lamp]
               lamp-module verify <module.lamp>
-              lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE]
+              lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY]
             """)
     }
 }

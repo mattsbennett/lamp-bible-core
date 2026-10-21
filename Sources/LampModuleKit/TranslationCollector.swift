@@ -110,7 +110,7 @@ struct VerseTextBuilder {
         var isFirst = true
         for character in piece {
             defer { isFirst = false }
-            if character.isWhitespace {
+            if Self.isSpace(character) {
                 spaceIsPending = !characters.isEmpty
                 continue
             }
@@ -129,6 +129,15 @@ struct VerseTextBuilder {
         }
     }
 
+    /// Asked of every character of a Bible: ASCII is answered without a
+    /// Unicode property lookup.
+    static func isSpace(_ character: Character) -> Bool {
+        if let ascii = character.asciiValue {
+            return ascii == 32 || (9...13).contains(ascii)
+        }
+        return character.isWhitespace
+    }
+
     /// A line or block boundary: words on either side stay apart.
     mutating func appendSpace() {
         if !characters.isEmpty { spaceIsPending = true }
@@ -144,6 +153,20 @@ struct VerseTextBuilder {
     private static let closingPunctuation: Set<Character> = [
         ".", ",", ";", ":", "!", "?", ")", "]", "}", "\u{2019}", "\u{201D}", "\u{00BB}", "\u{203A}", "\u{2026}",
     ]
+
+    /// The last word written, without punctuation after it: where GBF and
+    /// ThML put a Strong's number, after the word it belongs to.
+    var precedingWordRange: Range<Int>? {
+        var end = characters.count
+        while end > 0, !Self.isWordCharacter(characters[end - 1]) { end -= 1 }
+        var start = end
+        while start > 0, Self.isWordCharacter(characters[start - 1]) { start -= 1 }
+        return start < end ? start..<end : nil
+    }
+
+    private static func isWordCharacter(_ character: Character) -> Bool {
+        character.isLetter || character.isNumber || character == "’" || character == "'" || character == "-"
+    }
 
     func trimmedRange(from start: Int, to end: Int) -> Range<Int>? {
         var start = max(0, start)
@@ -316,7 +339,11 @@ struct TranslationCollector {
 
     mutating func appendText<S: StringProtocol>(_ text: S) {
         guard verse != nil else { return }
-        if text.contains(where: { !$0.isWhitespace }) {
+        // Text from XMLParser is Foundation's; walking it a Character at a
+        // time is several times faster once it is Swift's own.
+        var text = String(text)
+        text.makeContiguousUTF8()
+        if text.contains(where: { !VerseTextBuilder.isSpace($0) }) {
             // Anything still pending was marked inside this verse.
             pendingParagraph = false
             pendingPoetryIndent = 0
@@ -329,6 +356,8 @@ struct TranslationCollector {
         }
         verse?.text.append(text)
     }
+
+    var lastCharacter: Character? { verse?.text.characters.last }
 
     mutating func breakLine() {
         verse?.text.appendSpace()
@@ -412,6 +441,34 @@ struct TranslationCollector {
             content: content,
             offset: offset
         ))
+    }
+
+    mutating func annotatePrecedingWord(with style: SpanStyle) {
+        guard let range = verse?.text.precedingWordRange,
+              style.kind != "strongs" || style.strongs != nil else { return }
+        verse?.annotations.append(ImportedAnnotation(
+            kind: style.kind, start: range.lowerBound, end: range.upperBound,
+            strongs: style.strongs, morphology: style.morphology, lemma: style.lemma
+        ))
+    }
+
+    /// Clears what has been written of the verse being read, for a reader
+    /// that found its markup broken and will write it again plainly.
+    mutating func discardVerseText() {
+        verse?.text = VerseTextBuilder()
+        verse?.annotations = []
+        verse?.footnotes = []
+        for index in spans.indices {
+            spans[index].start = 0
+        }
+    }
+
+    /// Books a source holds that the reader didn't open, such as a SWORD
+    /// module's Apocrypha.
+    mutating func noteSkippedBook(_ identifier: String) {
+        if !report.skippedBooks.contains(identifier) {
+            report.skippedBooks.append(identifier)
+        }
     }
 
     mutating func noteUnrecognized(_ markup: String) {

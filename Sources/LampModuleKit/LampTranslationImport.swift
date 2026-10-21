@@ -9,6 +9,8 @@ public enum LampTranslationSourceFormat: String, CaseIterable, Sendable {
     /// `<bible><b n="Genesis"><c n="1"><v n="1">` or Beblia's
     /// `<bible><testament><book number="1"><chapter number="1"><verse number="1">`.
     case xmlBible
+    /// A CrossWire SWORD module, locked or not, zipped or as a folder.
+    case sword
 
     public var displayName: String {
         switch self {
@@ -16,6 +18,7 @@ public enum LampTranslationSourceFormat: String, CaseIterable, Sendable {
         case .osis: "OSIS XML"
         case .zefania: "Zefania XML"
         case .xmlBible: "XML Bible"
+        case .sword: "SWORD module"
         }
     }
 }
@@ -47,6 +50,11 @@ public enum LampTranslationImportError: Error, LocalizedError, Equatable, Sendab
     case invalidXML(String)
     case unreadableArchive(String)
     case noScripture(skippedBooks: [String])
+    /// A locked SWORD module, read without the key bought for it.
+    case needsUnlockKey(moduleName: String, unlockURL: String?)
+    case wrongUnlockKey(moduleName: String)
+    case unsupportedSwordModule(moduleName: String, reason: String)
+    case severalSwordModules([String])
 
     public var errorDescription: String? {
         switch self {
@@ -63,6 +71,31 @@ public enum LampTranslationImportError: Error, LocalizedError, Equatable, Sendab
                 return "No verses were found in the file."
             }
             return "No verses from the 66 books were found. Left out: \(skippedBooks.joined(separator: ", "))."
+        case .needsUnlockKey(let moduleName, _):
+            return "“\(moduleName)” is locked. Enter the unlock key you received for it."
+        case .wrongUnlockKey(let moduleName):
+            return "That key doesn’t unlock “\(moduleName)”."
+        case .unsupportedSwordModule(let moduleName, let reason):
+            return "“\(moduleName)” \(reason)."
+        case .severalSwordModules(let names):
+            return "This holds several SWORD Bibles (\(names.joined(separator: ", "))). Choose the zip or .conf file of the one to import."
+        }
+    }
+}
+
+extension LampTranslationImportError {
+    /// For a locked SWORD module: what to say when asking for its key, and
+    /// where keys are sold when the module says. Nil for any other error.
+    public var unlockPrompt: String? {
+        switch self {
+        case .needsUnlockKey(_, let unlockURL):
+            return [errorDescription, unlockURL.map { "Keys for it are available from \($0)." }]
+                .compactMap { $0 }
+                .joined(separator: " ")
+        case .wrongUnlockKey:
+            return errorDescription
+        default:
+            return nil
         }
     }
 }
@@ -225,7 +258,9 @@ public struct LampImportedTranslation: Sendable {
 public struct LampTranslationImporter: Sendable {
     public init() {}
 
-    public func read(_ url: URL) throws -> LampImportedTranslation {
+    /// `unlockKey` opens a locked SWORD module; reading one without it throws
+    /// `.needsUnlockKey`, and an app asks for the key and reads again.
+    public func read(_ url: URL, unlockKey: String? = nil) throws -> LampImportedTranslation {
         let hasSecurityScope = url.startAccessingSecurityScopedResource()
         defer {
             if hasSecurityScope {
@@ -235,17 +270,40 @@ public struct LampTranslationImporter: Sendable {
 
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            let modsD = url.appendingPathComponent("mods.d", isDirectory: true)
+            if FileManager.default.fileExists(atPath: modsD.path) {
+                let confs = try FileManager.default.contentsOfDirectory(at: modsD, includingPropertiesForKeys: nil)
+                    .filter { $0.pathExtension.lowercased() == "conf" }
+                    .compactMap { conf in Self.decodeText(try Data(contentsOf: conf)).map { (conf.path, $0) } }
+                return try readSword(confs, files: FolderSwordFiles(root: url), name: url.lastPathComponent, unlockKey: unlockKey)
+            }
             return try read(files: folderFiles(url), name: url.lastPathComponent)
         }
-        return try read(data: Data(contentsOf: url, options: [.mappedIfSafe]), filename: url.lastPathComponent)
+        if url.pathExtension.lowercased() == "conf" {
+            guard let text = Self.decodeText(try Data(contentsOf: url)) else {
+                throw LampTranslationImportError.unreadableText(url.lastPathComponent)
+            }
+            // A module's root holds `mods.d`, where its conf lives.
+            let folder = url.deletingLastPathComponent()
+            let root = folder.lastPathComponent.lowercased() == "mods.d" ? folder.deletingLastPathComponent() : folder
+            return try readSword([(url.path, text)], files: FolderSwordFiles(root: root), name: url.lastPathComponent, unlockKey: unlockKey)
+        }
+        return try read(data: Data(contentsOf: url, options: [.mappedIfSafe]), filename: url.lastPathComponent, unlockKey: unlockKey)
     }
 
-    public func read(data: Data, filename: String) throws -> LampImportedTranslation {
+    public func read(data: Data, filename: String, unlockKey: String? = nil) throws -> LampImportedTranslation {
         guard LampZipArchive.isZip(data) else {
             return try read(files: [(filename, data)], name: filename)
         }
         do {
             let archive = try LampZipArchive(data: data)
+            let confs = try archive.entries
+                .filter { Self.isSwordConf($0.path) }
+                .compactMap { entry in Self.decodeText(try archive.contents(of: entry)).map { (entry.path, $0) } }
+            if !confs.isEmpty {
+                let root = confs[0].0.lowercased().range(of: "mods.d/").map { String(confs[0].0[..<$0.lowerBound]) } ?? ""
+                return try readSword(confs, files: ZipSwordFiles(archive: archive, root: root), name: filename, unlockKey: unlockKey)
+            }
             let files = try archive.entries
                 .filter { !$0.isDirectory && Self.isCandidate($0.path) }
                 .map { ($0.path, try archive.contents(of: $0)) }
@@ -255,6 +313,29 @@ public struct LampTranslationImporter: Sendable {
         } catch {
             throw LampTranslationImportError.unreadableArchive(filename)
         }
+    }
+
+    /// A root may hold commentaries and dictionaries beside a Bible; only
+    /// one Bible can be read at a time.
+    private func readSword(
+        _ confs: [(path: String, text: String)],
+        files: SwordFileSource,
+        name: String,
+        unlockKey: String?
+    ) throws -> LampImportedTranslation {
+        let bibles = SwordTranslationReader.bibleConfigurations(confs)
+        guard bibles.count <= 1 else {
+            throw LampTranslationImportError.severalSwordModules(bibles.map(\.configuration.moduleName).sorted())
+        }
+        guard let bible = bibles.first?.configuration ?? confs.first.map({ SwordModule.Configuration(text: $0.text) }) else {
+            throw LampTranslationImportError.unrecognizedFormat(name)
+        }
+        return try SwordTranslationReader.read(bible, files: files, unlockKey: unlockKey)
+    }
+
+    private static func isSwordConf(_ path: String) -> Bool {
+        let components = path.lowercased().split(separator: "/")
+        return components.count >= 2 && components[components.count - 2] == "mods.d" && components.last?.hasSuffix(".conf") == true
     }
 
     /// A module ID for an imported translation that can't be mistaken for a
