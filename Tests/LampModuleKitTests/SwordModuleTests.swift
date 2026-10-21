@@ -189,6 +189,20 @@ struct SwordModuleTests {
         #expect(verse(try LampTranslationImporter().read(conf), 1_001_001)?.text == "In the beginning.")
     }
 
+    @Test func aConfWithoutItsVerseFilesSaysWhatToChoose() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("sword-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let conf = folder.appendingPathComponent("alone.conf")
+        try Data("[Alone]\nDataPath=./modules/texts/ztext/alone/\nModDrv=zText\n".utf8).write(to: conf)
+        #expect(throws: LampTranslationImportError.unsupportedSwordModule(
+            moduleName: "Alone",
+            reason: "has no verse files beside its conf. Choose the module’s zip or its whole folder"
+        )) {
+            try LampTranslationImporter().read(conf)
+        }
+    }
+
     @Test func aZippedModuleIsReadFromTheZip() throws {
         let module = try SwordFixture(conf: "[Zipped]\nDataPath=./modules/texts/ztext/zipped/\nModDrv=zText", verses: [(66, 22, 21, "The grace of our Lord be with you all.")])
         defer { module.remove() }

@@ -23,8 +23,17 @@ enum SwordTranslationReader {
             : TaggedVerses(markup: module.markup)
         var checkedKey = !module.isLocked
 
-        for testament in 1...2 {
-            guard let store = try module.testament(testament) else { continue }
+        let testaments = try (1...2).map { try module.testament($0) }
+        guard testaments.contains(where: { $0 != nil }) else {
+            // Typically a conf chosen without the folder around it, which a
+            // phone gives no access to.
+            throw LampTranslationImportError.unsupportedSwordModule(
+                moduleName: configuration.moduleName,
+                reason: "has no verse files beside its conf. Choose the module’s zip or its whole folder"
+            )
+        }
+        for (testament, store) in zip(1...2, testaments) {
+            guard let store else { continue }
             for position in module.chapterPositions(testament: testament) {
                 // Verse 0 is the chapter's heading slot.
                 for verse in 0...position.verseCount {
