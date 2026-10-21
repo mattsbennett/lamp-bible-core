@@ -1141,34 +1141,6 @@ theorem failedEditableMergePreservesWholeState
     editableCommit installed none = installed := by
   rfl
 
--- Mac portable backups are imported into a sibling library first. A failed
--- item discards that stage; only a complete stage replaces the local root.
-def stagedBackupImport (installed : List Nat) (prepared : Option (List Nat)) : List Nat :=
-  prepared.getD installed
-
-theorem failedStagedBackupImportKeepsLibrary (installed : List Nat) :
-    stagedBackupImport installed none = installed := by
-  rfl
-
-theorem completedStagedBackupImportUsesWholeLibrary
-    (installed incoming : List Nat) :
-    stagedBackupImport installed (some incoming) = incoming := by
-  rfl
-
-def guardedStagedBackupCommit
-    (base current incoming : List Nat) : Option (List Nat) :=
-  if base == current then some incoming else none
-
-theorem changedLocalLibraryRejectsStagedCommit
-    (base current incoming : List Nat) (changed : base ≠ current) :
-    guardedStagedBackupCommit base current incoming = none := by
-  simp [guardedStagedBackupCommit, changed]
-
-theorem unchangedLocalLibraryAcceptsStagedCommit
-    (base incoming : List Nat) :
-    guardedStagedBackupCommit base base incoming = some incoming := by
-  simp [guardedStagedBackupCommit]
-
 -- The Mac writes the settings a pass brings down through a journal kept with
 -- the library: staged first, then applied to UserDefaults and cleared. A crash
 -- between the two leaves the journal, and the next launch or pass replays it.
@@ -1250,15 +1222,6 @@ theorem replayableMacSettingsReachPlannedValues
     (allowed : macSettingKeysReplayable keys = true) :
     recoverMacSettingKeys keys = some (keys.map (·.planned)) := by
   simp [recoverMacSettingKeys, allowed]
-
--- The former sequential loop could keep an earlier installed item after a
--- later item failed, even though publication was stopped.
-def oldPartialBackupImport (_installed firstIncoming : List Nat) : List Nat :=
-  firstIncoming
-
-theorem laterBackupFailureCouldLeavePartialLocalLibrary :
-    oldPartialBackupImport [1] [1, 2] ≠ [1] := by
-  decide
 
 -- Translation-schema replacement uses the same all-or-rollback result for
 -- translation metadata, books, verses, and headings.
@@ -2295,25 +2258,6 @@ theorem keptFileIsWhatMergeChooses (current incoming : FileVersion)
   unfold replaceFile at h
   unfold mergeFile at *
   split at h <;> simp_all
-
--- `LampLibrary.stagedCommitAllowed`: a staged import replaces the live
--- library only while its files are those the stage was copied from. An
--- absent library is `none`, so a library that appeared or vanished during the
--- import also blocks the commit.
-def stagedCommitAllowed (original live : Option (List Nat)) : Bool :=
-  original == live
-
-theorem stagedCommitAllowedIsTheGuard (base current incoming : List Nat) :
-    (guardedStagedBackupCommit base current incoming).isSome =
-      stagedCommitAllowed (some base) (some current) := by
-  simp [guardedStagedBackupCommit, stagedCommitAllowed]
-  split <;> simp_all
-
-theorem libraryThatAppearedBlocksTheCommit (live : List Nat) :
-    stagedCommitAllowed none (some live) = false := rfl
-
-theorem libraryThatVanishedBlocksTheCommit (original : List Nat) :
-    stagedCommitAllowed (some original) none = false := rfl
 
 /-! ## The per-file library (design B)
 
@@ -3964,10 +3908,6 @@ def readName : Option (Nat × Option Nat) → String
         IO.println <| conformanceLine "folderSealAccepts"
           [optList (some committed), optList pending, optList (some observed),
            toString (folderSealAccepts committed pending observed)]
-  for original in [none, some [1], some [2]] do
-    for live in [none, some [1], some [2]] do
-      IO.println <| conformanceLine "stagedCommitAllowed"
-        [optList original, optList live, toString (stagedCommitAllowed original live)]
 
 #eval show IO Unit from do
   let reads : List (Option (Nat × Option Nat)) := [none, some (5, some 1), some (4, some 2), some (5, none)]

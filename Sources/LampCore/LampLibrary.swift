@@ -13,7 +13,6 @@ public actor LampLibrary {
 
     private let fileManager: FileManager
     private let bundledModulesArchiveURL: URL?
-    private let isStagingLibrary: Bool
     private var cachedBundledDatabaseURL: URL?
     private var cachedBundledModules: [LampInstalledModule]?
     private var openDatabases: [String: DatabaseQueue] = [:]
@@ -25,7 +24,6 @@ public actor LampLibrary {
     ) {
         self.fileManager = fileManager
         self.bundledModulesArchiveURL = bundledModulesArchiveURL
-        self.isStagingLibrary = false
         if let rootURL {
             self.rootURL = rootURL
         } else {
@@ -37,17 +35,6 @@ public actor LampLibrary {
                 .appendingPathComponent("Lamp Bible", isDirectory: true)
                 .appendingPathComponent("Library", isDirectory: true)
         }
-    }
-
-    private init(
-        stagingRootURL: URL,
-        bundledModulesArchiveURL: URL?,
-        fileManager: FileManager
-    ) {
-        self.rootURL = stagingRootURL
-        self.bundledModulesArchiveURL = bundledModulesArchiveURL
-        self.fileManager = fileManager
-        self.isStagingLibrary = true
     }
 
     public func installedModules() throws -> [LampInstalledModule] {
@@ -3254,122 +3241,6 @@ public actor LampLibrary {
             options: .atomic
         )
         return summary
-    }
-
-    /// Apply every part of an incoming sync to a sibling copy of the library.
-    /// A thrown operation discards that copy; a successful one replaces the root
-    /// only if the live library has not changed while the operation was running.
-    @discardableResult
-    /// Whether a staged import may replace the live library: only while the
-    /// live files are still those the stage was copied from, or while there
-    /// was no library before and still is none. An absent library is `nil`.
-    /// (`Verification/SyncMerge.lean`: `stagedCommitAllowed`.)
-    static func stagedCommitAllowed(
-        original: [String: String]?, live: [String: String]?
-    ) -> Bool {
-        original == live
-    }
-
-    public func withStagedChanges<Result>(
-        _ operation: (LampLibrary) async throws -> Result
-    ) async throws -> Result {
-        precondition(!isStagingLibrary, "Nested staged library changes are unsupported")
-        let parent = rootURL.deletingLastPathComponent()
-        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
-        let stagedURL = parent.appendingPathComponent(
-            ".lamp-backup-import-\(UUID().uuidString)", isDirectory: true
-        )
-        defer { try? fileManager.removeItem(at: stagedURL) }
-        let rootExisted = fileManager.fileExists(atPath: rootURL.path)
-        if rootExisted {
-            try fileManager.copyItem(at: rootURL, to: stagedURL)
-        } else {
-            try fileManager.createDirectory(at: stagedURL, withIntermediateDirectories: false)
-        }
-        let originalFiles = try libraryFileRevisions(at: stagedURL)
-
-        let stagedLibrary = LampLibrary(
-            stagingRootURL: stagedURL,
-            bundledModulesArchiveURL: bundledModulesArchiveURL,
-            fileManager: fileManager
-        )
-        let result = try await operation(stagedLibrary)
-        await stagedLibrary.forgetOpenDatabases()
-
-        // Another actor call may have changed the live library while this
-        // actor was suspended for the staged import. Never replace that edit.
-        let liveFiles = fileManager.fileExists(atPath: rootURL.path)
-            ? try libraryFileRevisions(at: rootURL) : nil
-        guard Self.stagedCommitAllowed(
-            original: rootExisted ? originalFiles : nil, live: liveFiles
-        ) else {
-            throw LampLibraryError.syncConflict("Local library changed during sync import.")
-        }
-
-        // The destination and stage are siblings on one volume. Replace the
-        // directory only after all incoming content has been accepted.
-        forgetOpenDatabases()
-        cachedBundledDatabaseURL = nil
-        cachedBundledModules = nil
-        if fileManager.fileExists(atPath: rootURL.path) {
-            let backupName = ".lamp-backup-previous-\(UUID().uuidString)"
-            let previousURL = parent.appendingPathComponent(backupName, isDirectory: true)
-            do {
-                _ = try fileManager.replaceItemAt(
-                    rootURL, withItemAt: stagedURL, backupItemName: backupName
-                )
-            } catch {
-                if !fileManager.fileExists(atPath: rootURL.path),
-                   fileManager.fileExists(atPath: previousURL.path) {
-                    try? fileManager.moveItem(at: previousURL, to: rootURL)
-                }
-                throw error
-            }
-            try? fileManager.removeItem(at: previousURL)
-        } else {
-            try fileManager.moveItem(at: stagedURL, to: rootURL)
-        }
-        return result
-    }
-
-    private func libraryFileRevisions(at directory: URL) throws -> [String: String] {
-        var enumerationError: Error?
-        guard let enumerator = fileManager.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            errorHandler: { _, error in
-                enumerationError = error
-                return false
-            }
-        ) else {
-            throw LampLibraryError.syncConflict("Could not inspect the local library.")
-        }
-        let pathPrefix = directory.standardizedFileURL.path + "/"
-        var revisions: [String: String] = [:]
-        for case let url as URL in enumerator {
-            let itemPath = url.standardizedFileURL.path
-            guard itemPath.hasPrefix(pathPrefix) else {
-                throw LampLibraryError.syncConflict("Could not inspect the local library.")
-            }
-            let relativePath = String(itemPath.dropFirst(pathPrefix.count))
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            if values.isSymbolicLink == true {
-                revisions[relativePath] = "link:" + (try fileManager.destinationOfSymbolicLink(
-                    atPath: url.path
-                ))
-            } else if values.isRegularFile == true {
-                var digest = SHA256()
-                let handle = try FileHandle(forReadingFrom: url)
-                defer { try? handle.close() }
-                while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
-                    digest.update(data: chunk)
-                }
-                revisions[relativePath] = digest.finalize()
-                    .map { String(format: "%02x", $0) }.joined()
-            }
-        }
-        if let enumerationError { throw enumerationError }
-        return revisions
     }
 
     private var modulesURL: URL {

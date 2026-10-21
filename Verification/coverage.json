@@ -12,22 +12,15 @@
     "Sources/LampCore/LampLibrary.swift": {
       "rules": [
         "portableImportOutcome",
-        "stagedBackupImport",
-        "guardedStagedBackupCommit",
         "editableCommit",
         "tombstoneDeletes",
         "ownedSQLiteReplacement",
-        "stagedCommitAllowed",
-        "stagedCommitAllowedIsTheGuard",
         "personalStudyModuleID",
         "personalStudyArchiveImport",
         "macMediaMetadataAfterImport",
         "macStructuredContentAfterSave"
       ],
-      "boundary": "Only the library's sync paths are modelled: personal import, staged changes with their commit guard, and the deletion ledger. Nothing in the apps stages changes any more; the staging goes once the Mac's tests stop using it. SQLite and filesystem behaviour are assumed.",
-      "conformance": [
-        "stagedCommitAllowed"
-      ]
+      "boundary": "Only the library's sync paths are modelled: personal import and the deletion ledger. SQLite and filesystem behaviour are assumed."
     },
     "Sources/LampCore/LampPersonalDeletionLedger.swift": {
       "rules": [
@@ -812,7 +805,6 @@
       "modificationDateToken": "Why a folder revision is a content digest, never a modification date (contentRevision).",
       "earlyBackendWipe": "Why a provider switch wipes only after persisting the new provider (deferredBackendWipe).",
       "oldSQLiteReplacementResult": "Why the phone retires and copies rows inside one transaction (sqliteReplacementResult).",
-      "oldPartialBackupImport": "Why a backup import is staged and committed whole (stagedBackupImport).",
       "oldMacHighlightAllowsPublish": "Why a failed highlight export stops the publish (macHighlightAllowsPublish)."
     }
   }

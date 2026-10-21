@@ -98,7 +98,7 @@ struct SyncModelConformanceTests {
         "decide", "importOutcome", "landing", "tombstone", "tombstoneMerge", "baselessReading",
         "namesSameRevision", "needsImport", "preferenceMerge", "replaceFile", "deckPull",
         "mergeMembership", "chooseWholeValue", "chooseReading", "folderSealAccepts",
-        "stagedCommitAllowed", "confirmWrite", "webDAVPresence", "webDAVDirectoryReady",
+        "confirmWrite", "webDAVPresence", "webDAVDirectoryReady",
         "guardedETagCondition", "cancellableRunTrace", "backendTransition",
         "selectedCandidateIndex", "resolvedRecordRevision", "moduleFolderListing", "initialSync",
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
@@ -373,10 +373,6 @@ struct SyncModelConformanceTests {
             LampSyncFolderPublisher.sealAccepts(
                 committed: files(f[0])!, pending: files(f[1]), observed: files(f[2])!
             ) == (f[3] == "true")
-        }
-        try conform("stagedCommitAllowed") { f in
-            func library(_ field: String) -> [String: String]? { field == "-" ? nil : ["UserData.sqlite": field] }
-            return LampLibrary.stagedCommitAllowed(original: library(f[0]), live: library(f[1])) == (f[2] == "true")
         }
     }
 
