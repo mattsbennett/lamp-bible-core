@@ -118,7 +118,7 @@ struct LampWebDAVPersonalArchiveAdapterTests {
         let backupURL = root.appendingPathComponent("Backup")
         _ = try await destination.exportPortableBackup(to: backupURL)
         let restored = LampLibrary(rootURL: root.appendingPathComponent("Restored"))
-        _ = try await restored.importPortableBackup(from: backupURL)
+        try await restored.receive(exportAt: backupURL)
         let roundTrip = try #require(try await restored.personalDevotionals().first)
         #expect(roundTrip.mediaJSON?.contains("keep this value") == true)
         #expect(roundTrip.mediaReferences.first?.alt == "Morning light")

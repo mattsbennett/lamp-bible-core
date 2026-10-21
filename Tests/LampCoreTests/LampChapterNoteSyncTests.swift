@@ -18,7 +18,7 @@ struct LampChapterNoteSyncTests {
     private func sync(_ source: LampLibrary, _ destination: LampLibrary, in root: URL) async throws {
         let backup = root.appendingPathComponent("backup-\(UUID().uuidString)", isDirectory: true)
         _ = try await source.exportPortableBackup(to: backup)
-        _ = try await destination.importPortableBackup(from: backup)
+        try await destination.receive(exportAt: backup)
     }
 
     @Test func aChapterNoteKeepsItsOwnTitleThroughSync() async throws {
@@ -61,7 +61,7 @@ struct LampChapterNoteSyncTests {
             try stripped.write(to: file, atomically: true, encoding: .utf8)
         }
 
-        _ = try await a.importPortableBackup(from: backup)
+        try await a.receive(exportAt: backup)
         #expect(try await a.verseNotes(reference: chapter).map(\.title) == ["General Notes"])
     }
 

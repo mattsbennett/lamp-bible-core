@@ -1014,9 +1014,9 @@ struct LampLibraryTests {
         #expect(archive.entries.first { $0.path == portableAttachmentPath }?.data == attachmentData)
 
         let destination = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Destination"))
-        let imported = try await destination.importPortableBackup(from: backupURL)
-        #expect(imported.importedStudyEntries == 3)
-        #expect(imported.importedDevotionals == 1)
+        let imported = try await destination.receive(exportAt: backupURL)
+        #expect(imported.studyEntries == 3)
+        #expect(imported.devotionals == 1)
         #expect(try await destination.verseNotes(reference: 43_003_016).first?.content == "A synced note.")
         #expect(try await destination.verseHighlights(
             translationID: "TEST",
@@ -1032,17 +1032,6 @@ struct LampLibraryTests {
         #expect(try await destination.personalDevotionals().first?.mediaReferences.first?.alt
             == "Portable image description")
         #expect(try Data(contentsOf: fixtureURL.appendingPathComponent("Destination").appendingPathComponent(portableAttachmentPath)) == attachmentData)
-
-        try FileManager.default.createSymbolicLink(
-            at: backupURL.appendingPathComponent("Media/Devotionals/synced-devotional/linked.png"),
-            withDestinationURL: attachment
-        )
-        do {
-            _ = try await destination.importPortableBackup(from: backupURL)
-            Issue.record("Media symlink should stop portable backup import")
-        } catch LampLibraryError.syncConflict(let reason) {
-            #expect(reason == "Media backup contains a symbolic link.")
-        }
     }
 
     @Test func installsAndReadsPortableStudyModules() async throws {

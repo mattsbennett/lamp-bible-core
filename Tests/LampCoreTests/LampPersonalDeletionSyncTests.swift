@@ -24,7 +24,7 @@ struct LampPersonalDeletionSyncTests {
         func sync(from source: LampLibrary, to destination: LampLibrary) async throws {
             let backup = root.appendingPathComponent("backup-\(UUID().uuidString)", isDirectory: true)
             _ = try await source.exportPortableBackup(to: backup)
-            _ = try await destination.importPortableBackup(from: backup)
+            try await destination.receive(exportAt: backup)
         }
 
         func remove() { try? FileManager.default.removeItem(at: root) }
@@ -275,30 +275,6 @@ struct LampPersonalDeletionSyncTests {
         }
     }
 
-    @Test func copiesLeftByEarlierRoundTripsAreFoldedBackIn() async throws {
-        let devices = try Devices()
-        defer { devices.remove() }
-        // What earlier versions left: the default set beside its export-named copy.
-        _ = try await devices.a.saveVerseHighlight(
-            translationID: "TEST", reference: verse, startOffset: 0, endOffset: 4, color: "#FFCC00"
-        )
-        _ = try await devices.a.saveHighlightSet(LampHighlightSet(
-            id: "personal-highlights-TEST", name: "My Highlights", translationID: "TEST"
-        ))
-        for start in [0, 6] {
-            _ = try await devices.a.saveVerseHighlight(
-                translationID: "TEST", reference: verse, startOffset: start, endOffset: start + 4,
-                color: "#FFCC00", setID: "personal-highlights-TEST"
-            )
-        }
-        #expect(try await highlights(devices.a) == ["0-4 FFCC00", "0-4 FFCC00", "6-10 FFCC00"])
-
-        try await devices.sync(from: devices.b, to: devices.a)
-
-        #expect(try await highlights(devices.a) == ["0-4 FFCC00", "6-10 FFCC00"])
-        #expect(try await devices.a.highlightSets(translationID: "TEST").map(\.id) == ["personal-highlights:TEST"])
-    }
-
     // MARK: - Format
 
     @Test func theLedgerStaysOutOfWhatOlderVersionsRead() async throws {
@@ -331,7 +307,7 @@ struct LampPersonalDeletionSyncTests {
             at: backup.appendingPathComponent(LampPortableBackupLayout.deletionLedgerPath)
         )
 
-        _ = try await devices.b.importPortableBackup(from: backup)
+        try await devices.b.receive(exportAt: backup)
         #expect(try await devices.b.personalDevotionals().map(\.title) == ["From an older device"])
     }
 

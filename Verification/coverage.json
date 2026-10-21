@@ -24,7 +24,7 @@
         "macMediaMetadataAfterImport",
         "macStructuredContentAfterSave"
       ],
-      "boundary": "Only the library's sync paths are modelled: personal import, staged backup import and the deletion ledger. SQLite and filesystem behaviour are assumed.",
+      "boundary": "Only the library's sync paths are modelled: personal import, staged changes with their commit guard, and the deletion ledger. Nothing in the apps stages changes any more; the staging goes once the Mac's tests stop using it. SQLite and filesystem behaviour are assumed.",
       "conformance": [
         "stagedCommitAllowed"
       ]

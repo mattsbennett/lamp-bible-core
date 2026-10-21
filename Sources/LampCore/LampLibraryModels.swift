@@ -1022,18 +1022,6 @@ public struct LampPortableBackupSummary: Codable, Equatable, Sendable {
     }
 }
 
-public struct LampPortableBackupImportResult: Equatable, Sendable {
-    public let installedModules: Int
-    public let importedStudyEntries: Int
-    public let importedDevotionals: Int
-
-    public init(installedModules: Int, importedStudyEntries: Int, importedDevotionals: Int) {
-        self.installedModules = installedModules
-        self.importedStudyEntries = importedStudyEntries
-        self.importedDevotionals = importedDevotionals
-    }
-}
-
 public struct LampReadingPlan: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String

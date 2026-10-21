@@ -3256,16 +3256,6 @@ public actor LampLibrary {
         return summary
     }
 
-    @discardableResult
-    public func importPortableBackup(from sourceURL: URL) async throws -> LampPortableBackupImportResult {
-        if isStagingLibrary {
-            return try importPortableBackupContents(from: sourceURL)
-        }
-        return try await withStagedChanges { stagedLibrary in
-            try await stagedLibrary.importPortableBackup(from: sourceURL)
-        }
-    }
-
     /// Apply every part of an incoming sync to a sibling copy of the library.
     /// A thrown operation discards that copy; a successful one replaces the root
     /// only if the live library has not changed while the operation was running.
@@ -3342,61 +3332,6 @@ public actor LampLibrary {
         return result
     }
 
-    private func importPortableBackupContents(
-        from sourceURL: URL
-    ) throws -> LampPortableBackupImportResult {
-        let manifestURL = sourceURL.appendingPathComponent(LampPortableBackupLayout.manifestPath)
-        guard fileManager.fileExists(atPath: manifestURL.path) else {
-            throw LampLibraryError.invalidPersonalContent("The selected folder is not a Lamp Bible backup.")
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let manifest = try decoder.decode(
-            LampPortableBackupManifest.self,
-            from: Data(contentsOf: manifestURL)
-        )
-        try manifest.validate()
-        try consolidateExportedDefaultHighlightSets()
-        // Merged before any content, so content deleted elsewhere is skipped
-        // rather than imported and then removed.
-        let ledgerURL = sourceURL.appendingPathComponent(LampPortableBackupLayout.deletionLedgerPath)
-        if fileManager.fileExists(atPath: ledgerURL.path) {
-            try mergePersonalDeletionLedger(
-                LampPersonalDeletionLedger.decode(Data(contentsOf: ledgerURL))
-            )
-        }
-        var installedModules = 0
-        var importedStudyEntries = 0
-        var importedDevotionals = 0
-
-        let modulesSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.modulesDirectory, isDirectory: true)
-        for url in backupFiles(in: modulesSource, extension: "lamp") {
-            _ = try install(from: url)
-            installedModules += 1
-        }
-        let studySource = sourceURL.appendingPathComponent(LampPortableBackupLayout.studyDirectory, isDirectory: true)
-        for url in backupFiles(in: studySource, extension: "json") {
-            let result = try importPersonalStudyData(from: url, forSync: true)
-            importedStudyEntries += result.importedCount
-        }
-        let devotionalsSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.devotionalsDirectory, isDirectory: true)
-        for url in backupFiles(in: devotionalsSource, extension: "json") {
-            importedDevotionals += try importPersonalDevotional(from: url, forSync: true).count
-        }
-
-        let mediaSource = sourceURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
-        if fileManager.fileExists(atPath: mediaSource.path) {
-            let mediaDestination = rootURL.appendingPathComponent(LampPortableBackupLayout.mediaDirectory, isDirectory: true)
-            try mergeDirectory(from: mediaSource, to: mediaDestination)
-        }
-        try applyPersonalDeletionLedger()
-        return LampPortableBackupImportResult(
-            installedModules: installedModules,
-            importedStudyEntries: importedStudyEntries,
-            importedDevotionals: importedDevotionals
-        )
-    }
-
     private func libraryFileRevisions(at directory: URL) throws -> [String: String] {
         var enumerationError: Error?
         guard let enumerator = fileManager.enumerator(
@@ -3441,42 +3376,6 @@ public actor LampLibrary {
         rootURL.appendingPathComponent("Modules", isDirectory: true)
     }
 
-    private func backupFiles(in directory: URL, extension fileExtension: String) -> [URL] {
-        guard let enumerator = fileManager.enumerator(
-            at: directory,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-        return enumerator.compactMap { $0 as? URL }
-            .filter { $0.pathExtension.lowercased() == fileExtension }
-            .sorted { $0.path < $1.path }
-    }
-
-    private func mergeDirectory(from source: URL, to destination: URL) throws {
-        if try source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
-            throw LampLibraryError.syncConflict("Media backup contains a symbolic link.")
-        }
-        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-        let children = try fileManager.contentsOfDirectory(
-            at: source,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-            options: []
-        )
-        for child in children {
-            let target = destination.appendingPathComponent(child.lastPathComponent)
-            let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            if values.isSymbolicLink == true {
-                throw LampLibraryError.syncConflict("Media backup contains a symbolic link.")
-            }
-            if values.isDirectory == true {
-                try mergeDirectory(from: child, to: target)
-            } else {
-                if fileManager.fileExists(atPath: target.path) { try fileManager.removeItem(at: target) }
-                try fileManager.copyItem(at: child, to: target)
-            }
-        }
-    }
-
     private func safeExportIdentifier(_ value: String) -> String {
         Self.safeExportIdentifier(value)
     }
@@ -3494,46 +3393,6 @@ public actor LampLibrary {
         setID == "personal-highlights-\(safeExportIdentifier(translationID))"
             ? "personal-highlights:\(translationID)"
             : setID
-    }
-
-    /// Earlier versions brought a translation's default highlight set back from
-    /// sync under its export name, beside the original, so every highlight in
-    /// it appeared twice. Folds such copies back into the default set; nothing
-    /// is lost, as only exact duplicates are dropped.
-    func consolidateExportedDefaultHighlightSets() throws {
-        let queue = try openUserDatabase()
-        try queue.write { db in
-            for row in try Row.fetchAll(db, sql: "SELECT id, translation_id FROM highlight_sets") {
-                let id: String = row["id"]
-                let translationID: String = row["translation_id"]
-                let canonicalID = Self.canonicalHighlightSetID(id, translationID: translationID)
-                guard canonicalID != id else { continue }
-                try db.execute(sql: """
-                    INSERT INTO highlight_sets (id, name, description, translation_id, created, last_modified)
-                    SELECT ?, name, description, translation_id, created, last_modified
-                    FROM highlight_sets WHERE id = ?
-                    ON CONFLICT(id) DO UPDATE SET
-                        last_modified = MAX(highlight_sets.last_modified, excluded.last_modified)
-                    """, arguments: [canonicalID, id])
-                try db.execute(sql: """
-                    INSERT INTO highlights (set_id, ref, sc, ec, style, color)
-                    SELECT DISTINCT ?, h.ref, h.sc, h.ec, h.style, h.color
-                    FROM highlights h
-                    WHERE h.set_id = ? AND NOT EXISTS (
-                        SELECT 1 FROM highlights d
-                        WHERE d.set_id = ? AND d.ref = h.ref AND d.sc = h.sc AND d.ec = h.ec
-                          AND d.style = h.style AND COALESCE(d.color, '') = COALESCE(h.color, '')
-                    )
-                    """, arguments: [canonicalID, id, canonicalID])
-                try db.execute(sql: """
-                    INSERT OR IGNORE INTO highlight_themes (set_id, color, style, name, description)
-                    SELECT ?, color, style, name, description FROM highlight_themes WHERE set_id = ?
-                    """, arguments: [canonicalID, id])
-                try db.execute(sql: "DELETE FROM highlights WHERE set_id = ?", arguments: [id])
-                try db.execute(sql: "DELETE FROM highlight_themes WHERE set_id = ?", arguments: [id])
-                try db.execute(sql: "DELETE FROM highlight_sets WHERE id = ?", arguments: [id])
-            }
-        }
     }
 
     private func prettyJSONData(_ object: Any) throws -> Data {
