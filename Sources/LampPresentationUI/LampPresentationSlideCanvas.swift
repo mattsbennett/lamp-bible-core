@@ -56,6 +56,7 @@ public struct LampPresentationSlideCanvas: View {
     private struct Ink {
         var text: Color
         var accent: Color
+        var highlights: [String: Color]
     }
 
     public init(
@@ -102,6 +103,18 @@ public struct LampPresentationSlideCanvas: View {
         ink?.accent ?? Color(lampDeckHex: style.theme.accentColor) ?? .orange
     }
     private var background: Color { Color(lampDeckHex: style.theme.backgroundColor) ?? .black }
+
+    /// The colour emphasised words are drawn in: the highlight they name, or
+    /// the accent when the theme has none by that name.
+    private func color(for mark: LampPresentationTextRun.Mark) -> Color {
+        switch mark {
+        case .accent:
+            return accent
+        case .highlight(let name):
+            if let ink { return ink.highlights[name] ?? accent }
+            return style.theme.highlights?[name].flatMap { Color(lampDeckHex: $0) } ?? accent
+        }
+    }
 
     public var body: some View {
         GeometryReader { geometry in
@@ -195,7 +208,8 @@ public struct LampPresentationSlideCanvas: View {
         var copy = self
         copy.ink = Ink(
             text: Color(lampDeckHex: treatment.text) ?? foreground,
-            accent: Color(lampDeckHex: treatment.accent) ?? accent
+            accent: Color(lampDeckHex: treatment.accent) ?? accent,
+            highlights: treatment.highlights.compactMapValues { Color(lampDeckHex: $0) }
         )
         return copy
     }
@@ -649,16 +663,6 @@ public struct LampPresentationSlideCanvas: View {
 
     private var imageBlock: LampPresentationBlock? { plan.image }
 
-    /// What this block reads as on the slide. A quotation is set in marks, with
-    /// ellipses where it starts or ends mid-sentence; everything else is drawn
-    /// as the author typed it.
-    private func displayText(of block: LampPresentationBlock) -> String {
-        guard LampPresentationQuoteTypography.applies(to: block, layout: slide.layout) else {
-            return block.text
-        }
-        return LampPresentationQuoteTypography.displayText(block.text)
-    }
-
     /// The picture itself when it can be read, and an honest placeholder
     /// naming what is missing when it cannot.
     @ViewBuilder
@@ -720,11 +724,11 @@ public struct LampPresentationSlideCanvas: View {
     ) -> some View {
         if let listStyle = block.listStyle,
            block.kind == .body,
-           !listItems(in: block.text).isEmpty,
+           !block.listItemRuns.isEmpty,
            !stepsDown {
             // The slide has already chosen one step for everything on it.
             listRows(
-                listItems(in: block.text),
+                block.listItemRuns,
                 listStyle: listStyle,
                 size: size,
                 weight: weight,
@@ -734,8 +738,8 @@ public struct LampPresentationSlideCanvas: View {
             .foregroundStyle(color ?? foreground)
         } else if let listStyle = block.listStyle,
            block.kind == .body,
-           !listItems(in: block.text).isEmpty {
-            let items = listItems(in: block.text)
+           !block.listItemRuns.isEmpty {
+            let items = block.listItemRuns
             // One size for the whole list, chosen by what fits.
             //
             // Each row used to carry its own `minimumScaleFactor`, so a tight
@@ -757,8 +761,11 @@ public struct LampPresentationSlideCanvas: View {
             }
             .foregroundStyle(color ?? foreground)
         } else {
+            // A quotation is set in marks, with ellipses where it starts or
+            // ends mid-sentence; everything else is drawn as the author typed
+            // it.
             styledText(
-                displayText(of: block),
+                block.drawnRuns(on: slide.layout),
                 size: size,
                 weight: weight,
                 alignment: alignment,
@@ -773,7 +780,7 @@ public struct LampPresentationSlideCanvas: View {
     /// One list, every row at the same size, with wrapped lines hanging under
     /// the text rather than under the marker.
     private func listRows(
-        _ items: [String],
+        _ items: [[LampPresentationTextRun]],
         listStyle: LampPresentationListStyle,
         size: CGFloat,
         weight: Font.Weight,
@@ -806,14 +813,14 @@ public struct LampPresentationSlideCanvas: View {
     }
 
     private func styledText(
-        _ value: String,
+        _ runs: [LampPresentationTextRun],
         size: CGFloat,
         weight: Font.Weight,
         alignment: TextAlignment,
         color: Color,
         scalesToFit: Bool = true
     ) -> some View {
-        Text(value)
+        Text(attributed(runs, size: size))
             .font(presentationFont(size: size, weight: weight))
             .foregroundStyle(color)
             .multilineTextAlignment(alignment)
@@ -823,6 +830,19 @@ public struct LampPresentationSlideCanvas: View {
             // a truncated passage measures shorter, and the thumbnail would
             // then choose a larger size than the slide it stands for.
             .lineLimit(compact && scalesToFit ? 4 : nil)
+    }
+
+    /// `runs` as one string, emphasised words bold and in their colour. The
+    /// rest takes the font and colour the text view is given.
+    private func attributed(_ runs: [LampPresentationTextRun], size: CGFloat) -> AttributedString {
+        runs.reduce(into: AttributedString()) { result, run in
+            var piece = AttributedString(run.text)
+            if let mark = run.mark {
+                piece.font = presentationFont(size: size, weight: .bold)
+                piece.foregroundColor = color(for: mark)
+            }
+            result.append(piece)
+        }
     }
 
     private func presentationFont(size: CGFloat, weight: Font.Weight) -> Font {
@@ -837,12 +857,6 @@ public struct LampPresentationSlideCanvas: View {
         default:
             return .system(size: resolvedSize, weight: weight, design: .rounded)
         }
-    }
-
-    private func listItems(in value: String) -> [String] {
-        value.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
     }
 
     private func listMarker(for style: LampPresentationListStyle, index: Int) -> String {

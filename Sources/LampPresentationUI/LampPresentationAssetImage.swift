@@ -100,6 +100,9 @@ enum LampPresentationAssetImageCache {
             theme.foregroundColor,
             theme.backgroundColor,
             theme.accentColor,
+            (theme.highlights ?? [:]).sorted { $0.key < $1.key }
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: ","),
             places.joined(separator: ";"),
         ].joined(separator: "|") as NSString
         if let cached = treatments.object(forKey: key) { return cached.treatment }

@@ -143,19 +143,25 @@ public struct LampPresentationTheme: Codable, Equatable, Sendable {
     public var foregroundColor: String
     public var accentColor: String
     public var typeface: String?
+    /// Colours emphasised words can be drawn in besides the accent, by name:
+    /// one for each idea, person or side a deck sets apart. A block's
+    /// `emphasis` names one; emphasis that names none takes the accent.
+    public var highlights: [String: String]?
 
     public init(
         id: String,
         backgroundColor: String,
         foregroundColor: String,
         accentColor: String,
-        typeface: String? = nil
+        typeface: String? = nil,
+        highlights: [String: String]? = nil
     ) {
         self.id = id
         self.backgroundColor = backgroundColor
         self.foregroundColor = foregroundColor
         self.accentColor = accentColor
         self.typeface = typeface
+        self.highlights = highlights
     }
 
     public static let lampDark = LampPresentationTheme(
@@ -348,6 +354,10 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// Lamp chooses the colour of the words over it, and darkens or lightens
     /// the picture behind them only as far as they need to be read.
     public var placement: LampPresentationImagePlacement?
+    /// Words in this block drawn bold and in colour. The text itself is left
+    /// as it is, so a check against a translation or a manuscript still
+    /// reads the words alone.
+    public var emphasis: [LampPresentationEmphasis]?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -359,7 +369,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         scriptureReference: LampPresentationScriptureReference? = nil,
         manuscriptCheck: LampPresentationManuscriptCheck? = nil,
         typography: LampPresentationTypography? = nil,
-        placement: LampPresentationImagePlacement? = nil
+        placement: LampPresentationImagePlacement? = nil,
+        emphasis: [LampPresentationEmphasis]? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -371,6 +382,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.manuscriptCheck = manuscriptCheck
         self.typography = typography
         self.placement = placement
+        self.emphasis = emphasis
     }
 
     /// An image that fills the slide behind everything else.
@@ -455,6 +467,25 @@ public enum LampPresentationDeckValidator {
                     key,
                     "\(role) contrasts with the background at only "
                         + "\(formattedRatio(ratio)):1; aim for \(formattedRatio(floor)):1 or more."
+                )
+            }
+        }
+
+        // Held to the accent's 3:1, WCAG's level for large and bold text,
+        // which emphasised words on a slide always are; 4.5:1 is for body
+        // text at reading size.
+        for (name, value) in (deck.theme.highlights ?? [:]).sorted(by: { $0.key < $1.key }) {
+            let path = "theme.highlights.\(name)"
+            if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                issue(.error, "theme.highlights", "A highlight needs a name for emphasis to give.")
+            } else if !isHexColor(value) {
+                issue(.error, path, "Use a six-digit hexadecimal colour such as #111827.")
+            } else if let ratio = contrastRatio(value, deck.theme.backgroundColor), ratio < 3.0 {
+                issue(
+                    .warning,
+                    path,
+                    "Highlighted words contrast with the background at only "
+                        + "\(formattedRatio(ratio)):1; aim for 3.0:1 or more."
                 )
             }
         }
@@ -629,6 +660,9 @@ public enum LampPresentationDeckValidator {
                         )
                     }
                 }
+                for (path, message) in emphasisIssues(in: block, theme: deck.theme) {
+                    issue(.warning, "\(blockPath).\(path)", message)
+                }
                 if block.kind == .title && block.text.count > 90 {
                     issue(.warning, "\(blockPath).text", "This title may be too long for a slide.")
                 }
@@ -704,6 +738,72 @@ public enum LampPresentationDeckValidator {
         // Marks at both ends with another between them belong to the text: two
         // speakers quoted in turn, not one quotation wrapped by hand.
         return !trimmed.dropFirst().dropLast().contains { marks.contains($0) }
+    }
+
+    /// Emphasis that will not be drawn as written, by the path of its entry
+    /// within the block.
+    ///
+    /// Each is a warning, never an error: a deck that fails validation cannot
+    /// be saved or synced, and rewording a slide in Slide Studio must not
+    /// make its deck unsavable because an entry named the old words.
+    private static func emphasisIssues(
+        in block: LampPresentationBlock,
+        theme: LampPresentationTheme
+    ) -> [(path: String, message: String)] {
+        guard let emphasis = block.emphasis, !emphasis.isEmpty else { return [] }
+        guard block.kind != .image else {
+            return [("emphasis", "Emphasis is drawn on words, and an image block has none.")]
+        }
+        var issues: [(path: String, message: String)] = []
+        let characters = Array(block.text)
+        var taken = [Bool](repeating: false, count: characters.count)
+        for (index, entry) in emphasis.enumerated() {
+            let path = "emphasis[\(index)]"
+            guard !entry.text.isEmpty else {
+                issues.append((path, "Name the words to emphasise."))
+                continue
+            }
+            if let name = entry.highlight, theme.highlights?[name] == nil {
+                issues.append((
+                    path,
+                    "The theme has no highlight named '\(name)', so these words take the accent colour."
+                ))
+            }
+            let matches = entry.matches(in: characters)
+            if matches.isEmpty {
+                issues.append((
+                    path,
+                    "'\(entry.text)' is not in this block's text as whole words, so nothing is "
+                        + "emphasised. Copy the words exactly as the text has them."
+                ))
+                continue
+            }
+            if let occurrence = entry.occurrence, !matches.indices.contains(occurrence - 1) {
+                issues.append((
+                    path,
+                    occurrence < 1
+                        ? "Count occurrences from 1."
+                        : "'\(entry.text)' appears \(matches.count) time\(matches.count == 1 ? "" : "s") "
+                            + "in this block's text, so occurrence \(occurrence) emphasises nothing."
+                ))
+                continue
+            }
+            var overlaps = false
+            for match in entry.drawnMatches(in: characters) {
+                if taken[match].contains(true) {
+                    overlaps = true
+                } else {
+                    for offset in match { taken[offset] = true }
+                }
+            }
+            if overlaps {
+                issues.append((
+                    path,
+                    "'\(entry.text)' overlaps words an earlier entry emphasises, so it is not drawn there."
+                ))
+            }
+        }
+        return issues
     }
 
     /// Why a block went undrawn, when the reason is worth naming.

@@ -27,16 +27,20 @@ public enum LampPresentationQuoteTypography {
 
     /// How `text` should be drawn. Returns it unchanged when it is empty.
     public static func displayText(_ text: String) -> String {
+        String(display(text.map { LampPresentationLetter($0) }).map(\.character))
+    }
+
+    /// `displayText` for letters that carry emphasis. Each letter keeps its
+    /// own, and the marks and ellipses Lamp adds carry none.
+    static func display(_ letters: [LampPresentationLetter]) -> [LampPresentationLetter] {
         // 1. One ellipsis character, however it was typed.
-        var value = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "...", with: "\u{2026}")
-        guard !value.isEmpty else { return text }
+        var value = collapsingTypedEllipses(trimmed(letters))
+        guard !value.isEmpty else { return letters }
 
         // 2. Outer marks the author typed: taken off here and put back in
         // step 6, so every quotation is wrapped the same way.
         value = removingTypedOuterMarks(value)
-        guard !value.isEmpty else { return text }
+        guard !value.isEmpty else { return letters }
 
         // 3 and 4. Ellipses where the quotation begins or ends mid-sentence.
         value = addingLeadingEllipsis(value)
@@ -44,23 +48,44 @@ public enum LampPresentationQuoteTypography {
 
         // 5 and 6. A quotation inside a quotation steps down a level.
         value = demotingInnerMarks(value)
-        return "\u{201C}" + value + "\u{201D}"
+        return [LampPresentationLetter("\u{201C}")] + value + [LampPresentationLetter("\u{201D}")]
+    }
+
+    private static func trimmed(_ value: [LampPresentationLetter]) -> [LampPresentationLetter] {
+        guard let first = value.firstIndex(where: { !$0.isWhitespaceOrNewline }),
+              let last = value.lastIndex(where: { !$0.isWhitespaceOrNewline })
+        else { return [] }
+        return Array(value[first...last])
+    }
+
+    /// Three full stops become one ellipsis, emphasised as the first was.
+    private static func collapsingTypedEllipses(_ value: [LampPresentationLetter]) -> [LampPresentationLetter] {
+        var result: [LampPresentationLetter] = []
+        var index = 0
+        while index < value.count {
+            if index + 2 < value.count,
+               value[index...(index + 2)].allSatisfy({ $0.character == "." }) {
+                result.append(LampPresentationLetter("\u{2026}", mark: value[index].mark))
+                index += 3
+            } else {
+                result.append(value[index])
+                index += 1
+            }
+        }
+        return result
     }
 
     /// Removes a pair of outer marks, but only when they are a pair: a
     /// quotation that opens with one speaker and closes with another has marks
     /// that belong to the text.
-    private static func removingTypedOuterMarks(_ value: String) -> String {
-        var characters = Array(value)
-        guard characters.count >= 2,
-              let first = characters.first, doubleMarks.contains(first),
-              let last = characters.last, doubleMarks.contains(last)
+    private static func removingTypedOuterMarks(_ value: [LampPresentationLetter]) -> [LampPresentationLetter] {
+        guard value.count >= 2,
+              let first = value.first, doubleMarks.contains(first.character),
+              let last = value.last, doubleMarks.contains(last.character)
         else { return value }
-        let inner = characters[1..<(characters.count - 1)]
-        guard !inner.contains(where: { doubleMarks.contains($0) }) else { return value }
-        characters.removeFirst()
-        characters.removeLast()
-        return String(characters).trimmingCharacters(in: .whitespacesAndNewlines)
+        let inner = value[1..<(value.count - 1)]
+        guard !inner.contains(where: { doubleMarks.contains($0.character) }) else { return value }
+        return trimmed(Array(inner))
     }
 
     /// An excerpt starting mid-sentence opens with an ellipsis.
@@ -69,34 +94,33 @@ public enum LampPresentationQuoteTypography {
     /// never triggers this, and a capitalised name at the start is the known
     /// blind spot: an author who wants an ellipsis there types one, and a typed
     /// one is left alone.
-    private static func addingLeadingEllipsis(_ value: String) -> String {
-        let characters = Array(value)
-        guard characters.first != "\u{2026}" else { return value }
-        guard let letter = characters.first(where: { character in
-            !openers.contains(character) && !character.isWhitespace
+    private static func addingLeadingEllipsis(_ value: [LampPresentationLetter]) -> [LampPresentationLetter] {
+        guard value.first?.character != "\u{2026}" else { return value }
+        guard let letter = value.first(where: { letter in
+            !openers.contains(letter.character) && !letter.character.isWhitespace
         }) else { return value }
-        guard letter.isLowercase else { return value }
-        return "\u{2026}" + value
+        guard letter.character.isLowercase else { return value }
+        return [LampPresentationLetter("\u{2026}")] + value
     }
 
     /// An excerpt stopping mid-sentence closes with an ellipsis.
-    private static func addingTrailingEllipsis(_ value: String) -> String {
-        var characters = Array(value)
+    private static func addingTrailingEllipsis(_ value: [LampPresentationLetter]) -> [LampPresentationLetter] {
+        var letters = value
         // Marks and brackets sit outside the sentence's own punctuation.
-        var tail: [Character] = []
-        while let last = characters.last, closers.contains(last) {
-            tail.insert(characters.removeLast(), at: 0)
+        var tail: [LampPresentationLetter] = []
+        while let last = letters.last, closers.contains(last.character) {
+            tail.insert(letters.removeLast(), at: 0)
         }
-        guard let last = characters.last else { return value }
-        if terminals.contains(last) { return value }
-        if danglers.contains(last) {
+        guard let last = letters.last else { return value }
+        if terminals.contains(last.character) { return value }
+        if danglers.contains(last.character) {
             // A comma or dash where the excerpt was cut: the ellipsis replaces it.
-            while let trailing = characters.last,
-                  danglers.contains(trailing) || trailing.isWhitespace {
-                characters.removeLast()
+            while let trailing = letters.last,
+                  danglers.contains(trailing.character) || trailing.character.isWhitespace {
+                letters.removeLast()
             }
         }
-        return String(characters) + "\u{2026}" + String(tail)
+        return letters + [LampPresentationLetter("\u{2026}")] + tail
     }
 
     /// Curls the marks inside the quotation.
@@ -106,26 +130,28 @@ public enum LampPresentationQuoteTypography {
     /// they stand: an installed translation stores them straight — `Cain's`,
     /// `'Know the LORD,'` — and a verse inserted from Slide Studio would
     /// otherwise carry typewriter punctuation onto a slide set in curled marks.
-    private static func demotingInnerMarks(_ value: String) -> String {
-        var result: [Character] = []
+    private static func demotingInnerMarks(_ value: [LampPresentationLetter]) -> [LampPresentationLetter] {
+        var result: [LampPresentationLetter] = []
         var previous: Character?
-        for character in value {
-            switch character {
+        for letter in value {
+            var demoted = letter
+            switch letter.character {
             case "\u{201C}":
-                result.append("\u{2018}")
+                demoted.character = "\u{2018}"
             case "\u{201D}":
-                result.append("\u{2019}")
+                demoted.character = "\u{2019}"
             case "\"", "'":
                 // A straight mark says nothing about which end it is, so it is
                 // read from what comes before it. After a letter it is an
                 // apostrophe, which is the same character as a closing mark.
-                result.append(opensQuotation(after: previous) ? "\u{2018}" : "\u{2019}")
+                demoted.character = opensQuotation(after: previous) ? "\u{2018}" : "\u{2019}"
             default:
-                result.append(character)
+                break
             }
-            previous = character
+            result.append(demoted)
+            previous = letter.character
         }
-        return String(result)
+        return result
     }
 
     /// Whether a straight mark here opens rather than closes.

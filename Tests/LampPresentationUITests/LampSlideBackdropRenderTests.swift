@@ -290,4 +290,60 @@ struct LampSlideBackdropRenderTests {
         )
         #expect(apart.count == 2)
     }
+
+    // MARK: Emphasis
+
+    private func emphasisSlide(_ emphasis: [LampPresentationEmphasis]?) -> LampPresentationSlide {
+        LampPresentationSlide(layout: .quotation, blocks: [
+            .init(
+                kind: .scripture,
+                text: "For by grace you have been saved through faith.",
+                emphasis: emphasis
+            ),
+            .init(kind: .citation, text: "Ephesians 2:8"),
+        ])
+    }
+
+    @Test("Emphasised words are drawn in their highlight and the accent, and nothing else is")
+    func emphasisIsDrawnInItsColours() throws {
+        var theme = LampPresentationTheme.lampDark
+        theme.highlights = ["grace": "#60A5FA"]
+        let whole = (x: 0.0...1.0, y: 0.0...1.0)
+        let plain = try render(emphasisSlide(nil), theme: theme, picture: nil)
+        let marked = try render(
+            emphasisSlide([.init(text: "grace", highlight: "grace"), .init(text: "faith")]),
+            theme: theme,
+            picture: nil
+        )
+        let blue = (
+            plain: plain.count(near: "#60A5FA", x: whole.x, y: whole.y, tolerance: 30),
+            marked: marked.count(near: "#60A5FA", x: whole.x, y: whole.y, tolerance: 30)
+        )
+        #expect(blue.plain == 0)
+        #expect(blue.marked > 150, "only \(blue.marked) pixels of the highlight")
+        // The accent was already on the slide in its rule and citation;
+        // emphasised words add to it.
+        let amber = (
+            plain: plain.count(near: theme.accentColor, x: whole.x, y: whole.y, tolerance: 30),
+            marked: marked.count(near: theme.accentColor, x: whole.x, y: whole.y, tolerance: 30)
+        )
+        #expect(amber.marked > amber.plain + 150, "amber \(amber.plain) then \(amber.marked)")
+    }
+
+    @Test("Over a picture, a highlight that would not read is drawn in the words' colour")
+    func unreadableHighlightTakesTheText() throws {
+        let pale = try solid(1, 1, 1)
+        defer { try? FileManager.default.removeItem(at: pale) }
+        var theme = LampPresentationTheme.lampDark
+        theme.highlights = ["dark": "#1E3A8A", "pale": "#FDE68A"]
+        var slide = emphasisSlide([.init(text: "grace", highlight: "dark"), .init(text: "faith", highlight: "pale")])
+        slide.blocks.insert(
+            .init(kind: .image, assetPath: "Assets/picture.png", altText: "Paper", placement: .background),
+            at: 0
+        )
+        let drawn = try render(slide, theme: theme, picture: pale)
+        let whole = (x: 0.0...1.0, y: 0.0...1.0)
+        #expect(drawn.count(near: "#1E3A8A", x: whole.x, y: whole.y, tolerance: 30) > 150)
+        #expect(drawn.count(near: "#FDE68A", x: whole.x, y: whole.y, tolerance: 30) == 0)
+    }
 }

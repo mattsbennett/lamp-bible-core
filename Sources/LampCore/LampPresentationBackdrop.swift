@@ -78,6 +78,9 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
         /// Citations and rules: the theme's accent while it still reads over
         /// the picture, and otherwise the text colour.
         public var accent: String
+        /// Each of the theme's highlights by name, held to the accent's rule:
+        /// its own colour while it still reads, and otherwise the text colour.
+        public var highlights: [String: String]
         /// What the picture is darkened or lightened with behind the words:
         /// the theme's other ground colour.
         public var scrim: String
@@ -90,12 +93,14 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
         public init(
             text: String,
             accent: String,
+            highlights: [String: String] = [:],
             scrim: String,
             scrimOpacity: Double,
             contrast: Double
         ) {
             self.text = text
             self.accent = accent
+            self.highlights = highlights
             self.scrim = scrim
             self.scrimOpacity = scrimOpacity
             self.contrast = contrast
@@ -259,16 +264,18 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             return best
         }
 
-        var accentHex = theme.accentColor
-        if let accent = LampPresentationColor(hex: theme.accentColor),
-           Self.contrast(of: accent, over: behind, scrim: chosen.scrim, opacity: chosen.opacity)
-               < Self.accentContrast {
-            accentHex = chosen.inkHex
+        func reading(_ hex: String) -> String {
+            guard let color = LampPresentationColor(hex: hex),
+                  Self.contrast(of: color, over: behind, scrim: chosen.scrim, opacity: chosen.opacity)
+                      < Self.accentContrast
+            else { return hex }
+            return chosen.inkHex
         }
 
         return Treatment(
             text: chosen.inkHex,
-            accent: accentHex,
+            accent: reading(theme.accentColor),
+            highlights: (theme.highlights ?? [:]).mapValues(reading),
             scrim: chosen.scrimHex,
             scrimOpacity: chosen.opacity,
             contrast: chosen.contrast.isFinite ? chosen.contrast : LampPresentationColor.contrast(chosen.ink, chosen.scrim)
