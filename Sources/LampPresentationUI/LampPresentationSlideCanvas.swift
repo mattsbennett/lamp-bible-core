@@ -190,7 +190,13 @@ public struct LampPresentationSlideCanvas: View {
                         ) {
                             let _ = reportsBackdrop?(treatment)
                             ZStack(alignment: .topLeading) {
-                                scrim(treatment, behind: frames, in: proxy.size, unit: unit)
+                                scrim(
+                                    treatment,
+                                    behind: frames,
+                                    in: proxy.size,
+                                    unit: unit,
+                                    softening: LampPresentationAssetImageCache.swiftUIImage(at: backdrop)
+                                )
                                 inked(treatment).page(unit: unit)
                             }
                         } else {
@@ -214,62 +220,116 @@ public struct LampPresentationSlideCanvas: View {
         return copy
     }
 
-    /// The picture darkened or lightened behind the words, in bands the width
-    /// of the slide that fade out above and below them. The rest of the
-    /// picture is left as it is.
+    /// The picture blurred and then darkened or lightened behind the words,
+    /// in fades the width of the slide that run out above and below each
+    /// block. The rest of the picture is left as it is.
+    ///
+    /// Each block's words are covered as much as they need, which the
+    /// treatment gives block by block; where two blocks' fades meet, the
+    /// stronger holds. `softening` is the picture itself, blurred by
+    /// `LampPresentationBackdrop.softening` behind every block whether or not
+    /// it needs a scrim: fine detail behind a letter hinders reading at any
+    /// contrast.
     private func scrim(
         _ treatment: LampPresentationBackdrop.Treatment,
         behind frames: [CGRect],
         in size: CGSize,
-        unit: CGFloat
+        unit: CGFloat,
+        softening picture: Image?
     ) -> some View {
         let color = Color(lampDeckHex: treatment.scrim) ?? background
-        let feather = 90 * unit
-        let bands = treatment.scrimOpacity > 0
-            ? Self.bands(around: frames, pad: 36 * unit, feather: feather)
-            : []
+        let strengths = treatment.scrimOpacities.count == frames.count
+            ? treatment.scrimOpacities
+            : Array(repeating: treatment.scrimOpacity, count: frames.count)
+        let shade = Self.profile(
+            around: frames,
+            strengths: strengths,
+            pad: 36 * unit,
+            feather: 90 * unit,
+            height: size.height
+        )
+        let reach = Self.profile(
+            around: frames,
+            strengths: frames.map { _ in 1 },
+            pad: 36 * unit,
+            feather: 90 * unit,
+            height: size.height
+        )
         return ZStack(alignment: .topLeading) {
-            ForEach(Array(bands.enumerated()), id: \.offset) { _, band in
-                let height = band.upperBound - band.lowerBound + 2 * feather
-                let edge = feather / height
+            if let picture, reach.contains(where: { $0.strength > 0 }) {
+                picture
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
+                    .blur(radius: LampPresentationBackdrop.softening * unit, opaque: true)
+                    .mask {
+                        LinearGradient(
+                            stops: reach.map { .init(color: .black.opacity($0.strength), location: $0.location) },
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+            }
+            if shade.contains(where: { $0.strength > 0 }) {
                 LinearGradient(
-                    stops: [
-                        .init(color: color.opacity(0), location: 0),
-                        .init(color: color.opacity(treatment.scrimOpacity), location: edge),
-                        .init(color: color.opacity(treatment.scrimOpacity), location: 1 - edge),
-                        .init(color: color.opacity(0), location: 1),
-                    ],
+                    stops: shade.map { .init(color: color.opacity($0.strength), location: $0.location) },
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(width: size.width, height: height)
-                .offset(y: band.lowerBound - feather)
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 
-    /// The spans down the slide that need the scrim at full strength: every
-    /// block's words with `pad` around them, run together where the fades
-    /// between them would otherwise overlap.
-    static func bands(
+    /// How strongly the scrim lies at each point down a slide `height` tall:
+    /// at a block's full strength across its words with `pad` around them,
+    /// fading to nothing over `feather` above and below, and the strongest of
+    /// any blocks whose fades meet.
+    ///
+    /// Given as stops for a vertical gradient: every place a fade begins or
+    /// ends, and enough between them that the strongest of two overlapping
+    /// fades is followed closely.
+    static func profile(
         around frames: [CGRect],
+        strengths: [Double],
         pad: CGFloat,
-        feather: CGFloat
-    ) -> [ClosedRange<CGFloat>] {
-        let spans = frames
-            .filter { !$0.isNull && !$0.isEmpty }
-            .map { ($0.minY - pad)...($0.maxY + pad) }
-            .sorted { $0.lowerBound < $1.lowerBound }
-        var merged: [ClosedRange<CGFloat>] = []
-        for span in spans {
-            if let last = merged.last, span.lowerBound - last.upperBound < 2 * feather {
-                merged[merged.count - 1] = last.lowerBound...max(last.upperBound, span.upperBound)
-            } else {
-                merged.append(span)
+        feather: CGFloat,
+        height: CGFloat
+    ) -> [(location: CGFloat, strength: Double)] {
+        guard height > 0 else { return [] }
+        let spans = zip(frames, strengths)
+            .filter { !$0.0.isNull && !$0.0.isEmpty && $0.1 > 0 }
+            .map { (low: $0.0.minY - pad, high: $0.0.maxY + pad, strength: $0.1) }
+        guard !spans.isEmpty else { return [(0, 0), (1, 0)] }
+        func strength(at y: CGFloat) -> Double {
+            spans.reduce(0) { most, span in
+                let reach: CGFloat
+                if y >= span.low && y <= span.high {
+                    reach = 1
+                } else if y < span.low {
+                    reach = max(0, 1 - (span.low - y) / feather)
+                } else {
+                    reach = max(0, 1 - (y - span.high) / feather)
+                }
+                return max(most, span.strength * Double(reach))
             }
         }
-        return merged
+        var places = Set<CGFloat>([0, height])
+        for span in spans {
+            for y in [span.low - feather, span.low, span.high, span.high + feather]
+            where y > 0 && y < height {
+                places.insert(y)
+            }
+        }
+        // Every so often between, so a crossing of two fades is not cut short.
+        let step = feather / 6
+        var y = step
+        while y < height {
+            places.insert(y)
+            y += step
+        }
+        return places.sorted().map { (location: $0 / height, strength: strength(at: $0)) }
     }
 
     /// `rect` as a fraction of `size`, from its top left.
@@ -318,6 +378,9 @@ public struct LampPresentationSlideCanvas: View {
                         alignment: .center,
                         color: accent
                     )
+                }
+                if !plan.quoteGroups.isEmpty {
+                    epigraph(unit: unit)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -373,6 +436,60 @@ public struct LampPresentationSlideCanvas: View {
             }
         }
     }
+
+    /// The passages under a title or closing heading, each with its citation.
+    ///
+    /// They are set well below the heading, never larger than
+    /// `largestEpigraph`, and centred under it with the heading's rule
+    /// between, so the slide keeps the look of a title while the words wait
+    /// on screen. A long passage steps down rather than pushing the heading
+    /// off the slide.
+    private func epigraph(unit: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(accent)
+                .frame(width: 120 * unit, height: 6 * unit)
+                .padding(.top, 14 * unit)
+                .padding(.bottom, 40 * unit)
+            fitted(
+                unit: unit,
+                largest: Self.largestEpigraph,
+                settled: Self.largestEpigraph,
+                air: 0
+            ) { size in
+                VStack(spacing: 0.9 * size * unit) {
+                    ForEach(plan.quoteGroups) { group in
+                        VStack(spacing: 0.3 * size * unit) {
+                            ForEach(group.quotations) { passage in
+                                slideBlockText(
+                                    passage,
+                                    size: size * unit,
+                                    weight: .regular,
+                                    alignment: .center,
+                                    stepsDown: false
+                                )
+                            }
+                            if let citation = group.citation {
+                                slideBlockText(
+                                    citation,
+                                    size: Self.citationSize(beside: size) * unit,
+                                    weight: .medium,
+                                    alignment: .center,
+                                    color: accent,
+                                    stepsDown: false
+                                )
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: 1_200 * unit)
+            }
+        }
+    }
+
+    /// An epigraph stays under the 40-unit line a title may carry, so it never
+    /// competes with the heading it serves.
+    static let largestEpigraph: CGFloat = 32
 
     /// A heading, every body block beneath it, and any citations — with a
     /// picture beside the prose when the slide carries one.

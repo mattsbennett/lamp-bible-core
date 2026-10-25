@@ -275,20 +275,44 @@ struct LampSlideBackdropRenderTests {
         #expect(reported?.scrimOpacity == 0)
     }
 
-    @Test("The scrim runs in one band behind words that sit together, and in two behind words apart")
-    func bandsJoinOnlyWhereTheirFadesMeet() {
-        let close = LampPresentationSlideCanvas.bands(
-            around: [CGRect(x: 0, y: 100, width: 10, height: 50), CGRect(x: 0, y: 200, width: 10, height: 50)],
+    @Test("Each block is covered as much as it needs, and the stronger holds where fades meet")
+    func scrimFollowsEachBlock() {
+        let title = CGRect(x: 0, y: 100, width: 10, height: 50)
+        let credit = CGRect(x: 0, y: 800, width: 10, height: 20)
+        let stops = LampPresentationSlideCanvas.profile(
+            around: [title, credit],
+            strengths: [0.3, 0.6],
             pad: 36,
-            feather: 90
+            feather: 90,
+            height: 900
         )
-        #expect(close == [64...286])
-        let apart = LampPresentationSlideCanvas.bands(
-            around: [CGRect(x: 0, y: 100, width: 10, height: 50), CGRect(x: 0, y: 700, width: 10, height: 50)],
+        func strength(at y: CGFloat) -> Double {
+            stops.min { abs($0.location * 900 - y) < abs($1.location * 900 - y) }!.strength
+        }
+        #expect(abs(strength(at: 125) - 0.3) < 0.001)
+        #expect(abs(strength(at: 810) - 0.6) < 0.001)
+        // Between them the picture is left alone.
+        #expect(strength(at: 450) == 0)
+
+        // Where two fades overlap, the stronger, not the two laid together.
+        let close = LampPresentationSlideCanvas.profile(
+            around: [title, CGRect(x: 0, y: 200, width: 10, height: 50)],
+            strengths: [0.3, 0.5],
             pad: 36,
-            feather: 90
+            feather: 90,
+            height: 900
         )
-        #expect(apart.count == 2)
+        #expect(close.allSatisfy { $0.strength <= 0.5 + 0.0001 })
+
+        // A block that needs no scrim adds none.
+        let none = LampPresentationSlideCanvas.profile(
+            around: [title],
+            strengths: [0],
+            pad: 36,
+            feather: 90,
+            height: 900
+        )
+        #expect(none.allSatisfy { $0.strength == 0 })
     }
 
     // MARK: Emphasis

@@ -110,6 +110,9 @@ struct LampPresentationQuoteTypographyTests {
         #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .titleAndBody))
         // A quotation in a column is still a quotation.
         #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .twoColumn))
+        // And so is a passage under a title or closing heading.
+        #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .title))
+        #expect(LampPresentationQuoteTypography.applies(to: quotation, layout: .closing))
         // Where an author types what they mean, nothing is added.
         #expect(!LampPresentationQuoteTypography.applies(to: body, layout: .twoColumn))
         #expect(!LampPresentationQuoteTypography.applies(to: quotation, layout: .blank))

@@ -174,8 +174,8 @@ public enum LampPresentationQuoteTypography {
         guard block.typography != .verbatim else { return false }
         guard block.kind == .quotation || block.kind == .scripture else { return false }
         switch layout {
-        case .quotation, .scripture, .titleAndBody, .twoColumn: return true
-        case .title, .closing, .image, .blank: return false
+        case .quotation, .scripture, .titleAndBody, .twoColumn, .title, .closing: return true
+        case .image, .blank: return false
         }
     }
 }

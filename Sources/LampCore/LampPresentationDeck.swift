@@ -564,7 +564,8 @@ public enum LampPresentationDeckValidator {
                only.count > 1,
                plan.quoteGroups.contains(where: { $0.citation != nil }),
                slide.layout == .scripture || slide.layout == .quotation
-                   || slide.layout == .titleAndBody {
+                   || slide.layout == .titleAndBody || slide.layout == .title
+                   || slide.layout == .closing {
                 issue(
                     .warning,
                     "\(slidePath).blocks",
@@ -847,12 +848,16 @@ public enum LampPresentationDeckValidator {
             .reduce(0) { $0 + $1.text.count }
         guard prose > 0 else { return nil }
         // A picture takes about half the slide, so the prose beside it has
-        // roughly half the room.
-        let ceiling = plan.image == nil ? 900 : 450
+        // roughly half the room. Passages under a title share the slide with
+        // a heading set at its largest, which leaves them about as much.
+        let underTitle = layout == .title || layout == .closing
+        let ceiling = plan.image == nil && !underTitle ? 900 : 450
         guard prose > ceiling else { return nil }
-        let shape = plan.image == nil
-            ? "this slide"
-            : "the half of this slide left by its image"
+        let shape = underTitle
+            ? "the passages under this slide's title"
+            : plan.image == nil
+                ? "this slide"
+                : "the half of this slide left by its image"
         return "About \(prose) characters of text for \(shape). Text shrinks to fit "
             + "before it is clipped, so split this across slides to keep it readable."
     }

@@ -261,9 +261,14 @@ public extension LampPresentationSlide {
 
         switch layout {
         case .title, .closing:
-            // Deliberately sparing: a heading and one line beneath it.
+            // A heading and one line beneath it, and under those any passages
+            // the slide quotes — an epigraph to sit on screen before a talk
+            // begins, or a verse to close on. The passages are set well below
+            // the heading, so the slide still reads as a title.
             plan.title = take(.title)
             plan.subtitle = take(.subtitle, .body)
+            plan.prose = takeAll(.scripture, .quotation)
+            plan.citations = takeAll(.citation)
 
         case .titleAndBody:
             plan.title = take(.title)

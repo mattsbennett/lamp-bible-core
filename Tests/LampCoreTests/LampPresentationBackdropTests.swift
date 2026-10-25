@@ -178,6 +178,32 @@ struct LampPresentationBackdropTests {
         #expect(treatment.scrimOpacity == 0)
     }
 
+    @Test("A small block over a darker part of the picture is covered as much as it needs, alone")
+    func eachBlockIsCoveredAsItNeeds() {
+        // White everywhere but the bottom row, which is mid-grey.
+        let grey = LampPresentationColor(hex: "#777777")!
+        let columns = 16
+        let rows = 9
+        let cells = (0..<rows).flatMap { row in
+            (0..<columns).map { _ -> LampPresentationBackdrop.Cell in
+                let color = row == rows - 1 ? grey : white
+                return .init(darkest: color, lightest: color)
+            }
+        }
+        let backdrop = LampPresentationBackdrop(columns: columns, rows: rows, cells: cells)
+        let title = CGRect(x: 0, y: 0, width: 1, height: 0.85)
+        // Four cells against the title's 128: within the share forgiven, were
+        // the two counted together.
+        let credit = CGRect(x: 0.76, y: 0.9, width: 0.24, height: 0.08)
+        let treatment = backdrop.treatment(for: [title, credit], theme: neutral)
+        #expect(treatment.text == neutral.foregroundColor)
+        #expect(treatment.scrimOpacities.count == 2)
+        #expect(treatment.scrimOpacities[0] == 0)
+        #expect(treatment.scrimOpacities[1] > 0)
+        #expect(treatment.scrimOpacity == treatment.scrimOpacities[1])
+        #expect(treatment.contrast >= LampPresentationBackdrop.targetContrast)
+    }
+
     @Test("Fine black lines on white paper count as both, not as their grey average")
     func engravingIsReadAsLinesAndPaper() {
         let mixed = LampPresentationBackdrop.Cell(darkest: black, lightest: white)

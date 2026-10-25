@@ -84,10 +84,16 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
         /// What the picture is darkened or lightened with behind the words:
         /// the theme's other ground colour.
         public var scrim: String
-        /// From 0, where the picture is left alone, to 1, where it is hidden.
+        /// From 0, where the picture is left alone, to 1, where it is hidden:
+        /// the most any of the slide's words needs.
         public var scrimOpacity: Double
-        /// The contrast the words have over at least `coverage` of what lies
-        /// behind them, once the scrim is laid.
+        /// What each region the treatment was asked about needs, in the order
+        /// they were given. A credit in a dark corner of the picture is
+        /// covered as much as it needs there, without the scrim behind the
+        /// title growing to match.
+        public var scrimOpacities: [Double]
+        /// The contrast every block of words keeps over at least `coverage`
+        /// of what lies behind it, once the scrim is laid: the least of them.
         public var contrast: Double
 
         public init(
@@ -96,6 +102,7 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             highlights: [String: String] = [:],
             scrim: String,
             scrimOpacity: Double,
+            scrimOpacities: [Double] = [],
             contrast: Double
         ) {
             self.text = text
@@ -103,6 +110,7 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             self.highlights = highlights
             self.scrim = scrim
             self.scrimOpacity = scrimOpacity
+            self.scrimOpacities = scrimOpacities
             self.contrast = contrast
         }
     }
@@ -112,10 +120,29 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
     public static let targetContrast = 4.5
     /// What an accent must keep to stay the accent, as for a theme.
     public static let accentContrast = 3.0
-    /// The share of the picture behind the words that must meet the target.
-    /// A glint or a candle flame under one letter should not darken a whole
-    /// title.
+    /// The share of the picture behind each block of words that must meet
+    /// the target. A glint or a candle flame under one letter should not
+    /// darken a whole title.
+    ///
+    /// It is counted block by block. Counted over every block together, a
+    /// small one — a citation, the picture's credit — could fall entirely
+    /// within the share forgiven and be left unreadable while the slide as a
+    /// whole passed.
     public static let coverage = 0.95
+    /// How far the picture is blurred behind the words, in design units: the
+    /// radius of the blur the canvas lays under the scrim, which the sampler
+    /// applies before it reads the picture so that what it measures is what
+    /// the words are drawn over.
+    ///
+    /// Contrast alone did not make a painting readable behind a verse. A
+    /// crowd, a colonnade or a shoreline has edges as fine as a letter's
+    /// strokes, and those edges compete with the letters even where every
+    /// cell reaches the target. Four units, a little more than a stroke of
+    /// body type, takes that detail out from behind the words while the
+    /// picture keeps its colours and the shapes of what it shows. Eight read
+    /// little better and left the picture a blur behind most of a title
+    /// slide.
+    public static let softening = 4.0
 
     public let columns: Int
     public let rows: Int
@@ -217,12 +244,16 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
         return min((high * 100).rounded(.up) / 100, 1)
     }
 
-    /// How to draw words in `regions` of this picture in `theme`.
+    /// How to draw words in `regions` of this picture in `theme`, each region
+    /// being one block of words.
     ///
     /// The words take whichever of the theme's two ground colours needs less
     /// of the picture covered to be read, and the scrim is the other one. A
     /// dark theme over a pale photograph is set in its dark colour rather
     /// than drowning the picture in black, and the reverse.
+    ///
+    /// Each region is covered as much as its own words need, so every block
+    /// reaches the target over `coverage` of what lies behind it.
     public func treatment(
         for regions: [CGRect],
         theme: LampPresentationTheme
@@ -231,43 +262,55 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             ?? .init(red: 1, green: 1, blue: 1)
         let ground = LampPresentationColor(hex: theme.backgroundColor)
             ?? .init(red: 0, green: 0, blue: 0)
-        let behind = cells(under: regions)
+        let blocks = regions.map { cells(under: [$0]) }
 
         struct Option {
             var ink: LampPresentationColor
             var inkHex: String
             var scrim: LampPresentationColor
             var scrimHex: String
-            var opacity: Double
+            var opacities: [Double]
             var contrast: Double
+            var most: Double { opacities.max() ?? 0 }
+            var total: Double { opacities.reduce(0, +) }
         }
         let options = [
             (foreground, theme.foregroundColor, ground, theme.backgroundColor),
             (ground, theme.backgroundColor, foreground, theme.foregroundColor),
         ].map { ink, inkHex, scrim, scrimHex in
-            let opacity = Self.leastScrim(for: ink, over: behind, scrim: scrim)
+            let opacities = blocks.map { Self.leastScrim(for: ink, over: $0, scrim: scrim) }
+            let contrasts = zip(blocks, opacities).map { cells, opacity in
+                Self.contrast(of: ink, over: cells, scrim: scrim, opacity: opacity)
+            }
             return Option(
                 ink: ink,
                 inkHex: inkHex,
                 scrim: scrim,
                 scrimHex: scrimHex,
-                opacity: opacity,
-                contrast: Self.contrast(of: ink, over: behind, scrim: scrim, opacity: opacity)
+                opacities: opacities,
+                contrast: contrasts.min() ?? .infinity
             )
         }
-        // Less covered wins; where both leave the picture alone, the one that
-        // reads more clearly. The theme's own foreground wins a tie, so a
-        // slide looks like the rest of its deck when it can.
+        // Less covered wins — first where it is covered most, then over all;
+        // where both leave the picture alone, the one that reads more clearly.
+        // The theme's own foreground wins a tie, so a slide looks like the
+        // rest of its deck when it can.
         let chosen = options.dropFirst().reduce(options[0]) { best, next in
-            if next.opacity < best.opacity { return next }
-            if next.opacity == best.opacity && next.contrast > best.contrast + 0.5 { return next }
+            if next.most < best.most { return next }
+            if next.most == best.most && next.total < best.total { return next }
+            if next.most == best.most && next.total == best.total
+                && next.contrast > best.contrast + 0.5 { return next }
             return best
         }
 
+        // A colour stays itself only while every block it may be used in
+        // still reads in it.
         func reading(_ hex: String) -> String {
             guard let color = LampPresentationColor(hex: hex),
-                  Self.contrast(of: color, over: behind, scrim: chosen.scrim, opacity: chosen.opacity)
-                      < Self.accentContrast
+                  zip(blocks, chosen.opacities).contains(where: { cells, opacity in
+                      Self.contrast(of: color, over: cells, scrim: chosen.scrim, opacity: opacity)
+                          < Self.accentContrast
+                  })
             else { return hex }
             return chosen.inkHex
         }
@@ -277,7 +320,8 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             accent: reading(theme.accentColor),
             highlights: (theme.highlights ?? [:]).mapValues(reading),
             scrim: chosen.scrimHex,
-            scrimOpacity: chosen.opacity,
+            scrimOpacity: chosen.most,
+            scrimOpacities: chosen.opacities,
             contrast: chosen.contrast.isFinite ? chosen.contrast : LampPresentationColor.contrast(chosen.ink, chosen.scrim)
         )
     }

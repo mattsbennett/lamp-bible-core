@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import Foundation
 import ImageIO
 import LampCore
@@ -64,12 +65,19 @@ enum LampPresentationBackdropSampler {
               )
         else { return nil }
         context.interpolationQuality = .high
+        // The words are drawn over the picture blurred by
+        // `LampPresentationBackdrop.softening`, so it is read blurred as well.
+        let designWidth = aspectRatio == .widescreen ? 1_600.0 : 1_200.0
+        let picture = softened(
+            image,
+            radius: LampPresentationBackdrop.softening * shown.width / designWidth
+        ) ?? image
         // Scale the whole picture so that the shown part lands exactly on the
         // bitmap; Core Graphics clips the rest.
         let scaleX = Double(width) / shown.width
         let scaleY = Double(height) / shown.height
         context.draw(
-            image,
+            picture,
             in: CGRect(
                 x: -shown.minX * scaleX,
                 y: -(Double(image.height) - shown.maxY) * scaleY,
@@ -104,6 +112,22 @@ enum LampPresentationBackdropSampler {
             }
         }
         return LampPresentationBackdrop(columns: columns, rows: rows, cells: cells)
+    }
+
+    /// `image` blurred by `radius` pixels, the edges held rather than faded
+    /// to transparent, as SwiftUI's opaque blur holds them.
+    static func softened(_ image: CGImage, radius: Double) -> CGImage? {
+        guard radius > 0 else { return image }
+        let input = CIImage(cgImage: image)
+        let blurred = input
+            .clampedToExtent()
+            .applyingGaussianBlur(sigma: radius)
+            .cropped(to: input.extent)
+        let context = CIContext(options: [
+            .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+            .outputColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+        ])
+        return context.createCGImage(blurred, from: input.extent)
     }
 
     /// Reads the file at `url` small enough to be quick, upright as it will
