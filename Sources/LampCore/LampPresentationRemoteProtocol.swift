@@ -34,6 +34,22 @@ public struct LampPresentationRemoteMessage: Codable, Equatable, Sendable {
     public var command: LampPresentationRemoteCommand?
     public var state: LampPresentationRemoteState?
     public var errorMessage: String?
+    /// A code of this device's own, minted by the presenter when it first
+    /// pairs so the device is not asked for the QR code again.
+    ///
+    /// Only ever sent inside `accepted`, which is already sealed under the
+    /// session code, so it is never in the clear. A device sends it back as
+    /// `pairingCode` on a later connection.
+    public var deviceCode: String?
+    /// The presenter's long-lived secret, shared with every device it has
+    /// paired so that a returning device can recognise it. Also only ever
+    /// sent inside `accepted`.
+    public var presenterSecret: String?
+    /// Lets a device that has paired before recognise this presenter without
+    /// the presenter broadcasting anything that stays the same between
+    /// connections. Carried on the public challenge; see
+    /// `LampPresentationRemotePairing.presenterHint(secret:challenge:)`.
+    public var presenterHint: String?
 
     public init(
         protocolVersion: Int = LampPresentationRemoteProtocol.currentVersion,
@@ -43,7 +59,10 @@ public struct LampPresentationRemoteMessage: Codable, Equatable, Sendable {
         pairingChallenge: String? = nil,
         command: LampPresentationRemoteCommand? = nil,
         state: LampPresentationRemoteState? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        deviceCode: String? = nil,
+        presenterSecret: String? = nil,
+        presenterHint: String? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.kind = kind
@@ -53,21 +72,33 @@ public struct LampPresentationRemoteMessage: Codable, Equatable, Sendable {
         self.command = command
         self.state = state
         self.errorMessage = errorMessage
+        self.deviceCode = deviceCode
+        self.presenterSecret = presenterSecret
+        self.presenterHint = presenterHint
     }
 
     public static func hello(
         clientName: String? = nil,
-        pairingChallenge: String? = nil
+        pairingChallenge: String? = nil,
+        presenterHint: String? = nil
     ) -> Self {
-        .init(kind: .hello, clientName: clientName, pairingChallenge: pairingChallenge)
+        .init(
+            kind: .hello,
+            clientName: clientName,
+            pairingChallenge: pairingChallenge,
+            presenterHint: presenterHint
+        )
     }
 
     public static func pair(code: String, challenge: String) -> Self {
         .init(kind: .pair, pairingCode: code, pairingChallenge: challenge)
     }
 
-    public static func accepted() -> Self {
-        .init(kind: .accepted)
+    public static func accepted(
+        deviceCode: String? = nil,
+        presenterSecret: String? = nil
+    ) -> Self {
+        .init(kind: .accepted, deviceCode: deviceCode, presenterSecret: presenterSecret)
     }
 
     public static func rejected(_ message: String) -> Self {
@@ -282,6 +313,88 @@ public enum LampPresentationRemotePairing {
     public static func generateChallenge(byteCount: Int = 24) -> String {
         let bytes = (0..<max(16, byteCount)).map { _ in UInt8.random(in: .min ... .max) }
         return Data(bytes).base64EncodedString()
+    }
+
+    /// A presenter's long-lived secret, 32 random bytes.
+    ///
+    /// It identifies the presenter to the devices it has paired and nothing
+    /// else: it is never a key for traffic, and knowing it does not let
+    /// anyone connect. It belongs in the presenter's keychain, never in the
+    /// library — a synced file of pairing material would hand every remote's
+    /// key to the sync server.
+    public static func generatePresenterSecret(byteCount: Int = 32) -> String {
+        Data((0..<max(16, byteCount)).map { _ in UInt8.random(in: .min ... .max) })
+            .base64EncodedString()
+    }
+
+    /// What a presenter puts on its public challenge so that a device it has
+    /// paired can tell which saved code to offer.
+    ///
+    /// It is an HMAC over the challenge, which is fresh for every connection,
+    /// so the hint is different every time: someone watching the network sees
+    /// no value that would let them say "that is the same Mac as yesterday".
+    /// A device that holds the secret recomputes it; a device that does not
+    /// learns nothing, because the secret cannot be recovered from the hint.
+    ///
+    /// **Matching a hint is recognition, not authentication.** It only
+    /// decides which code to try. What proves a device may connect is still
+    /// the pairing proof, sealed under that code and bound to this same fresh
+    /// challenge.
+    public static func presenterHint(secret: String, challenge: String) -> String? {
+        guard let key = presenterKey(secret), !challenge.isEmpty else { return nil }
+        let code = HMAC<SHA256>.authenticationCode(
+            for: Data(challenge.utf8),
+            using: key
+        )
+        return Data(code).base64EncodedString()
+    }
+
+    /// Whether `hint` is the one this secret makes for this challenge.
+    ///
+    /// Compared through CryptoKit, which takes the same time whether or not
+    /// it matches, so the comparison itself says nothing about the secret.
+    public static func presenterMatches(
+        secret: String,
+        hint: String,
+        challenge: String
+    ) -> Bool {
+        guard let key = presenterKey(secret),
+              !challenge.isEmpty,
+              let offered = Data(base64Encoded: hint)
+        else { return false }
+        return HMAC<SHA256>.isValidAuthenticationCode(
+            offered,
+            authenticating: Data(challenge.utf8),
+            using: key
+        )
+    }
+
+    private static func presenterKey(_ secret: String) -> SymmetricKey? {
+        guard let data = Data(base64Encoded: secret), data.count >= 16 else { return nil }
+        return SymmetricKey(data: data)
+    }
+}
+
+/// A device a presenter has paired and will recognise again.
+///
+/// `deviceCode` is that device's key for every frame it sends, so this record
+/// is as sensitive as a password: it belongs in the presenter's keychain, and
+/// never in the library, which syncs.
+public struct LampPresentationTrustedRemote: Codable, Equatable, Sendable, Identifiable {
+    /// The code minted for this device, which is also its frame key.
+    public var deviceCode: String
+    /// What the device called itself when it paired, to be shown in a list
+    /// someone forgets a remote from. Chosen by the device, so it is a label,
+    /// never something to decide anything by.
+    public var clientName: String?
+    public var pairedAt: Date
+
+    public var id: String { deviceCode }
+
+    public init(deviceCode: String, clientName: String? = nil, pairedAt: Date = Date()) {
+        self.deviceCode = deviceCode
+        self.clientName = clientName
+        self.pairedAt = pairedAt
     }
 }
 
