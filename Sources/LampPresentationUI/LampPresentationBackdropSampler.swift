@@ -114,6 +114,17 @@ enum LampPresentationBackdropSampler {
         return LampPresentationBackdrop(columns: columns, rows: rows, cells: cells)
     }
 
+    /// The context the blur is drawn through.
+    ///
+    /// Made once and kept: a `CIContext` compiles its kernels and claims its
+    /// drawing resources as it is created, which measured 8 to 15 ms against
+    /// 1 ms for the blur itself. One per picture made opening a deck pay that
+    /// cost for nothing.
+    private static let softeningContext = CIContext(options: [
+        .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+        .outputColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
+    ])
+
     /// `image` blurred by `radius` pixels, the edges held rather than faded
     /// to transparent, as SwiftUI's opaque blur holds them.
     static func softened(_ image: CGImage, radius: Double) -> CGImage? {
@@ -123,11 +134,7 @@ enum LampPresentationBackdropSampler {
             .clampedToExtent()
             .applyingGaussianBlur(sigma: radius)
             .cropped(to: input.extent)
-        let context = CIContext(options: [
-            .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
-            .outputColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any,
-        ])
-        return context.createCGImage(blurred, from: input.extent)
+        return softeningContext.createCGImage(blurred, from: input.extent)
     }
 
     /// Reads the file at `url` small enough to be quick, upright as it will
