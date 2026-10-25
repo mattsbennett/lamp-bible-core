@@ -40,6 +40,13 @@ public struct LampPresentationRemoteMessage: Codable, Equatable, Sendable {
     /// Only ever sent inside `accepted`, which is already sealed under the
     /// session code, so it is never in the clear. A device sends it back as
     /// `pairingCode` on a later connection.
+    ///
+    /// It is that device's key for every session it ever has, so this
+    /// channel has no forward secrecy: someone who later obtained a code
+    /// could read recordings of that remote's past sessions. For moving
+    /// between slides that is a fair trade for not pairing every time. It
+    /// would not be one for anything worth recording, so this channel should
+    /// not be reused for anything else without changing that.
     public var deviceCode: String?
     /// The presenter's long-lived secret, shared with every device it has
     /// paired so that a returning device can recognise it. Also only ever
