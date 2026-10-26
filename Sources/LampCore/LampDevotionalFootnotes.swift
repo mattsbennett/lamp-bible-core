@@ -108,39 +108,73 @@ public enum LampDevotionalFootnotes {
 
     // MARK: - Shown to a reader
 
+    /// The scheme a footnote marker links to, where a reader can be taken to
+    /// the note by clicking it.
+    ///
+    /// Nothing outside Lamp knows it. Whichever surface shows the writing
+    /// answers the link itself, and one with nowhere to go asks for markers
+    /// that are not linked at all.
+    public static let markerURLScheme = "lamp-footnote"
+
+    /// The link for the marker of the footnote shown as `number`.
+    public static func markerURL(number: Int) -> String {
+        "\(markerURLScheme):\(number)"
+    }
+
+    /// Which footnote a marker's link refers to, or nil for any other link.
+    ///
+    /// Read from the whole link rather than from its path: the marker's link
+    /// has no authority and no slash, and what Foundation calls the path of
+    /// such a URL has changed before.
+    public static func markerNumber(in url: URL) -> Int? {
+        guard url.scheme == markerURLScheme else { return nil }
+        return Int(url.absoluteString.dropFirst(markerURLScheme.count + 1))
+    }
+
     /// The prose with each marker set as a superscript number, which is how a
     /// footnote reference reads in a finished document.
     ///
     /// The digits are the Unicode superscript characters rather than styling,
     /// so the number survives being copied out of the reader and needs nothing
     /// of whoever draws the text.
-    public static func displayContent(_ numbered: Numbered) -> String {
+    ///
+    /// `linkingMarkers` sets each one as a Markdown link to its note, for a
+    /// surface that can take a reader there. A surface that cannot leaves them
+    /// plain: a link that does nothing is worse than no link.
+    public static func displayContent(
+        _ numbered: Numbered,
+        linkingMarkers: Bool = false
+    ) -> String {
         guard !numbered.footnotes.isEmpty else { return numbered.source }
-        let superscripts = Dictionary(
-            uniqueKeysWithValues: numbered.footnotes.map {
-                ($0.label, superscript($0.number))
+        let markers = Dictionary(
+            uniqueKeysWithValues: numbered.footnotes.map { footnote in
+                let shown = superscript(footnote.number)
+                guard linkingMarkers else { return (footnote.label, shown) }
+                return (footnote.label, "[\(shown)](\(markerURL(number: footnote.number)))")
             }
         )
         // From the writing's own labels, not from the numbered Markdown: a
         // marker left as written because nothing defines it could otherwise be
         // mistaken for the number of a footnote that does exist.
-        return rewritingMarkers(in: numbered.source) { superscripts[$0] }
+        return rewritingMarkers(in: numbered.source) { markers[$0] }
+    }
+
+    /// One footnote as a reader meets it, its own line breaks joined: a
+    /// footnote is one note, and the lines of an indented continuation are a
+    /// single item in the list it is drawn as.
+    public static func displayText(of footnote: Footnote) -> String {
+        footnote.content
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     /// The definitions as a numbered list, in reading order.
-    ///
-    /// A definition's own line breaks are joined: a footnote is one note, and
-    /// the lines of an indented continuation are a single item in the list it
-    /// is drawn as.
     public static func displayFootnotes(_ numbered: Numbered) -> String {
         guard !numbered.footnotes.isEmpty else { return numbered.preamble }
-        let list: String = numbered.footnotes.map { footnote -> String in
-            let body = footnote.content
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
-            return "\(footnote.number). \(body)"
+        let list: String = numbered.footnotes.map {
+            "\($0.number). \(displayText(of: $0))"
         }.joined(separator: "\n")
         guard !numbered.preamble.isEmpty else { return list }
         return "\(numbered.preamble)\n\n\(list)"

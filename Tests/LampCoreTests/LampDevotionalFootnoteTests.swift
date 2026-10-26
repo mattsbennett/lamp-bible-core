@@ -137,6 +137,68 @@ struct LampDevotionalFootnoteTests {
         #expect(LampDevotionalFootnotes.superscript(1_024) == "¹⁰²⁴")
     }
 
+    // MARK: - Clicking a marker
+
+    /// A marker can be a link to its note, for a surface that can take a
+    /// reader there. The writer's preview does; the exported document and
+    /// anything else asking for plain markers is untouched by this.
+    @Test func linksAMarkerToItsNoteWhenAsked() {
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: "Capacity[^lewis] has not changed[^2a].",
+            footnotes: """
+            [^2a]: Defined first.
+            [^lewis]: Lewis, p. 26.
+            """
+        )
+
+        #expect(
+            LampDevotionalFootnotes.displayContent(numbered, linkingMarkers: true)
+                == "Capacity[¹](lamp-footnote:1) has not changed[²](lamp-footnote:2)."
+        )
+        #expect(
+            LampDevotionalFootnotes.displayContent(numbered)
+                == "Capacity¹ has not changed².",
+            "the plain form is what every other surface still gets"
+        )
+    }
+
+    /// The link is read back by the view that drew it, so the two have to agree
+    /// about more than one digit.
+    @Test func readsTheFootnoteBackOutOfAMarkersLink() throws {
+        for number in [1, 9, 10, 35, 1_024] {
+            let url = try #require(URL(string: LampDevotionalFootnotes.markerURL(number: number)))
+            #expect(LampDevotionalFootnotes.markerNumber(in: url) == number)
+        }
+    }
+
+    /// Any other link in the writing is the writer's own and must be left to
+    /// open as it would anywhere else.
+    @Test func doesNotTakeAnOrdinaryLinkForAMarker() throws {
+        for text in [
+            "https://example.com/1",
+            "lampbible://read?reference=John.3.16",
+            "lamp-footnote:none",
+        ] {
+            let url = try #require(URL(string: text))
+            #expect(LampDevotionalFootnotes.markerNumber(in: url) == nil)
+        }
+    }
+
+    /// A marker nothing defines is left exactly as written, linked markers or
+    /// not: there is no note to go to, and silently dropping it would hide the
+    /// mistake.
+    @Test func leavesAMarkerWithNoNoteUnlinked() {
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: "Defined[^a], not defined[^b].",
+            footnotes: "[^a]: The one note."
+        )
+
+        #expect(
+            LampDevotionalFootnotes.displayContent(numbered, linkingMarkers: true)
+                == "Defined[¹](lamp-footnote:1), not defined[^b]."
+        )
+    }
+
     /// A footnote running to several lines is one note, so it reads as one item
     /// of the list it is drawn as.
     @Test func joinsADefinitionThatRunsOnIntoOneItem() {
