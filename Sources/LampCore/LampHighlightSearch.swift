@@ -5,7 +5,7 @@ public enum LampHighlightSearch {
         let value = color?.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
             .uppercased()
-        return value?.isEmpty == false ? value! : "FFCC00"
+        return value?.isEmpty == false ? value! : LampHighlightPalette.fallback.hex
     }
 
     public static func matchesColor(_ color: String?, in selectedColors: Set<String>?) -> Bool {
