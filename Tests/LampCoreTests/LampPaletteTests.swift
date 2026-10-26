@@ -16,6 +16,24 @@ struct LampPaletteTests {
         }
     }
 
+    /// A filled control's label belongs to the platform, and the platform
+    /// draws it white. Held to 3:1 rather than 4.5:1 on purpose: Apple's own
+    /// accents are no better against white, and reaching 4.5:1 would mean a
+    /// darker red than either platform's chrome. Documentation/ColorRules.md
+    /// has the numbers and the trade.
+    @Test func aWhiteLabelOnTheAccentClearsTheFillBar() {
+        let white = LampRGB(0xFFFFFF)
+        #expect(LampRGB.contrast(white, LampColorRole.accent.color.light) >= 3)
+        #expect(LampRGB.contrast(white, LampColorRole.accent.color.dark) >= 3)
+    }
+
+    /// The current match is drawn solid, with black text on it.
+    @Test func blackTextReadsOnASolidFindMatch() {
+        let black = LampRGB(0x000000)
+        #expect(LampRGB.contrast(black, LampColorRole.findMatch.color.light) >= 4.5)
+        #expect(LampRGB.contrast(black, LampColorRole.findMatch.color.dark) >= 4.5)
+    }
+
     @Test func redLetterTextIsNotTheAccent() {
         #expect(LampColorRole.wordsOfChrist.color != LampColorRole.accent.color)
     }

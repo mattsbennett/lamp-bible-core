@@ -21,6 +21,18 @@ The values live in `LampColorRole` and `LampHighlightPalette` (`Sources/LampCore
 
 Two things keep their own colours outside these rules: a slide deck's theme (the deck's palette, not the app's), and code and diff colouring in the writing tools.
 
+## Contrast
+
+Each colour is held to the bar its job needs, rather than one bar everywhere.
+
+- **Lamp's own colours, as text**, are held to 4.5:1 against the page: the accent used as text (4.56:1 light, 4.84:1 dark) and red-letter text (4.96:1, 5.53:1). `LampPaletteTests` fails if either slips.
+- **A colour used as a fill with a label on it** is held to 3:1, not 4.5:1, and that is a deliberate choice. The label belongs to the platform, not to Lamp: macOS draws white on an accent-filled prominent button, measured on a rendered one. White on `#DB344A` is 4.56:1 and on `#EF4F63` is 3.52:1, so the dark accent clears 3:1 but not the 4.5:1 bar for normal text. Apple's own accents do no better — its default blue is 4.02:1 against white, pink 3.20:1, red 3.18:1, orange 2.57:1, yellow 1.58:1 — so holding 4.5:1 would mean a red darker than either platform's own chrome, losing the lift the dark value exists for. Darkening the dark accent to about `#CE4455` would reach 4.58:1 if that trade is ever wanted.
+- **The system colours carry the platform's numbers, not Lamp's.** As light-mode text, system blue is 4.02:1 and system purple 4.13:1, both a little under 4.5:1. The rules still ask for the system colour: a link that isn't the platform's blue is a worse problem than a link slightly under the bar.
+- **Status cannot be carried by hue.** As light-mode text, system green is 2.22:1 and system orange 2.20:1. This is why status always comes with an icon or words, and the rule matters more than the hue.
+- **A find match** keeps black text on solid yellow: 13.9:1 light, 14.9:1 dark.
+
+These are the role values themselves, against white and against `#1C1C1E`, the raised dark surface `LampPaletteTests` measures on. A filled control draws its fill with the platform's own material, which can read lighter than the value here, so treat the light accent as sitting on the line rather than comfortably over it.
+
 ## Each platform
 
 - **System colours.** Link, original language, find match and the statuses are the platform's own system colours (`systemBlue`, `systemPurple`, `systemYellow`, `systemGreen`, `systemOrange`, `systemRed`). In app UI, ask the platform for them. The values in `LampColorRole` are those colours', for the places with no system colour to ask: the writing editor's CSS, exported files, the widget.
