@@ -26,10 +26,7 @@ public enum LampPortableSettingsCodec {
         "plans.reminder.hour", "plans.reminder.minute", "devotional.fontSize",
         "quiz.defaultAgeGroup", "quiz.alwaysShowAnswers", "quiz.fontSize",
         "quiz.lineSpacing", "quiz.typeface", "modules.hiddenIDs",
-        "writing.preview.placement", "writing.preview.width", "writing.preview.fontSize",
-        "writing.preview.lineSpacing", "writing.preview.typeface",
-        "writing.preview.followsEditorScrolling", "devotional.editor.fontSize",
-        "devotional.lineSpacing", "devotional.typeface",
+        "devotional.editor.fontSize", "devotional.lineSpacing", "devotional.typeface",
         "writing.sortOrder", "writing.groupBy",
         "books.fontSize", "books.lineSpacing", "books.typeface", "books.readerState",
     ]
