@@ -2,8 +2,10 @@ import Foundation
 
 /// Numbers a devotional's footnotes by the order they are first referred to.
 ///
-/// A devotional keeps its markers in the writing and its definitions in a field
-/// of their own, and both were shown exactly as typed. So the labels *were* the
+/// A devotional keeps its markers in the writing. Its definitions are written
+/// beneath the prose, as Markdown has them and as the editor and an agent
+/// write them, or in a field of their own; both are read. Markers and
+/// definitions were shown exactly as typed. So the labels *were* the
 /// numbering: adding a footnote early in a talk with thirty-five of them meant
 /// renumbering every later one by hand, in the prose and in the definitions,
 /// and a mistake either side left a marker pointing at the wrong note.
@@ -30,9 +32,10 @@ public enum LampDevotionalFootnotes {
 
     /// A devotional's prose and footnotes, renumbered together.
     public struct Numbered: Equatable, Sendable {
-        /// The prose exactly as it was written, markers and all. Kept so that
-        /// each way of showing the writing can work from the labels rather than
-        /// from another rendering of them.
+        /// The prose as it was written, markers and all, without the
+        /// definitions written beneath it. Kept so that each way of showing the
+        /// writing can work from the labels rather than from another rendering
+        /// of them.
         public var source: String
         /// The prose with every marker that has a definition rewritten to its
         /// number, as Markdown. A marker with no definition is left exactly as
@@ -60,31 +63,36 @@ public enum LampDevotionalFootnotes {
 
     // MARK: - Numbering
 
-    /// Numbers `footnotes` by the order of their first reference in `content`.
+    /// Numbers the definitions written in `content` and in `footnotes` by the
+    /// order of their first reference in the prose.
     ///
     /// A definition nothing refers to keeps its place after the ones that are
     /// referred to, in the order it was written: it is still the writer's note,
-    /// and dropping it would lose work.
+    /// and dropping it would lose work. Those in the writing come before those
+    /// in the field, and a label defined twice keeps its first definition.
     public static func numbered(content: String, footnotes: String?) -> Numbered {
-        let parsed = definitions(in: footnotes ?? "")
-        guard !parsed.definitions.isEmpty else {
+        let written = definitionsBeneathProse(in: content)
+        let field = definitions(in: footnotes ?? "")
+        let definitions = written.definitions + field.definitions
+        guard !definitions.isEmpty else {
             return Numbered(
                 source: content,
                 content: content,
                 footnotes: [],
-                preamble: parsed.preamble
+                preamble: field.preamble
             )
         }
+        let prose = written.prose
 
         var byLabel: [String: String] = [:]
-        for definition in parsed.definitions where byLabel[definition.label] == nil {
+        for definition in definitions where byLabel[definition.label] == nil {
             byLabel[definition.label] = definition.content
         }
 
         // Referred to, in the order of first reference; then the rest, as
         // written. A repeated marker takes the number of its first appearance.
         var seen = Set<String>()
-        let ordered = (markerLabels(in: content) + parsed.definitions.map(\.label))
+        let ordered = (markerLabels(in: prose) + definitions.map(\.label))
             .filter { byLabel[$0] != nil && seen.insert($0).inserted }
 
         var numbers: [String: Int] = [:]
@@ -97,12 +105,12 @@ public enum LampDevotionalFootnotes {
         }
 
         return Numbered(
-            source: content,
-            content: rewritingMarkers(in: content) { label in
+            source: prose,
+            content: rewritingMarkers(in: prose) { label in
                 numbers[label].map { "[^\($0)]" }
             },
             footnotes: numbered,
-            preamble: parsed.preamble
+            preamble: field.preamble
         )
     }
 
@@ -258,6 +266,72 @@ public enum LampDevotionalFootnotes {
         return rewritten as String
     }
 
+    /// The label and the first line of the definition `line` opens, if it
+    /// opens one.
+    private static func definition(openedBy line: String) -> (label: String, content: String)? {
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = definitionPattern.firstMatch(in: line, range: range),
+              let label = Range(match.range(at: 1), in: line).map({ String(line[$0]) }),
+              let body = Range(match.range(at: 2), in: line).map({ String(line[$0]) })
+        else { return nil }
+        return (label, body)
+    }
+
+    /// Takes the definitions out of the writing, leaving the prose.
+    ///
+    /// Read by the editor's own rules, those of readFootnotes in the TipTap
+    /// bundle, or the two would disagree about which lines are notes. A definition runs on
+    /// through lines indented four spaces or a tab, and through blank lines
+    /// only when such a line follows them. Any other line is prose again, so a
+    /// paragraph written after a note stays in the writing.
+    static func definitionsBeneathProse(
+        in content: String
+    ) -> (prose: String, definitions: [(label: String, content: String)]) {
+        guard content.contains("[^") else { return (content, []) }
+        let lines = content.components(separatedBy: "\n")
+        var prose: [String] = []
+        var definitions: [(label: String, content: String)] = []
+        var isOpen = false
+        func runsOn(_ line: String) -> Bool {
+            isOpen && (line.hasPrefix("    ") || line.hasPrefix("\t"))
+        }
+        func isBlank(_ line: String) -> Bool {
+            line.allSatisfy { $0 == " " || $0 == "\t" }
+        }
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            if let definition = definition(openedBy: line) {
+                definitions.append(definition)
+                isOpen = true
+            } else if runsOn(line) {
+                definitions[definitions.count - 1].content += "\n" + line
+            } else if isBlank(line) {
+                var end = index
+                while end < lines.count, isBlank(lines[end]), !runsOn(lines[end]) {
+                    end += 1
+                }
+                let blanks = lines[index..<end]
+                if end < lines.count, runsOn(lines[end]) {
+                    definitions[definitions.count - 1].content += "\n" + blanks.joined(separator: "\n")
+                } else {
+                    prose.append(contentsOf: blanks)
+                }
+                index = end
+                continue
+            } else {
+                isOpen = false
+                prose.append(line)
+            }
+            index += 1
+        }
+        guard !definitions.isEmpty else { return (content, []) }
+        return (
+            prose.joined(separator: "\n"),
+            definitions.map { ($0.label, $0.content.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        )
+    }
+
     /// Splits a definitions field into what was written above the first
     /// definition and the definitions themselves.
     ///
@@ -269,11 +343,8 @@ public enum LampDevotionalFootnotes {
         var preamble: [String] = []
         var definitions: [(label: String, content: String)] = []
         for line in footnotes.components(separatedBy: .newlines) {
-            let range = NSRange(line.startIndex..., in: line)
-            if let match = definitionPattern.firstMatch(in: line, range: range),
-               let label = Range(match.range(at: 1), in: line).map({ String(line[$0]) }),
-               let body = Range(match.range(at: 2), in: line).map({ String(line[$0]) }) {
-                definitions.append((label, body))
+            if let definition = definition(openedBy: line) {
+                definitions.append(definition)
             } else if definitions.isEmpty {
                 preamble.append(line)
             } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {

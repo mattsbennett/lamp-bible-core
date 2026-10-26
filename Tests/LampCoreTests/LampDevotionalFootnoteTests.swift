@@ -113,6 +113,107 @@ struct LampDevotionalFootnoteTests {
         #expect(parsed.definitions.first?.content == "The first line.\n    A second, indented line.")
     }
 
+    // MARK: - Written beneath the prose
+
+    /// Where Markdown puts them, and where the editor and an agent write them.
+    /// Read only from the field, a writing with its notes beneath the prose
+    /// showed every marker as typed and every note as a paragraph.
+    @Test func readsDefinitionsWrittenBeneathTheProse() {
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: """
+            Capacity[^lewis] has not changed[^2a].
+
+            [^2a]: Defined first.
+            [^lewis]: Lewis, p. 26.
+            """,
+            footnotes: nil
+        )
+
+        #expect(numbered.footnotes.map(\.label) == ["lewis", "2a"])
+        #expect(numbered.footnotes.map(\.content) == ["Lewis, p. 26.", "Defined first."])
+        #expect(!numbered.source.contains("]:"))
+        #expect(LampDevotionalFootnotes.displayContent(numbered)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "Capacity¹ has not changed².")
+        #expect(LampDevotionalFootnotes.displayFootnotes(numbered) == "1. Lewis, p. 26.\n2. Defined first.")
+    }
+
+    /// The editor's rules, so the two agree about which lines are notes: a
+    /// note runs on through indented lines, and through blank lines only when
+    /// an indented line follows them. Anything else is the writing again.
+    @Test func endsADefinitionWhereTheProseCarriesOn() {
+        let parsed = LampDevotionalFootnotes.definitionsBeneathProse(in: """
+        Before[^a] and after[^b].
+
+        [^a]: The first line,
+            and an indented second.
+
+            A second paragraph of the note.
+
+        [^b]: A note of one line.
+
+        A paragraph written after the notes.
+        """)
+
+        #expect(parsed.definitions.map(\.label) == ["a", "b"])
+        #expect(parsed.definitions[0].content == """
+        The first line,
+            and an indented second.
+
+            A second paragraph of the note.
+        """)
+        #expect(parsed.definitions[1].content == "A note of one line.")
+        #expect(parsed.prose.contains("Before[^a] and after[^b]."))
+        #expect(parsed.prose.contains("A paragraph written after the notes."))
+        #expect(!parsed.prose.contains("indented second"))
+        #expect(!parsed.prose.contains("A second paragraph of the note."))
+        #expect(!parsed.prose.contains("A note of one line."))
+    }
+
+    /// A field written before notes could go beneath the prose is still read,
+    /// and a label defined in both keeps the definition in the writing.
+    @Test func readsTheWritingAndTheFieldTogether() {
+        let numbered = LampDevotionalFootnotes.numbered(
+            content: """
+            One[^a], two[^b].
+
+            [^a]: In the writing.
+            """,
+            footnotes: """
+            [^b]: In the field.
+            [^a]: Also in the field.
+            """
+        )
+
+        #expect(numbered.footnotes.map(\.content) == ["In the writing.", "In the field."])
+        #expect(numbered.content.hasPrefix("One[^1], two[^2]."))
+    }
+
+    /// Writing with no notes beneath it comes back exactly as it was written.
+    @Test func leavesWritingWithNoDefinitionsAsWritten() {
+        let content = "A marker[^a] with no note,\n\n    and an indented line.\n"
+        let parsed = LampDevotionalFootnotes.definitionsBeneathProse(in: content)
+        #expect(parsed.prose == content)
+        #expect(parsed.definitions.isEmpty)
+    }
+
+    /// An exported document carries the notes once, beneath the prose and
+    /// numbered, rather than as written in it and again beneath it.
+    @Test func exportsDefinitionsWrittenInTheProseOnce() {
+        let markdown = LampPersonalMarkdownWriter.devotionalEntry(
+            LampMarkdownDevotionalEntry(
+                title: "Two Dials",
+                content: """
+                Capacity[^lewis] has not changed.
+
+                [^lewis]: Lewis, p. 26.
+                """
+            )
+        )
+        #expect(markdown.contains("Capacity[^1] has not changed."))
+        #expect(markdown.components(separatedBy: "Lewis, p. 26.").count == 2)
+        #expect(!markdown.contains("[^lewis]"))
+    }
+
     // MARK: - Shown to a reader
 
     @Test func setsAMarkerAsASuperscriptNumber() {
