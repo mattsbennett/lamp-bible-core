@@ -110,6 +110,29 @@ struct SwordModuleTests {
         #expect(verse(imported, 43_003_016)?.text == "For God so loved the world.")
     }
 
+    /// Uncompressed Latin-1 text deciphers to noise under a wrong key without
+    /// failing, and any byte is some Latin-1 character.
+    @Test func aWrongKeyOnALockedLatin1ModuleIsCaught() throws {
+        let module = try SwordFixture(conf: """
+            [LockedPlain]
+            DataPath=./modules/texts/rawtext/lockedplain/
+            ModDrv=RawText
+            CipherKey=
+            Description=Locked Plain
+            """, latin1Verses: [
+                (43, 1, 1, "Au commencement \u{E9}tait la Parole, et la Parole \u{E9}tait avec Dieu, et la Parole \u{E9}tait Dieu."),
+                (43, 1, 2, "Elle \u{E9}tait au commencement avec Dieu."),
+                (43, 1, 3, "Toutes choses ont \u{E9}t\u{E9} faites par elle, et rien de ce qui a \u{E9}t\u{E9} fait n'a \u{E9}t\u{E9} fait sans elle."),
+            ], driver: .rawText, cipherKey: "Open-Sesame")
+        defer { module.remove() }
+
+        #expect(throws: LampTranslationImportError.wrongUnlockKey(moduleName: "Locked Plain")) {
+            try LampTranslationImporter().read(module.root, unlockKey: "Wrong")
+        }
+        let imported = try LampTranslationImporter().read(module.root, unlockKey: "Open-Sesame")
+        #expect(verse(imported, 43_001_002)?.text == "Elle était au commencement avec Dieu.")
+    }
+
     @Test func rawTextGBFKeepsStrongsWordsOfChristAddedWordsNotesAndParagraphs() throws {
         let module = try SwordFixture(conf: """
             [TestGBF]
@@ -247,8 +270,8 @@ private struct SwordFixture {
         try self.init(conf: conf, encoded: verses.map { ($0.0, $0.1, $0.2, Data($0.3.utf8)) }, driver: driver, cipherKey: cipherKey)
     }
 
-    init(conf: String, latin1Verses: [(Int, Int, Int, String)], driver: Driver) throws {
-        try self.init(conf: conf, encoded: latin1Verses.map { ($0.0, $0.1, $0.2, $0.3.data(using: .isoLatin1)!) }, driver: driver, cipherKey: nil)
+    init(conf: String, latin1Verses: [(Int, Int, Int, String)], driver: Driver, cipherKey: String? = nil) throws {
+        try self.init(conf: conf, encoded: latin1Verses.map { ($0.0, $0.1, $0.2, $0.3.data(using: .isoLatin1)!) }, driver: driver, cipherKey: cipherKey)
     }
 
     private init(conf: String, encoded verses: [(Int, Int, Int, Data)], driver: Driver, cipherKey: String?) throws {

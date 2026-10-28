@@ -21,7 +21,10 @@ enum SwordTranslationReader {
         var reader: SwordVerseReader = module.markup == .osis
             ? OSISVerses()
             : TaggedVerses(markup: module.markup)
-        var checkedKey = !module.isLocked
+        var keyCheck = module.isLocked ? UnlockKeyCheck() : nil
+        let wrongKey = LampTranslationImportError.wrongUnlockKey(
+            moduleName: configuration.readable("Description") ?? configuration.moduleName
+        )
 
         let testaments = try (1...2).map { try module.testament($0) }
         guard testaments.contains(where: { $0 != nil }) else {
@@ -38,20 +41,21 @@ enum SwordTranslationReader {
                 // Verse 0 is the chapter's heading slot.
                 for verse in 0...position.verseCount {
                     guard let bytes = try store.text(at: position.headingIndex + verse), !bytes.isEmpty else { continue }
-                    if !checkedKey {
-                        // A wrong key on uncompressed text deciphers to noise
-                        // rather than failing; noise isn't valid UTF-8.
-                        if module.isUTF8, String(data: bytes, encoding: .utf8) == nil {
-                            throw LampTranslationImportError.wrongUnlockKey(
-                                moduleName: configuration.readable("Description") ?? configuration.moduleName
-                            )
+                    if var check = keyCheck {
+                        check.read(bytes, isUTF8: module.isUTF8)
+                        if check.isDecided {
+                            if check.foundNoise { throw wrongKey }
+                            keyCheck = nil
+                        } else {
+                            keyCheck = check
                         }
-                        checkedKey = true
                     }
                     reader.read(module.decode(bytes), book: position.book, chapter: position.chapter, verse: verse)
                 }
             }
         }
+        // A module with less text than the check wants is judged on all it has.
+        if keyCheck?.foundNoise == true { throw wrongKey }
 
         if module.includesApocrypha {
             reader.collector.noteSkippedBook("the Apocrypha")
@@ -74,6 +78,33 @@ enum SwordTranslationReader {
             books: books
         )
     }
+}
+
+/// Whether a locked module's key was the right one, judged by the text it
+/// deciphers to.
+///
+/// A wrong key on uncompressed text deciphers to noise rather than failing.
+/// Noise isn't valid UTF-8, which settles a UTF-8 module at once. A Latin-1
+/// module reads any byte as a character, but about one byte of noise in nine
+/// is a control character, and text has almost none beyond tabs and line
+/// breaks. More than one in fifty is noise, so a stray one in old text
+/// doesn't refuse the right key.
+private struct UnlockKeyCheck {
+    /// Deciphered text enough to decide by.
+    private static let enough = 256
+
+    private var bytesRead = 0
+    private var controlBytes = 0
+    private var invalidUTF8 = false
+
+    mutating func read(_ bytes: Data, isUTF8: Bool) {
+        if isUTF8, String(data: bytes, encoding: .utf8) == nil { invalidUTF8 = true }
+        bytesRead += bytes.count
+        controlBytes += bytes.count { $0 < 0x20 && $0 != 0x09 && $0 != 0x0A && $0 != 0x0D || $0 == 0x7F }
+    }
+
+    var isDecided: Bool { invalidUTF8 || bytesRead >= Self.enough }
+    var foundNoise: Bool { invalidUTF8 || controlBytes * 50 > bytesRead }
 }
 
 private protocol SwordVerseReader {
