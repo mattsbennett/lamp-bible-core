@@ -18,8 +18,11 @@
 public enum LampPreferenceDefaults {
     /// The pace a reading plan's day is estimated at.
     ///
-    /// Also the pace the phone reads aloud at, so an estimate matches what a
-    /// listener actually hears rather than how fast the words could be skimmed.
+    /// Chosen to match the pace the phone reads aloud at, so an estimate
+    /// reflects what a listener hears rather than how fast the words could be
+    /// skimmed. That preset is a separate constant describing how the phone
+    /// speaks, and the two are equal today rather than tied: changing this one
+    /// does not move it.
     public static let plansWordsPerMinute = 183
 
     /// When the daily reading reminder fires, as hour and minute: 18:30.
