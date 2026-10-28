@@ -230,7 +230,7 @@ struct LampLibraryTests {
         do {
             _ = try await target.importPersonalStudyData(from: noteURL)
             Issue.record("Equal-time note edits must stop the import")
-        } catch LampLibraryError.syncConflict(_) {
+        } catch LampLibraryError.importConflict(_) {
             #expect(try await target.verseNotes(reference: 43_003_016).first?.content == "local note")
         }
 
@@ -260,7 +260,7 @@ struct LampLibraryTests {
         do {
             _ = try await target.importPersonalDevotional(from: devotionalURL)
             Issue.record("Equal-time devotional edits must stop the import")
-        } catch LampLibraryError.syncConflict(_) {
+        } catch LampLibraryError.importConflict(_) {
             #expect(try await target.personalDevotionals().first?.title == "Local title")
         }
     }
@@ -482,6 +482,46 @@ struct LampLibraryTests {
         #expect(calendar.dateComponents([.month, .day], from: leapDay)
             == DateComponents(month: 2, day: 29))
         #expect(LampPlanCalendar.dayNumber(for: leapDay, calendar: calendar) == 60)
+    }
+
+    /// A search across translations named one by one, as the Mac names every
+    /// one installed, hears from each rather than filling from the first; and
+    /// what one translation doesn't use passes to the next.
+    @Test func aSearchAcrossNamedTranslationsHearsFromEach() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-library-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+
+        for (id, verses) in [("AAA", 4), ("BBB", 4), ("CCC", 0)] {
+            let words = (1...4).map { verse in
+                let text = verse <= verses ? "light number \(verse)" : "dark number \(verse)"
+                return #"{"v": \#(verse), "content": {"text": "\#(text)", "annotations": [{"type": "strongs", "start": 0, "end": 5, "data": {"strongs": "G5457"}}]}}"#
+            }
+            let moduleURL = fixtureURL.appendingPathComponent("\(id).lamp")
+            _ = try LampModuleCompiler().compile(
+                data: Data(#"""
+                {
+                  "meta": {"schemaVersion": "1.0", "id": "\#(id)", "type": "translation", "name": "\#(id)", "abbreviation": "\#(id)", "language": "en"},
+                  "books": [{
+                    "id": "John", "name": "John", "number": 43, "testament": "NT",
+                    "chapters": [{"chapter": 1, "verses": [\#(words.joined(separator: ","))]}]
+                  }]
+                }
+                """#.utf8),
+                sourceFilename: "\(id).json",
+                destinationURL: moduleURL
+            )
+            _ = try await library.install(from: moduleURL)
+        }
+
+        let named: Set<String> = ["AAA", "BBB", "CCC"]
+        let found = try await library.searchTranslations(query: "light", moduleIDs: named, limit: 4)
+        #expect(Dictionary(grouping: found, by: \.translationID).mapValues(\.count) == ["AAA": 2, "BBB": 2])
+        let byStrongs = try await library.searchTranslationsByStrongs(key: "G5457", moduleIDs: named, limit: 6)
+        #expect(Dictionary(grouping: byStrongs, by: \.translationID).mapValues(\.count) == ["AAA": 2, "BBB": 2, "CCC": 2])
+        #expect(try await library.searchTranslations(query: "light", moduleIDs: ["AAA"], limit: 4).count == 4)
     }
 
     @Test func installsAndReadsCompiledTranslation() async throws {

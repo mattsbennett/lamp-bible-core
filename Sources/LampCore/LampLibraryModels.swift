@@ -1216,7 +1216,9 @@ public enum LampLibraryError: Error, LocalizedError, Equatable, Sendable {
     case noPersonalHighlights(translationID: String)
     case invalidStudyDataExtension
     case invalidPersonalContent(String)
-    case syncConflict(String)
+    /// An import someone asked for met a copy of something changed at the
+    /// same moment as theirs, and different; a sync run sets that aside.
+    case importConflict(String)
 
     public var errorDescription: String? {
         switch self {
@@ -1246,8 +1248,8 @@ public enum LampLibraryError: Error, LocalizedError, Equatable, Sendable {
             return "Choose canonical study data in a .json or .lamp file."
         case .invalidPersonalContent(let reason):
             return reason
-        case .syncConflict(let identifier):
-            return "Two versions of \(identifier) have the same change time but different content. Sync stopped to preserve both."
+        case .importConflict(let subject):
+            return "\(subject) was changed at the same moment in your library and in this file, but the two copies differ. The import stopped and left your library’s copy as it was."
         }
     }
 }

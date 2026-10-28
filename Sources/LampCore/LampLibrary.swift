@@ -575,14 +575,10 @@ public actor LampLibrary {
         let translations = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
-        let perTranslationLimit = moduleIDs == nil && translations.count > 1
-            ? max(1, resultLimit / translations.count)
-            : resultLimit
-        var results: [LampTranslationSearchResult] = []
+        var found: [[LampTranslationSearchResult]] = []
 
-        for translation in translations where results.count < resultLimit {
+        for translation in translations {
             let queue = try openDatabase(moduleID: translation.id)
-            let remainingLimit = min(perTranslationLimit, resultLimit - results.count)
             let moduleResults = try queue.read { db -> [LampTranslationSearchResult] in
                 let tables = try tableNames(in: db)
                 let rows: [Row]
@@ -599,7 +595,7 @@ public actor LampLibrary {
                               AND v.book BETWEEN ? AND ?
                             ORDER BY bm25(verses_fts), v.ref
                             LIMIT ?
-                            """, arguments: [ftsQuery, firstBook, lastBook, remainingLimit])
+                            """, arguments: [ftsQuery, firstBook, lastBook, resultLimit])
                     } else {
                         rows = try Row.fetchAll(db, sql: """
                             SELECT v.ref, v.book, b.name AS book_name,
@@ -610,7 +606,7 @@ public actor LampLibrary {
                               AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
                             LIMIT ?
-                            """, arguments: [fallbackPattern, firstBook, lastBook, remainingLimit])
+                            """, arguments: [fallbackPattern, firstBook, lastBook, resultLimit])
                     }
                 } else if tables.contains("translation_verses") {
                     if tables.contains("translation_verses_fts") {
@@ -627,7 +623,7 @@ public actor LampLibrary {
                               AND v.book BETWEEN ? AND ?
                             ORDER BY bm25(translation_verses_fts), v.ref
                             LIMIT ?
-                            """, arguments: [ftsQuery, translation.id, firstBook, lastBook, remainingLimit])
+                            """, arguments: [ftsQuery, translation.id, firstBook, lastBook, resultLimit])
                     } else {
                         rows = try Row.fetchAll(db, sql: """
                             SELECT v.ref, v.book, b.name AS book_name,
@@ -641,7 +637,7 @@ public actor LampLibrary {
                               AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
                             LIMIT ?
-                            """, arguments: [translation.id, fallbackPattern, firstBook, lastBook, remainingLimit])
+                            """, arguments: [translation.id, fallbackPattern, firstBook, lastBook, resultLimit])
                     }
                 } else {
                     throw LampLibraryError.notATranslation(translation.id)
@@ -661,9 +657,9 @@ public actor LampLibrary {
                     )
                 }
             }
-            results.append(contentsOf: moduleResults)
+            found.append(moduleResults)
         }
-        return results
+        return Self.sharedEvenly(found, limit: resultLimit)
     }
 
     public func searchTranslationsByStrongs(
@@ -680,10 +676,9 @@ public actor LampLibrary {
         let modules = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
-        var results: [LampTranslationSearchResult] = []
-        for module in modules where results.count < resultLimit {
+        var found: [[LampTranslationSearchResult]] = []
+        for module in modules {
             let queue = try openDatabase(moduleID: module.id)
-            let remaining = resultLimit - results.count
             let matches = try queue.read { db -> [LampTranslationSearchResult] in
                 let tables = try tableNames(in: db)
                 let table: String
@@ -706,7 +701,7 @@ public actor LampLibrary {
                 guard try columnNames(in: db, table: table).contains("annotations_json") else {
                     return []
                 }
-                arguments += [remaining]
+                arguments += [resultLimit]
                 return try Row.fetchAll(db, sql: """
                     SELECT v.ref, v.book, b.name AS book_name,
                            v.chapter, v.verse, v.text
@@ -729,9 +724,9 @@ public actor LampLibrary {
                     )
                 }
             }
-            results += matches
+            found.append(matches)
         }
-        return results
+        return Self.sharedEvenly(found, limit: resultLimit)
     }
 
     public func searchDictionaries(
@@ -746,14 +741,10 @@ public actor LampLibrary {
         let dictionaries = try installedModules().filter {
             $0.kind == .dictionary && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
-        let perDictionaryLimit = moduleIDs == nil && dictionaries.count > 1
-            ? max(1, resultLimit / dictionaries.count)
-            : resultLimit
-        var results: [LampDictionaryResult] = []
+        var found: [[LampDictionaryResult]] = []
 
-        for dictionary in dictionaries where results.count < resultLimit {
+        for dictionary in dictionaries {
             let queue = try openDatabase(moduleID: dictionary.id)
-            let queryLimit = min(perDictionaryLimit, resultLimit - results.count)
             let entries = try queue.read { db -> [LampDictionaryResult] in
                 let tables = try tableNames(in: db)
                 guard tables.contains("dictionary_entries") else {
@@ -776,7 +767,7 @@ public actor LampLibrary {
                     moduleCondition = ""
                 }
                 queryArguments += StatementArguments(like.arguments)
-                queryArguments += [trimmedQuery, trimmedQuery, queryLimit]
+                queryArguments += [trimmedQuery, trimmedQuery, resultLimit]
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT id, key, lemma, transliteration, pronunciation, senses_json
                     FROM dictionary_entries
@@ -809,9 +800,26 @@ public actor LampLibrary {
                     )
                 }
             }
-            results.append(contentsOf: entries)
+            found.append(entries)
         }
-        return results
+        return Self.sharedEvenly(found, limit: resultLimit)
+    }
+
+    /// A search's results from several modules, at most `limit` of them,
+    /// shared as evenly as the modules allow: each module's best, in its own
+    /// order, and room one module can't fill goes to the others. A search
+    /// across several modules hears from each, however many it names and in
+    /// whatever order, rather than filling from the first.
+    static func sharedEvenly<Hit>(_ found: [[Hit]], limit: Int) -> [Hit] {
+        var shares = Array(repeating: 0, count: found.count)
+        var room = limit
+        // Fewest first, so what a short list leaves is shared by the rest.
+        let fewestFirst = found.indices.sorted { found[$0].count < found[$1].count }
+        for (position, index) in fewestFirst.enumerated() {
+            shares[index] = min(found[index].count, room / (found.count - position))
+            room -= shares[index]
+        }
+        return zip(found, shares).flatMap { $0.prefix($1) }
     }
 
     /// Returns dictionary entries whose keys exactly match the supplied keys.
@@ -1543,7 +1551,7 @@ public actor LampLibrary {
                 // someone right there to tell.
                 switch LampSyncMerge.importOutcome(decision, forSync: forSync) {
                 case .stop:
-                    throw LampLibraryError.syncConflict("devotional \(devotional.id)")
+                    throw LampLibraryError.importConflict("Your writing “\(local.title)”")
                 case .setAside:
                     try stashConflict(
                         kind: .devotional,
@@ -1767,6 +1775,14 @@ public actor LampLibrary {
         return .note(saved)
     }
 
+    /// Where a note sits, as a person names it: a verse, or for verse 0, the
+    /// chapter its introduction opens.
+    private static func notePlace(_ reference: Int) -> String {
+        let (book, chapter, verse) = LampBibleReferenceFormatter.components(of: reference)
+        let name = LampBibleReferenceFormatter.bookName(book)
+        return verse == 0 ? "\(name) \(chapter)" : "\(name) \(chapter):\(verse)"
+    }
+
     private func resolutionDate(
         local: Date?,
         incoming: Date?,
@@ -1778,7 +1794,9 @@ public actor LampLibrary {
             incomingModified: incoming.map { Int($0.timeIntervalSince1970) },
             now: Int(Date().timeIntervalSince1970)
         ) else {
-            throw LampLibraryError.syncConflict("\(kind.rawValue) \(itemKey)")
+            throw LampLibraryError.invalidPersonalContent(
+                "One copy of this \(kind.rawValue) has a change time Lamp can’t date a choice after, so nothing was changed."
+            )
         }
         return Date(timeIntervalSince1970: TimeInterval(timestamp))
     }
@@ -3705,7 +3723,7 @@ public actor LampLibrary {
                     // a reason to stop the rest of a library syncing. An
                     // import someone asked for still stops and says so.
                     if outcome == .stop {
-                        throw LampLibraryError.syncConflict("note \(note.reference)")
+                        throw LampLibraryError.importConflict("Your note on \(Self.notePlace(note.reference))")
                     }
                     if outcome == .setAside {
                         try Self.stashConflict(
