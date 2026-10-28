@@ -71,6 +71,41 @@ struct LampPortableModuleInspectorTests {
         ) == LampPortableModuleDescriptor(id: "NIC", kind: .commentary))
     }
 
+    /// A series built today says what it is, as every compiled module does: a
+    /// commentary, under the series' own ID, which its row must agree with.
+    @Test func aCommentarySeriesMayDeclareItself() throws {
+        func series(declaring declaredID: String) throws -> Data {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("lamp-inspector-\(UUID().uuidString).sqlite")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let queue = try DatabaseQueue(path: url.path)
+            try queue.write { db in
+                try db.execute(sql: """
+                    CREATE TABLE module_format (
+                        format_version TEXT NOT NULL, module_type TEXT NOT NULL, module_id TEXT NOT NULL
+                    );
+                    CREATE TABLE series_meta (id TEXT, name TEXT, abbreviation TEXT);
+                    CREATE TABLE commentary_books (id TEXT, book_number INTEGER, title TEXT);
+                    CREATE TABLE commentary_units (id TEXT, book INTEGER, chapter INTEGER);
+                    INSERT INTO series_meta VALUES ('NIC', 'New International Commentary', 'NIC');
+                    INSERT INTO commentary_books VALUES ('NIC-GEN', 1, 'Genesis');
+                    INSERT INTO commentary_units VALUES ('u1', 1, 1);
+                    """)
+                try db.execute(
+                    sql: "INSERT INTO module_format VALUES (?, 'commentary', ?)",
+                    arguments: [LampModuleCompiler.formatVersion, declaredID]
+                )
+            }
+            return try Data(contentsOf: url)
+        }
+
+        #expect(try LampPortableModuleInspector.inspect(databaseData: series(declaring: "NIC"))
+            == LampPortableModuleDescriptor(id: "NIC", kind: .commentary))
+        #expect(throws: LampPortableModuleInspector.InspectionError.foreignRows("series_meta")) {
+            try LampPortableModuleInspector.inspect(databaseData: series(declaring: "WBC"))
+        }
+    }
+
     /// The series row is an owner like any other: a file carrying two of them
     /// is two modules in a trenchcoat.
     @Test func aSecondSeriesRowIsRejectedAsForeign() throws {
