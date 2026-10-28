@@ -890,6 +890,90 @@ struct LampLibraryTests {
         #expect(completed.first?.readingIndex == 1, "the columns that held the truth are untouched")
     }
 
+    // MARK: - Plan progress as it travels
+
+    private func planLibrary() throws -> (LampLibrary, URL) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-plan-progress-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        return (LampLibrary(rootURL: url), url)
+    }
+
+    /// Unticking deletes the row, so without a record of when, another device's
+    /// older tick outranks it and the reading comes back.
+    @Test func anuntickIsRememberedAfterItsRowHasGone() async throws {
+        let (library, url) = try planLibrary()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try await library.setReadingCompleted(
+            planID: "PLAN", day: 1, readingIndex: 0, year: 2026, completed: true
+        )
+        try await library.setReadingCompleted(
+            planID: "PLAN", day: 1, readingIndex: 0, year: 2026, completed: false
+        )
+
+        let ledger = try await library.planProgressLedger()
+        #expect(ledger.completedReadings.isEmpty, "the tick was taken back")
+        #expect(
+            ledger.readings["PLAN_1_0_2026"]?.deletedAt != nil,
+            "and when it was taken back is recorded, which is what outranks the other device"
+        )
+    }
+
+    /// What a device already holds travels even though nothing recorded it:
+    /// progress from before this ledger existed is still that person's.
+    @Test func progressWithNoRecordStillTravels() async throws {
+        let (library, url) = try planLibrary()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await library.setPlanSelected(moduleID: "PLAN", selected: true)
+        try await library.setReadingCompleted(
+            planID: "PLAN", day: 2, readingIndex: 1, year: 2026, completed: true
+        )
+
+        let ledger = try await library.planProgressLedger()
+
+        #expect(ledger.selectedPlanIDs == ["PLAN"])
+        #expect(ledger.completedReadings.keys.contains("PLAN_2_1_2026"))
+    }
+
+    /// The other device's record arrives, and the rows follow it: a reading it
+    /// ticked appears here, and one it unticked disappears.
+    @Test func anotherDevicesRecordMovesTheRows() async throws {
+        let (library, url) = try planLibrary()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await library.setReadingCompleted(
+            planID: "PLAN", day: 1, readingIndex: 0, year: 2026, completed: true
+        )
+
+        var incoming = LampSyncPlanProgress()
+        incoming.recordCompletion("PLAN_5_0_2026", at: 9_000_000_000_000)
+        incoming.recordUncompletion("PLAN_1_0_2026", at: 9_000_000_000_000)
+        incoming.recordSelection("PLAN", at: 9_000_000_000_000)
+        try await library.mergePlanProgressLedger(incoming)
+
+        #expect(try await library.applyPlanProgress())
+
+        let completed = try await library.completedReadings(year: 2026)
+        #expect(completed.map(\.id) == ["PLAN_5_0_2026"])
+        #expect(try await library.selectedPlanIDs() == ["PLAN"])
+        let arrived = try #require(completed.first)
+        #expect(arrived.day == 5, "the row's parts come from the ID it arrived under")
+        #expect(arrived.planID == "PLAN")
+    }
+
+    /// Applying twice must not undo itself or keep reporting work.
+    @Test func applyingTheSameRecordAgainChangesNothing() async throws {
+        let (library, url) = try planLibrary()
+        defer { try? FileManager.default.removeItem(at: url) }
+        var incoming = LampSyncPlanProgress()
+        incoming.recordCompletion("PLAN_5_0_2026", at: 9_000_000_000_000)
+        try await library.mergePlanProgressLedger(incoming)
+        #expect(try await library.applyPlanProgress())
+
+        #expect(try await library.applyPlanProgress() == false)
+        #expect(try await library.completedReadings(year: 2026).count == 1)
+    }
+
     /// A plan's day and year are counted in a fixed calendar, not the device's.
     /// Counted in the device's, a Mac set to the Buddhist calendar files this
     /// year's progress under 2569 and shares nothing with the phone.

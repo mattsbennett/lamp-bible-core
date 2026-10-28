@@ -2430,7 +2430,133 @@ public actor LampLibrary {
             } else {
                 try db.execute(sql: "DELETE FROM selected_plans WHERE plan_id = ?", arguments: [moduleID])
             }
+            try Self.updatePlanProgressLedger(db) { ledger in
+                let now = Self.nowMilliseconds()
+                if selected {
+                    ledger.recordSelection(moduleID, at: now)
+                } else {
+                    ledger.recordDeselection(moduleID, at: now)
+                }
+            }
         }
+    }
+
+    // MARK: - Plan progress, as it travels
+
+    /// This library's record of what has been selected and ticked, and when.
+    ///
+    /// Seeded from the rows themselves on every read. `recordHeld` only ever
+    /// sets, never clears, so repeating it is harmless — and it means a tick
+    /// written by some path that forgot to record one still travels, at the
+    /// cost that it cannot outrank a later untick.
+    public func planProgressLedger() throws -> LampSyncPlanProgress {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            var ledger = try Self.readPlanProgressLedger(db)
+            ledger.recordHeld(
+                completed: try Self.heldReadings(db),
+                selected: try Self.heldSelections(db)
+            )
+            return ledger
+        }
+    }
+
+    /// Folds another device's record into this one. Marks join; nothing is
+    /// decided here.
+    public func mergePlanProgressLedger(_ incoming: LampSyncPlanProgress) throws {
+        let queue = try openUserDatabase()
+        try queue.write { db in
+            try Self.updatePlanProgressLedger(db) { $0.merge(incoming) }
+        }
+    }
+
+    /// Makes the rows say what the joined record says.
+    ///
+    /// Returns whether anything moved, so a caller can tell a pass that
+    /// changed this library from one that did not.
+    @discardableResult
+    public func applyPlanProgress() throws -> Bool {
+        let queue = try openUserDatabase()
+        return try queue.write { db in
+            var ledger = try Self.readPlanProgressLedger(db)
+            ledger.recordHeld(
+                completed: try Self.heldReadings(db),
+                selected: try Self.heldSelections(db)
+            )
+            let changes = ledger.changes(
+                toApplyTo: try Self.heldReadings(db),
+                selected: try Self.heldSelections(db)
+            )
+            guard !changes.isEmpty else { return false }
+
+            for (readingID, at) in changes.complete {
+                guard let parts = LampSyncPlanProgress.readingParts(of: readingID) else { continue }
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO completed_readings (
+                        id, plan_id, day, reading_index, year, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """, arguments: [
+                        readingID, parts.planID, parts.day, parts.readingIndex, parts.year,
+                        Date(timeIntervalSince1970: Double(at) / 1_000),
+                    ])
+            }
+            for readingID in changes.uncomplete {
+                try db.execute(
+                    sql: "DELETE FROM completed_readings WHERE id = ?", arguments: [readingID]
+                )
+            }
+            for planID in changes.select {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO selected_plans (plan_id, selected_at) VALUES (?, ?)",
+                    arguments: [planID, Date()]
+                )
+            }
+            for planID in changes.deselect {
+                try db.execute(
+                    sql: "DELETE FROM selected_plans WHERE plan_id = ?", arguments: [planID]
+                )
+            }
+            return true
+        }
+    }
+
+    private static func heldReadings(_ db: Database) throws -> [String: Int64] {
+        var held: [String: Int64] = [:]
+        for row in try Row.fetchAll(db, sql: "SELECT id, completed_at FROM completed_readings") {
+            let at = (row["completed_at"] as Date?) ?? Date(timeIntervalSince1970: 0)
+            held[row["id"]] = Int64((at.timeIntervalSince1970 * 1_000).rounded(.down))
+        }
+        return held
+    }
+
+    private static func heldSelections(_ db: Database) throws -> [String: Int64] {
+        var held: [String: Int64] = [:]
+        for row in try Row.fetchAll(db, sql: "SELECT plan_id, selected_at FROM selected_plans") {
+            let at = (row["selected_at"] as Date?) ?? Date(timeIntervalSince1970: 0)
+            held[row["plan_id"]] = Int64((at.timeIntervalSince1970 * 1_000).rounded(.down))
+        }
+        return held
+    }
+
+    private static func readPlanProgressLedger(_ db: Database) throws -> LampSyncPlanProgress {
+        guard let data = try Data.fetchOne(
+            db, sql: "SELECT payload FROM plan_progress_ledger WHERE id = 1"
+        ) else { return LampSyncPlanProgress() }
+        // An unreadable record is treated as none: the rows are still here and
+        // reseed it, where refusing to open the library would lose everything.
+        return (try? LampSyncPlanProgress.decode(data)) ?? LampSyncPlanProgress()
+    }
+
+    private static func updatePlanProgressLedger(
+        _ db: Database,
+        _ change: (inout LampSyncPlanProgress) -> Void
+    ) throws {
+        var ledger = try readPlanProgressLedger(db)
+        change(&ledger)
+        try db.execute(
+            sql: "INSERT OR REPLACE INTO plan_progress_ledger (id, payload) VALUES (1, ?)",
+            arguments: [try ledger.encoded()]
+        )
     }
 
     public func completedReadings(
@@ -2506,6 +2632,18 @@ public actor LampLibrary {
                     """, arguments: [id, planID, day, readingIndex, year, Date()])
             } else {
                 try db.execute(sql: "DELETE FROM completed_readings WHERE id = ?", arguments: [id])
+            }
+            // In the same transaction as the row. Unticking deletes the row, so
+            // without a record of when, the other device's older tick would win
+            // and bring it back; and a ledger that disagrees with the table is
+            // what the other device would be told.
+            try Self.updatePlanProgressLedger(db) { ledger in
+                let now = Self.nowMilliseconds()
+                if completed {
+                    ledger.recordCompletion(id, at: now)
+                } else {
+                    ledger.recordUncompletion(id, at: now)
+                }
             }
         }
     }
@@ -4175,6 +4313,10 @@ public actor LampLibrary {
                     present_since INTEGER,
                     deleted_at INTEGER,
                     PRIMARY KEY (kind, item_key)
+                );
+                CREATE TABLE IF NOT EXISTS plan_progress_ledger (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    payload BLOB NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS completed_readings (
                     id TEXT PRIMARY KEY,
