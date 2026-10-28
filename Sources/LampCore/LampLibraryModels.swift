@@ -1112,7 +1112,28 @@ public struct LampCompletedReading: Identifiable, Equatable, Sendable {
 }
 
 public enum LampPlanCalendar {
-    public static func dayNumber(for date: Date, calendar: Calendar = .current) -> Int {
+    /// The calendar a plan's days and years are counted in.
+    ///
+    /// Fixed, rather than the device's. A plan's day number and year are
+    /// stored and travel between a Mac and a phone, so counting them in
+    /// whatever calendar a device happens to be set to makes the two disagree
+    /// for the whole year rather than at some edge: a Mac set to the Buddhist
+    /// calendar calls this year 2569, and no reading it ticks is the reading
+    /// the phone ticked. The phone has always counted in this one.
+    ///
+    /// The time zone is still the device's, so "today" remains the reader's
+    /// today rather than a fixed offset's.
+    public static let calendar = Calendar(identifier: .iso8601)
+
+    /// The year a plan's progress is filed under.
+    ///
+    /// The calendar year, not the week-based year: a reading on 1 January
+    /// belongs to the year that is starting, not to the week that is ending.
+    public static func year(for date: Date, calendar: Calendar = calendar) -> Int {
+        calendar.component(.year, from: date)
+    }
+
+    public static func dayNumber(for date: Date, calendar: Calendar = calendar) -> Int {
         let day = calendar.ordinality(of: .day, in: .year, for: date) ?? 1
         let leapYear = calendar.range(of: .day, in: .year, for: date)?.count == 366
         return !leapYear && day >= 60 ? day + 1 : day
@@ -1123,7 +1144,7 @@ public enum LampPlanCalendar {
     public static func date(
         forDayNumber dayNumber: Int,
         year: Int,
-        calendar: Calendar = .current
+        calendar: Calendar = calendar
     ) -> Date? {
         guard (1...366).contains(dayNumber),
               let startOfYear = calendar.date(from: DateComponents(year: year, month: 1, day: 1)),

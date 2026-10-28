@@ -890,6 +890,22 @@ struct LampLibraryTests {
         #expect(completed.first?.readingIndex == 1, "the columns that held the truth are untouched")
     }
 
+    /// A plan's day and year are counted in a fixed calendar, not the device's.
+    /// Counted in the device's, a Mac set to the Buddhist calendar files this
+    /// year's progress under 2569 and shares nothing with the phone.
+    @Test func planDaysAndYearsDoNotFollowTheDevicesCalendar() {
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = TimeZone(identifier: "UTC") ?? .current
+        let date = Date(timeIntervalSince1970: 1_772_323_200)  // 2026-03-01 UTC
+
+        #expect(buddhist.component(.year, from: date) == 2569, "the device would say this")
+        #expect(LampPlanCalendar.year(for: date) == 2026, "a plan says this")
+        #expect(
+            LampPlanCalendar.dayNumber(for: date)
+                == LampPlanCalendar.dayNumber(for: date, calendar: .init(identifier: .iso8601))
+        )
+    }
+
     /// The phone derives `plan_id` from the first `_` of its own IDs, so a plan
     /// called `the_bible_companion` is stored there as `the`. Those rows reach
     /// this database through sync, and rebuilding an ID from their columns
