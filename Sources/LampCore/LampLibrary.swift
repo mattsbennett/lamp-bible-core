@@ -2468,6 +2468,24 @@ public actor LampLibrary {
         }
     }
 
+    /// Names one reading of a plan, on one day, in one year.
+    ///
+    /// The phone's format. The Mac used to put an "r" before the index, so the
+    /// two apps named the same reading differently; synced together, a
+    /// per-record merge keeps both and one finished reading counts twice.
+    /// The phone's IDs were already in people's libraries, so the Mac moved.
+    ///
+    /// Kept in one place because the migration below rebuilds these IDs in SQL,
+    /// and a formula written twice is one that drifts.
+    static func completedReadingID(
+        planID: String,
+        day: Int,
+        readingIndex: Int,
+        year: Int
+    ) -> String {
+        "\(planID)_\(day)_\(readingIndex)_\(year)"
+    }
+
     public func setReadingCompleted(
         planID: String,
         day: Int,
@@ -2475,7 +2493,9 @@ public actor LampLibrary {
         year: Int,
         completed: Bool
     ) throws {
-        let id = "\(planID)_\(day)_r\(readingIndex)_\(year)"
+        let id = Self.completedReadingID(
+            planID: planID, day: day, readingIndex: readingIndex, year: year
+        )
         let queue = try openUserDatabase()
         try queue.write { db in
             if completed {
@@ -4258,6 +4278,18 @@ public actor LampLibrary {
                 try db.execute(sql: "DROP TABLE sync_conflicts")
                 try db.execute(sql: Self.syncConflictsTable)
             }
+            // Reading IDs are rebuilt from the columns that hold the truth, so
+            // the Mac's old "plan_1_r0_2026" becomes the phone's
+            // "plan_1_0_2026" and the two apps name a reading alike. Rows
+            // already in the canonical form are untouched, so this settles
+            // after the first open. `OR REPLACE` collapses a reading that
+            // somehow exists in both forms rather than failing on the key:
+            // they are the same reading, and keeping one of them is the point.
+            try db.execute(sql: """
+                UPDATE OR REPLACE completed_readings
+                SET id = plan_id || '_' || day || '_' || reading_index || '_' || year
+                WHERE id <> plan_id || '_' || day || '_' || reading_index || '_' || year
+                """)
         }
         return queue
     }

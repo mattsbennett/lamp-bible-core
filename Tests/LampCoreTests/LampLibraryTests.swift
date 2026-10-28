@@ -834,7 +834,9 @@ struct LampLibraryTests {
         )
         let completed = try await library.completedReadings(planID: "TEST_PLAN", year: 2026)
         #expect(completed.count == 1)
-        #expect(completed.first?.id == "TEST_PLAN_1_r0_2026")
+        // The phone's format. The Mac's old "TEST_PLAN_1_r0_2026" named the
+        // same reading differently, so synced together it counted twice.
+        #expect(completed.first?.id == "TEST_PLAN_1_0_2026")
 
         try await library.setReadingCompleted(
             planID: "TEST_PLAN",
@@ -846,6 +848,67 @@ struct LampLibraryTests {
         #expect(try await library.completedReadings().isEmpty)
         try await library.remove(moduleID: "TEST_PLAN")
         #expect(try await library.selectedPlanIDs().isEmpty)
+    }
+
+    /// A library written by an older Mac holds reading IDs with an "r" before
+    /// the index. Opening it rewrites them, so the two apps agree about what a
+    /// reading is called and a finished day is not completed twice over.
+    @Test func rewritesOldReadingIDsToThePhonesFormat() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-reading-ids-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        // Opened once so the schema exists, then written behind the library's
+        // back as an older version would have.
+        let library = LampLibrary(rootURL: fixtureURL)
+        _ = try await library.completedReadings()
+        let queue = try DatabaseQueue(
+            path: fixtureURL.appendingPathComponent("UserData.sqlite").path
+        )
+        try await queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO completed_readings (id, plan_id, day, reading_index, year, completed_at)
+                VALUES ('TEST_PLAN_3_r1_2026', 'TEST_PLAN', 3, 1, 2026, ?)
+                """, arguments: [Date()])
+        }
+
+        let reopened = LampLibrary(rootURL: fixtureURL)
+        let completed = try await reopened.completedReadings(planID: "TEST_PLAN", year: 2026)
+
+        #expect(completed.count == 1, "the reading is the same one, not a second")
+        #expect(completed.first?.id == "TEST_PLAN_3_1_2026")
+        #expect(completed.first?.day == 3)
+        #expect(completed.first?.readingIndex == 1, "the columns that held the truth are untouched")
+    }
+
+    /// Both forms of the same reading collapse rather than refusing to open the
+    /// library, which a primary-key clash would otherwise do.
+    @Test func thetwoFormsOfOneReadingCollapseToOne() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-reading-ids-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        let library = LampLibrary(rootURL: fixtureURL)
+        _ = try await library.completedReadings()
+        let queue = try DatabaseQueue(
+            path: fixtureURL.appendingPathComponent("UserData.sqlite").path
+        )
+        try await queue.write { db in
+            for id in ["TEST_PLAN_3_r1_2026", "TEST_PLAN_3_1_2026"] {
+                try db.execute(sql: """
+                    INSERT INTO completed_readings (id, plan_id, day, reading_index, year, completed_at)
+                    VALUES (?, 'TEST_PLAN', 3, 1, 2026, ?)
+                    """, arguments: [id, Date()])
+            }
+        }
+
+        let reopened = LampLibrary(rootURL: fixtureURL)
+        let completed = try await reopened.completedReadings(planID: "TEST_PLAN", year: 2026)
+
+        #expect(completed.count == 1)
+        #expect(completed.first?.id == "TEST_PLAN_3_1_2026")
     }
 
     @Test func persistsPersonalVerseNotesAndHighlights() async throws {
