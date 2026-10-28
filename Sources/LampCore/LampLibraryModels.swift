@@ -1066,7 +1066,9 @@ public struct LampPlanReading: Identifiable, Equatable, Sendable {
     }
 
     public func completionID(planID: String, day: Int, year: Int) -> String {
-        "\(planID)_\(day)_r\(id)_\(year)"
+        LampLibrary.completedReadingID(
+            planID: planID, day: day, readingIndex: id, year: year
+        )
     }
 }
 

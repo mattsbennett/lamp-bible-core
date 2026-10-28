@@ -2477,7 +2477,7 @@ public actor LampLibrary {
     ///
     /// Kept in one place because the migration below rebuilds these IDs in SQL,
     /// and a formula written twice is one that drifts.
-    static func completedReadingID(
+    public static func completedReadingID(
         planID: String,
         day: Int,
         readingIndex: Int,
@@ -4288,7 +4288,7 @@ public actor LampLibrary {
             try db.execute(sql: """
                 UPDATE OR REPLACE completed_readings
                 SET id = plan_id || '_' || day || '_' || reading_index || '_' || year
-                WHERE id <> plan_id || '_' || day || '_' || reading_index || '_' || year
+                WHERE id = plan_id || '_' || day || '_r' || reading_index || '_' || year
                 """)
         }
         return queue

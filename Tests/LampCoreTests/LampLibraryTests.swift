@@ -837,6 +837,14 @@ struct LampLibraryTests {
         // The phone's format. The Mac's old "TEST_PLAN_1_r0_2026" named the
         // same reading differently, so synced together it counted twice.
         #expect(completed.first?.id == "TEST_PLAN_1_0_2026")
+        // The reading names itself the same way the library stored it. Three
+        // places once spelled this ID and only one was moved, so every reading
+        // showed as unread and none could be unticked.
+        let firstReading = try #require(day.readings.first)
+        #expect(
+            completed.first?.id
+                == firstReading.completionID(planID: "TEST_PLAN", day: 1, year: 2026)
+        )
 
         try await library.setReadingCompleted(
             planID: "TEST_PLAN",
@@ -880,6 +888,35 @@ struct LampLibraryTests {
         #expect(completed.first?.id == "TEST_PLAN_3_1_2026")
         #expect(completed.first?.day == 3)
         #expect(completed.first?.readingIndex == 1, "the columns that held the truth are untouched")
+    }
+
+    /// The phone derives `plan_id` from the first `_` of its own IDs, so a plan
+    /// called `the_bible_companion` is stored there as `the`. Those rows reach
+    /// this database through sync, and rebuilding an ID from their columns
+    /// would turn a correct ID into a wrong one. Only the Mac's own old form is
+    /// rewritten.
+    @Test func arowFromThePhoneIsLeftAlone() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-reading-ids-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        let library = LampLibrary(rootURL: fixtureURL)
+        _ = try await library.completedReadings()
+        let queue = try DatabaseQueue(
+            path: fixtureURL.appendingPathComponent("UserData.sqlite").path
+        )
+        try await queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO completed_readings (id, plan_id, day, reading_index, year, completed_at)
+                VALUES ('the_bible_companion_60_0_2026', 'the', 60, 0, 2026, ?)
+                """, arguments: [Date()])
+        }
+
+        let reopened = LampLibrary(rootURL: fixtureURL)
+        let completed = try await reopened.completedReadings(year: 2026)
+
+        #expect(completed.first?.id == "the_bible_companion_60_0_2026")
     }
 
     /// Both forms of the same reading collapse rather than refusing to open the
