@@ -1,17 +1,18 @@
 import Foundation
 import LampModuleKit
 
-/// The deletion records a pass carries in the settings bundle, and the rules
-/// every client follows with them.
+/// The ledgers a pass carries in the settings bundle, and the rules every
+/// client follows with them: the deletion records, and plan progress.
 ///
 /// Sync merges content as a union, so on its own a deletion is undone by the
-/// next device that still has a copy. These two ledgers are what let each
-/// device tell a copy that predates a deletion, which is dropped, from a
-/// change made after it, which is kept.
+/// next device that still has a copy. The two deletion ledgers are what let
+/// each device tell a copy that predates a deletion, which is dropped, from a
+/// change made after it, which is kept. Plan progress records the same two
+/// times for each plan and reading, and is itself what syncs.
 ///
 /// They live in the bundle rather than beside the content: a ledger published
 /// as an ordinary file would be won rather than merged, so two devices
-/// deleting different things would overwrite each other's record, and
+/// changing different things would overwrite each other's record, and
 /// whatever the loser deleted would come back. In the bundle they go through
 /// `update`'s read-merge-retry.
 ///
@@ -35,6 +36,13 @@ public enum LampSyncBundleLedgers {
         bundle.deckDeletions.map(LampPresentationDeckDeletionLedger.decoded(from:))
     }
 
+    /// The bundle's plan progress, or nil when it has none or none this client
+    /// can read. None says nothing: an app from before plan progress writes
+    /// the bundle back without it.
+    public static func planProgress(in bundle: LampSyncSettingsBundle) -> LampSyncPlanProgress? {
+        bundle.planProgress.flatMap { try? LampSyncPlanProgress.decode($0) }
+    }
+
     /// This client's own records, read before the pass's update and put into
     /// the bundle inside it.
     ///
@@ -43,27 +51,33 @@ public enum LampSyncBundleLedgers {
     public struct Contribution: Sendable {
         public let personal: LampPersonalDeletionLedger
         public let decks: LampPresentationDeckDeletionLedger
+        /// The whole of this client's plan ledger, every pass: that is what
+        /// restores the part when an app from before it wrote the bundle back
+        /// without it.
+        public let planProgress: LampSyncPlanProgress
 
         public init(
             personal: LampPersonalDeletionLedger,
-            decks: LampPresentationDeckDeletionLedger = LampPresentationDeckDeletionLedger()
+            decks: LampPresentationDeckDeletionLedger = LampPresentationDeckDeletionLedger(),
+            planProgress: LampSyncPlanProgress = LampSyncPlanProgress()
         ) {
             self.personal = personal
             self.decks = decks
+            self.planProgress = planProgress
         }
 
         /// Joins this client's records into the bundle being written.
         ///
         /// Joined, never replaced: the bundle may be newer than the one the
         /// pass read, since `update` re-applies its change when another device
-        /// writes first, and replacing would drop that device's deletions.
-        /// Both ledgers join by the later of each entry's times, so the order
+        /// writes first, and replacing would drop that device's changes.
+        /// Every ledger joins by the later of each entry's times, so the order
         /// does not matter, and a client with nothing of its own leaves the
         /// bundle's exactly as it was, unreadable or not.
         ///
         /// A ledger this client cannot read is replaced by its own records,
         /// when it has any. Leaving it alone would lose this client's
-        /// deletions on every pass, so a ledger format change has to travel
+        /// changes on every pass, so a ledger format change has to travel
         /// with a bundle format older clients refuse.
         public func apply(to bundle: inout LampSyncSettingsBundle) throws {
             var personal = personal
@@ -80,6 +94,15 @@ public enum LampSyncBundleLedgers {
             }
             if !decks.isEmpty {
                 bundle.deckDeletions = try decks.encoded()
+            }
+
+            // (`Verification/SyncMerge.lean`: `contributePlan`.)
+            var progress = planProgress
+            if let existing = LampSyncBundleLedgers.planProgress(in: bundle) {
+                progress.merge(existing)
+            }
+            if !progress.isEmpty {
+                bundle.planProgress = try progress.encoded()
             }
         }
     }

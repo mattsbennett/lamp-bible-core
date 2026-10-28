@@ -1718,6 +1718,174 @@ theorem documentDeletionSparesALaterEdit (seen noticed edited : Nat) (h : seen <
   apply decide_eq_false
   simp [later, workspaceDeletionTime]; omega
 
+/-! ### Plan progress
+
+`LampSyncPlanProgress` keeps, for each followed plan and each finished
+reading, the deletion ledger's two times: when it was last set (chosen,
+ticked) and last cleared, joined by `mergeTombstone`.
+
+It is a join rather than the three-way merge the apps' own settings use. An
+app from before it decodes the bundle, passes over the key it does not know,
+and writes the bundle back without it. Merged three ways, that absence would
+read as every reading unticked on another device. Joined, a missing part or
+a missing mark says nothing, and the next client to contribute puts its marks
+back.
+
+A tie keeps the tick, the reverse of `tombstoneDeletes`: there a tie would
+bring a deleted thing back, here it would lose someone's progress. -/
+
+def planMarkIsSet (m : Tombstone) : Bool :=
+  match m.presentSince, m.deletedAt with
+  | none, _ => false
+  | some _, none => true
+  | some s, some c => Decidable.decide (c ≤ s)
+
+-- A change is stamped now, but never at or before the time it overrides, so
+-- a device's own change holds against its own clock, and against a clock
+-- behind the device whose change it undoes.
+def stampSet (now : Nat) (m : Tombstone) : Tombstone :=
+  mergeTombstone m ⟨some (max now ((m.deletedAt.map (· + 1)).getD now)), none⟩
+
+def stampCleared (now : Nat) (m : Tombstone) : Tombstone :=
+  mergeTombstone m ⟨none, some (max now ((m.presentSince.map (· + 1)).getD now))⟩
+
+theorem aTickHoldsWhereItWasMade (now : Nat) (m : Tombstone) :
+    planMarkIsSet (stampSet now m) = true := by
+  rcases m with ⟨p, d⟩
+  cases p <;> cases d <;> simp [stampSet, mergeTombstone, later, planMarkIsSet] <;> omega
+
+theorem anUntickHoldsWhereItWasMade (now : Nat) (m : Tombstone) :
+    planMarkIsSet (stampCleared now m) = false := by
+  rcases m with ⟨p, d⟩
+  cases p <;> cases d <;> simp [stampCleared, mergeTombstone, later, planMarkIsSet] <;> omega
+
+theorem aTieKeepsTheTick (t : Nat) : planMarkIsSet ⟨some t, some t⟩ = true := by
+  simp [planMarkIsSet]
+
+-- Whatever order two devices exchange their marks in, they agree.
+theorem exchangedPlanMarksAgree (a b : Tombstone) :
+    planMarkIsSet (mergeTombstone a b) = planMarkIsSet (mergeTombstone b a) := by
+  rw [mergeTombstone_comm]
+
+-- A device with no mark for something changes nothing by joining.
+theorem aMissingMarkSaysNothing (m : Tombstone) : mergeTombstone m ⟨none, none⟩ = m := by
+  rcases m with ⟨p, d⟩
+  cases p <;> cases d <;> simp [mergeTombstone, later]
+
+inductive PlanChange where
+  | leave
+  | hold (time : Nat)
+  | drop
+  deriving DecidableEq, Repr
+
+-- `LampSyncPlanProgress.apply`: what a client changes to hold what a joined
+-- ledger says. Its own copy counts as a mark set at its time, so a copy held
+-- since after the clearing stays.
+def planApply (m : Tombstone) (held : Option Nat) : PlanChange :=
+  let joined := mergeTombstone m ⟨held, none⟩
+  if planMarkIsSet joined then
+    match joined.presentSince with
+    | some s => if held = some s then .leave else .hold s
+    | none => .leave
+  else if held.isSome then .drop else .leave
+
+-- Nothing is taken away without a mark clearing it: a part an older app
+-- dropped, or a mark no device made, takes nothing away.
+theorem noClearingNeverDrops (p held : Option Nat) : planApply ⟨p, none⟩ held ≠ .drop := by
+  cases p <;> cases held <;> simp [planApply, mergeTombstone, later, planMarkIsSet] <;> split <;> simp
+
+theorem later_none (a : Option Nat) : later a none = a := by cases a <;> rfl
+
+-- The joined mark, spelled out.
+theorem planApply_eq (p d held : Option Nat) :
+    planApply ⟨p, d⟩ held =
+      if planMarkIsSet ⟨later p held, d⟩ then
+        (match later p held with
+         | some s => if held = some s then .leave else .hold s
+         | none => .leave)
+      else if held.isSome then .drop else .leave := by
+  simp [planApply, mergeTombstone, later_none]
+
+-- A copy held since the clearing stays.
+theorem aTickSinceTheUntickStays (p : Option Nat) (c t : Nat) (h : c ≤ t) :
+    planApply ⟨p, some c⟩ (some t) ≠ .drop := by
+  rw [planApply_eq]
+  have hs : planMarkIsSet ⟨later p (some t), some c⟩ = true := by
+    cases p <;> simp [later, planMarkIsSet] <;> omega
+  simp only [hs, ↓reduceIte]
+  cases hl : later p (some t) <;> simp
+  split <;> simp
+
+-- Applying settles: once a client holds what it was told to, applying the
+-- same ledger again changes nothing.
+theorem planApplySettlesAHold (p d held : Option Nat) (s : Nat)
+    (h : planApply ⟨p, d⟩ held = .hold s) : planApply ⟨p, d⟩ (some s) = .leave := by
+  rw [planApply_eq] at h ⊢
+  by_cases hs : planMarkIsSet ⟨later p held, d⟩ = true
+  · simp only [hs, ↓reduceIte] at h
+    cases hl : later p held with
+    | none => rw [hl] at h; simp at h
+    | some s' =>
+      rw [hl] at h
+      by_cases he : held = some s'
+      · simp [he] at h
+      · simp [he] at h
+        subst h
+        have hl2 : later p (some s') = some s' := by
+          cases p <;> cases held <;> simp_all [later] <;> omega
+        rw [hl2]
+        have hs2 : planMarkIsSet ⟨some s', d⟩ = true := by rw [← hl]; exact hs
+        simp [hs2]
+  · simp only [Bool.not_eq_true] at hs
+    simp only [hs, Bool.false_eq_true, ↓reduceIte] at h
+    split at h <;> simp at h
+
+theorem planApplySettlesADrop (p d held : Option Nat)
+    (h : planApply ⟨p, d⟩ held = .drop) : planApply ⟨p, d⟩ none = .leave := by
+  rw [planApply_eq] at h ⊢
+  by_cases hs : planMarkIsSet ⟨later p held, d⟩ = true
+  · simp only [hs, ↓reduceIte] at h
+    split at h <;> (try split at h) <;> simp at h
+  · simp only [Bool.not_eq_true] at hs
+    simp only [hs, Bool.false_eq_true, ↓reduceIte] at h
+    rw [later_none]
+    have hm : planMarkIsSet ⟨p, d⟩ = false := by
+      cases p <;> cases d <;> cases held <;> simp_all [later, planMarkIsSet] <;> omega
+    simp [hm]
+
+-- The bundle's plan part: absent, or a ledger, here one mark of it.
+def mergePlanPart : Option Tombstone → Option Tombstone → Option Tombstone
+  | none, b => b
+  | some a, none => some a
+  | some a, some b => some (mergeTombstone a b)
+
+theorem planPartsJoinInAnyOrder (a b : Option Tombstone) :
+    mergePlanPart a b = mergePlanPart b a := by
+  cases a <;> cases b <;> simp [mergePlanPart, mergeTombstone_comm]
+
+-- `Contribution.apply`: this client's whole ledger joined in, every pass, and
+-- nothing written by a client with nothing of its own.
+def contributePlan (own : Tombstone) (part : Option Tombstone) : Option Tombstone :=
+  if own = ⟨none, none⟩ then part else mergePlanPart (some own) part
+
+-- A part an older app wrote the bundle without comes back with the next
+-- contribution of a client that holds it.
+theorem aDroppedPartIsRestored (own : Tombstone) (h : own ≠ ⟨none, none⟩) :
+    contributePlan own none = some own := by
+  simp [contributePlan, h, mergePlanPart]
+
+-- A contribution with no unticks of its own never takes back a tick the
+-- part held.
+theorem aContributionWithoutUnticksKeepsTheTick (own m : Tombstone)
+    (hset : planMarkIsSet m = true) (hown : own.deletedAt = none) :
+    ∃ r, contributePlan own (some m) = some r ∧ planMarkIsSet r = true := by
+  rcases own with ⟨op, od⟩
+  rcases m with ⟨p, d⟩
+  simp at hown
+  subst hown
+  cases op <;> cases p <;> cases d <;>
+    simp_all [contributePlan, mergePlanPart, mergeTombstone, later, planMarkIsSet] <;> omega
+
 /-! ### Deck pull
 
 `LampPresentationDeckPortablePull.plan` keeps, per deck, the greatest copy in
@@ -4377,5 +4545,38 @@ def bundleCopies : List BundleCopy :=
         [stampCode a.preference, entryCode a.entry, toString a.own,
          stampCode b.preference, entryCode b.entry, toString b.own,
          stampCode m.preference, entryCode m.entry, toString m.own]
+
+
+#eval show IO Unit from do
+  let times := [none, some 0, some 1, some 2]
+  for p in times do
+    for d in times do
+      IO.println <| conformanceLine "planMark" [optNat p, optNat d, toString (planMarkIsSet ⟨p, d⟩)]
+  let few := [none, some 1, some 2]
+  for now in [0, 1, 3] do
+    for p in few do
+      for d in few do
+        let set := stampSet now ⟨p, d⟩
+        let cleared := stampCleared now ⟨p, d⟩
+        IO.println <| conformanceLine "planStamp"
+          [toString now, optNat p, optNat d,
+           optNat set.presentSince, optNat set.deletedAt,
+           optNat cleared.presentSince, optNat cleared.deletedAt]
+  for p in few do
+    for d in few do
+      for held in [none, some 0, some 1, some 2, some 3] do
+        let change := match planApply ⟨p, d⟩ held with
+          | .leave => "leave" | .hold s => "hold:" ++ toString s | .drop => "drop"
+        IO.println <| conformanceLine "planApply" [optNat p, optNat d, optNat held, change]
+  let marks : List (Option Tombstone) :=
+    [none, some ⟨some 1, none⟩, some ⟨none, some 2⟩, some ⟨some 2, some 1⟩, some ⟨some 1, some 2⟩]
+  let code : Option Tombstone → String
+    | none => "absent"
+    | some m => optNat m.presentSince ++ ":" ++ optNat m.deletedAt
+  for a in marks do
+    for b in marks do
+      IO.println <| conformanceLine "planVersionMerge" [code a, code b, code (mergePlanPart a b)]
+      let own := a.getD ⟨none, none⟩
+      IO.println <| conformanceLine "planContribution" [code a, code b, code (contributePlan own b)]
 
 end LampSyncVerification

@@ -225,6 +225,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
     public var preferences: LampSharedPreferenceLedger
     public var personalDeletions: Data?                    // per item; separate from the per-file manifest
     public var deckDeletions: Data?
+    public var planProgress: Data?                         // plans followed and readings finished, both apps
     public var manifest: LampSyncLibraryManifest
     public func encoded() throws -> Data                   // zlib {"formatVersion":3,"entries":[],"bundle":{…}}
     public static func decode(_ data: Data) throws -> Self // .isArchive, .unsupportedVersion, .damaged
@@ -260,6 +261,21 @@ public enum LampSyncSettingsStore {
   `LampSyncRefusal`. An app that wraps store errors in its own type must adopt
   it, or rethrow core's. Otherwise a refusal reads as a failure and `update`
   never retries. The phone had exactly this bug, now fixed.
+
+**Plan progress** is `LampSyncPlanProgress`, in LampCore: for each followed
+plan and each finished reading, when it was last set and last cleared, joined
+by the later of each. A tie keeps the tick. It is a join rather than the
+three-way merge the apps' own settings use: an app from before it decodes
+the bundle, passes over the key, and writes the bundle back without it.
+Merged three ways, that absence would read as every reading unticked on
+another device. Joined, it says nothing, and the next client's
+`Contribution`, which carries its whole ledger every pass, puts it back
+(`aDroppedPartIsRestored`). Each app keeps its ledger in the same
+transaction as its plan tables, records a change stamped after the time it
+overrides (`stampSet`, `stampCleared`), seeds what it already holds with
+`recordHeld` (0 where it kept no time), and applies a joined ledger with
+`changes(toApplyTo:selected:)` (`planApply`), which takes nothing away
+without a clearing later than the app's own copy.
 
 ### Deleting
 
@@ -325,11 +341,12 @@ public protocol LampSyncVersionedStore: LampSyncRemoteStore {
   or they would stay forever. With no `mergingVersion`, versions throw
   `versionsNeedAMerge` and nothing is touched (`settingsWrite`).
 - `LampSyncSettingsBundle.merge(version:)`, in LampCore, joins the manifest,
-  the shared preferences and both deletion ledgers, and keeps the current
-  copy's `userSettings` and `macSettings`. The joined parts come out the same
-  whichever copy iCloud kept as current (`versionMerge`). An unreadable
-  ledger never stops it, as it never stops a pass: of two personal ledgers
-  the readable one stands, and an unreadable deck ledger leaves this copy's.
+  the shared preferences, both deletion ledgers and plan progress, and keeps
+  the current copy's `userSettings` and `macSettings`. The joined parts come
+  out the same whichever copy iCloud kept as current (`versionMerge`,
+  `planVersionMerge`). An unreadable ledger never stops it, as it never stops
+  a pass: of two personal ledgers or two plan-progress ledgers the readable
+  one stands, and an unreadable deck ledger leaves this copy's.
 - Each app merges its own settings from `Snapshot.versions` before the write,
   **without a base**: after a lost write, a device has recorded its own write
   as the base, which the current copy never saw, so a three-way merge undoes

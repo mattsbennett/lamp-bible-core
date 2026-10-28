@@ -27,6 +27,10 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
     public var personalDeletions: Data?
     /// An encoded `LampPresentationDeckDeletionLedger`.
     public var deckDeletions: Data?
+    /// An encoded `LampSyncPlanProgress`: plans followed and readings
+    /// finished, which both apps read, unlike `userSettings`. An app from
+    /// before it writes the bundle back without it, which is why it is a join.
+    public var planProgress: Data?
     public var manifest: LampSyncLibraryManifest
 
     public init(
@@ -35,6 +39,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         preferences: LampSharedPreferenceLedger = .init(),
         personalDeletions: Data? = nil,
         deckDeletions: Data? = nil,
+        planProgress: Data? = nil,
         manifest: LampSyncLibraryManifest = .init()
     ) {
         self.userSettings = userSettings
@@ -42,6 +47,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         self.preferences = preferences
         self.personalDeletions = personalDeletions
         self.deckDeletions = deckDeletions
+        self.planProgress = planProgress
         self.manifest = manifest
     }
 
@@ -91,6 +97,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         var preferences: LampSharedPreferenceLedger
         var personalDeletions: Data?
         var deckDeletions: Data?
+        var planProgress: Data?
         var manifest: LampSyncLibraryManifest
     }
 
@@ -106,7 +113,8 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         encoder.outputFormatting = .sortedKeys
         let payload = try encoder.encode(Payload(
             userSettings: userSettings, macSettings: macSettings, preferences: preferences,
-            personalDeletions: personalDeletions, deckDeletions: deckDeletions, manifest: manifest
+            personalDeletions: personalDeletions, deckDeletions: deckDeletions,
+            planProgress: planProgress, manifest: manifest
         ))
         // Written by hand so the version comes first, where `contents`
         // looks for it.
@@ -137,7 +145,8 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         return Self(
             userSettings: payload.userSettings, macSettings: payload.macSettings,
             preferences: payload.preferences, personalDeletions: payload.personalDeletions,
-            deckDeletions: payload.deckDeletions, manifest: payload.manifest
+            deckDeletions: payload.deckDeletions, planProgress: payload.planProgress,
+            manifest: payload.manifest
         )
     }
 

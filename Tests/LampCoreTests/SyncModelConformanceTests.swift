@@ -107,6 +107,7 @@ struct SyncModelConformanceTests {
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
         "macMigrationStep", "writeOutcome", "passTrace",
+        "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
     ]
 
     // MARK: - The model itself
@@ -244,6 +245,82 @@ struct SyncModelConformanceTests {
                 .merged(with: .init(presentSince: Int64(f[2]), deletedAt: Int64(f[3])))
             return merged.presentSince.map { "\($0)" } ?? "-" == f[4]
                 && merged.deletedAt.map { "\($0)" } ?? "-" == f[5]
+        }
+    }
+
+    // MARK: - Plan progress
+
+    @Test func planProgress() throws {
+        typealias Mark = LampSyncPlanProgress.Mark
+        func time(_ field: String) -> Int64? { Int64(field) }
+        func text(_ time: Int64?) -> String { time.map(String.init) ?? "-" }
+        // A mark with neither time stands for none at all: a ledger without the key.
+        func mark(_ set: String, _ cleared: String) -> Mark? {
+            set == "-" && cleared == "-" ? nil : Mark(presentSince: time(set), deletedAt: time(cleared))
+        }
+        // One plan and one reading, both "x", each with the mark: built from
+        // the wire format, so the format is held to the model too.
+        func ledger(_ mark: Mark?) throws -> LampSyncPlanProgress {
+            struct File: Encodable {
+                let formatVersion = LampSyncPlanProgress.formatVersion
+                let readings: [String: Mark]
+                let selections: [String: Mark]
+            }
+            let marks = mark.map { ["x": $0] } ?? [:]
+            return try LampSyncPlanProgress.decode(JSONEncoder().encode(File(readings: marks, selections: marks)))
+        }
+        func part(_ code: String) throws -> Data? {
+            guard code != "absent" else { return nil }
+            let times = code.split(separator: ":").map(String.init)
+            return try ledger(mark(times[0], times[1])).encoded()
+        }
+        func code(_ part: Data?) throws -> String {
+            guard let part else { return "absent" }
+            let progress = try LampSyncPlanProgress.decode(part)
+            let reading = try #require(progress.readings["x"])
+            #expect(progress.selections["x"] == reading)
+            return text(reading.presentSince) + ":" + text(reading.deletedAt)
+        }
+
+        try conform("planMark") { f in
+            LampSyncPlanProgress.isSet(Mark(presentSince: time(f[0]), deletedAt: time(f[1]))) == (f[2] == "true")
+        }
+        try conform("planStamp") { f in
+            let now = try #require(Int64(f[0]))
+            let set = LampSyncPlanProgress.set(mark(f[1], f[2]), at: now)
+            let cleared = LampSyncPlanProgress.cleared(mark(f[1], f[2]), at: now)
+            return [text(set.presentSince), text(set.deletedAt), text(cleared.presentSince), text(cleared.deletedAt)]
+                == Array(f[3...6])
+        }
+        try conform("planApply") { f in
+            let held = time(f[2])
+            let change = switch LampSyncPlanProgress.apply(mark(f[0], f[1]), held: held) {
+            case .leave: "leave"
+            case .hold(let at): "hold:\(at)"
+            case .drop: "drop"
+            }
+            guard change == f[3] else { return false }
+            // And through what the apps call, for a reading and for a plan,
+            // which isn't chosen again at a later time.
+            let holding = held.map { ["x": $0] } ?? [:]
+            let changes = try ledger(mark(f[0], f[1])).changes(toApplyTo: holding, selected: holding)
+            let reading = changes.uncomplete.contains("x") ? "drop"
+                : changes.complete["x"].map { "hold:\($0)" } ?? "leave"
+            let plan = changes.deselect.contains("x") ? "drop" : changes.select.contains("x") ? "select" : "leave"
+            let expectedPlan = f[3] == "drop" ? "drop" : f[3].hasPrefix("hold") && held == nil ? "select" : "leave"
+            return reading == f[3] && plan == expectedPlan
+        }
+        try conform("planVersionMerge") { f in
+            var merged = LampSyncSettingsBundle(planProgress: try part(f[0]))
+            try merged.merge(version: LampSyncSettingsBundle(planProgress: try part(f[1])))
+            return try code(merged.planProgress) == f[2]
+        }
+        try conform("planContribution") { f in
+            let own = try part(f[0]).map(LampSyncPlanProgress.decode) ?? LampSyncPlanProgress()
+            var bundle = LampSyncSettingsBundle(planProgress: try part(f[1]))
+            try LampSyncBundleLedgers.Contribution(personal: LampPersonalDeletionLedger(), planProgress: own)
+                .apply(to: &bundle)
+            return try code(bundle.planProgress) == f[2]
         }
     }
 

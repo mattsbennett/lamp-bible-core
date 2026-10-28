@@ -6,7 +6,7 @@ extension LampSyncSettingsBundle {
     /// which the store kept beside this one (`LampSyncSettingsStore.Version`).
     ///
     /// Every part that is a join is joined: membership, the shared
-    /// preferences and both deletion ledgers, so the result is the same
+    /// preferences, both deletion ledgers and plan progress, so the result is the same
     /// whichever copy the store kept as current, and nothing either device
     /// recorded is lost. The apps' own settings stay as this copy has them:
     /// they are opaque here, and each app merges them from
@@ -40,6 +40,16 @@ extension LampSyncSettingsBundle {
             guard var ledger = try? decoded(ours), let incoming = try? decoded(theirs) else { return ours }
             ledger.merge(incoming)
             return (try? ledger.encoded()) ?? ours
+        }
+        // As the personal ledger: of two, the readable one stands.
+        planProgress = Self.joined(planProgress, other.planProgress) { ours, theirs in
+            switch (try? LampSyncPlanProgress.decode(ours), try? LampSyncPlanProgress.decode(theirs)) {
+            case (var progress?, let incoming?):
+                progress.merge(incoming)
+                return (try? progress.encoded()) ?? ours
+            case (nil, .some): return theirs
+            default: return ours
+            }
         }
     }
 

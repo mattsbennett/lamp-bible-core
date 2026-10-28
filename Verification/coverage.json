@@ -57,9 +57,45 @@
         "mergeTombstone_assoc",
         "mergeTombstone_idem",
         "exchangedLedgersAgree",
-        "deckPullIgnoresArrivalOrder"
+        "deckPullIgnoresArrivalOrder",
+        "contributePlan",
+        "aDroppedPartIsRestored",
+        "aContributionWithoutUnticksKeepsTheTick"
       ],
-      "boundary": "The rules both apps follow with the bundle's deletion records: an unreadable personal ledger is skipped where it is read, a contribution joins rather than replaces, and a client with nothing of its own leaves the bundle's as it was. Applying them to a library is each app's."
+      "boundary": "The rules both apps follow with the bundle's ledgers: an unreadable personal ledger or plan-progress ledger is skipped where it is read, a contribution joins rather than replaces, a client with nothing of its own leaves the bundle's as it was, and a client's whole plan ledger goes in every pass. Applying them to a library is each app's.",
+      "conformance": [
+        "planContribution"
+      ]
+    },
+    "Sources/LampCore/LampSyncPlanProgress.swift": {
+      "rules": [
+        "planMarkIsSet",
+        "stampSet",
+        "stampCleared",
+        "aTickHoldsWhereItWasMade",
+        "anUntickHoldsWhereItWasMade",
+        "aTieKeepsTheTick",
+        "exchangedPlanMarksAgree",
+        "aMissingMarkSaysNothing",
+        "mergeTombstone",
+        "mergeTombstone_comm",
+        "mergeTombstone_assoc",
+        "mergeTombstone_idem",
+        "PlanChange",
+        "planApply",
+        "later_none",
+        "planApply_eq",
+        "noClearingNeverDrops",
+        "aTickSinceTheUntickStays",
+        "planApplySettlesAHold",
+        "planApplySettlesADrop"
+      ],
+      "conformance": [
+        "planMark",
+        "planStamp",
+        "planApply"
+      ],
+      "boundary": "Plans followed and readings finished, as a join of the deletion ledger's marks with a tie that keeps the tick. Recording a change stamps it after the time it overrides; recording what a device holds only sets. Reading IDs are parsed from the right, and the file format refuses a later version rather than reading it in part. Keeping the ledger in the same transaction as the plan tables is each app's."
     },
     "Sources/LampCore/LampSyncConflict.swift": {
       "rules": [
@@ -108,12 +144,15 @@
         "versionsFoldInAnyOrder",
         "mergeManifestEntry_comm",
         "mergeTombstone_comm",
-        "deckPullIgnoresArrivalOrder"
+        "deckPullIgnoresArrivalOrder",
+        "mergePlanPart",
+        "planPartsJoinInAnyOrder"
       ],
       "conformance": [
-        "versionMerge"
+        "versionMerge",
+        "planVersionMerge"
       ],
-      "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable ledger never stops the merge: of two personal ledgers the readable one stands, and an unreadable deck ledger leaves this copy's, as the passes do."
+      "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable ledger never stops the merge: of two personal ledgers or two plan-progress ledgers the readable one stands, and an unreadable deck ledger leaves this copy's, as the passes do."
     },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [
