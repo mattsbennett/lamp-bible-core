@@ -65,10 +65,22 @@ public enum LampExternalBibleApplication: String, CaseIterable, Codable, Identif
 
         let startName = startBook.name.lowercased()
             .replacingOccurrences(of: " ", with: "")
+        // A reading of whole chapters ends at verse 999, which is how a
+        // reference says "to the end of the chapter" rather than a verse
+        // anybody has. Passed on as a verse number it asks another app for
+        // verse 999, and a plan's daily reading is usually whole chapters.
+        let wholeChapters = start.verse == 1 && end.verse == 999
+        let sameChapter = start.book == end.book && start.chapter == end.chapter
         let path: String
         switch self {
         case .accordance:
-            path = "\(startBook.osisID)_\(start.chapter):\(start.verse)-\(endBook.osisID)_\(end.chapter):\(end.verse)"
+            if wholeChapters {
+                path = sameChapter
+                    ? "\(startBook.osisID)_\(start.chapter)"
+                    : "\(startBook.osisID)_\(start.chapter)-\(endBook.osisID)_\(end.chapter)"
+            } else {
+                path = "\(startBook.osisID)_\(start.chapter):\(start.verse)-\(endBook.osisID)_\(end.chapter):\(end.verse)"
+            }
         case .eSword:
             path = "\(startName).\(start.chapter):\(start.verse)"
         case .logos:
@@ -81,7 +93,7 @@ public enum LampExternalBibleApplication: String, CaseIterable, Codable, Identif
             let youVersionBook = startBook.usfmCode.isEmpty
                 ? startBook.osisID
                 : startBook.usfmCode
-            path = start.book == end.book && start.chapter == end.chapter
+            path = sameChapter && !wholeChapters
                 ? "\(youVersionBook).\(start.chapter).\(start.verse)-\(end.verse)"
                 : "\(youVersionBook).\(start.chapter)"
         }

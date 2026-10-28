@@ -164,6 +164,32 @@ struct LampExternalBibleLinkFormatTests {
         #expect(link?.absoluteString == "youversion://bible?reference=Jn.3.16-16")
     }
 
+    /// A plan's daily reading is usually whole chapters, which a reference
+    /// ends at verse 999 — its way of saying "to the end" rather than a verse
+    /// anybody has. Sent on as a verse number it asked YouVersion for
+    /// 2 Chronicles 25:1-999, which it has no application for.
+    @Test func awholeChapterAsksForTheChapterAndNotVerse999() {
+        let wholeChapter = LampExternalBibleApplication.youVersion.url(
+            startReference: 14_025_001, endReference: 14_025_999
+        )
+        #expect(wholeChapter?.absoluteString == "youversion://bible?reference=2CH.25")
+
+        #expect(
+            LampExternalBibleApplication.accordance.url(
+                startReference: 14_025_001, endReference: 14_025_999
+            )?.absoluteString == "accord://read/2Chr_25"
+        )
+    }
+
+    /// Several whole chapters keep both ends, without the sentinel.
+    @Test func aspanOfWholeChaptersNamesBothChapters() {
+        #expect(
+            LampExternalBibleApplication.accordance.url(
+                startReference: 14_025_001, endReference: 14_027_999
+            )?.absoluteString == "accord://read/2Chr_25-2Chr_27"
+        )
+    }
+
     @Test func accordanceTakesBothEndsOfTheRange() {
         #expect(
             LampExternalBibleApplication.accordance.url(
