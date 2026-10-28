@@ -16,6 +16,9 @@ public actor LampLibrary {
     private var cachedBundledDatabaseURL: URL?
     private var cachedBundledModules: [LampInstalledModule]?
     private var openDatabases: [String: DatabaseQueue] = [:]
+    /// Each translation's verse numbering, read once: comparing translations
+    /// asks for it on every chapter.
+    private var versifications: [String: LampVersification] = [:]
 
     public init(
         rootURL: URL? = nil,
@@ -301,6 +304,46 @@ public actor LampLibrary {
             try db.execute(sql: "DELETE FROM selected_plans WHERE plan_id = ?", arguments: [moduleID])
             try db.execute(sql: "DELETE FROM completed_readings WHERE plan_id = ?", arguments: [moduleID])
         }
+    }
+
+    /// The verse numbering a translation follows, with any departures from it
+    /// the translation declares; the English scheme where it declares none,
+    /// which is what every translation was read as before it could say.
+    ///
+    /// An imported translation names its scheme in `translation_meta`, and a
+    /// bundled one in the bundle's `translations` table, which may also list
+    /// its departures as a JSON array of mapping lines in
+    /// `versification_mappings`.
+    public func versification(moduleID: String) throws -> LampVersification {
+        if let known = versifications[moduleID] { return known }
+        let queue = try openDatabase(moduleID: moduleID)
+        let declared: (scheme: String?, departures: String?) = try queue.read { db in
+            let tables = try tableNames(in: db)
+            if tables.contains("translation_meta") {
+                let row = try Row.fetchOne(db, sql: "SELECT versification FROM translation_meta LIMIT 1")
+                return (row?["versification"], nil)
+            }
+            guard tables.contains("translations") else { return (nil, nil) }
+            let columns = try columnNames(in: db, table: "translations")
+            guard columns.contains("versification") else { return (nil, nil) }
+            let hasDepartures = columns.contains("versification_mappings")
+            let row = try Row.fetchOne(
+                db,
+                sql: "SELECT versification\(hasDepartures ? ", versification_mappings" : "") FROM translations WHERE id = ?",
+                arguments: [moduleID]
+            )
+            return (row?["versification"], hasDepartures ? row?["versification_mappings"] : nil)
+        }
+        var versification = LampVersification.standard(
+            LampVersification.Scheme(moduleValue: declared.scheme) ?? .english
+        )
+        if let departures = declared.departures?.data(using: .utf8),
+           let lines = try? JSONDecoder().decode([String].self, from: departures),
+           !lines.isEmpty {
+            versification = versification.departing(by: lines)
+        }
+        versifications[moduleID] = versification
+        return versification
     }
 
     public func translationBooks(moduleID: String) throws -> [LampTranslationBook] {
@@ -3786,6 +3829,7 @@ public actor LampLibrary {
     /// database file underneath one.
     private func forgetOpenDatabases() {
         openDatabases.removeAll()
+        versifications.removeAll()
     }
 
     private func preparedBundledDatabaseURL() throws -> URL? {

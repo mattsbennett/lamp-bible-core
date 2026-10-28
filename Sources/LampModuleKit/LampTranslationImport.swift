@@ -150,7 +150,10 @@ public struct LampImportedTranslation: Sendable {
             "textDirection": Locale.Language(identifier: language).characterDirection == .rightToLeft ? "rtl" : "ltr",
             "license": license,
             "features": features,
-            "versification": "standard",
+            // Worked out from the chapters' lengths: an imported file rarely
+            // says, and a psalm numbered from its title read as English would
+            // stand a verse out from every other translation.
+            "versification": LampVersification.likeliestScheme(forVerseCounts: verseCounts).rawValue,
         ]
         if let languageName = Locale(identifier: "en").localizedString(forLanguageCode: language) {
             meta["languageName"] = languageName
@@ -178,6 +181,18 @@ public struct LampImportedTranslation: Sendable {
             sourceFilename: "\(id).json",
             destinationURL: directory.appendingPathComponent(id).appendingPathExtension("lamp")
         )
+    }
+
+    /// The last verse of each chapter, by book: what tells one numbering
+    /// scheme from another.
+    private var verseCounts: [Int: [Int: Int]] {
+        var counts: [Int: [Int: Int]] = [:]
+        for book in books {
+            for chapter in book.chapters {
+                counts[book.number, default: [:]][chapter.number] = chapter.verses.map(\.number).max() ?? 0
+            }
+        }
+        return counts
     }
 
     private var features: [String: Bool] {

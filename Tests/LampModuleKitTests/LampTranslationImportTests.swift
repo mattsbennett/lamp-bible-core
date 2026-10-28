@@ -406,6 +406,19 @@ struct LampTranslationImportTests {
         #expect(result.tableCounts["verses"] == 1)
     }
 
+    /// An imported file rarely says how it numbers its verses, and Joel in four
+    /// chapters is the Hebrew's numbering, not the English three.
+    @Test func recordsTheNumberingTheChaptersFollow() throws {
+        func scheme(_ usfm: String) throws -> String? {
+            let root = try read(usfm).moduleRoot(id: "TST", name: "Test", abbreviation: "TST")
+            return (root["meta"] as? [String: Any])?["versification"] as? String
+        }
+        let hebrew = "\\id JOL\n\\c 1\n\\v 20 a\n\\c 2\n\\v 27 b\n\\c 3\n\\v 5 c\n\\c 4\n\\v 21 d\n"
+        let english = "\\id JOL\n\\c 1\n\\v 20 a\n\\c 2\n\\v 32 b\n\\c 3\n\\v 21 c\n"
+        #expect(try scheme(hebrew) == "org")
+        #expect(try scheme(english) == "eng")
+    }
+
     // MARK: - Helpers
 
     private func read(_ usfm: String) throws -> LampImportedTranslation {
