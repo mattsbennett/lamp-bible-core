@@ -114,13 +114,16 @@ extension LampModuleCompiler {
         lastModified: Int?,
         footnotes: [Any]?
     ) throws {
-        let content = JSONSupport.plainText(contentValue)
+        // Both apps keep a note as Markdown, so annotated text arrives as the
+        // links and footnote markers they write themselves; searched as text.
+        let content = LampPortableDevotionalContent.annotatedText(contentValue)
+            ?? JSONSupport.plainText(contentValue)
         let verseReferences = endReference.map { [$0] }
         let footnoteText = (footnotes ?? [])
             .compactMap(JSONSupport.object)
             .map { JSONSupport.plainText($0["content"]) }
             .filter { !$0.isEmpty }
-        let searchText = ([content] + footnoteText).joined(separator: " ")
+        let searchText = ([JSONSupport.plainText(contentValue)] + footnoteText).joined(separator: " ")
 
         try db.execute(sql: """
             INSERT INTO note_entries (

@@ -68,6 +68,34 @@ struct LampModuleCompilerTests {
         }
     }
 
+    /// The apps list a book's chapters as 1 through its count, so a book only
+    /// part of which is here counts to its last chapter.
+    @Test func countsAPartialBookToItsLastChapter() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("PART.lamp")
+
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {"schemaVersion": "1.0", "id": "PART", "type": "translation", "name": "Part", "abbreviation": "PRT", "language": "en"},
+              "books": [{
+                "id": "Ps", "name": "Psalms", "number": 19, "testament": "OT",
+                "chapters": [{"chapter": 119, "verses": [{"v": 105, "content": "Thy word is a lamp unto my feet"}]}]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "PART.json",
+            destinationURL: outputURL
+        )
+
+        let queue = try fixture.openLamp(outputURL)
+        let chapterCount = try queue.read { db in
+            try Int.fetchOne(db, sql: "SELECT chapter_count FROM books WHERE id = 19")
+        }
+        #expect(chapterCount == 119)
+    }
+
     @Test func compilesDictionaryAndNormalizesLegacySenseKeys() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
@@ -322,7 +350,8 @@ struct LampModuleCompilerTests {
             let searchText: String? = row["search_text"]
             #expect(metaName == "Study Notes")
             #expect(entries == 2)
-            #expect(row["content"] as String == "The opening words matter.")
+            // As the apps write a note: Markdown, its annotations links.
+            #expect(row["content"] as String == "The [opening](lampbible://verse/43001001) words matter.")
             #expect(rangeJSON == "[1001002]")
             #expect(footnotesJSON?.contains("Compare John 1:1") == true)
             #expect(searchText == "The opening words matter. Compare John 1:1")

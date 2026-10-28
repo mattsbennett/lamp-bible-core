@@ -133,7 +133,11 @@ public enum LampPortableDevotionalContent {
         return (value as? [String: Any])?["text"] as? String
     }
 
-    private static func annotatedText(_ value: Any?) -> String? {
+    /// A string, or annotated text as Markdown: scripture and Strong's
+    /// annotations become `lampbible://` links, emphasis becomes emphasis and
+    /// footnote references become `[^id]` markers. A note's content is the
+    /// same Markdown, so the notes compiler reads its annotated text here too.
+    static func annotatedText(_ value: Any?) -> String? {
         if let text = value as? String { return text }
         guard let object = value as? [String: Any],
               let text = object["text"] as? String else { return nil }

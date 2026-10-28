@@ -51,6 +51,14 @@ extension LampModuleCompiler {
                 let book = try JSONSupport.requiredObject(bookValue, path: bookPath)
                 let bookNumber = try JSONSupport.requiredInteger(book["number"], path: "\(bookPath)/number")
                 let chapters = try JSONSupport.requiredArray(book["chapters"], path: "\(bookPath)/chapters")
+                // Both apps list a book's chapters as 1 through its count, so
+                // the count is the last chapter, not how many are here: a book
+                // whose only chapter is Psalm 119 still reaches 119.
+                let lastChapter = try chapters.indices.map { chapterIndex in
+                    let chapterPath = "\(bookPath)/chapters/\(chapterIndex)"
+                    let chapter = try JSONSupport.requiredObject(chapters[chapterIndex], path: chapterPath)
+                    return try JSONSupport.requiredInteger(chapter["chapter"], path: "\(chapterPath)/chapter")
+                }.max() ?? 0
 
                 try db.execute(
                     sql: "INSERT INTO books (id, book_id, name, testament, chapter_count) VALUES (?, ?, ?, ?, ?)",
@@ -59,7 +67,7 @@ extension LampModuleCompiler {
                         try JSONSupport.requiredString(book["id"], path: "\(bookPath)/id"),
                         try JSONSupport.requiredString(book["name"], path: "\(bookPath)/name"),
                         try JSONSupport.requiredString(book["testament"], path: "\(bookPath)/testament"),
-                        chapters.count,
+                        lastChapter,
                     ]
                 )
 
