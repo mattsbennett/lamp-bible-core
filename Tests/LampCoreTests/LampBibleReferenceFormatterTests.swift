@@ -120,8 +120,9 @@ struct LampBibleReferenceFormatterTests {
 }
 
 /// The abbreviations above are OSIS identifiers, and they are what Lamp hands
-/// to another Bible app when the reader asks to open a passage there. A wrong
-/// one does not fail — it opens that app at the wrong passage.
+/// to most of these apps when the reader asks to open a passage there. A wrong
+/// one does not fail — it opens that app at the wrong passage. YouVersion is
+/// the exception and takes USFM codes.
 struct LampExternalBibleLinkFormatTests {
     @Test func installedBookMetadataCanOverrideCanonicalCatalog() {
         let link = LampExternalBibleApplication.accordance.url(
@@ -133,6 +134,34 @@ struct LampExternalBibleLinkFormatTests {
         #expect(LampExternalBibleApplication.logos.url(
             startReference: 43_003_016
         ) { _ in nil } == nil)
+    }
+
+    /// YouVersion references books by USFM code, not by the OSIS identifier
+    /// the other apps take. They differ for most books, so an OSIS one opens
+    /// YouVersion at the wrong passage, or at none.
+    @Test func youVersionIsGivenUSFMCodes() {
+        #expect(
+            LampExternalBibleApplication.youVersion.url(
+                startReference: 43_003_016, endReference: 43_003_018
+            )?.absoluteString == "youversion://bible?reference=JHN.3.16-18"
+        )
+        #expect(
+            LampExternalBibleApplication.youVersion.url(startReference: 19_023_001)?
+                .absoluteString == "youversion://bible?reference=PSA.23.1-1",
+            "Psalms is Ps in OSIS and PSA in USFM"
+        )
+    }
+
+    /// Book metadata supplied by a caller may know an OSIS identifier and not a
+    /// USFM code. A link then keeps what it has rather than building a
+    /// reference out of an empty string.
+    @Test func ayouVersionLinkFallsBackWhenNoUSFMCodeIsKnown() {
+        let link = LampExternalBibleApplication.youVersion.url(
+            startReference: 43_003_016
+        ) { number in
+            LampExternalBibleBook(number: number, name: "John", osisID: "Jn")
+        }
+        #expect(link?.absoluteString == "youversion://bible?reference=Jn.3.16-16")
     }
 
     @Test func accordanceTakesBothEndsOfTheRange() {
@@ -147,7 +176,7 @@ struct LampExternalBibleLinkFormatTests {
         #expect(
             LampExternalBibleApplication.youVersion.url(
                 startReference: 43_003_016, endReference: 43_003_017
-            )?.absoluteString == "youversion://bible?reference=John.3.16-17"
+            )?.absoluteString == "youversion://bible?reference=JHN.3.16-17"
         )
     }
 
@@ -158,7 +187,7 @@ struct LampExternalBibleLinkFormatTests {
         #expect(
             LampExternalBibleApplication.youVersion.url(
                 startReference: 43_003_016, endReference: 43_004_002
-            )?.absoluteString == "youversion://bible?reference=John.3"
+            )?.absoluteString == "youversion://bible?reference=JHN.3"
         )
     }
 

@@ -1,15 +1,24 @@
 import Foundation
+import LampModuleKit
 
 /// The book information needed to format a passage for another Bible app.
 public struct LampExternalBibleBook: Equatable, Sendable {
     public let number: Int
     public let name: String
     public let osisID: String
+    /// The USFM code, such as `JHN`, where it is known.
+    ///
+    /// Most of these apps take an OSIS identifier; YouVersion takes USFM, and
+    /// the two differ for most books — `John` against `JHN`, `Ps` against
+    /// `PSA`. Empty means unknown, and a link that needs it falls back to the
+    /// OSIS identifier rather than building a reference out of nothing.
+    public let usfmCode: String
 
-    public init(number: Int, name: String, osisID: String) {
+    public init(number: Int, name: String, osisID: String, usfmCode: String = "") {
         self.number = number
         self.name = name
         self.osisID = osisID
+        self.usfmCode = usfmCode
     }
 }
 
@@ -67,9 +76,14 @@ public enum LampExternalBibleApplication: String, CaseIterable, Codable, Identif
         case .oliveTree:
             path = "\(start.book).\(start.chapter).\(start.verse)"
         case .youVersion:
+            // USFM, not OSIS: YouVersion's references are JHN.3.16, and an
+            // OSIS "John.3.16" takes it somewhere else or nowhere.
+            let youVersionBook = startBook.usfmCode.isEmpty
+                ? startBook.osisID
+                : startBook.usfmCode
             path = start.book == end.book && start.chapter == end.chapter
-                ? "\(startBook.osisID).\(start.chapter).\(start.verse)-\(end.verse)"
-                : "\(startBook.osisID).\(start.chapter)"
+                ? "\(youVersionBook).\(start.chapter).\(start.verse)-\(end.verse)"
+                : "\(youVersionBook).\(start.chapter)"
         }
         return URL(string: urlRoot + path)
     }
@@ -79,7 +93,8 @@ public enum LampExternalBibleApplication: String, CaseIterable, Codable, Identif
         return LampExternalBibleBook(
             number: number,
             name: LampBibleReferenceFormatter.bookName(number),
-            osisID: LampBibleReferenceFormatter.bookAbbreviation(number)
+            osisID: LampBibleReferenceFormatter.bookAbbreviation(number),
+            usfmCode: LampCanonicalBooks.book(number)?.usfmCode ?? ""
         )
     }
 }
