@@ -2441,6 +2441,31 @@ public actor LampLibrary {
         }
     }
 
+    /// The latest moment this library's own study content changed, in
+    /// milliseconds, or 0 when it never has.
+    ///
+    /// Read from the ledgers rather than from a list of places that write,
+    /// because every personal change already has to record itself there for
+    /// sync to be correct. A write that forgot to move this would be a sync
+    /// bug on its own, where a list of call sites can simply be missed — and a
+    /// missed one is a change that never reaches another device.
+    ///
+    /// Cheap enough to ask often: two indexed aggregates and one small blob.
+    public func personalChangeStamp() throws -> Int64 {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            var stamp = try Int64.fetchOne(db, sql: """
+                SELECT COALESCE(MAX(MAX(COALESCE(present_since, 0), COALESCE(deleted_at, 0))), 0)
+                FROM personal_sync_ledger
+                """) ?? 0
+            let plans = try Self.readPlanProgressLedger(db)
+            for mark in Array(plans.selections.values) + Array(plans.readings.values) {
+                stamp = max(stamp, max(mark.presentSince ?? 0, mark.deletedAt ?? 0))
+            }
+            return stamp
+        }
+    }
+
     // MARK: - Plan progress, as it travels
 
     /// This library's record of what has been selected and ticked, and when.

@@ -974,6 +974,34 @@ struct LampLibraryTests {
         #expect(try await library.completedReadings(year: 2026).count == 1)
     }
 
+    /// Sync asks this to decide whether this device has anything to publish,
+    /// so a write that did not move it is a change that never leaves the Mac.
+    @Test func everyKindOfPersonalChangeMovesTheStamp() async throws {
+        let (library, url) = try planLibrary()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        #expect(try await library.personalChangeStamp() == 0, "nothing has happened yet")
+
+        try await library.setReadingCompleted(
+            planID: "PLAN", day: 1, readingIndex: 0, year: 2026, completed: true
+        )
+        let afterTick = try await library.personalChangeStamp()
+        #expect(afterTick > 0)
+
+        // An untick deletes the row. Were the stamp read from the rows rather
+        // than the ledger, taking something back would look like nothing.
+        try await library.setReadingCompleted(
+            planID: "PLAN", day: 1, readingIndex: 0, year: 2026, completed: false
+        )
+        let afterUntick = try await library.personalChangeStamp()
+        #expect(afterUntick >= afterTick)
+
+        try await library.setPersonalVerseNote(
+            reference: 43_003_016, title: "John", content: "A note", footnotes: nil
+        )
+        #expect(try await library.personalChangeStamp() >= afterUntick)
+    }
+
     /// A plan's day and year are counted in a fixed calendar, not the device's.
     /// Counted in the device's, a Mac set to the Buddhist calendar files this
     /// year's progress under 2569 and shares nothing with the phone.
