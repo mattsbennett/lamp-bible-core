@@ -40,6 +40,11 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
     public let books: [Division]
     public let sections: [Division]
     public let companions: [Companion]
+    /// Each verse holding the key, by reference, when the analysis was asked
+    /// to keep them; empty otherwise. The verse alone, as the translation
+    /// stores it, without its headings or footnotes, which a translation
+    /// keeps apart. An occurrence's offsets point into it.
+    public let verseTexts: [Int: String]
 
     public var occurrenceCount: Int { occurrences.count }
     /// Verses holding the key, not the range's verses: those are
@@ -66,7 +71,8 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
         grammar: [GrammarCount],
         books: [Division],
         sections: [Division],
-        companions: [Companion]
+        companions: [Companion],
+        verseTexts: [Int: String] = [:]
     ) {
         self.key = key
         self.translationID = translationID
@@ -83,6 +89,7 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
         self.books = books
         self.sections = sections
         self.companions = companions
+        self.verseTexts = verseTexts
     }
 
     /// One tagged rendering of the key. Two tags of the key with only space
@@ -91,7 +98,10 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
     /// one occurrence here.
     public struct Occurrence: Equatable, Sendable {
         public let reference: Int
-        /// Character offsets into the verse's text.
+        /// Offsets into the verse's text counted in `Character`s, as Lamp
+        /// reads every annotation's offsets: slice `Array(text)`, never its
+        /// Unicode scalars or UTF-16 units, or a word after a combining mark
+        /// is cut in the wrong place.
         public let startOffset: Int
         public let endOffset: Int
         public let text: String
@@ -325,6 +335,7 @@ public struct LampStrongsAnalyzer {
     private let isEnglish: Bool
     private let keyLanguage: Character?
     private let bareKey: Substring?
+    private let keepsVerseText: Bool
 
     private var normalizedTags: [String: String] = [:]
     private var chapterWords: [Int: [Int: Int]] = [:]
@@ -332,16 +343,22 @@ public struct LampStrongsAnalyzer {
     private var verseFrequency: [String: Int] = [:]
     private var sharedVerses: [String: Int] = [:]
     private var occurrences: [LampStrongsAnalysis.Occurrence] = []
+    private var verseTexts: [Int: String] = [:]
     private var tags: [String] = []
 
     /// `language` is the translation's; English renderings are gathered by
     /// the word that carries them, and any other language's by their text.
+    /// `includingVerseText` keeps the text of each verse holding the key, for
+    /// a caller that shows occurrences in context. It is off by default:
+    /// a common key's verses run to a megabyte, held for each translation
+    /// analysed, and most callers want only the counts.
     public init(
         key: String,
         translationID: String,
         translationName: String,
         translationAbbreviation: String? = nil,
-        language: String? = nil
+        language: String? = nil,
+        includingVerseText: Bool = false
     ) {
         let normalized = LampStrongsKey.normalized(key)
         self.key = normalized
@@ -352,6 +369,7 @@ public struct LampStrongsAnalyzer {
         let first = normalized.first
         keyLanguage = first == "H" || first == "G" ? first : nil
         bareKey = first?.isNumber == true ? Substring(normalized) : nil
+        keepsVerseText = includingVerseText
     }
 
     /// `text` is read only when the verse holds the key.
@@ -370,8 +388,10 @@ public struct LampStrongsAnalyzer {
         for tag in distinct { verseFrequency[tag, default: 0] += 1 }
         guard distinct.contains(where: isKey) else { return }
 
-        let (found, joined) = verseOccurrences(reference: reference, text: text(), annotationsJSON: annotationsJSON)
+        let verseText = text()
+        let (found, joined) = verseOccurrences(reference: reference, text: verseText, annotationsJSON: annotationsJSON)
         guard !found.isEmpty else { return }
+        if keepsVerseText { verseTexts[reference] = verseText }
         // A word tagged in two pieces was counted twice above.
         chapterWords[book, default: [:]][chapter, default: 0] -= joined
         occurrences += found
@@ -403,7 +423,8 @@ public struct LampStrongsAnalyzer {
             grammar: grammar(ordered),
             books: books,
             sections: sections(books, totalHits: ordered.count, totalWords: totalWords),
-            companions: companions(hitVerses: references.count)
+            companions: companions(hitVerses: references.count),
+            verseTexts: verseTexts
         )
     }
 

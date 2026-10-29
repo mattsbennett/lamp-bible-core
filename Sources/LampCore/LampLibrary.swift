@@ -732,11 +732,13 @@ public actor LampLibrary {
     /// `key` analysed in each translation in range that tags its language
     /// there, in installed order. Unlike a search this reads the whole range
     /// rather than a page of hits, because every count is measured against
-    /// all of the range's tags.
+    /// all of the range's tags. `includingVerseText` keeps each verse holding
+    /// the key, for showing occurrences in context.
     public func strongsAnalyses(
         key: String,
         moduleIDs: Set<String>? = nil,
-        bookRange: ClosedRange<Int>? = nil
+        bookRange: ClosedRange<Int>? = nil,
+        includingVerseText: Bool = false
     ) throws -> [LampStrongsAnalysis] {
         guard !LampStrongsKey.normalized(key).isEmpty else { return [] }
         let firstBook = bookRange?.lowerBound ?? Int.min
@@ -768,7 +770,8 @@ public actor LampLibrary {
                     translationID: module.id,
                     translationName: module.name,
                     translationAbbreviation: module.abbreviation,
-                    language: module.language
+                    language: module.language,
+                    includingVerseText: includingVerseText
                 )
                 let rows = try Row.fetchCursor(db, sql: """
                     SELECT ref, text, annotations_json FROM \(table) WHERE \(condition)

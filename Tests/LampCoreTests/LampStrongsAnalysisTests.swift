@@ -48,6 +48,28 @@ struct LampStrongsAnalysisTests {
         #expect(LampGreekMorphology.describe("V-QQQ") == nil)
     }
 
+    /// A caller showing occurrences in context asks for their verses; one
+    /// counting does not. The offsets count Characters, so the tagged word
+    /// is cut cleanly from a verse where a combining mark comes before it.
+    @Test func versesAreKeptOnlyWhenAskedForAndTheOffsetsCutTheirWords() {
+        let verses: [(Int, (text: String, json: String))] = [
+            (44_017_023, verse([("Cafe\u{301}", nil), ("love", "G26"), ("there", "G1563")])),
+            (44_017_024, verse([("no", "G3756"), ("tag", "G1")])),
+        ]
+        #expect(analysis("G26", verses).verseTexts.isEmpty)
+
+        var analyzer = LampStrongsAnalyzer(key: "G26", translationID: "T", translationName: "Test", includingVerseText: true)
+        for (reference, verse) in verses {
+            analyzer.add(reference: reference, text: verse.text, annotationsJSON: verse.json)
+        }
+        let kept = analyzer.analysis()
+        #expect(Array(kept.verseTexts.keys) == [44_017_023])
+        let occurrence = kept.occurrences.first
+        let text = Array(kept.verseTexts[44_017_023] ?? "")
+        #expect(occurrence.map { String(text[$0.startOffset..<$0.endOffset]) } == "love")
+        #expect(occurrence?.startOffset == 5)
+    }
+
     @Test func everyStrongsValueIsReadFromTheBytesHoweverItIsSpaced() {
         var tags: [String] = []
         LampStrongsAnalyzer.forEachTag(in: #"""
@@ -260,6 +282,8 @@ struct LampStrongsAnalysisTests {
         #expect(analyses.first?.references.first == 46_013_001)
         #expect(analyses.first?.wordCount == 60)
         #expect(try await library.strongsAnalyses(key: "G26", bookRange: 1...39).isEmpty)
+        #expect(analyses.first?.verseTexts.isEmpty == true)
+        #expect(try await library.strongsAnalyses(key: "G26", includingVerseText: true).first?.verseTexts.count == 6)
         #expect(try await library.strongsAnalyses(key: "H430").first?.wordCount == 2)
 
         let agent = LampAgentLibrary(library: library)
