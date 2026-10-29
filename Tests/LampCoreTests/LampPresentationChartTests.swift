@@ -210,5 +210,21 @@ struct LampPresentationChartTests {
         var ranged = chart(by: .book)
         ranged.source.range = "Romans-1 Corinthians"
         #expect(try await library.chartValues(ranged)?.map(\.label) == ["1 Corinthians"])
+
+        // An agent charts only what its policy lets it read, and is not told
+        // whether a withheld translation is installed.
+        let agent = LampAgentLibrary(library: library)
+        #expect(try await agent.workingOutCharts(in: deck).deck == built.deck)
+        let narrowed = LampAgentLibrary(library: library, policy: .init(allowedModuleIDs: ["OTHER"]))
+        let withheld = try await narrowed.workingOutCharts(in: deck)
+        #expect(withheld.deck == deck)
+        #expect(!withheld.changed)
+        #expect(withheld.issues.map(\.message) == [
+            "T is not available to agents, so the chart keeps the values it carries.",
+            "MISSING is not available to agents, so the chart keeps the values it carries.",
+        ])
+        await #expect(throws: LampAgentError.disabled) {
+            try await LampAgentLibrary(library: library, policy: .disabled).workingOutCharts(in: deck)
+        }
     }
 }

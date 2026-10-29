@@ -542,6 +542,40 @@ public actor LampAgentLibrary {
         }
     }
 
+    /// `deck`'s charts worked out as `LampLibrary.workingOutCharts` does,
+    /// but only from translations the policy permits. A chart naming any
+    /// other keeps the values it carries, and says why in words that do not
+    /// tell an agent whether that translation is installed.
+    public func workingOutCharts(in deck: LampPresentationDeck) async throws -> LampPresentationChartReport {
+        try requireEnabled()
+        let permitted = Set(try await permittedInstalledModules(kinds: [.translation]).map(\.id))
+        var screened = deck
+        var withheld: [(slide: Int, block: Int)] = []
+        var issues: [LampPresentationDeckIssue] = []
+        for (slideIndex, slide) in deck.slides.enumerated() {
+            for (blockIndex, block) in slide.blocks.enumerated() {
+                guard block.kind == .chart, let chart = block.chart,
+                      !permitted.contains(chart.source.translationID) else { continue }
+                // Without its chart the library passes the block by.
+                screened.slides[slideIndex].blocks[blockIndex].chart = nil
+                withheld.append((slideIndex, blockIndex))
+                issues.append(.init(
+                    severity: .warning,
+                    path: "slides[\(slideIndex)].blocks[\(blockIndex)].chart.source",
+                    message: "\(chart.source.translationID) is not available to agents, "
+                        + "so the chart keeps the values it carries."
+                ))
+            }
+        }
+        var report = await library.workingOutCharts(in: screened)
+        for (slideIndex, blockIndex) in withheld {
+            report.deck.slides[slideIndex].blocks[blockIndex].chart =
+                deck.slides[slideIndex].blocks[blockIndex].chart
+        }
+        report.issues = issues + report.issues
+        return report
+    }
+
     // MARK: - Policy and mapping
 
     private func requireEnabled() throws {
