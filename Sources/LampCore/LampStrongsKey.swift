@@ -40,6 +40,23 @@ public enum LampStrongsKey {
             == (rightPrefixed ? String(right.dropFirst()) : right)
     }
 
+    /// The key a query names when it is nothing but a Strong's key, G, H or
+    /// TH, its number, and at most one letter after it ("G26", "h0430",
+    /// "H1234a", "TH8799"), normalized. Nil for anything else, so a word such
+    /// as "Galatians" stays a word.
+    public static func typedKey(_ query: String) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let prefix = trimmed.hasPrefix("TH") ? "TH"
+            : trimmed.first == "H" || trimmed.first == "G" ? String(trimmed.prefix(1)) : nil
+        guard let prefix else { return nil }
+        let rest = trimmed.dropFirst(prefix.count)
+        let digits = rest.prefix { $0.isASCII && $0.isNumber }
+        let suffix = rest.dropFirst(digits.count)
+        guard !digits.isEmpty, digits.count <= 5, suffix.count <= 1,
+              suffix.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }
+        return normalized(trimmed)
+    }
+
     public static func hasAnnotations<S: Sequence>(_ rawKeys: S) -> Bool
     where S.Element == String? {
         rawKeys.contains {

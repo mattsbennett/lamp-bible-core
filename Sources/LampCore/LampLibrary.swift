@@ -569,7 +569,9 @@ public actor LampLibrary {
         let parsedQuery = LampSearchQuery(query)
         let ftsQuery = parsedQuery.fts5Query
         guard !ftsQuery.isEmpty else { return [] }
-        let fallbackPattern = "%\(parsedQuery.plainText)%"
+        // Without a full-text index every term must still appear, as the
+        // index would ask, rather than the terms as one run of text.
+        let fallback = parsedQuery.sqlLikePredicate(columns: ["v.text"])
         let firstBook = bookRange?.lowerBound ?? Int.min
         let lastBook = bookRange?.upperBound ?? Int.max
         let translations = try installedModules().filter {
@@ -578,6 +580,7 @@ public actor LampLibrary {
         var found: [[LampTranslationSearchResult]] = []
 
         for translation in translations {
+            try Task.checkCancellation()
             let queue = try openDatabase(moduleID: translation.id)
             let moduleResults = try queue.read { db -> [LampTranslationSearchResult] in
                 let tables = try tableNames(in: db)
@@ -597,16 +600,18 @@ public actor LampLibrary {
                             LIMIT ?
                             """, arguments: [ftsQuery, firstBook, lastBook, resultLimit])
                     } else {
+                        var arguments = StatementArguments(fallback.arguments)
+                        arguments += [firstBook, lastBook, resultLimit]
                         rows = try Row.fetchAll(db, sql: """
                             SELECT v.ref, v.book, b.name AS book_name,
                                    v.chapter, v.verse, v.text
                             FROM verses v
                             JOIN books b ON b.id = v.book
-                            WHERE v.text LIKE ? COLLATE NOCASE
+                            WHERE \(fallback.condition)
                               AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
                             LIMIT ?
-                            """, arguments: [fallbackPattern, firstBook, lastBook, resultLimit])
+                            """, arguments: arguments)
                     }
                 } else if tables.contains("translation_verses") {
                     if tables.contains("translation_verses_fts") {
@@ -625,6 +630,9 @@ public actor LampLibrary {
                             LIMIT ?
                             """, arguments: [ftsQuery, translation.id, firstBook, lastBook, resultLimit])
                     } else {
+                        var arguments: StatementArguments = [translation.id]
+                        arguments += StatementArguments(fallback.arguments)
+                        arguments += [firstBook, lastBook, resultLimit]
                         rows = try Row.fetchAll(db, sql: """
                             SELECT v.ref, v.book, b.name AS book_name,
                                    v.chapter, v.verse, v.text
@@ -633,14 +641,17 @@ public actor LampLibrary {
                               ON b.translation_id = v.translation_id
                              AND b.book_number = v.book
                             WHERE v.translation_id = ?
-                              AND v.text LIKE ? COLLATE NOCASE
+                              AND \(fallback.condition)
                               AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
                             LIMIT ?
-                            """, arguments: [translation.id, fallbackPattern, firstBook, lastBook, resultLimit])
+                            """, arguments: arguments)
                     }
                 } else {
-                    throw LampLibraryError.notATranslation(translation.id)
+                    // One module of another shape is passed by, as every
+                    // other search here passes it, rather than ending the
+                    // search for all the rest.
+                    return []
                 }
 
                 return rows.map { row in
@@ -668,25 +679,41 @@ public actor LampLibrary {
         bookRange: ClosedRange<Int>? = nil,
         limit: Int = 100
     ) throws -> [LampTranslationSearchResult] {
-        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        try strongsVerses(key: key, moduleIDs: moduleIDs, bookRange: bookRange, limit: limit).map(\.result)
+    }
+
+    /// Verses whose tags hold `key`, each with its text marked where the key
+    /// is tagged.
+    ///
+    /// A key can be written padded or in either case, or listed with others
+    /// under one word, as the KJV tags "God" with "G3588,G2316". The query
+    /// finds every verse that might hold it, and each is confirmed by reading
+    /// its tags, so the verses are those the reader and the analysis see.
+    private func strongsVerses(
+        key: String,
+        moduleIDs: Set<String>?,
+        bookRange: ClosedRange<Int>?,
+        limit: Int
+    ) throws -> [(result: LampTranslationSearchResult, marked: String)] {
+        let normalized = LampStrongsKey.normalized(key)
         guard !normalized.isEmpty else { return [] }
         let resultLimit = min(max(limit, 1), 500)
         let firstBook = bookRange?.lowerBound ?? Int.min
         let lastBook = bookRange?.upperBound ?? Int.max
+        let prefilter = LampStrongsSearch.sqlPrefilterPattern(for: normalized)
         let modules = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
-        var found: [[LampTranslationSearchResult]] = []
+        var found: [[(result: LampTranslationSearchResult, marked: String)]] = []
         for module in modules {
+            try Task.checkCancellation()
             let queue = try openDatabase(moduleID: module.id)
-            let matches = try queue.read { db -> [LampTranslationSearchResult] in
+            let matches = try queue.read { db -> [(result: LampTranslationSearchResult, marked: String)] in
                 let tables = try tableNames(in: db)
                 let table: String
                 let books: String
-                var condition = "v.annotations_json LIKE ? COLLATE NOCASE AND v.book BETWEEN ? AND ?"
-                var arguments: StatementArguments = [
-                    LampStrongsSearch.sqlLikePattern(for: normalized), firstBook, lastBook,
-                ]
+                var condition = "v.annotations_json LIKE ? AND v.book BETWEEN ? AND ?"
+                var arguments: StatementArguments = [prefilter, firstBook, lastBook]
                 if tables.contains("verses"), tables.contains("books") {
                     table = "verses"
                     books = "JOIN books b ON b.id = v.book"
@@ -694,35 +721,42 @@ public actor LampLibrary {
                     table = "translation_verses"
                     books = "JOIN translation_books b ON b.translation_id = v.translation_id AND b.book_number = v.book"
                     condition = "v.translation_id = ? AND " + condition
-                    arguments = [module.id, LampStrongsSearch.sqlLikePattern(for: normalized), firstBook, lastBook]
+                    arguments = [module.id, prefilter, firstBook, lastBook]
                 } else {
                     return []
                 }
                 guard try columnNames(in: db, table: table).contains("annotations_json") else {
                     return []
                 }
-                arguments += [resultLimit]
-                return try Row.fetchAll(db, sql: """
+                let rows = try Row.fetchCursor(db, sql: """
                     SELECT v.ref, v.book, b.name AS book_name,
-                           v.chapter, v.verse, v.text
+                           v.chapter, v.verse, v.text, v.annotations_json
                     FROM \(table) v
                     \(books)
                     WHERE \(condition)
                     ORDER BY v.ref
-                    LIMIT ?
-                    """, arguments: arguments).map { row in
-                    LampTranslationSearchResult(
-                        translationID: module.id,
-                        translationName: module.name,
-                        translationAbbreviation: module.abbreviation,
-                        reference: row["ref"],
-                        bookNumber: row["book"],
-                        bookName: row["book_name"],
-                        chapterNumber: row["chapter"],
-                        verseNumber: row["verse"],
-                        text: row["text"]
-                    )
+                    """, arguments: arguments)
+                var matches: [(result: LampTranslationSearchResult, marked: String)] = []
+                while matches.count < resultLimit, let row = try rows.next() {
+                    let annotations: String? = row["annotations_json"]
+                    guard LampStrongsSearch.holdsKey(annotations, key: normalized) else { continue }
+                    let text: String = row["text"]
+                    matches.append((
+                        LampTranslationSearchResult(
+                            translationID: module.id,
+                            translationName: module.name,
+                            translationAbbreviation: module.abbreviation,
+                            reference: row["ref"],
+                            bookNumber: row["book"],
+                            bookName: row["book_name"],
+                            chapterNumber: row["chapter"],
+                            verseNumber: row["verse"],
+                            text: text
+                        ),
+                        LampStrongsSearch.markedText(text, annotationsJSON: annotations, key: normalized)
+                    ))
                 }
+                return matches
             }
             found.append(matches)
         }
@@ -799,35 +833,57 @@ public actor LampLibrary {
         }
         var found: [[LampDictionaryResult]] = []
 
+        let parsedQuery = LampSearchQuery(trimmedQuery)
+        let writtenInOriginalLanguage = trimmedQuery.unicodeScalars.contains { Self.isGreekOrHebrew($0) }
         for dictionary in dictionaries {
+            try Task.checkCancellation()
             let queue = try openDatabase(moduleID: dictionary.id)
             let entries = try queue.read { db -> [LampDictionaryResult] in
                 let tables = try tableNames(in: db)
-                guard tables.contains("dictionary_entries") else {
-                    throw LampLibraryError.unsupportedModuleSchema
-                }
+                guard tables.contains("dictionary_entries") else { return [] }
                 let columns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(dictionary_entries)")
                     .compactMap { $0["name"] as String? })
-                guard columns.contains("senses_json") else {
-                    throw LampLibraryError.unsupportedModuleSchema
-                }
-                var searchColumns = ["key", "lemma", "transliteration", "senses_json"]
+                guard columns.contains("senses_json") else { return [] }
+                var searchColumns = ["key", "lemma", "transliteration"]
                 if columns.contains("search_text") { searchColumns.append("search_text") }
-                let like = LampSearchQuery(trimmedQuery).sqlLikePredicate(columns: searchColumns)
-                var queryArguments = StatementArguments()
+                let like = parsedQuery.sqlLikePredicate(columns: searchColumns, jsonColumns: ["senses_json"])
+                var moduleArguments = StatementArguments()
                 let moduleCondition: String
                 if columns.contains("module_id") {
                     moduleCondition = "module_id = ? AND"
-                    queryArguments += [dictionary.id]
+                    moduleArguments += [dictionary.id]
                 } else {
                     moduleCondition = ""
                 }
+                var condition = "(\(like.condition))"
+                var queryArguments = moduleArguments
                 queryArguments += StatementArguments(like.arguments)
+                // SQLite folds neither Greek accents and breathings nor Hebrew
+                // points, so "αγαπη" would never find ἀγάπη. A query in either
+                // script is matched against every headword here, with accents
+                // set aside, and those entries are found alongside.
+                if writtenInOriginalLanguage {
+                    var headwordArguments = moduleArguments
+                    headwordArguments += [""]
+                    let headwords = try Row.fetchAll(db, sql: """
+                        SELECT id, key, lemma, transliteration FROM dictionary_entries
+                        WHERE \(moduleCondition) COALESCE(lemma, '') <> ?
+                        """, arguments: headwordArguments)
+                    let ids: [DatabaseValue] = headwords.compactMap { row in
+                        let text = [row["key"], row["lemma"], row["transliteration"]]
+                            .compactMap { $0 as String? }.joined(separator: " ")
+                        return parsedQuery.matches(text) ? row["id"] : nil
+                    }
+                    if !ids.isEmpty {
+                        condition = "(\(condition) OR id IN (\(Array(repeating: "?", count: ids.count).joined(separator: ", "))))"
+                        queryArguments += StatementArguments(ids)
+                    }
+                }
                 queryArguments += [trimmedQuery, trimmedQuery, resultLimit]
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT id, key, lemma, transliteration, pronunciation, senses_json
                     FROM dictionary_entries
-                    WHERE \(moduleCondition) (\(like.condition))
+                    WHERE \(moduleCondition) \(condition)
                     ORDER BY
                         CASE
                             WHEN key = ? COLLATE NOCASE THEN 0
@@ -866,6 +922,12 @@ public actor LampLibrary {
     /// order, and room one module can't fill goes to the others. A search
     /// across several modules hears from each, however many it names and in
     /// whatever order, rather than filling from the first.
+    /// Greek, including its extended accented letters, or Hebrew.
+    static func isGreekOrHebrew(_ scalar: Unicode.Scalar) -> Bool {
+        (0x0370...0x03FF).contains(scalar.value) || (0x1F00...0x1FFF).contains(scalar.value)
+            || (0x0590...0x05FF).contains(scalar.value)
+    }
+
     static func sharedEvenly<Hit>(_ found: [[Hit]], limit: Int) -> [Hit] {
         var shares = Array(repeating: 0, count: found.count)
         var room = limit
@@ -887,11 +949,14 @@ public actor LampLibrary {
         keys: [String],
         moduleIDs: Set<String>? = nil
     ) throws -> [LampDictionaryResult] {
+        // A key as given and as normalized, so "G0026" finds an entry kept
+        // as G26.
         var seenKeys = Set<String>()
-        let normalizedKeys = keys.compactMap { key -> String? in
-            let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-            guard !normalized.isEmpty, seenKeys.insert(normalized).inserted else { return nil }
-            return normalized
+        let normalizedKeys = keys.flatMap { key -> [String] in
+            let given = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            return [given, LampStrongsKey.normalized(given)].filter {
+                !$0.isEmpty && seenKeys.insert($0).inserted
+            }
         }
         guard !normalizedKeys.isEmpty else { return [] }
 
@@ -905,14 +970,10 @@ public actor LampLibrary {
             let queue = try openDatabase(moduleID: dictionary.id)
             let entries = try queue.read { db -> [LampDictionaryResult] in
                 let tables = try tableNames(in: db)
-                guard tables.contains("dictionary_entries") else {
-                    throw LampLibraryError.unsupportedModuleSchema
-                }
+                guard tables.contains("dictionary_entries") else { return [] }
                 let columns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(dictionary_entries)")
                     .compactMap { $0["name"] as String? })
-                guard columns.contains("senses_json") else {
-                    throw LampLibraryError.unsupportedModuleSchema
-                }
+                guard columns.contains("senses_json") else { return [] }
 
                 var arguments = StatementArguments()
                 let moduleCondition: String
@@ -2055,9 +2116,16 @@ public actor LampLibrary {
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
         let hasTextQuery = !parsedQuery.isEmpty && !searchableQuery.isEmpty
         let hasColorFilter = highlightColors?.isEmpty == false
-        guard hasTextQuery || normalizedStrongs != nil || hasColorFilter else { return [] }
-        let installed = try installedModules()
         let wants: (LampModuleKind) -> Bool = { kinds == nil || kinds?.contains($0) == true }
+        // Writing found by its date, tag or category alone, as the facets ask.
+        let hasDevotionalCriteria = !devotionalCriteria.isEmpty && wants(.devotional)
+        guard hasTextQuery || normalizedStrongs != nil || hasColorFilter || hasDevotionalCriteria else { return [] }
+        let installed = try installedModules()
+        /// A result's text cut around what the query found, the found words
+        /// marked; without a text query, its opening.
+        func snippet(_ text: String) -> String {
+            hasTextQuery ? parsedQuery.markedSnippet(text) : searchSnippet(text)
+        }
         let includesModule: (String) -> Bool = { moduleIDs == nil || moduleIDs?.contains($0) == true }
         var results: [LampModuleSearchResult] = []
         let countForKind: (LampModuleKind) -> Int = { kind in
@@ -2069,16 +2137,17 @@ public actor LampLibrary {
                 $0.kind == .translation && includesModule($0.id)
             }.map(\.id))
             if !translationIDs.isEmpty {
+                // A verse is shown whole, with what the search found marked.
                 let matches = try hasTextQuery
                     ? searchTranslations(
                         query: trimmedQuery, moduleIDs: translationIDs,
                         bookRange: bookRange, limit: resultLimit - countForKind(.translation)
-                    )
-                    : searchTranslationsByStrongs(
+                    ).map { ($0, parsedQuery.markedSnippet($0.text, limit: 2_000)) }
+                    : strongsVerses(
                         key: normalizedStrongs ?? "", moduleIDs: translationIDs,
                         bookRange: bookRange, limit: resultLimit - countForKind(.translation)
-                    )
-                results += matches.map { match in
+                    ).map { ($0.result, $0.marked) }
+                results += matches.map { match, marked in
                     LampModuleSearchResult(
                         id: "translation:\(match.id)",
                         kind: .translation,
@@ -2086,7 +2155,7 @@ public actor LampLibrary {
                         moduleName: match.translationName,
                         title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
                         subtitle: match.translationAbbreviation,
-                        snippet: match.text,
+                        snippet: marked,
                         startReference: match.reference
                     )
                 }
@@ -2107,7 +2176,7 @@ public actor LampLibrary {
                         ].compactMap { $0 }.joined(separator: " "))
                     }
                 } ?? searchDictionaries(
-                    query: searchableQuery, moduleIDs: dictionaryIDs,
+                    query: trimmedQuery, moduleIDs: dictionaryIDs,
                     limit: resultLimit - countForKind(.dictionary)
                 )
                 results += matches.map { match in
@@ -2121,22 +2190,29 @@ public actor LampLibrary {
                         moduleName: match.moduleName,
                         title: match.lemma,
                         subtitle: match.transliteration,
-                        snippet: searchSnippet(definition.isEmpty ? match.key : definition)
+                        snippet: snippet(definition.isEmpty ? match.key : definition)
                     )
                 }
             }
         }
 
         if hasTextQuery && wants(.commentary) {
-            let like = parsedQuery.sqlLikePredicate(columns: [
-                "title", "introduction_json", "translation_json", "commentary_json", "footnotes_json",
-            ])
             for module in installed where module.kind == .commentary && includesModule(module.id) {
+                try Task.checkCancellation()
                 let queue = try openDatabase(moduleID: module.id)
                 let remaining = resultLimit - countForKind(.commentary)
                 let matches = try queue.read { db -> [LampModuleSearchResult] in
                     guard try tableNames(in: db).contains("commentary_units") else { return [] }
                     let columns = try columnNames(in: db, table: "commentary_units")
+                    // The compiled text holds a unit's title, introduction,
+                    // translation and commentary but not its footnotes, which
+                    // are searched in the words of their JSON. A module from
+                    // before that text is searched in the words of each.
+                    let like = columns.contains("search_text")
+                        ? parsedQuery.sqlLikePredicate(columns: ["title", "search_text"], jsonColumns: ["footnotes_json"])
+                        : parsedQuery.sqlLikePredicate(columns: ["title"], jsonColumns: [
+                            "introduction_json", "translation_json", "commentary_json", "footnotes_json",
+                        ])
                     var condition = like.condition
                     var arguments = StatementArguments(like.arguments)
                     if columns.contains("module_id") {
@@ -2170,7 +2246,7 @@ public actor LampLibrary {
                                 title: title?.isEmpty == false
                                     ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
                                 subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                                snippet: searchSnippet(body),
+                                snippet: snippet(body),
                                 startReference: start,
                                 endReference: end
                             )
@@ -2184,6 +2260,7 @@ public actor LampLibrary {
         if hasTextQuery && wants(.book) {
             let like = parsedQuery.sqlLikePredicate(columns: ["title", "subtitle", "search_text"])
             for module in installed where module.kind == .book && includesModule(module.id) {
+                try Task.checkCancellation()
                 let queue = try openDatabase(moduleID: module.id)
                 let remaining = resultLimit - countForKind(.book)
                 results += try queue.read { db in
@@ -2209,7 +2286,7 @@ public actor LampLibrary {
                                 moduleName: module.name,
                                 title: row["title"],
                                 subtitle: row["subtitle"],
-                                snippet: searchSnippet(plainText(fromJSONString: contentJSON) ?? contentJSON),
+                                snippet: snippet(plainText(fromJSONString: contentJSON) ?? contentJSON),
                                 startReference: scriptures.first?.startReference,
                                 endReference: scriptures.first?.endReference
                             )
@@ -2244,13 +2321,14 @@ public actor LampLibrary {
                                 title: title?.isEmpty == false
                                     ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                                 subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                                snippet: searchSnippet(row["content"] as String),
+                                snippet: snippet(row["content"] as String),
                                 startReference: reference
                             )
                         }
                 }
             }
             for module in installed where module.kind == .notes && includesModule(module.id) && countForKind(.notes) < resultLimit {
+                try Task.checkCancellation()
                 let queue = try openDatabase(moduleID: module.id)
                 let remaining = resultLimit - countForKind(.notes)
                 results += try queue.read { db in
@@ -2260,8 +2338,15 @@ public actor LampLibrary {
                     let like = parsedQuery.sqlLikePredicate(
                         columns: columns.contains("title") ? ["title", "content"] : ["content"]
                     )
-                    let searchCondition = like.condition
-                    var arguments = StatementArguments(like.arguments)
+                    // A database holding several modules' notes answers for
+                    // this one only.
+                    var searchCondition = like.condition
+                    var arguments = StatementArguments()
+                    if columns.contains("module_id") {
+                        searchCondition = "module_id = ? AND (\(searchCondition))"
+                        arguments += [module.id]
+                    }
+                    arguments += StatementArguments(like.arguments)
                     arguments += [remaining]
                     return try Row.fetchAll(db, sql: """
                         SELECT id, verse_id, \(titleColumn), content
@@ -2280,7 +2365,7 @@ public actor LampLibrary {
                                 title: title?.isEmpty == false
                                     ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                                 subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                                snippet: searchSnippet(row["content"] as String),
+                                snippet: snippet(row["content"] as String),
                                 startReference: reference
                             )
                         }
@@ -2288,7 +2373,8 @@ public actor LampLibrary {
             }
         }
 
-        if hasTextQuery && wants(.devotional) {
+        if (hasTextQuery || hasDevotionalCriteria) && wants(.devotional) {
+            try Task.checkCancellation()
             let matches = try devotionals(moduleIDs: moduleIDs).filter {
                 devotionalCriteria.matches(date: $0.date, tags: $0.tags, category: $0.category)
                     && parsedQuery.matches([
@@ -2304,7 +2390,9 @@ public actor LampLibrary {
                     moduleName: devotional.moduleName,
                     title: devotional.title,
                     subtitle: devotional.subtitle ?? devotional.author,
-                    snippet: searchSnippet(devotional.summary ?? devotional.content),
+                    snippet: snippet(
+                        devotional.summary.flatMap { parsedQuery.matches($0) ? $0 : nil } ?? devotional.content
+                    ),
                     startReference: devotional.keyScriptures.first?.startReference,
                     endReference: devotional.keyScriptures.first?.endReference
                 )
@@ -2327,16 +2415,15 @@ public actor LampLibrary {
                     moduleName: plan.name,
                     title: plan.name,
                     subtitle: plan.author,
-                    snippet: searchSnippet(plan.fullDescription ?? plan.description ?? "\(plan.duration) days")
+                    snippet: snippet(plan.fullDescription ?? plan.description ?? "\(plan.duration) days")
                 )
             }
         }
 
         if hasTextQuery && wants(.quiz) {
-            let like = parsedQuery.sqlLikePredicate(columns: [
-                "question_json", "answer_json", "theme",
-            ])
+            let like = parsedQuery.sqlLikePredicate(columns: ["theme"], jsonColumns: ["question_json", "answer_json"])
             for module in installed where module.kind == .quiz && includesModule(module.id) {
+                try Task.checkCancellation()
                 let queue = try openDatabase(moduleID: module.id)
                 let remaining = resultLimit - countForKind(.quiz)
                 results += try queue.read { db in
@@ -2362,7 +2449,7 @@ public actor LampLibrary {
                                 moduleName: module.name,
                                 title: plainText(fromJSONString: questionJSON) ?? "Quiz Question",
                                 subtitle: "Day \(row["day"] as Int) • \(row["age_group"] as String)",
-                                snippet: searchSnippet(plainText(fromJSONString: answerJSON) ?? answerJSON),
+                                snippet: snippet(plainText(fromJSONString: answerJSON) ?? answerJSON),
                                 startReference: start,
                                 endReference: end
                             )
@@ -2392,7 +2479,7 @@ public actor LampLibrary {
                         moduleName: "My Highlights",
                         title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
                         subtitle: match.translationAbbreviation,
-                        snippet: searchSnippet(match.text),
+                        snippet: snippet(match.text),
                         startReference: match.reference,
                         highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
                     ))
@@ -2409,7 +2496,7 @@ public actor LampLibrary {
                             moduleName: module.name,
                             title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
                             subtitle: match.translationAbbreviation,
-                            snippet: searchSnippet(match.text),
+                            snippet: snippet(match.text),
                             startReference: match.reference,
                             highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
                         ))

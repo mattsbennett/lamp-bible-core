@@ -19,6 +19,11 @@ public struct LampDevotionalSearchCriteria: Equatable, Sendable {
         self.categories = categories
     }
 
+    /// Whether no facet is set, so the criteria pass everything.
+    public var isEmpty: Bool {
+        date == nil && monthDay == nil && (tags ?? []).isEmpty && (categories ?? []).isEmpty
+    }
+
     public func matches(date candidateDate: String?, tags candidateTags: [String], category: String?) -> Bool {
         if let date, candidateDate != date { return false }
         if let monthDay, candidateDate?.hasSuffix("-\(monthDay)") != true { return false }

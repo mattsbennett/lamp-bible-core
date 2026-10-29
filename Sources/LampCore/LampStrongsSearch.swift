@@ -2,8 +2,30 @@ import Foundation
 
 /// Strong's matching and range marking for translation annotations on both platforms.
 public enum LampStrongsSearch {
+    /// A verse whose tags carry `key` written exactly so. It misses a key
+    /// written padded ("G0026") and one listed with others under a word
+    /// ("G3588,G2316"); `sqlPrefilterPattern` with `holdsKey` finds both.
     public static func sqlLikePattern(for key: String) -> String {
         "%\"strongs\":%\"\(key.trimmingCharacters(in: .whitespacesAndNewlines))\"%"
+    }
+
+    /// A LIKE pattern for the annotations of every verse that might tag
+    /// `key`, however it is written, to be confirmed with `holdsKey`: the
+    /// key's number, which any of its forms contains.
+    public static func sqlPrefilterPattern(for key: String) -> String {
+        let digits = LampStrongsKey.normalized(key).filter { $0.isASCII && $0.isNumber }
+        return digits.isEmpty ? "%\"strongs\"%" : "%\(digits)%"
+    }
+
+    /// Whether a verse's annotations tag `key`, read as the reader reads
+    /// them: each key a tag lists on its own, padding and case aside.
+    public static func holdsKey(_ annotationsJSON: String?, key: String) -> Bool {
+        guard let annotationsJSON else { return false }
+        var holds = false
+        LampStrongsAnalyzer.forEachTag(in: annotationsJSON) { tag in
+            if !holds, LampStrongsKey.matches(tag, key) { holds = true }
+        }
+        return holds
     }
 
     public static func markedText(
@@ -27,7 +49,9 @@ public enum LampStrongsSearch {
         let ranges = annotations.compactMap { annotation -> (start: Int, end: Int)? in
             let value = (annotation["data"] as? [String: Any])?["strongs"]
                 ?? annotation["strongs"]
-            guard let strongs = value as? String, LampStrongsKey.matches(strongs, key),
+            guard let strongs = value as? String,
+                  strongs.split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "|" || $0.isWhitespace })
+                    .contains(where: { LampStrongsKey.matches(String($0), key) }),
                   let start = annotation["start"] as? Int,
                   let end = annotation["end"] as? Int,
                   start >= 0, end > start, end <= length else { return nil }
