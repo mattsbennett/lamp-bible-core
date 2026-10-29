@@ -131,7 +131,7 @@
         "readingPosition",
         "readingStamp"
       ],
-      "boundary": "Where each book was left and its bookmarks, as a join: per book the later position whole, ordered by time, then section, then block, and per bookmark the plan ledger's marks. Recording a move stamps it after the position it replaces, and a position already held records nothing. Section IDs are compared as Swift strings; the model numbers them. The file format refuses a later version rather than reading it in part, and reads the Mac's unversioned format from before sync with its bookmarks held since 0."
+      "boundary": "Where each book was left and its bookmarks, as a join: per book the later position whole, ordered by time, then section, block and anchor, and per bookmark the plan ledger's marks. Recording a move stamps it after the position it replaces, and a position already held records nothing. Section IDs and anchors are compared as Swift strings; the model numbers them. Finding a block again by its anchor only decides where a reader opens, never what is recorded, so it isn't modelled. The file format refuses a later version rather than reading it in part, and reads the Mac's unversioned format from before sync with its bookmarks held since 0."
     },
     "Sources/LampCore/LampSyncConflict.swift": {
       "rules": [

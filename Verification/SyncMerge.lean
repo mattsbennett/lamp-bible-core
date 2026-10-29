@@ -1895,21 +1895,23 @@ keeps the bookmark.
 
 A position is one value, so it can't be joined field by field: the later one
 stands whole. Two recorded at the same millisecond are ordered by section,
-then block, so every device keeps the same one whatever order they arrive in.
-It is a join for the reason plan progress is: an app from before it writes
-the bundle back without it. Sections are numbered here; Swift compares their
-IDs as strings. -/
+block and anchor, so every device keeps the same one whatever order they
+arrive in. It is a join for the reason plan progress is: an app from before
+it writes the bundle back without it. Sections and anchors are numbered here,
+0 for no anchor; Swift compares them as strings, no anchor as empty. -/
 
 structure ReadingPosition where
   time : Nat
   sectionKey : Nat
   block : Int
+  anchor : Nat
   deriving DecidableEq, Repr
 
 -- Whether `a` comes after `b`.
 def positionAfter (a b : ReadingPosition) : Bool :=
   Decidable.decide (b.time < a.time ∨ (b.time = a.time ∧
-    (b.sectionKey < a.sectionKey ∨ (b.sectionKey = a.sectionKey ∧ b.block < a.block))))
+    (b.sectionKey < a.sectionKey ∨ (b.sectionKey = a.sectionKey ∧
+      (b.block < a.block ∨ (b.block = a.block ∧ b.anchor < a.anchor))))))
 
 def laterPosition (a b : ReadingPosition) : ReadingPosition :=
   if positionAfter b a then b else a
@@ -1922,13 +1924,13 @@ def joinPosition : Option ReadingPosition → Option ReadingPosition → Option 
 -- The order is total: of two positions that differ, one comes after the other.
 theorem positionAfter_asymm (a b : ReadingPosition) (h : positionAfter a b = true) :
     positionAfter b a = false := by
-  rcases a with ⟨t1, s1, b1⟩; rcases b with ⟨t2, s2, b2⟩
+  rcases a with ⟨t1, s1, b1, n1⟩; rcases b with ⟨t2, s2, b2, n2⟩
   simp only [positionAfter, decide_eq_true_eq, decide_eq_false_iff_not] at h ⊢
   omega
 
 theorem positionAfter_total (a b : ReadingPosition) (h1 : positionAfter a b = false)
     (h2 : positionAfter b a = false) : a = b := by
-  rcases a with ⟨t1, s1, b1⟩; rcases b with ⟨t2, s2, b2⟩
+  rcases a with ⟨t1, s1, b1, n1⟩; rcases b with ⟨t2, s2, b2, n2⟩
   simp only [positionAfter, decide_eq_false_iff_not, ReadingPosition.mk.injEq] at h1 h2 ⊢
   omega
 
@@ -1944,7 +1946,7 @@ theorem laterPosition_assoc (a b c : ReadingPosition) :
   cases hba : positionAfter b a <;> cases hcb : positionAfter c b <;> cases hca : positionAfter c a <;>
     simp [hba, hcb, hca]
   all_goals
-    rcases a with ⟨t1, s1, b1⟩; rcases b with ⟨t2, s2, b2⟩; rcases c with ⟨t3, s3, b3⟩
+    rcases a with ⟨t1, s1, b1, n1⟩; rcases b with ⟨t2, s2, b2, n2⟩; rcases c with ⟨t3, s3, b3, n3⟩
     simp only [positionAfter, decide_eq_true_eq, decide_eq_false_iff_not] at hba hcb hca
     omega
 
@@ -1967,15 +1969,16 @@ theorem aMissingPositionSaysNothing (a : Option ReadingPosition) : joinPosition 
 
 -- `LampSyncBookReading.stamped`: a move is recorded now, but never at or
 -- before the position it replaces, as `stampSet` records a tick.
-def stampPosition (now : Nat) (current : Option ReadingPosition) (sectionKey : Nat) (block : Int) :
-    ReadingPosition :=
-  ⟨max now ((current.map (·.time + 1)).getD now), sectionKey, block⟩
+def stampPosition (now : Nat) (current : Option ReadingPosition) (sectionKey : Nat) (block : Int)
+    (anchor : Nat) : ReadingPosition :=
+  ⟨max now ((current.map (·.time + 1)).getD now), sectionKey, block, anchor⟩
 
 -- So a move stands where it was made, against its own device's clock and
 -- against a clock ahead of it that recorded the position it moves from.
 theorem aMoveHoldsWhereItWasMade (now : Nat) (current : Option ReadingPosition)
-    (s : Nat) (b : Int) :
-    joinPosition current (some (stampPosition now current s b)) = some (stampPosition now current s b) := by
+    (s : Nat) (b : Int) (n : Nat) :
+    joinPosition current (some (stampPosition now current s b n))
+      = some (stampPosition now current s b n) := by
   cases current with
   | none => rfl
   | some c =>
@@ -2025,11 +2028,11 @@ theorem aContributionNeverMovesBack (own : ReadingPart) (part : ReadingPart) (p 
       split
       · exact Or.inl rfl
       · rename_i hn
-        rcases o with ⟨t1, s1, b1⟩
-        rcases p with ⟨t2, s2, b2⟩
-        by_cases e : t1 = t2 ∧ s1 = s2 ∧ b1 = b2
+        rcases o with ⟨t1, s1, b1, n1⟩
+        rcases p with ⟨t2, s2, b2, n2⟩
+        by_cases e : t1 = t2 ∧ s1 = s2 ∧ b1 = b2 ∧ n1 = n2
         · left
-          obtain ⟨rfl, rfl, rfl⟩ := e
+          obtain ⟨rfl, rfl, rfl, rfl⟩ := e
           rfl
         · right
           simp only [positionAfter, decide_eq_true_eq] at hn ⊢
@@ -4732,19 +4735,20 @@ def bundleCopies : List BundleCopy :=
   let positionCode : Option ReadingPosition → String
     | none => "-"
     | some p => toString p.time ++ ":" ++ toString p.sectionKey ++ ":" ++ toString p.block
+        ++ ":" ++ toString p.anchor
   let positions : List (Option ReadingPosition) :=
-    [none, some ⟨1, 1, -1⟩, some ⟨1, 1, 3⟩, some ⟨1, 2, 0⟩, some ⟨2, 1, 0⟩]
+    [none, some ⟨1, 1, -1, 0⟩, some ⟨1, 1, 3, 0⟩, some ⟨1, 1, 3, 2⟩, some ⟨1, 2, 0, 1⟩, some ⟨2, 1, 0, 0⟩]
   for a in positions do
     for b in positions do
       IO.println <| conformanceLine "readingPosition"
         [positionCode a, positionCode b, positionCode (joinPosition a b)]
   for now in [0, 3, 9] do
-    for current in [none, some ⟨2, 1, 0⟩, some ⟨9, 2, 3⟩] do
+    for current in [none, some ⟨2, 1, 0, 0⟩, some ⟨9, 2, 3, 1⟩] do
       IO.println <| conformanceLine "readingStamp"
-        [toString now, positionCode current, positionCode (some (stampPosition now current 1 4))]
+        [toString now, positionCode current, positionCode (some (stampPosition now current 1 4 2))]
   let parts : List (Option ReadingPart) :=
-    [none, some ⟨none, ⟨some 1, none⟩⟩, some ⟨some ⟨1, 1, 0⟩, ⟨none, some 2⟩⟩,
-     some ⟨some ⟨2, 2, -1⟩, ⟨some 2, some 1⟩⟩, some ⟨some ⟨2, 1, 3⟩, ⟨none, none⟩⟩]
+    [none, some ⟨none, ⟨some 1, none⟩⟩, some ⟨some ⟨1, 1, 0, 1⟩, ⟨none, some 2⟩⟩,
+     some ⟨some ⟨2, 2, -1, 0⟩, ⟨some 2, some 1⟩⟩, some ⟨some ⟨2, 1, 3, 0⟩, ⟨none, none⟩⟩]
   let code : Option ReadingPart → String
     | none => "absent"
     | some r => positionCode r.position ++ "|" ++ optNat r.bookmark.presentSince ++ ":"

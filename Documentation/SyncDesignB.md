@@ -279,10 +279,14 @@ overrides (`stampSet`, `stampCleared`), seeds what it already holds with
 without a clearing later than the app's own copy.
 
 **Book reading** is `LampSyncBookReading`, in LampCore, a join for the same
-reason: for each book, where it was left (section, first block in view, and
-when), and for each bookmarked section a plan mark. The later position stands
-whole, ordered by time, then section, then block, so two devices keep the same
-one whichever way they exchange (`joinPosition`). A move is stamped after the
+reason: for each book, where it was left (section, first block in view, the
+start of that block's text, and when), and for each bookmarked section a plan
+mark. The later position stands whole, ordered by time, then section, block
+and anchor, so two devices keep the same one whichever way they exchange
+(`joinPosition`). The anchor is how a reader finds the block again when a
+rebuilt book numbers its blocks differently:
+`LampBookReadingPosition.blockIndex(in:)` opens at the block that still starts
+with it, or the nearest that holds it, and the position stays as recorded. A move is stamped after the
 position it replaces (`stampPosition`), and a position already held records
 nothing, so opening a book where another device left it doesn't make that
 place newer. It is also each app's own record:

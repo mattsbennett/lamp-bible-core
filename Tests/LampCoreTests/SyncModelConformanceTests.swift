@@ -331,20 +331,22 @@ struct SyncModelConformanceTests {
         typealias Mark = LampSyncBookReading.Mark
         func time(_ field: String) -> Int64? { Int64(field) }
         func text(_ time: Int64?) -> String { time.map(String.init) ?? "-" }
-        // The model numbers sections and Swift names them: one digit each, so
-        // the names sort as the numbers do.
+        // The model numbers sections and anchors, 0 for none, and Swift names
+        // them: one digit each, so the names sort as the numbers do.
         func position(_ code: String) throws -> LampBookReadingPosition? {
             guard code != "-" else { return nil }
             let fields = code.split(separator: ":").map(String.init)
             return LampBookReadingPosition(
                 sectionID: "s\(fields[1])",
                 blockIndex: try #require(Int(fields[2])),
-                at: try #require(Int64(fields[0]))
+                at: try #require(Int64(fields[0])),
+                anchor: fields[3] == "0" ? nil : "a\(fields[3])"
             )
         }
         func positionCode(_ position: LampBookReadingPosition?) -> String {
             guard let position else { return "-" }
-            return "\(position.at):\(position.sectionID.dropFirst()):\(position.blockIndex)"
+            let anchor = position.anchor.map { String($0.dropFirst()) } ?? "0"
+            return "\(position.at):\(position.sectionID.dropFirst()):\(position.blockIndex):\(anchor)"
         }
         // One book, "x", with the position and a bookmark on its section "x":
         // built from the wire format, so the format is held to the model too.
@@ -382,7 +384,7 @@ struct SyncModelConformanceTests {
         try conform("readingStamp") { f in
             let now = try #require(Int64(f[0]))
             let stamped = LampSyncBookReading.stamped(
-                LampBookReadingPosition(sectionID: "s1", blockIndex: 4, at: now),
+                LampBookReadingPosition(sectionID: "s1", blockIndex: 4, at: now, anchor: "a2"),
                 after: try position(f[1])
             )
             return positionCode(stamped) == f[2]
