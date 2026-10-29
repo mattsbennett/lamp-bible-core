@@ -2,7 +2,8 @@ import Foundation
 import LampModuleKit
 
 /// The ledgers a pass carries in the settings bundle, and the rules every
-/// client follows with them: the deletion records, and plan progress.
+/// client follows with them: the deletion records, plan progress and book
+/// reading.
 ///
 /// Sync merges content as a union, so on its own a deletion is undone by the
 /// next device that still has a copy. The two deletion ledgers are what let
@@ -43,6 +44,12 @@ public enum LampSyncBundleLedgers {
         bundle.planProgress.flatMap { try? LampSyncPlanProgress.decode($0) }
     }
 
+    /// The bundle's book reading, or nil when it has none or none this client
+    /// can read. None says nothing, as with plan progress.
+    public static func bookReading(in bundle: LampSyncSettingsBundle) -> LampSyncBookReading? {
+        bundle.bookReading.flatMap { try? LampSyncBookReading.decode($0) }
+    }
+
     /// This client's own records, read before the pass's update and put into
     /// the bundle inside it.
     ///
@@ -55,15 +62,20 @@ public enum LampSyncBundleLedgers {
         /// restores the part when an app from before it wrote the bundle back
         /// without it.
         public let planProgress: LampSyncPlanProgress
+        /// The whole of this client's book reading, every pass, for the same
+        /// reason.
+        public let bookReading: LampSyncBookReading
 
         public init(
             personal: LampPersonalDeletionLedger,
             decks: LampPresentationDeckDeletionLedger = LampPresentationDeckDeletionLedger(),
-            planProgress: LampSyncPlanProgress = LampSyncPlanProgress()
+            planProgress: LampSyncPlanProgress = LampSyncPlanProgress(),
+            bookReading: LampSyncBookReading = LampSyncBookReading()
         ) {
             self.personal = personal
             self.decks = decks
             self.planProgress = planProgress
+            self.bookReading = bookReading
         }
 
         /// Joins this client's records into the bundle being written.
@@ -103,6 +115,15 @@ public enum LampSyncBundleLedgers {
             }
             if !progress.isEmpty {
                 bundle.planProgress = try progress.encoded()
+            }
+
+            // (`Verification/SyncMerge.lean`: `contributeReading`.)
+            var reading = bookReading
+            if let existing = LampSyncBundleLedgers.bookReading(in: bundle) {
+                reading.merge(existing)
+            }
+            if !reading.isEmpty {
+                bundle.bookReading = try reading.encoded()
             }
         }
     }

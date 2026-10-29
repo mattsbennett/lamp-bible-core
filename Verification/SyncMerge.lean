@@ -1886,6 +1886,155 @@ theorem aContributionWithoutUnticksKeepsTheTick (own m : Tombstone)
   cases op <;> cases p <;> cases d <;>
     simp_all [contributePlan, mergePlanPart, mergeTombstone, later, planMarkIsSet] <;> omega
 
+/-! ### Book reading
+
+`LampSyncBookReading` keeps, for each book, where the person last was in it,
+and for each section bookmarked, the plan ledger's two times. A bookmark is a
+plan mark: `planMarkIsSet`, `stampSet` and `stampCleared` decide it, and a tie
+keeps the bookmark.
+
+A position is one value, so it can't be joined field by field: the later one
+stands whole. Two recorded at the same millisecond are ordered by section,
+then block, so every device keeps the same one whatever order they arrive in.
+It is a join for the reason plan progress is: an app from before it writes
+the bundle back without it. Sections are numbered here; Swift compares their
+IDs as strings. -/
+
+structure ReadingPosition where
+  time : Nat
+  sectionKey : Nat
+  block : Int
+  deriving DecidableEq, Repr
+
+-- Whether `a` comes after `b`.
+def positionAfter (a b : ReadingPosition) : Bool :=
+  Decidable.decide (b.time < a.time ∨ (b.time = a.time ∧
+    (b.sectionKey < a.sectionKey ∨ (b.sectionKey = a.sectionKey ∧ b.block < a.block))))
+
+def laterPosition (a b : ReadingPosition) : ReadingPosition :=
+  if positionAfter b a then b else a
+
+def joinPosition : Option ReadingPosition → Option ReadingPosition → Option ReadingPosition
+  | none, b => b
+  | some a, none => some a
+  | some a, some b => some (laterPosition a b)
+
+-- The order is total: of two positions that differ, one comes after the other.
+theorem positionAfter_asymm (a b : ReadingPosition) (h : positionAfter a b = true) :
+    positionAfter b a = false := by
+  rcases a with ⟨t1, s1, b1⟩; rcases b with ⟨t2, s2, b2⟩
+  simp only [positionAfter, decide_eq_true_eq, decide_eq_false_iff_not] at h ⊢
+  omega
+
+theorem positionAfter_total (a b : ReadingPosition) (h1 : positionAfter a b = false)
+    (h2 : positionAfter b a = false) : a = b := by
+  rcases a with ⟨t1, s1, b1⟩; rcases b with ⟨t2, s2, b2⟩
+  simp only [positionAfter, decide_eq_false_iff_not, ReadingPosition.mk.injEq] at h1 h2 ⊢
+  omega
+
+theorem laterPosition_comm (a b : ReadingPosition) : laterPosition a b = laterPosition b a := by
+  unfold laterPosition
+  cases hba : positionAfter b a <;> cases hab : positionAfter a b <;> simp
+  · exact positionAfter_total a b hab hba
+  · exact absurd (positionAfter_asymm b a hba) (by simp [hab])
+
+theorem laterPosition_assoc (a b c : ReadingPosition) :
+    laterPosition (laterPosition a b) c = laterPosition a (laterPosition b c) := by
+  unfold laterPosition
+  cases hba : positionAfter b a <;> cases hcb : positionAfter c b <;> cases hca : positionAfter c a <;>
+    simp [hba, hcb, hca]
+  all_goals
+    rcases a with ⟨t1, s1, b1⟩; rcases b with ⟨t2, s2, b2⟩; rcases c with ⟨t3, s3, b3⟩
+    simp only [positionAfter, decide_eq_true_eq, decide_eq_false_iff_not] at hba hcb hca
+    omega
+
+theorem laterPosition_idem (a : ReadingPosition) : laterPosition a a = a := by
+  simp [laterPosition]
+
+theorem joinPosition_comm (a b : Option ReadingPosition) : joinPosition a b = joinPosition b a := by
+  cases a <;> cases b <;> simp [joinPosition, laterPosition_comm]
+
+theorem joinPosition_assoc (a b c : Option ReadingPosition) :
+    joinPosition (joinPosition a b) c = joinPosition a (joinPosition b c) := by
+  cases a <;> cases b <;> cases c <;> simp [joinPosition, laterPosition_assoc]
+
+theorem joinPosition_idem (a : Option ReadingPosition) : joinPosition a a = a := by
+  cases a <;> simp [joinPosition, laterPosition_idem]
+
+-- A device with no position for a book changes nothing by joining.
+theorem aMissingPositionSaysNothing (a : Option ReadingPosition) : joinPosition a none = a := by
+  cases a <;> rfl
+
+-- `LampSyncBookReading.stamped`: a move is recorded now, but never at or
+-- before the position it replaces, as `stampSet` records a tick.
+def stampPosition (now : Nat) (current : Option ReadingPosition) (sectionKey : Nat) (block : Int) :
+    ReadingPosition :=
+  ⟨max now ((current.map (·.time + 1)).getD now), sectionKey, block⟩
+
+-- So a move stands where it was made, against its own device's clock and
+-- against a clock ahead of it that recorded the position it moves from.
+theorem aMoveHoldsWhereItWasMade (now : Nat) (current : Option ReadingPosition)
+    (s : Nat) (b : Int) :
+    joinPosition current (some (stampPosition now current s b)) = some (stampPosition now current s b) := by
+  cases current with
+  | none => rfl
+  | some c =>
+    have h : c.time < max now (c.time + 1) := by omega
+    simp [joinPosition, laterPosition, positionAfter, stampPosition, h]
+
+-- The bundle's book-reading part: absent, or a ledger, here one book's
+-- position and one section's bookmark.
+structure ReadingPart where
+  position : Option ReadingPosition
+  bookmark : Tombstone
+  deriving DecidableEq, Repr
+
+def mergeReadingPart : Option ReadingPart → Option ReadingPart → Option ReadingPart
+  | none, b => b
+  | some a, none => some a
+  | some a, some b =>
+    some ⟨joinPosition a.position b.position, mergeTombstone a.bookmark b.bookmark⟩
+
+theorem readingPartsJoinInAnyOrder (a b : Option ReadingPart) :
+    mergeReadingPart a b = mergeReadingPart b a := by
+  cases a <;> cases b <;> simp [mergeReadingPart, joinPosition_comm, mergeTombstone_comm]
+
+-- `Contribution.apply`: this client's whole ledger joined in, every pass, and
+-- nothing written by a client with nothing of its own.
+def contributeReading (own : ReadingPart) (part : Option ReadingPart) : Option ReadingPart :=
+  if own = ⟨none, ⟨none, none⟩⟩ then part else mergeReadingPart (some own) part
+
+theorem aDroppedReadingPartIsRestored (own : ReadingPart) (h : own ≠ ⟨none, none, none⟩) :
+    contributeReading own none = some own := by
+  simp [contributeReading, h, mergeReadingPart]
+
+-- A contribution never takes a book back to an earlier place than the part
+-- holds: whatever it brings, the part's position is still there, or a later one.
+theorem aContributionNeverMovesBack (own : ReadingPart) (part : ReadingPart) (p : ReadingPosition)
+    (h : part.position = some p) :
+    ∃ r q, contributeReading own (some part) = some r ∧ r.position = some q
+      ∧ (q = p ∨ positionAfter q p = true) := by
+  unfold contributeReading
+  split
+  · exact ⟨part, p, rfl, h, Or.inl rfl⟩
+  · cases ho : own.position with
+    | none => exact ⟨_, p, rfl, by simp [joinPosition, ho, h], Or.inl rfl⟩
+    | some o =>
+      refine ⟨_, laterPosition o p, rfl, by simp [joinPosition, ho, h], ?_⟩
+      unfold laterPosition
+      split
+      · exact Or.inl rfl
+      · rename_i hn
+        rcases o with ⟨t1, s1, b1⟩
+        rcases p with ⟨t2, s2, b2⟩
+        by_cases e : t1 = t2 ∧ s1 = s2 ∧ b1 = b2
+        · left
+          obtain ⟨rfl, rfl, rfl⟩ := e
+          rfl
+        · right
+          simp only [positionAfter, decide_eq_true_eq] at hn ⊢
+          omega
+
 /-! ### Deck pull
 
 `LampPresentationDeckPortablePull.plan` keeps, per deck, the greatest copy in
@@ -4578,5 +4727,32 @@ def bundleCopies : List BundleCopy :=
       IO.println <| conformanceLine "planVersionMerge" [code a, code b, code (mergePlanPart a b)]
       let own := a.getD ⟨none, none⟩
       IO.println <| conformanceLine "planContribution" [code a, code b, code (contributePlan own b)]
+
+#eval show IO Unit from do
+  let positionCode : Option ReadingPosition → String
+    | none => "-"
+    | some p => toString p.time ++ ":" ++ toString p.sectionKey ++ ":" ++ toString p.block
+  let positions : List (Option ReadingPosition) :=
+    [none, some ⟨1, 1, -1⟩, some ⟨1, 1, 3⟩, some ⟨1, 2, 0⟩, some ⟨2, 1, 0⟩]
+  for a in positions do
+    for b in positions do
+      IO.println <| conformanceLine "readingPosition"
+        [positionCode a, positionCode b, positionCode (joinPosition a b)]
+  for now in [0, 3, 9] do
+    for current in [none, some ⟨2, 1, 0⟩, some ⟨9, 2, 3⟩] do
+      IO.println <| conformanceLine "readingStamp"
+        [toString now, positionCode current, positionCode (some (stampPosition now current 1 4))]
+  let parts : List (Option ReadingPart) :=
+    [none, some ⟨none, ⟨some 1, none⟩⟩, some ⟨some ⟨1, 1, 0⟩, ⟨none, some 2⟩⟩,
+     some ⟨some ⟨2, 2, -1⟩, ⟨some 2, some 1⟩⟩, some ⟨some ⟨2, 1, 3⟩, ⟨none, none⟩⟩]
+  let code : Option ReadingPart → String
+    | none => "absent"
+    | some r => positionCode r.position ++ "|" ++ optNat r.bookmark.presentSince ++ ":"
+        ++ optNat r.bookmark.deletedAt
+  for a in parts do
+    for b in parts do
+      IO.println <| conformanceLine "readingVersionMerge" [code a, code b, code (mergeReadingPart a b)]
+      let own := a.getD ⟨none, ⟨none, none⟩⟩
+      IO.println <| conformanceLine "readingContribution" [code a, code b, code (contributeReading own b)]
 
 end LampSyncVerification

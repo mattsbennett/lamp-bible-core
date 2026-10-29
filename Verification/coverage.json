@@ -60,11 +60,15 @@
         "deckPullIgnoresArrivalOrder",
         "contributePlan",
         "aDroppedPartIsRestored",
-        "aContributionWithoutUnticksKeepsTheTick"
+        "aContributionWithoutUnticksKeepsTheTick",
+        "contributeReading",
+        "aDroppedReadingPartIsRestored",
+        "aContributionNeverMovesBack"
       ],
-      "boundary": "The rules both apps follow with the bundle's ledgers: an unreadable personal ledger or plan-progress ledger is skipped where it is read, a contribution joins rather than replaces, a client with nothing of its own leaves the bundle's as it was, and a client's whole plan ledger goes in every pass. Applying them to a library is each app's.",
+      "boundary": "The rules both apps follow with the bundle's ledgers: an unreadable personal ledger or plan-progress or book-reading ledger is skipped where it is read, a contribution joins rather than replaces, a client with nothing of its own leaves the bundle's as it was, and a client's whole plan ledger and book reading go in every pass. Applying them to a library is each app's.",
       "conformance": [
-        "planContribution"
+        "planContribution",
+        "readingContribution"
       ]
     },
     "Sources/LampCore/LampSyncPlanProgress.swift": {
@@ -96,6 +100,38 @@
         "planApply"
       ],
       "boundary": "Plans followed and readings finished, as a join of the deletion ledger's marks with a tie that keeps the tick. Recording a change stamps it after the time it overrides; recording what a device holds only sets. Reading IDs are parsed from the right, and the file format refuses a later version rather than reading it in part. Keeping the ledger in the same transaction as the plan tables is each app's."
+    },
+    "Sources/LampCore/LampSyncBookReading.swift": {
+      "rules": [
+        "planMarkIsSet",
+        "stampSet",
+        "stampCleared",
+        "aTieKeepsTheTick",
+        "mergeTombstone",
+        "mergeTombstone_comm",
+        "mergeTombstone_assoc",
+        "mergeTombstone_idem",
+        "ReadingPosition",
+        "positionAfter",
+        "laterPosition",
+        "joinPosition",
+        "positionAfter_asymm",
+        "positionAfter_total",
+        "laterPosition_comm",
+        "laterPosition_assoc",
+        "laterPosition_idem",
+        "joinPosition_comm",
+        "joinPosition_assoc",
+        "joinPosition_idem",
+        "aMissingPositionSaysNothing",
+        "stampPosition",
+        "aMoveHoldsWhereItWasMade"
+      ],
+      "conformance": [
+        "readingPosition",
+        "readingStamp"
+      ],
+      "boundary": "Where each book was left and its bookmarks, as a join: per book the later position whole, ordered by time, then section, then block, and per bookmark the plan ledger's marks. Recording a move stamps it after the position it replaces, and a position already held records nothing. Section IDs are compared as Swift strings; the model numbers them. The file format refuses a later version rather than reading it in part, and reads the Mac's unversioned format from before sync with its bookmarks held since 0."
     },
     "Sources/LampCore/LampSyncConflict.swift": {
       "rules": [
@@ -146,13 +182,16 @@
         "mergeTombstone_comm",
         "deckPullIgnoresArrivalOrder",
         "mergePlanPart",
-        "planPartsJoinInAnyOrder"
+        "planPartsJoinInAnyOrder",
+        "mergeReadingPart",
+        "readingPartsJoinInAnyOrder"
       ],
       "conformance": [
         "versionMerge",
-        "planVersionMerge"
+        "planVersionMerge",
+        "readingVersionMerge"
       ],
-      "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable ledger never stops the merge: of two personal ledgers or two plan-progress ledgers the readable one stands, and an unreadable deck ledger leaves this copy's, as the passes do."
+      "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable ledger never stops the merge: of two personal ledgers, two plan-progress ledgers or two book-reading ledgers the readable one stands, and an unreadable deck ledger leaves this copy's, as the passes do."
     },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [

@@ -6,7 +6,7 @@ extension LampSyncSettingsBundle {
     /// which the store kept beside this one (`LampSyncSettingsStore.Version`).
     ///
     /// Every part that is a join is joined: membership, the shared
-    /// preferences, both deletion ledgers and plan progress, so the result is the same
+    /// preferences, both deletion ledgers, plan progress and book reading, so the result is the same
     /// whichever copy the store kept as current, and nothing either device
     /// recorded is lost. The apps' own settings stay as this copy has them:
     /// they are opaque here, and each app merges them from
@@ -16,7 +16,7 @@ extension LampSyncSettingsBundle {
     /// stops a pass: of two personal ledgers the readable one stands, and of
     /// two deck ledgers an unreadable one leaves this copy's as it is, so a
     /// newer client's is never rewritten in an older format.
-    /// (`Verification/SyncMerge.lean`: `versionMerge`.)
+    /// (`Verification/SyncMerge.lean`: `versionMerge`, `mergeReadingPart`.)
     public mutating func merge(version other: LampSyncSettingsBundle) throws {
         manifest = manifest.merged(with: other.manifest)
         preferences = preferences.joined(with: other.preferences)
@@ -47,6 +47,16 @@ extension LampSyncSettingsBundle {
             case (var progress?, let incoming?):
                 progress.merge(incoming)
                 return (try? progress.encoded()) ?? ours
+            case (nil, .some): return theirs
+            default: return ours
+            }
+        }
+        // And as plan progress.
+        bookReading = Self.joined(bookReading, other.bookReading) { ours, theirs in
+            switch (try? LampSyncBookReading.decode(ours), try? LampSyncBookReading.decode(theirs)) {
+            case (var reading?, let incoming?):
+                reading.merge(incoming)
+                return (try? reading.encoded()) ?? ours
             case (nil, .some): return theirs
             default: return ours
             }

@@ -226,6 +226,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
     public var personalDeletions: Data?                    // per item; separate from the per-file manifest
     public var deckDeletions: Data?
     public var planProgress: Data?                         // plans followed and readings finished, both apps
+    public var bookReading: Data?                          // where each book was left, and its bookmarks, both apps
     public var manifest: LampSyncLibraryManifest
     public func encoded() throws -> Data                   // zlib {"formatVersion":3,"entries":[],"bundle":{…}}
     public static func decode(_ data: Data) throws -> Self // .isArchive, .unsupportedVersion, .damaged
@@ -276,6 +277,21 @@ overrides (`stampSet`, `stampCleared`), seeds what it already holds with
 `recordHeld` (0 where it kept no time), and applies a joined ledger with
 `changes(toApplyTo:selected:)` (`planApply`), which takes nothing away
 without a clearing later than the app's own copy.
+
+**Book reading** is `LampSyncBookReading`, in LampCore, a join for the same
+reason: for each book, where it was left (section, first block in view, and
+when), and for each bookmarked section a plan mark. The later position stands
+whole, ordered by time, then section, then block, so two devices keep the same
+one whichever way they exchange (`joinPosition`). A move is stamped after the
+position it replaces (`stampPosition`), and a position already held records
+nothing, so opening a book where another device left it doesn't make that
+place newer. It is also each app's own record:
+`LampBookReadingStateStore` keeps it in the defaults under
+`books.readerState`, so a change and what the pass contributes are one write.
+The store reads the Mac's unversioned format from before sync, holding its
+bookmarks since 0, so that any recorded removal outranks them. A pass
+contributes `ledger()` every time, and `merge(_:)`s the written bundle's part
+back.
 
 ### Deleting
 
@@ -341,12 +357,13 @@ public protocol LampSyncVersionedStore: LampSyncRemoteStore {
   or they would stay forever. With no `mergingVersion`, versions throw
   `versionsNeedAMerge` and nothing is touched (`settingsWrite`).
 - `LampSyncSettingsBundle.merge(version:)`, in LampCore, joins the manifest,
-  the shared preferences, both deletion ledgers and plan progress, and keeps
-  the current copy's `userSettings` and `macSettings`. The joined parts come
-  out the same whichever copy iCloud kept as current (`versionMerge`,
-  `planVersionMerge`). An unreadable ledger never stops it, as it never stops
-  a pass: of two personal ledgers or two plan-progress ledgers the readable
-  one stands, and an unreadable deck ledger leaves this copy's.
+  the shared preferences, both deletion ledgers, plan progress and book
+  reading, and keeps the current copy's `userSettings` and `macSettings`. The
+  joined parts come out the same whichever copy iCloud kept as current
+  (`versionMerge`, `planVersionMerge`, `readingVersionMerge`). An unreadable
+  ledger never stops it, as it never stops a pass: of two personal,
+  plan-progress or book-reading ledgers the readable one stands, and an
+  unreadable deck ledger leaves this copy's.
 - Each app merges its own settings from `Snapshot.versions` before the write,
   **without a base**: after a lost write, a device has recorded its own write
   as the base, which the current copy never saw, so a three-way merge undoes

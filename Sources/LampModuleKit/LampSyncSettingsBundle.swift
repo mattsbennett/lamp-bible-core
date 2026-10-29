@@ -31,6 +31,9 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
     /// finished, which both apps read, unlike `userSettings`. An app from
     /// before it writes the bundle back without it, which is why it is a join.
     public var planProgress: Data?
+    /// An encoded `LampSyncBookReading`: where each book was left, and its
+    /// bookmarks. A join, as plan progress is, for the same reason.
+    public var bookReading: Data?
     public var manifest: LampSyncLibraryManifest
 
     public init(
@@ -40,6 +43,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         personalDeletions: Data? = nil,
         deckDeletions: Data? = nil,
         planProgress: Data? = nil,
+        bookReading: Data? = nil,
         manifest: LampSyncLibraryManifest = .init()
     ) {
         self.userSettings = userSettings
@@ -48,6 +52,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         self.personalDeletions = personalDeletions
         self.deckDeletions = deckDeletions
         self.planProgress = planProgress
+        self.bookReading = bookReading
         self.manifest = manifest
     }
 
@@ -98,6 +103,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         var personalDeletions: Data?
         var deckDeletions: Data?
         var planProgress: Data?
+        var bookReading: Data?
         var manifest: LampSyncLibraryManifest
     }
 
@@ -114,7 +120,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         let payload = try encoder.encode(Payload(
             userSettings: userSettings, macSettings: macSettings, preferences: preferences,
             personalDeletions: personalDeletions, deckDeletions: deckDeletions,
-            planProgress: planProgress, manifest: manifest
+            planProgress: planProgress, bookReading: bookReading, manifest: manifest
         ))
         // Written by hand so the version comes first, where `contents`
         // looks for it.
@@ -146,7 +152,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
             userSettings: payload.userSettings, macSettings: payload.macSettings,
             preferences: payload.preferences, personalDeletions: payload.personalDeletions,
             deckDeletions: payload.deckDeletions, planProgress: payload.planProgress,
-            manifest: payload.manifest
+            bookReading: payload.bookReading, manifest: payload.manifest
         )
     }
 
