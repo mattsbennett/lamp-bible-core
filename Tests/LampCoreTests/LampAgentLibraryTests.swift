@@ -92,6 +92,25 @@ struct LampAgentLibraryTests {
         )
         let data = try JSONEncoder().encode(policy)
         #expect(try JSONDecoder().decode(LampAgentAccessPolicy.self, from: data) == policy)
+        let everyModule = LampAgentAccessPolicy()
+        #expect(try JSONDecoder().decode(LampAgentAccessPolicy.self, from: JSONEncoder().encode(everyModule)) == everyModule)
+    }
+
+    /// A policy missing keys still reads, with access off unless it says
+    /// otherwise, so a field added later leaves the files on disk readable.
+    @Test func anAccessPolicyMissingKeysReadsWithItsDefaults() throws {
+        let decoder = JSONDecoder()
+        #expect(try decoder.decode(LampAgentAccessPolicy.self, from: Data("{}".utf8)) == LampAgentAccessPolicy(isEnabled: false))
+        #expect(try decoder.decode(LampAgentAccessPolicy.self, from: Data(#"{"isEnabled":true}"#.utf8)) == LampAgentAccessPolicy())
+    }
+
+    /// A limit edited by hand is held to the bounds the app's own are.
+    @Test func anAccessPolicyLimitFromAFileIsClamped() throws {
+        let file = #"{"isEnabled":true,"maximumSearchResults":10000,"maximumPassageVerses":0,"maximumItemCharacters":5}"#
+        let policy = try JSONDecoder().decode(LampAgentAccessPolicy.self, from: Data(file.utf8))
+        #expect(policy.maximumSearchResults == 200)
+        #expect(policy.maximumPassageVerses == 1)
+        #expect(policy.maximumItemCharacters == 1_000)
     }
 
     @Test func browsesAndReadsLongFormBookSections() async throws {
