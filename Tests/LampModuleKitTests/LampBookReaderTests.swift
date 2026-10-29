@@ -134,14 +134,41 @@ struct LampBookTextResolverTests {
             annotation("scripture", 6, 3, scripture),
             annotation("scripture", 16, 20, scripture),
             annotation("scripture", 7, 99, scripture),
-            annotation("page", 0, 0, LampBookAnnotationData(pageNumber: "41")),
         ])
 
         let value = LampBookTextResolver.resolve(content, footnoteNumbers: [:])
 
         #expect(runs(of: LampBookTextAttributes.Scripture.self, in: value).map { $0.0 } == ["beginning"])
-        // Page numbers are the PDF's, not the printed page's: no marker.
         #expect(String(value.characters) == "In the beginning")
+    }
+
+    @Test func pageMarkersGoWhereEachPageStartsSpacedFromTheWords() throws {
+        // A roman page at the start; page 12 at "Christadelphian", after the
+        // space; page 13 straight after that word, with the footnote that
+        // ends page 12 at the same place.
+        let text = "disagreed with Christadelphian teaching"
+        let content = LampBookAnnotatedText(
+            text: text,
+            annotations: [
+                annotation("page", 0, 0, LampBookAnnotationData(pageNumber: "xii")),
+                annotation("page", 15, 15, LampBookAnnotationData(pageNumber: "12")),
+                annotation("page", 30, 30, LampBookAnnotationData(pageNumber: "13")),
+                annotation("page", -1, -1, LampBookAnnotationData(pageNumber: "0")),
+                annotation("page", 4, 4),
+                annotation("page", 99, 99, LampBookAnnotationData(pageNumber: "14")),
+            ],
+            footnoteReferences: [LampBookFootnoteReference(id: "n", offset: 30)]
+        )
+
+        let value = LampBookTextResolver.resolve(content, footnoteNumbers: ["n": 3])
+
+        // A start past the end goes at the end; the spaces a marker brings
+        // are marked with it.
+        #expect(String(value.characters)
+            == "[p. xii] disagreed with [p. 12] Christadelphian[3] [p. 13] teaching [p. 14]")
+        #expect(runs(of: LampBookTextAttributes.Page.self, in: value).map { $0.0 }
+            == ["[p. xii] ", "[p. 12] ", " [p. 13]", " [p. 14]"])
+        #expect(runs(of: LampBookTextAttributes.Page.self, in: value).map { $0.1 } == ["xii", "12", "13", "14"])
     }
 
     @Test func attributesSurviveTheTripThroughNSAttributedStringGivenTheScope() throws {

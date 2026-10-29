@@ -107,6 +107,14 @@ public enum LampBookTextAttributes {
         public typealias Value = Bool
         public static let name = "LampBookUnderline"
     }
+
+    /// A page marker the resolver inserted, with the spaces it put either
+    /// side, by the printed page that starts there: everything the resolver
+    /// inserts can be told from the book's own text.
+    public enum Page: CodableAttributedStringKey {
+        public typealias Value = String
+        public static let name = "LampBookPage"
+    }
 }
 
 extension AttributeScopes {
@@ -115,6 +123,7 @@ extension AttributeScopes {
         public let bookFootnote: LampBookTextAttributes.Footnote
         public let bookOriginalLanguage: LampBookTextAttributes.OriginalLanguage
         public let bookUnderline: LampBookTextAttributes.Underline
+        public let bookPage: LampBookTextAttributes.Page
         public let foundation: AttributeScopes.FoundationAttributes
     }
 
@@ -134,8 +143,8 @@ extension AttributeDynamicLookup {
 /// Resolves a book's annotated text into an attributed string that says what
 /// each stretch of it is, and leaves how it looks, and what tapping it does,
 /// to each app. Emphasis is `inlinePresentationIntent`, a link to the web is
-/// `link`, and citations, footnotes, original-language words and underlining
-/// are in `LampBookAttributes`.
+/// `link`, and citations, footnotes, original-language words, underlining and
+/// page markers are in `LampBookAttributes`.
 ///
 /// Offsets are Unicode scalar offsets into `text`, which is how the book
 /// converters count them. Devotional content counts Characters instead
@@ -149,8 +158,10 @@ extension AttributeDynamicLookup {
 /// cut at its end. A footnote marker past the end goes at the end, where a
 /// trailing note belongs anyway.
 ///
-/// Page annotations are left out: their numbers are the source PDF's page
-/// index, not the printed page.
+/// A page annotation becomes a marker, "[p. 12]", where the page starts,
+/// spaced from the words on either side, after any footnote markers at the
+/// same place: those belong to the word the last page ended on. Its number is
+/// the printed page; a page printed without one carries no annotation.
 public enum LampBookTextResolver {
     public static func resolve(
         _ content: LampBookAnnotatedText,
@@ -202,6 +213,17 @@ public enum LampBookTextResolver {
             var marker = AttributedString("[\(number.map(String.init) ?? "•")]")
             marker.bookFootnote = LampBookFootnoteMark(id: reference.id, number: number, isMarker: true)
             markers.append((min(max(reference.offset, 0), length), order, marker))
+        }
+        let scalars = Array(content.text.unicodeScalars)
+        for (order, annotation) in content.annotations.enumerated()
+        where annotation.type == "page" && annotation.start >= 0 {
+            guard let page = annotation.data?.pageNumber, !page.isEmpty else { continue }
+            let offset = min(annotation.start, length)
+            let before = offset > 0 && !scalars[offset - 1].properties.isWhitespace ? " " : ""
+            let after = offset < length && !scalars[offset].properties.isWhitespace ? " " : ""
+            var marker = AttributedString("\(before)[p. \(page)]\(after)")
+            marker.bookPage = page
+            markers.append((offset, content.footnoteReferences.count + order, marker))
         }
         // From the end, so each offset still counts the book's own text; markers
         // at one offset keep the order the book lists them in.
