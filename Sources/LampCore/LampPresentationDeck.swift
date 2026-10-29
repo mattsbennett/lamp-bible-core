@@ -749,14 +749,47 @@ public enum LampPresentationDeckValidator {
                 "Name whole books, such as NT, Romans or Matthew-John, or leave the range out."
             ))
         }
+        if chart.drawnStyle == .grid && chart.by != .book {
+            issues.append((.error, "chart.by", "A grid shades each book's chapters, so it charts by book."))
+        }
+        if chart.drawnStyle == .share && chart.measure == .perThousandWords {
+            issues.append((
+                .warning,
+                "chart.measure",
+                "A share is of occurrences: rates per thousand words do not add up to a whole, "
+                    + "so the ring counts occurrences."
+            ))
+        }
         if let values = chart.values {
-            if values.count > LampPresentationChart.readableBars {
+            switch chart.drawnStyle {
+            case .bars where values.count > LampPresentationChart.readableBars:
                 issues.append((
                     .warning,
                     "chart.values",
                     "\(values.count) bars are hard to read from the back of a room. "
                         + "Chart by section, or narrow the range."
                 ))
+            case .grid where values.count > LampPresentationChart.readableGridRows:
+                issues.append((
+                    .warning,
+                    "chart.values",
+                    "A grid of \(values.count) books is too dense to read. Narrow the range."
+                ))
+            case .grid where chart.by == .book && values.contains { $0.chapters == nil }:
+                issues.append((
+                    .warning,
+                    "chart.values",
+                    "This grid has no chapters yet. Lamp works them out when the deck is built."
+                ))
+            case .share where values.count > LampPresentationChart.shareSlices:
+                issues.append((
+                    .warning,
+                    "chart.values",
+                    "A share of \(values.count) slices cannot be told apart. "
+                        + "Build the deck again to gather the smallest."
+                ))
+            default:
+                break
             }
         } else {
             issues.append((

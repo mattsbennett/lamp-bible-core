@@ -85,6 +85,79 @@ struct LampPresentationChartTests {
             == "Chart of G26 in T: Gospels 0, fewer than expected; Paul’s Letters 10, more than expected")
     }
 
+    @Test func aStyleTheAppDoesNotKnowReadsAsBars() throws {
+        func decoded(_ style: String?) throws -> LampPresentationChart {
+            let field = style.map { #", "style": "\#($0)""# } ?? ""
+            let json = #"{"source": {"strongs": "G26", "translationID": "T"}, "by": "book", "measure": "occurrences"\#(field)}"#
+            return try JSONDecoder().decode(LampPresentationChart.self, from: Data(json.utf8))
+        }
+        #expect(try decoded(nil).drawnStyle == .bars)
+        #expect(try decoded("grid").drawnStyle == .grid)
+        #expect(try decoded("spiral").drawnStyle == .bars)
+    }
+
+    @Test func eachStyleTakesTheValuesItDraws() {
+        var columns = chart(by: .book)
+        columns.style = .columns
+        #expect(columns.values(from: analysis).map(\.label) == ["Matthew", "Romans", "1 Corinthians"])
+
+        var grid = chart(by: .book)
+        grid.style = .grid
+        let rows = grid.values(from: analysis)
+        #expect(rows.map(\.label) == ["Matthew", "Romans", "1 Corinthians"])
+        #expect(rows.map { $0.chapters?.count } == [1, 1, 13])
+        #expect(rows.last?.chapters?.last == 10)
+        #expect(rows.last?.chapters?.dropLast().allSatisfy { $0 == 0 } == true)
+
+        var share = chart(by: .section, measure: .perThousandWords)
+        share.style = .share
+        let ring = share.values(from: analysis)
+        #expect(ring == [.init(label: "Paul’s Letters", value: 10)])
+        #expect(share.formatted(10) == "10")
+        share.values = ring
+        #expect(share.spokenDescription.hasSuffix("Paul’s Letters 10, 100 percent"))
+
+        // Eleven renderings: the largest and the next six alphabetically keep
+        // their slices, and the last four are gathered into one.
+        var analyzer = LampStrongsAnalyzer(key: "G26", translationID: "T", translationName: "Test")
+        let words = Array(repeating: "love", count: 5) + (1...10).map { "word\($0)" }
+        for (index, word) in words.enumerated() {
+            let verse = tagged([(word, "G26"), ("filler", "G1")])
+            analyzer.add(reference: 46_013_001 + index, text: verse.text, annotationsJSON: verse.json)
+        }
+        var renderings = chart(by: .rendering)
+        renderings.style = .share
+        let slices = renderings.values(from: analyzer.analysis())
+        #expect(slices.count == LampPresentationChart.shareSlices)
+        #expect(slices.first == .init(label: "love", value: 5))
+        #expect(slices.last == .init(label: "Others", value: 4))
+        #expect(slices.reduce(0) { $0 + $1.value } == 15)
+    }
+
+    @Test func theValidatorHoldsEachStyleToWhatItCanDraw() {
+        func messages(_ chart: LampPresentationChart) -> [String] {
+            var deck = LampPresentationDeck.starter(title: "Charts")
+            deck.slides = [LampPresentationSlide(layout: .image, blocks: [.init(kind: .chart, chart: chart)])]
+            return LampPresentationDeckValidator.validate(deck).map(\.message)
+        }
+        let many = (1...30).map { LampPresentationChart.Value(label: "Book \($0)", value: 1) }
+        #expect(messages(.init(source: .init(strongs: "G26", translationID: "T"), by: .book, style: .columns, values: many)).isEmpty)
+        #expect(messages(.init(source: .init(strongs: "G26", translationID: "T"), by: .book, values: many))
+            == ["30 bars are hard to read from the back of a room. Chart by section, or narrow the range."])
+        #expect(messages(.init(source: .init(strongs: "G26", translationID: "T"), by: .section, style: .grid, values: []))
+            == ["A grid shades each book's chapters, so it charts by book."])
+        #expect(messages(.init(source: .init(strongs: "G26", translationID: "T"), by: .book, style: .grid, values: many))
+            == ["This grid has no chapters yet. Lamp works them out when the deck is built."])
+        let nine = Array(many.prefix(9))
+        #expect(messages(.init(
+            source: .init(strongs: "G26", translationID: "T"), by: .book, measure: .perThousandWords,
+            style: .share, values: nine
+        )) == [
+            "A share is of occurrences: rates per thousand words do not add up to a whole, so the ring counts occurrences.",
+            "A share of 9 slices cannot be told apart. Build the deck again to gather the smallest.",
+        ])
+    }
+
     @Test func aChartTakesTheSlotAPictureWould() {
         let chartBlock = LampPresentationBlock(kind: .chart, chart: chart(by: .book))
         let slide = LampPresentationSlide(layout: .titleAndBody, blocks: [
