@@ -2459,56 +2459,13 @@ public actor LampLibrary {
             }
         }
 
-        if hasTextQuery && wants(.highlights) {
-            let translationIDs = Set(installed.filter { $0.kind == .translation }.map(\.id))
-            let verseMatches = try searchTranslations(
-                query: trimmedQuery,
-                moduleIDs: translationIDs,
+        if (hasTextQuery || hasColorFilter) && wants(.highlights) {
+            results += try searchHighlights(
+                colors: highlightColors,
+                query: hasTextQuery ? parsedQuery : nil,
+                moduleIDs: moduleIDs,
                 bookRange: bookRange,
-                limit: min((resultLimit - countForKind(.highlights)) * 4, 500)
-            )
-            for match in verseMatches where countForKind(.highlights) < resultLimit {
-                let personal = try verseHighlights(translationID: match.translationID, reference: match.reference)
-                for highlight in personal where includesModule(highlight.setID)
-                    && LampHighlightSearch.matchesColor(highlight.color, in: highlightColors)
-                    && countForKind(.highlights) < resultLimit {
-                    results.append(LampModuleSearchResult(
-                        id: "highlights:\(highlight.setID):\(highlight.id)",
-                        kind: .highlights,
-                        moduleID: highlight.setID,
-                        moduleName: "My Highlights",
-                        title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
-                        subtitle: match.translationAbbreviation,
-                        snippet: snippet(match.text),
-                        startReference: match.reference,
-                        highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
-                    ))
-                }
-                for module in installed where module.kind == .highlights && includesModule(module.id) {
-                    let moduleHighlights = try moduleVerseHighlights(moduleID: module.id, reference: match.reference)
-                    for highlight in moduleHighlights where highlight.translationID == match.translationID
-                        && LampHighlightSearch.matchesColor(highlight.color, in: highlightColors)
-                        && countForKind(.highlights) < resultLimit {
-                        results.append(LampModuleSearchResult(
-                            id: "highlights:\(module.id):\(highlight.id)",
-                            kind: .highlights,
-                            moduleID: module.id,
-                            moduleName: module.name,
-                            title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
-                            subtitle: match.translationAbbreviation,
-                            snippet: snippet(match.text),
-                            startReference: match.reference,
-                            highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
-                        ))
-                    }
-                }
-            }
-        }
-
-        if !hasTextQuery && hasColorFilter && wants(.highlights) {
-            results += try searchHighlightsByColor(
-                colors: highlightColors ?? [], moduleIDs: moduleIDs,
-                bookRange: bookRange, limit: resultLimit
+                limit: resultLimit - countForKind(.highlights)
             )
         }
 
@@ -2520,12 +2477,25 @@ public actor LampLibrary {
         }.prefix(resultLimit).map(\.element))
     }
 
-    private func searchHighlightsByColor(
-        colors: Set<String>,
+    /// Highlights of `colors`, or of any colour when none are given, whose
+    /// verses hold `query` when one is given: each set's most recent first,
+    /// then each highlight module's.
+    ///
+    /// The highlights are read first and their verses after, so a highlight
+    /// is found wherever its verse falls. Found the other way, from the
+    /// verses a text search ranks first, one on a verse past the first few
+    /// hundred was never seen.
+    private func searchHighlights(
+        colors: Set<String>?,
+        query: LampSearchQuery?,
         moduleIDs: Set<String>?,
         bookRange: ClosedRange<Int>?,
         limit: Int
     ) throws -> [LampModuleSearchResult] {
+        func wanted(_ highlight: LampVerseHighlight) -> Bool {
+            LampHighlightSearch.matchesColor(highlight.color, in: colors)
+                && bookRange.map { $0.contains(highlight.bookNumber) } != false
+        }
         var matches: [(highlight: LampVerseHighlight, moduleID: String, name: String)] = []
         let queue = try openUserDatabase()
         for set in try highlightSets() where moduleIDs == nil || moduleIDs?.contains(set.id) == true {
@@ -2539,55 +2509,87 @@ public actor LampLibrary {
                     ORDER BY h.id DESC
                     """, arguments: [set.id]).map(makeVerseHighlight)
             }
-            matches += highlights.filter {
-                LampHighlightSearch.matchesColor($0.color, in: colors)
-            }.map { ($0, set.id, set.name) }
+            matches += highlights.filter(wanted).map { ($0, set.id, set.name) }
         }
-        for module in try installedModules() where module.kind == .highlights
+        let installed = try installedModules()
+        for module in installed where module.kind == .highlights
             && (moduleIDs == nil || moduleIDs?.contains(module.id) == true) {
             let moduleQueue = try openDatabase(moduleID: module.id)
             let highlights = try moduleQueue.read { db in
                 try readModuleHighlights(in: db, referenceRange: Int.min...Int.max)
             }
-            matches += highlights.filter {
-                LampHighlightSearch.matchesColor($0.color, in: colors)
-            }.map { ($0, module.id, module.name) }
+            matches += highlights.filter(wanted).map { ($0, module.id, module.name) }
         }
 
-        var chapters: [String: LampChapter] = [:]
+        let abbreviations = Dictionary(
+            installed.filter { $0.kind == .translation }.map { ($0.id, $0.abbreviation ?? $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var texts: [String: [Int: String]] = [:]
+        for (translationID, highlights) in Dictionary(grouping: matches, by: \.highlight.translationID) {
+            try Task.checkCancellation()
+            texts[translationID] = (try? verseTexts(
+                moduleID: translationID,
+                references: Set(highlights.map(\.highlight.reference))
+            )) ?? [:]
+        }
+
         var results: [LampModuleSearchResult] = []
-        for (highlight, moduleID, name) in matches {
-            let book = highlight.bookNumber
-            if let bookRange, !bookRange.contains(book) { continue }
-            let chapterNumber = highlight.chapterNumber
-            let key = "\(highlight.translationID):\(book):\(chapterNumber)"
-            if chapters[key] == nil {
-                chapters[key] = try? chapter(
-                    moduleID: highlight.translationID,
-                    bookNumber: book, chapterNumber: chapterNumber
-                )
-            }
-            guard let chapter = chapters[key],
-                  let verse = chapter.verses.first(where: {
-                      $0.number == highlight.verseNumber
-                  }) else { continue }
+        for (highlight, moduleID, name) in matches where results.count < limit {
+            guard let text = texts[highlight.translationID]?[highlight.reference],
+                  query?.matches(text) != false else { continue }
             results.append(LampModuleSearchResult(
                 id: "highlights:\(moduleID):\(highlight.id)",
                 kind: .highlights,
                 moduleID: moduleID,
                 moduleName: name,
-                title: "\(chapter.book.name) \(chapterNumber):\(highlight.verseNumber)",
-                snippet: LampHighlightSearch.markedSnippet(
-                    text: verse.text,
+                title: LampBibleReferenceFormatter.describeRange(from: highlight.reference, to: highlight.reference),
+                subtitle: abbreviations[highlight.translationID],
+                snippet: query.map { $0.markedSnippet(text) } ?? LampHighlightSearch.markedSnippet(
+                    text: text,
                     startOffset: highlight.startOffset,
                     endOffset: highlight.endOffset
                 ),
                 startReference: highlight.reference,
                 highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
             ))
-            if results.count >= limit { break }
         }
         return results
+    }
+
+    /// The text of each verse of a translation in `references`, read a few
+    /// hundred at a time rather than a chapter at a time.
+    private func verseTexts(moduleID: String, references: Set<Int>) throws -> [Int: String] {
+        let queue = try openDatabase(moduleID: moduleID)
+        return try queue.read { db in
+            let tables = try tableNames(in: db)
+            let table: String
+            var condition = ""
+            var leading = StatementArguments()
+            if tables.contains("translation_meta") && tables.contains("verses") {
+                table = "verses"
+            } else if tables.contains("translation_verses") {
+                table = "translation_verses"
+                condition = "translation_id = ? AND "
+                leading = [moduleID]
+            } else {
+                return [:]
+            }
+            let sorted = references.sorted()
+            var texts: [Int: String] = [:]
+            for start in stride(from: 0, to: sorted.count, by: 500) {
+                let batch = Array(sorted[start..<min(start + 500, sorted.count)])
+                var arguments = leading
+                arguments += StatementArguments(batch)
+                let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ", ")
+                for row in try Row.fetchAll(db, sql: """
+                    SELECT ref, text FROM \(table) WHERE \(condition)ref IN (\(placeholders))
+                    """, arguments: arguments) {
+                    texts[row["ref"]] = row["text"]
+                }
+            }
+            return texts
+        }
     }
 
     public func selectedPlanIDs() throws -> Set<String> {

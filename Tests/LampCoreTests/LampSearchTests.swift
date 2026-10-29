@@ -166,6 +166,40 @@ struct LampSearchTests {
         #expect(text.first?.snippet == "God so <mark>loved</mark> the <mark>world</mark>")
     }
 
+    /// A highlight is found wherever its verse falls among the text matches,
+    /// not only among the first few the text search ranks; and an agent's
+    /// search takes the same filters the apps do.
+    @Test func everyHighlightIsFoundAndAnAgentSearchIsFiltered() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let verses = (1...12).map { verse in
+            #"{"v": \#(verse), "content": {"text": "light in verse \#(verse)", "annotations": [{"type": "strongs", "start": 0, "end": 5, "data": {"strongs": "G5457"}}]}}"#
+        }.joined(separator: ",")
+        try await installed(#"""
+            {"meta": {"schemaVersion": "1.0", "id": "T", "type": "translation", "name": "T", "abbreviation": "T", "language": "en"},
+             "books": [
+               {"id": "Gen", "name": "Genesis", "number": 1, "testament": "OT", "chapters": [{"chapter": 1, "verses": [
+                 {"v": 3, "content": {"text": "Let there be light", "annotations": [{"type": "strongs", "start": 13, "end": 18, "data": {"strongs": "H216"}}]}}]}]},
+               {"id": "John", "name": "John", "number": 43, "testament": "NT", "chapters": [{"chapter": 1, "verses": [\#(verses)]}]}
+             ]}
+            """#, id: "T", in: root, library: library)
+        _ = try await library.saveVerseHighlight(
+            translationID: "T", reference: 43_001_012, startOffset: 0, endOffset: 5, color: "#FFCC00"
+        )
+
+        let found = try await library.searchModules(query: "light", kinds: [.highlights], limit: 1)
+        #expect(found.map(\.startReference) == [43_001_012])
+        #expect(found.first?.snippet == "<mark>light</mark> in verse 12")
+        #expect(found.first?.subtitle == "T")
+        #expect(try await library.searchModules(query: "darkness", kinds: [.highlights]).isEmpty)
+
+        let agent = LampAgentLibrary(library: library)
+        #expect(try await agent.searchLibrary(query: "light", kinds: [.translation], range: "OT").map(\.reference)
+            == ["Genesis 1:3"])
+        #expect(try await agent.searchLibrary(query: "", kinds: [.translation], strongsKey: "H216").count == 1)
+    }
+
     /// A translation without a full-text index still asks for every term,
     /// wherever each falls, as the index would.
     @Test func aTranslationWithoutAnIndexFindsEveryTermApart() async throws {

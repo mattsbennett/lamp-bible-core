@@ -67,10 +67,16 @@ public actor LampAgentLibrary {
         }
     }
 
+    /// `range` names whole books, as `analyzeStrongs` reads it ("NT",
+    /// "Romans", "Matthew-John"); `strongsKey` finds the verses and lexicon
+    /// entries a key tags; `highlightColors` narrows highlights to colours.
     public func searchLibrary(
         query: String,
         kinds: Set<LampModuleKind>? = nil,
         moduleIDs: Set<String>? = nil,
+        range: String? = nil,
+        strongsKey: String? = nil,
+        highlightColors: Set<String>? = nil,
         limit: Int = 20
     ) async throws -> [LampAgentSearchResult] {
         try requireEnabled()
@@ -80,6 +86,9 @@ public actor LampAgentLibrary {
             query: query,
             kinds: kinds,
             moduleIDs: allowedIDs,
+            bookRange: try range.map(LampReferenceParser.books),
+            strongsKey: strongsKey,
+            highlightColors: highlightColors,
             limit: boundedLimit
         )
         return results.map { result in
