@@ -96,6 +96,46 @@ struct LampAgentLibraryTests {
         #expect(try JSONDecoder().decode(LampAgentAccessPolicy.self, from: JSONEncoder().encode(everyModule)) == everyModule)
     }
 
+    /// What a write checks against: the whole body, whatever the agent may
+    /// read, and no text given out.
+    @Test func aPersonalDevotionalsRevisionFollowsItsWholeBody() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LampAgentRevision-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = LampLibrary(rootURL: fixture.appendingPathComponent("Library"))
+        let opening = String(repeating: "In the beginning was the Word. ", count: 2_000)
+        func save(_ ending: String) async throws {
+            _ = try await library.savePersonalDevotional(LampDevotional(
+                id: "w", moduleID: "personal-devotionals", moduleName: "My Writing",
+                title: "Beginnings", content: opening + ending
+            ))
+        }
+        // Reading is off, and the body is longer than any limit an agent reads to.
+        let agent = LampAgentLibrary(library: library, policy: .disabled)
+
+        #expect(try await agent.personalDevotionalRevision("w") == nil)
+        try await save("And the Word was with God.")
+        let first = try #require(try await agent.personalDevotionalRevision("w"))
+        #expect(first.count == 64)
+        #expect(try await agent.personalDevotionalRevision("w") == first)
+        // An edit past where an agent's read would have been cut.
+        try await save("And the Word was God.")
+        #expect(try await agent.personalDevotionalRevision("w") != first)
+
+        // The same words, accents composed or not, are the same writing. Swift's
+        // == calls the two equal, so their bytes show they really differ.
+        let composed = "Caf\u{E9} and gr\u{E2}ce."
+        let decomposed = "Cafe\u{301} and gra\u{302}ce."
+        #expect(Array(composed.utf8) != Array(decomposed.utf8))
+        try await save(decomposed)
+        // Stored as written, so it is the hash that composes it.
+        let stored = try await library.personalDevotionals().first { $0.id == "w" }?.content
+        #expect(stored.map { Array($0.utf8) } == Array((opening + decomposed).utf8))
+        let fromDecomposed = try await agent.personalDevotionalRevision("w")
+        try await save(composed)
+        #expect(try await agent.personalDevotionalRevision("w") == fromDecomposed)
+    }
+
     /// A policy missing keys still reads, with access off unless it says
     /// otherwise, so a field added later leaves the files on disk readable.
     @Test func anAccessPolicyMissingKeysReadsWithItsDefaults() throws {

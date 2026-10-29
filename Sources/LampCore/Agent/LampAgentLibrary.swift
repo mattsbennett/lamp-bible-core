@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LampModuleKit
 
@@ -356,6 +357,27 @@ public actor LampAgentLibrary {
             throw LampAgentError.itemNotFound(devotionalID)
         }
         return LampAgentDevotional(devotional, content: limitedText(devotional.content))
+    }
+
+    /// A fingerprint of a personal devotional's whole stored body, or nil when
+    /// there is no such devotional: what a write compares at read and at write
+    /// to know the writer hasn't changed it in between.
+    ///
+    /// Not `readDevotional`, which answers for an agent: it applies the access
+    /// policy and cuts long text to the policy's limit, so a check built on it
+    /// stops working when reading is off and misses an edit past the cut. This
+    /// reads past both, and gives out a SHA-256 rather than any text.
+    ///
+    /// The body is composed (NFC) first. The same sentence spelled with
+    /// decomposed accents is not a change to the writing, and pasted or
+    /// filed text often arrives that way; hashed as stored, it would refuse a
+    /// write and blame the writer's own editing for it.
+    public func personalDevotionalRevision(_ devotionalID: String) async throws -> String? {
+        guard let devotional = try await library.personalDevotionals()
+            .first(where: { $0.id == devotionalID }) else { return nil }
+        return SHA256.hash(data: Data(devotional.content.precomposedStringWithCanonicalMapping.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     public func listQuizModules(planID: String? = nil) async throws -> [LampAgentQuizModule] {
