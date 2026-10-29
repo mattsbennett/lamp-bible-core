@@ -54,6 +54,18 @@ struct BookLibraryTests {
         #expect(sections.last?.content.contains("beginning of creation") == true)
         #expect(sections.last?.keyScriptures.first?.displayDescription == "Genesis 1:1–3")
 
+        // A "continue reading" row names the section without reading the book.
+        let title = try await library.bookSectionTitle(
+            moduleID: "TEST_BOOK", sectionID: "TEST_BOOK:chapter-one"
+        )
+        #expect(title == "Creation and Grace")
+        #expect(
+            try await library.bookSectionTitle(
+                moduleID: "TEST_BOOK", sectionID: "TEST_BOOK:no-such-section"
+            ) == nil,
+            "a position saved against a section the book no longer has"
+        )
+
         let results = try await library.searchModules(query: "shines", kinds: [.book])
         #expect(results.count == 1)
         #expect(results.first?.kind == .book)

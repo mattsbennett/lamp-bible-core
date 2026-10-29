@@ -1166,6 +1166,23 @@ public actor LampLibrary {
         }
     }
 
+    /// One section's title, without the text under it.
+    ///
+    /// `bookSections(moduleID:)` selects every column, so a book's whole body
+    /// comes back with it. Naming the section a reader left off in needs the
+    /// title alone, and asking for it through that call would read an entire
+    /// book per line of a "continue reading" list.
+    public func bookSectionTitle(moduleID: String, sectionID: String) throws -> String? {
+        let queue = try openDatabase(moduleID: moduleID)
+        return try queue.read { db in
+            guard try tableNames(in: db).contains("book_sections") else { return nil }
+            return try String.fetchOne(db, sql: """
+                SELECT title FROM book_sections
+                WHERE module_id = ? AND id = ?
+                """, arguments: [moduleID, sectionID])
+        }
+    }
+
     public func devotionals(
         moduleIDs: Set<String>? = nil,
         query: String? = nil
