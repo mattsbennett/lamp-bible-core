@@ -291,7 +291,9 @@ place newer. It is also each app's own record:
 The store reads the Mac's unversioned format from before sync, holding its
 bookmarks since 0, so that any recorded removal outranks them. A pass
 contributes `ledger()` every time, and `merge(_:)`s the written bundle's part
-back.
+back. `books.readerState` is not in `LampPortableSettingsCodec.syncedKeys`:
+the Mac's settings plist replaces a value whole with the newer copy, which
+would undo the join.
 
 ### Deleting
 

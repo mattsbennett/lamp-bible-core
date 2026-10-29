@@ -15,6 +15,8 @@ public enum LampPortableSettingsCodec {
         }
     }
 
+    /// Not where a book was left: that travels in the bundle's own part,
+    /// `LampSyncBookReading`, joined rather than replaced by the newer copy.
     public static let syncedKeys: [String] = [
         "reader.fontSize", "reader.lineSpacing", "reader.typeface", "reader.defaultTranslationID",
         "reader.readAloud.voice", "reader.readAloud.rate", "reader.readAloud.followAlong",
@@ -28,7 +30,7 @@ public enum LampPortableSettingsCodec {
         "quiz.lineSpacing", "quiz.typeface", "modules.hiddenIDs",
         "devotional.editor.fontSize", "devotional.lineSpacing", "devotional.typeface",
         "writing.sortOrder", "writing.groupBy",
-        "books.fontSize", "books.lineSpacing", "books.typeface", "books.readerState",
+        "books.fontSize", "books.lineSpacing", "books.typeface",
     ]
 
     public static func encode(from defaults: UserDefaults) throws -> Data {

@@ -168,6 +168,12 @@ struct LampSyncBookReadingTests {
         #expect(LampSyncBundleLedgers.bookReading(in: decoded) == reading)
     }
 
+    /// Reading state travels in its own part, joined, and not in the
+    /// Mac's settings, where the newer copy would replace it whole.
+    @Test func theMacsSettingsLeaveBookReadingToItsPart() {
+        #expect(!LampPortableSettingsCodec.syncedKeys.contains(LampBookReadingStateStore.defaultsKey))
+    }
+
     // MARK: - The scroll buffer
 
     @Test func theScrollBufferDefersAndCoalescesPersistence() {
