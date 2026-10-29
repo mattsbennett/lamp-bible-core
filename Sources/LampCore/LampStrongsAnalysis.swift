@@ -42,7 +42,11 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
     public let companions: [Companion]
 
     public var occurrenceCount: Int { occurrences.count }
+    /// Verses holding the key, not the range's verses: those are
+    /// `taggedVerseCount`.
     public var verseCount: Int { references.count }
+    /// Occurrences per thousand tagged words of the key's language in range
+    /// (`wordCount`): not per thousand verses, nor per thousand English words.
     public var ratePerThousandWords: Double {
         wordCount > 0 ? Double(occurrences.count) * 1_000 / Double(wordCount) : 0
     }
@@ -196,7 +200,9 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
         public let name: String
         public let bookRange: ClosedRange<Int>
         public let occurrenceCount: Int
+        /// The division's verses holding the key.
         public let verseCount: Int
+        /// The division's tagged words of the key's language.
         public let wordCount: Int
         /// The occurrences its share of the words predicts.
         public let expectedCount: Double
@@ -228,6 +234,7 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
             self.chapters = chapters
         }
 
+        /// Occurrences per thousand of the division's tagged words.
         public var ratePerThousandWords: Double {
             wordCount > 0 ? Double(occurrenceCount) * 1_000 / Double(wordCount) : 0
         }

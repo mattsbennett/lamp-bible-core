@@ -599,9 +599,11 @@ public struct LampAgentStrongsAnalysis: Codable, Equatable, Sendable {
         public let firstBook: Int
         public let lastBook: Int
         public let occurrences: Int
+        /// The division's verses holding the key.
         public let verses: Int
         public let taggedWords: Int
         public let expectedOccurrences: Double
+        /// Occurrences per thousand of the division's tagged words.
         public let perThousandWords: Double
         /// `more`, `fewer` or `asExpected`: whether the count differs from
         /// what the division's share of the words predicts beyond what chance
@@ -640,9 +642,11 @@ public struct LampAgentStrongsAnalysis: Codable, Equatable, Sendable {
     public let translationID: String
     public let translationName: String
     public let occurrences: Int
+    /// Verses holding the key.
     public let verses: Int
     /// Tagged words of the key's language in range: what the rates measure against.
     public let taggedWords: Int
+    /// Occurrences per thousand of `taggedWords`.
     public let perThousandWords: Double
     public let renderings: [Rendering]
     public let originalForms: [Count]
