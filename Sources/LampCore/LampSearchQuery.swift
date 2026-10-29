@@ -50,6 +50,24 @@ public struct LampSearchTerm: Equatable, Sendable {
     }
 }
 
+/// A passage a search names, for going straight to it rather than searching.
+public struct LampSearchReference: Equatable, Sendable {
+    /// Packed references. A chapter named without verses runs from verse 1
+    /// to 999, as a range does everywhere else.
+    public let startReference: Int
+    public let endReference: Int
+
+    public init(startReference: Int, endReference: Int) {
+        self.startReference = startReference
+        self.endReference = endReference
+    }
+
+    /// "John 3:16", "1 Corinthians 13".
+    public var description: String {
+        LampBibleReferenceFormatter.describeRange(from: startReference, to: endReference)
+    }
+}
+
 /// iOS's quoted-phrase and prefix-search grammar, shared with Mac search.
 public struct LampSearchQuery: Equatable, Sendable {
     public let source: String
@@ -68,6 +86,20 @@ public struct LampSearchQuery: Equatable, Sendable {
 
     public var plainText: String {
         terms.map(\.text).joined(separator: " ")
+    }
+
+    /// The passage the whole query names, "John 3:16", "1 Cor 13" or "Ps
+    /// 23:1-4", when the book has that chapter. A chapter is required, so a
+    /// book's name alone ("Job", "Acts", "Mark") stays a word to search for.
+    public var reference: LampSearchReference? {
+        guard let range = try? LampReferenceParser.parse(source),
+              let startChapters = LampReferenceParser.chapterCount(ofBook: range.start.book),
+              let endChapters = LampReferenceParser.chapterCount(ofBook: range.end.book),
+              range.start.chapter <= startChapters, range.end.chapter <= endChapters else { return nil }
+        return LampSearchReference(
+            startReference: range.start.book * 1_000_000 + range.start.chapter * 1_000 + (range.start.verse ?? 1),
+            endReference: range.end.book * 1_000_000 + range.end.chapter * 1_000 + (range.end.verse ?? 999)
+        )
     }
 
     /// FTS5 MATCH argument. Exact quoted terms stay phrases; unquoted terms

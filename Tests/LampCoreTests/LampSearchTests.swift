@@ -82,6 +82,56 @@ struct LampSearchTests {
             == "<mark>God</mark> is love")
     }
 
+    /// A query naming a passage is offered as one; a book's name alone, or a
+    /// chapter past a book's end, is searched as words.
+    @Test func aQueryNamingAPassageIsKnownAsOne() {
+        #expect(LampSearchQuery("John 3:16").reference?.description == "John 3:16")
+        #expect(LampSearchQuery("1 Cor 13").reference?.description == "1 Corinthians 13")
+        #expect(LampSearchQuery("Ps 23:1-4").reference == LampSearchReference(
+            startReference: 19_023_001, endReference: 19_023_004
+        ))
+        #expect(LampSearchQuery("Jn 1:1–2:3").reference?.description == "John 1:1–2:3")
+        #expect(LampSearchQuery("Job").reference == nil)
+        #expect(LampSearchQuery("Mark").reference == nil)
+        #expect(LampSearchQuery("John 99").reference == nil)
+        #expect(LampSearchQuery("love 3").reference == nil)
+        #expect(LampReferenceParser.chapterCount(ofBook: 19) == 150)
+        #expect(LampReferenceParser.chapterCount(ofBook: 67) == nil)
+    }
+
+    @Test func aSearchIsKeptWhenItFoundSomethingAndSaidSomething() {
+        var history = LampSearchHistory()
+        let nothingFound = history.record(.init(query: "grace"), resultCount: 0)
+        let tooShort = history.record(.init(query: "g"), resultCount: 3)
+        let aKey = history.record(.init(query: "", strongsKey: "G26"), resultCount: 3)
+        #expect(!nothingFound && !tooShort && aKey)
+        history.record(.init(query: "Grace  of God", searchedAt: Date(timeIntervalSince1970: 1)), resultCount: 5)
+        // The same search again moves to the top, case and spacing aside;
+        // the same words with another filter are another search.
+        history.record(.init(query: "grace of god", searchedAt: Date(timeIntervalSince1970: 2)), resultCount: 5)
+        history.record(.init(query: "grace of god", kinds: [.commentary]), resultCount: 2)
+        #expect(history.entries.map(\.query) == ["grace of god", "grace of god", ""])
+        #expect(history.entries[1].searchedAt == Date(timeIntervalSince1970: 2))
+
+        for index in 0..<30 { history.record(.init(query: "query \(index)"), resultCount: 1) }
+        #expect(history.entries.count == LampSearchHistory.capacity)
+        #expect(history.entries.first?.query == "query 29")
+
+        var filtered = LampSearchHistory()
+        filtered.record(.init(
+            query: "love", kinds: [.translation], moduleIDs: ["ESV"], bookRange: 40...66,
+            highlightColors: ["#ffcc00"], devotionalCriteria: .init(tags: ["hope"]),
+            searchedAt: Date(timeIntervalSince1970: 100)
+        ), resultCount: 1)
+        #expect(LampSearchHistory.decoded(from: filtered.encoded()) == filtered)
+
+        // An entry a newer app wrote, with a kind this one does not know, is
+        // passed by without losing the rest.
+        let mixed = #"[{"query":"one","kinds":["future"],"searchedAt":1},{"query":"two","searchedAt":2}]"#
+        #expect(LampSearchHistory.decoded(from: Data(mixed.utf8)).entries.map(\.query) == ["two"])
+        #expect(LampSearchHistory.decoded(from: Data("not json".utf8)).entries.isEmpty)
+    }
+
     // MARK: - The library
 
     private func installed(_ json: String, id: String, in fixture: URL, library: LampLibrary) async throws {

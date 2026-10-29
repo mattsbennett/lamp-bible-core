@@ -1,7 +1,7 @@
 import Foundation
 
 /// Devotional facets used by both database-backed and in-memory search.
-public struct LampDevotionalSearchCriteria: Equatable, Sendable {
+public struct LampDevotionalSearchCriteria: Codable, Equatable, Sendable {
     public var date: String?
     public var monthDay: String?
     public var tags: Set<String>?
