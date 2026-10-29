@@ -58,7 +58,7 @@ struct LampPresentationDeckAdviceTests {
                 .init(kind: .caption, text: "A caption with no picture"),
             ]),
         ])
-        #expect(caption.contains { $0.contains("without an image to caption") })
+        #expect(caption.contains { $0.contains("without an image or chart to caption") })
     }
 
     // MARK: - Two columns

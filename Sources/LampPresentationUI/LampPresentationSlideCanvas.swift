@@ -347,6 +347,11 @@ public struct LampPresentationSlideCanvas: View {
     /// VoiceOver listener follows the same thread as the room.
     private var accessibilityDescription: String {
         let spoken = slide.blocks.compactMap { block -> String? in
+            if block.kind == .chart {
+                let heading = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let described = block.chart?.spokenDescription ?? "Chart"
+                return heading.isEmpty ? described : "\(heading). \(described)"
+            }
             if block.kind == .image {
                 let described = block.altText?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return described?.isEmpty == false ? described : "Image"
@@ -781,14 +786,16 @@ public struct LampPresentationSlideCanvas: View {
     private var imageBlock: LampPresentationBlock? { plan.image }
 
     /// The picture itself when it can be read, and an honest placeholder
-    /// naming what is missing when it cannot.
+    /// naming what is missing when it cannot; or the chart in its place.
     @ViewBuilder
     private func imageArea(unit: CGFloat) -> some View {
         let resolved = imageBlock.flatMap(assetURL).flatMap(
             LampPresentationAssetImageCache.swiftUIImage(at:)
         )
 
-        if let resolved {
+        if let chart = imageBlock, chart.kind == .chart {
+            LampPresentationChartView(block: chart, unit: unit, foreground: foreground, accent: accent)
+        } else if let resolved {
             resolved
                 .resizable()
                 .scaledToFit()

@@ -258,11 +258,14 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
     }
 
     /// What a block contributes to a label. An image has no text, but its
-    /// description names it better than the layout would.
+    /// description names it better than the layout would, and an untitled
+    /// chart is named by what it charts.
     private static func label(for block: LampPresentationBlock) -> String? {
         let candidate = block.kind == .image
             ? (block.altText ?? "")
-            : block.text
+            : block.kind == .chart && block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? (block.chart.map { "Chart of \($0.source.strongs)" } ?? "")
+                : block.text
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -291,6 +294,7 @@ public enum LampPresentationBlockKind: String, Codable, CaseIterable, Identifiab
     case citation
     case image
     case caption
+    case chart
 
     public var id: String { rawValue }
 
@@ -358,6 +362,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// as it is, so a check against a translation or a manuscript still
     /// reads the words alone.
     public var emphasis: [LampPresentationEmphasis]?
+    /// What a chart block charts, and the values Lamp worked out for it.
+    public var chart: LampPresentationChart?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -370,7 +376,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         manuscriptCheck: LampPresentationManuscriptCheck? = nil,
         typography: LampPresentationTypography? = nil,
         placement: LampPresentationImagePlacement? = nil,
-        emphasis: [LampPresentationEmphasis]? = nil
+        emphasis: [LampPresentationEmphasis]? = nil,
+        chart: LampPresentationChart? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -383,6 +390,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.typography = typography
         self.placement = placement
         self.emphasis = emphasis
+        self.chart = chart
     }
 
     /// An image that fills the slide behind everything else.
@@ -607,8 +615,16 @@ public enum LampPresentationDeckValidator {
                     if block.altText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                         issue(.warning, "\(blockPath).altText", "Describe the image for accessibility.")
                     }
+                } else if block.kind == .chart {
+                    // A chart's text is an optional heading over its bars.
+                    for (severity, path, message) in chartIssues(block.chart) {
+                        issue(severity, "\(blockPath).\(path)", message)
+                    }
                 } else if block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     issue(.error, "\(blockPath).text", "This content block cannot be empty.")
+                }
+                if block.chart != nil && block.kind != .chart {
+                    issue(.error, "\(blockPath).chart", "A chart is supported on chart content.")
                 }
                 if LampPresentationQuoteTypography.applies(to: block, layout: slide.layout),
                    hasTypedOuterQuotationMarks(block.text) {
@@ -704,6 +720,54 @@ public enum LampPresentationDeckValidator {
         return issues
     }
 
+    /// What is wrong with a chart block's chart, as severity, path within the
+    /// block and message.
+    private static func chartIssues(
+        _ chart: LampPresentationChart?
+    ) -> [(LampPresentationDeckIssue.Severity, String, String)] {
+        guard let chart else {
+            return [(.error, "chart", "A chart block needs a chart: its source, by and measure.")]
+        }
+        var issues: [(LampPresentationDeckIssue.Severity, String, String)] = []
+        let key = LampStrongsKey.normalized(chart.source.strongs)
+        if key.isEmpty {
+            issues.append((.error, "chart.source.strongs", "Name a Strong's key, such as G26."))
+        } else if key.first != "H" && key.first != "G" {
+            issues.append((
+                .warning,
+                "chart.source.strongs",
+                "A bare number counts Hebrew and Greek alike. Prefix it with H or G."
+            ))
+        }
+        if chart.source.translationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append((.error, "chart.source.translationID", "A translation ID is required."))
+        }
+        if let range = chart.source.range, (try? LampReferenceParser.books(range)) == nil {
+            issues.append((
+                .error,
+                "chart.source.range",
+                "Name whole books, such as NT, Romans or Matthew-John, or leave the range out."
+            ))
+        }
+        if let values = chart.values {
+            if values.count > LampPresentationChart.readableBars {
+                issues.append((
+                    .warning,
+                    "chart.values",
+                    "\(values.count) bars are hard to read from the back of a room. "
+                        + "Chart by section, or narrow the range."
+                ))
+            }
+        } else {
+            issues.append((
+                .warning,
+                "chart.values",
+                "No values yet. Lamp works them out from the library when the deck is built."
+            ))
+        }
+        return issues
+    }
+
     public static func errors(in deck: LampPresentationDeck) -> [LampPresentationDeckIssue] {
         validate(deck).filter { $0.severity == .error }
     }
@@ -754,6 +818,9 @@ public enum LampPresentationDeckValidator {
         guard let emphasis = block.emphasis, !emphasis.isEmpty else { return [] }
         guard block.kind != .image else {
             return [("emphasis", "Emphasis is drawn on words, and an image block has none.")]
+        }
+        guard block.kind != .chart else {
+            return [("emphasis", "Emphasis is not drawn on a chart's heading.")]
         }
         var issues: [(path: String, message: String)] = []
         let characters = Array(block.text)
@@ -825,10 +892,12 @@ public enum LampPresentationDeckValidator {
             return " beyond its first two columns"
         case (.twoColumn, .citation):
             return " unless it directly follows the column it attributes"
+        case (.twoColumn, .image), (.twoColumn, .chart):
+            return " — two-column slides draw no picture or chart"
         case (_, .caption):
-            return " without an image to caption"
-        case (_, .image):
-            return " more than once"
+            return " without an image or chart to caption"
+        case (_, .image), (_, .chart):
+            return " — a slide draws one picture or chart"
         default:
             return ""
         }

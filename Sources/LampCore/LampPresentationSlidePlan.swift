@@ -17,12 +17,13 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     public var citations: [LampPresentationBlock]
     /// Every block a two-column slide draws in its columns, in slide order.
     public var columns: [LampPresentationBlock]
-    /// The picture, which most layouts place beside their prose.
+    /// The picture or chart, which most layouts place beside their prose. A
+    /// slide has room for one, so a chart takes the place a picture would.
     public var image: LampPresentationBlock?
     /// A picture filling the slide behind everything else. Every layout can
     /// carry one, and it is never the picture beside the prose.
     public var background: LampPresentationBlock?
-    /// A caption, which belongs to the picture and is only drawn with one.
+    /// A caption, which belongs to the picture or chart and is only drawn with one.
     /// With no picture beside the prose, it credits the one behind the slide.
     public var caption: LampPresentationBlock?
     /// Blocks this layout will not draw. A deck that lists any of these has
@@ -204,7 +205,7 @@ extension LampPresentationSlide {
                           !columns[last].groups[group].quotations.isEmpty {
                     columns[last].groups[group].citation = block
                 }
-            case .title, .image, .caption:
+            case .title, .image, .caption, .chart:
                 break
             }
         }
@@ -218,7 +219,7 @@ public extension LampPresentationSlide {
     /// How this slide's layout will use its blocks.
     var plan: LampPresentationSlidePlan {
         var remaining = blocks.filter { block in
-            block.kind == .image || !block.text.trimmingCharacters(
+            block.kind == .image || block.kind == .chart || !block.text.trimmingCharacters(
                 in: .whitespacesAndNewlines
             ).isEmpty
         }
@@ -274,7 +275,7 @@ public extension LampPresentationSlide {
             plan.title = take(.title)
             plan.prose = takeAll(.subtitle, .body, .scripture, .quotation)
             plan.citations = takeAll(.citation)
-            plan.image = take(.image)
+            plan.image = take(.image, .chart)
             if plan.image != nil { plan.caption = take(.caption) }
 
         case .blank:
@@ -282,7 +283,7 @@ public extension LampPresentationSlide {
             // heading set like the prose around it.
             plan.prose = takeAll(.title, .subtitle, .body, .scripture, .quotation)
             plan.citations = takeAll(.citation)
-            plan.image = take(.image)
+            plan.image = take(.image, .chart)
             plan.caption = take(.caption)
 
         case .scripture, .quotation:
@@ -290,7 +291,7 @@ public extension LampPresentationSlide {
             // one still draws the other rather than dropping it.
             plan.prose = takeAll(.scripture, .quotation, .body)
             plan.citations = takeAll(.citation)
-            plan.image = take(.image)
+            plan.image = take(.image, .chart)
             if plan.image != nil { plan.caption = take(.caption) }
 
         case .twoColumn:
@@ -305,7 +306,7 @@ public extension LampPresentationSlide {
 
         case .image:
             plan.title = take(.title)
-            plan.image = take(.image)
+            plan.image = take(.image, .chart)
             plan.caption = take(.caption)
             plan.citations = takeAll(.citation)
         }

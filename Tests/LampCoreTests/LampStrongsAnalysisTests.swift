@@ -279,12 +279,12 @@ struct LampStrongsAnalysisTests {
     }
 
     @Test func anAgentNamesARangeByItsBooks() throws {
-        #expect(try LampAgentLibrary.bookRange("NT") == 40...66)
-        #expect(try LampAgentLibrary.bookRange("old testament") == 1...39)
-        #expect(try LampAgentLibrary.bookRange("Matthew–John") == 40...43)
-        #expect(try LampAgentLibrary.bookRange("1 Cor") == 46...46)
-        #expect(try LampAgentLibrary.bookRange("Romans 8:28") == 45...45)
-        #expect(throws: LampAgentError.self) { try LampAgentLibrary.bookRange("John-Matthew") }
-        #expect(throws: LampAgentError.self) { try LampAgentLibrary.bookRange("Nowhere") }
+        #expect(try LampReferenceParser.books("NT") == 40...66)
+        #expect(try LampReferenceParser.books("old testament") == 1...39)
+        #expect(try LampReferenceParser.books("Matthew–John") == 40...43)
+        #expect(try LampReferenceParser.books("1 Cor") == 46...46)
+        #expect(try LampReferenceParser.books("Romans 8:28") == 45...45)
+        #expect(throws: LampAgentError.self) { try LampReferenceParser.books("John-Matthew") }
+        #expect(throws: LampAgentError.self) { try LampReferenceParser.books("Nowhere") }
     }
 }

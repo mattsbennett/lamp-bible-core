@@ -474,7 +474,7 @@ public actor LampAgentLibrary {
         let analyses = try await library.strongsAnalyses(
             key: key,
             moduleIDs: Set(translations.map(\.id)),
-            bookRange: try range.map(Self.bookRange)
+            bookRange: try range.map(LampReferenceParser.books)
         )
         let companionLimit = 15
         var keys = [LampStrongsKey.normalized(key)]
@@ -540,30 +540,6 @@ public actor LampAgentLibrary {
                 referencesOmitted: max(analysis.references.count - referenceLimit, 0)
             )
         }
-    }
-
-    /// A run of whole books: "OT", "New Testament", "Romans", "Matthew-John",
-    /// or any reference, whose books are taken whole.
-    static func bookRange(_ source: String) throws -> ClosedRange<Int> {
-        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch trimmed.lowercased() {
-        case "ot", "old testament": return 1...39
-        case "nt", "new testament": return 40...66
-        default: break
-        }
-        let names = trimmed
-            .replacingOccurrences(of: "–", with: "-")
-            .replacingOccurrences(of: "—", with: "-")
-            .split(separator: "-", maxSplits: 1)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-        if let firstName = names.first,
-           let first = LampReferenceParser.bookNumber(for: firstName),
-           let last = names.count == 2 ? LampReferenceParser.bookNumber(for: names[1]) : first {
-            guard first <= last else { throw LampAgentError.invalidReference(source) }
-            return first...last
-        }
-        let range = try LampReferenceParser.parse(trimmed)
-        return range.start.book...range.end.book
     }
 
     // MARK: - Policy and mapping

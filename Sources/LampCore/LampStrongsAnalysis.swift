@@ -183,7 +183,7 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
         }
     }
 
-    public enum Expectation: String, Sendable {
+    public enum Expectation: String, Codable, Sendable {
         case more
         case fewer
         case asExpected

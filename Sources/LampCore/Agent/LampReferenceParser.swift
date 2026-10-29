@@ -21,6 +21,30 @@ public enum LampReferenceParser {
         return LampAgentReferenceRange(start: start, end: end)
     }
 
+    /// A run of whole books: "OT", "New Testament", "Romans", "Matthew-John",
+    /// or any reference, whose books are taken whole.
+    public static func books(_ source: String) throws -> ClosedRange<Int> {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmed.lowercased() {
+        case "ot", "old testament": return 1...39
+        case "nt", "new testament": return 40...66
+        default: break
+        }
+        let names = trimmed
+            .replacingOccurrences(of: "–", with: "-")
+            .replacingOccurrences(of: "—", with: "-")
+            .split(separator: "-", maxSplits: 1)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        if let firstName = names.first,
+           let first = bookNumber(for: firstName),
+           let last = names.count == 2 ? bookNumber(for: names[1]) : first {
+            guard first <= last else { throw LampAgentError.invalidReference(source) }
+            return first...last
+        }
+        let range = try parse(trimmed)
+        return range.start.book...range.end.book
+    }
+
     private static func parseCompletePoint(
         _ value: String,
         source: String
