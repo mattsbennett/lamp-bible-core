@@ -729,6 +729,59 @@ public actor LampLibrary {
         return Self.sharedEvenly(found, limit: resultLimit)
     }
 
+    /// `key` analysed in each translation in range that tags its language
+    /// there, in installed order. Unlike a search this reads the whole range
+    /// rather than a page of hits, because every count is measured against
+    /// all of the range's tags.
+    public func strongsAnalyses(
+        key: String,
+        moduleIDs: Set<String>? = nil,
+        bookRange: ClosedRange<Int>? = nil
+    ) throws -> [LampStrongsAnalysis] {
+        guard !LampStrongsKey.normalized(key).isEmpty else { return [] }
+        let firstBook = bookRange?.lowerBound ?? Int.min
+        let lastBook = bookRange?.upperBound ?? Int.max
+        let modules = try installedModules().filter {
+            $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
+        }
+        return try modules.compactMap { module in
+            let queue = try openDatabase(moduleID: module.id)
+            let analysis = try queue.read { db -> LampStrongsAnalysis? in
+                let tables = try tableNames(in: db)
+                let table: String
+                var condition = "book BETWEEN ? AND ? AND annotations_json IS NOT NULL"
+                var arguments: StatementArguments = [firstBook, lastBook]
+                if tables.contains("verses"), tables.contains("books") {
+                    table = "verses"
+                } else if tables.contains("translation_verses") {
+                    table = "translation_verses"
+                    condition = "translation_id = ? AND " + condition
+                    arguments = [module.id, firstBook, lastBook]
+                } else {
+                    return nil
+                }
+                guard try columnNames(in: db, table: table).contains("annotations_json") else {
+                    return nil
+                }
+                var analyzer = LampStrongsAnalyzer(
+                    key: key,
+                    translationID: module.id,
+                    translationName: module.name,
+                    translationAbbreviation: module.abbreviation,
+                    language: module.language
+                )
+                let rows = try Row.fetchCursor(db, sql: """
+                    SELECT ref, text, annotations_json FROM \(table) WHERE \(condition)
+                    """, arguments: arguments)
+                while let row = try rows.next() {
+                    analyzer.add(reference: row["ref"], text: row["text"], annotationsJSON: row["annotations_json"])
+                }
+                return analyzer.analysis()
+            }
+            return analysis.flatMap { $0.wordCount > 0 ? $0 : nil }
+        }
+    }
+
     public func searchDictionaries(
         query: String,
         moduleIDs: Set<String>? = nil,

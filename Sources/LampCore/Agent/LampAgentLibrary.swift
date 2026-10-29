@@ -455,6 +455,117 @@ public actor LampAgentLibrary {
         )
     }
 
+    /// `key` analysed in each permitted translation that tags its language in
+    /// `range`: a run of whole books such as "NT", "Romans" or
+    /// "Matthew-John". The key and its companions carry the first permitted
+    /// lexicon's lemma and gloss.
+    public func analyzeStrongs(
+        key: String,
+        translationIDs: [String]? = nil,
+        range: String? = nil
+    ) async throws -> [LampAgentStrongsAnalysis] {
+        try requireEnabled()
+        let translations = try await selectedModules(
+            kind: .translation,
+            requestedIDs: translationIDs.map(Set.init),
+            defaultLimit: nil
+        )
+        guard !translations.isEmpty else { return [] }
+        let analyses = try await library.strongsAnalyses(
+            key: key,
+            moduleIDs: Set(translations.map(\.id)),
+            bookRange: try range.map(Self.bookRange)
+        )
+        let companionLimit = 15
+        var keys = [LampStrongsKey.normalized(key)]
+        for analysis in analyses {
+            keys += analysis.companions.prefix(companionLimit).map(\.key)
+        }
+        let dictionaryIDs = Set(try await permittedInstalledModules(kinds: [.dictionary]).map(\.id))
+        let found = dictionaryIDs.isEmpty
+            ? []
+            : (try? await library.dictionaryEntries(keys: keys, moduleIDs: dictionaryIDs)) ?? []
+        var entries: [String: LampAgentStrongsAnalysis.Entry] = [:]
+        for result in found {
+            let normalized = LampStrongsKey.normalized(result.key)
+            let known = entries[normalized]
+            entries[normalized] = LampAgentStrongsAnalysis.Entry(
+                key: normalized,
+                lemma: known?.lemma ?? result.lemma,
+                transliteration: known?.transliteration ?? result.transliteration,
+                gloss: known?.gloss ?? result.senses.lazy.compactMap { $0.gloss ?? $0.shortDefinition }.first
+            )
+        }
+        func entry(_ key: String) -> LampAgentStrongsAnalysis.Entry {
+            entries[key] ?? .init(key: key, lemma: nil, transliteration: nil, gloss: nil)
+        }
+
+        let referenceLimit = policy.maximumSearchResults
+        return analyses.map { analysis in
+            LampAgentStrongsAnalysis(
+                entry: entry(analysis.key),
+                translationID: analysis.translationID,
+                translationName: analysis.translationName,
+                occurrences: analysis.occurrenceCount,
+                verses: analysis.verseCount,
+                taggedWords: analysis.wordCount,
+                perThousandWords: (analysis.ratePerThousandWords * 100).rounded() / 100,
+                renderings: analysis.renderings.prefix(20).map { rendering in
+                    .init(
+                        text: rendering.text,
+                        count: rendering.count,
+                        variants: rendering.variants.prefix(6).map { .init(text: $0.text, count: $0.count) }
+                    )
+                },
+                originalForms: analysis.forms.prefix(20).map { .init(text: $0.text, count: $0.count) },
+                parsings: analysis.parsings.prefix(20).map {
+                    .init(code: $0.code, description: $0.description, count: $0.count)
+                },
+                grammar: analysis.grammar.map {
+                    .init(feature: $0.feature.title, value: $0.value, count: $0.count)
+                },
+                books: analysis.books.map(LampAgentStrongsAnalysis.Division.init),
+                sections: analysis.sections.map(LampAgentStrongsAnalysis.Division.init),
+                companions: analysis.companions.prefix(companionLimit).map {
+                    .init(
+                        entry: entry($0.key),
+                        sharedVerses: $0.sharedVerseCount,
+                        verses: $0.verseCount,
+                        timesChance: ($0.lift * 10).rounded() / 10
+                    )
+                },
+                references: analysis.references.prefix(referenceLimit).map {
+                    LampBibleReferenceFormatter.describeRange(from: $0, to: $0)
+                },
+                referencesOmitted: max(analysis.references.count - referenceLimit, 0)
+            )
+        }
+    }
+
+    /// A run of whole books: "OT", "New Testament", "Romans", "Matthew-John",
+    /// or any reference, whose books are taken whole.
+    static func bookRange(_ source: String) throws -> ClosedRange<Int> {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmed.lowercased() {
+        case "ot", "old testament": return 1...39
+        case "nt", "new testament": return 40...66
+        default: break
+        }
+        let names = trimmed
+            .replacingOccurrences(of: "–", with: "-")
+            .replacingOccurrences(of: "—", with: "-")
+            .split(separator: "-", maxSplits: 1)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        if let firstName = names.first,
+           let first = LampReferenceParser.bookNumber(for: firstName),
+           let last = names.count == 2 ? LampReferenceParser.bookNumber(for: names[1]) : first {
+            guard first <= last else { throw LampAgentError.invalidReference(source) }
+            return first...last
+        }
+        let range = try LampReferenceParser.parse(trimmed)
+        return range.start.book...range.end.book
+    }
+
     // MARK: - Policy and mapping
 
     private func requireEnabled() throws {

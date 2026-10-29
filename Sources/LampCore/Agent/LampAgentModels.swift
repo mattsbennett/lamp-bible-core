@@ -529,6 +529,169 @@ public struct LampAgentStudyMaterial: Codable, Equatable, Sendable {
     }
 }
 
+/// A Strong's key analysed in one translation, for an agent to read, quote or
+/// chart. Every count comes from the installed text, so a chart drawn from it
+/// says what the library says.
+public struct LampAgentStrongsAnalysis: Codable, Equatable, Sendable {
+    public struct Entry: Codable, Equatable, Sendable {
+        public let key: String
+        public let lemma: String?
+        public let transliteration: String?
+        public let gloss: String?
+
+        public init(key: String, lemma: String?, transliteration: String?, gloss: String?) {
+            self.key = key
+            self.lemma = lemma
+            self.transliteration = transliteration
+            self.gloss = gloss
+        }
+    }
+
+    public struct Count: Codable, Equatable, Sendable {
+        public let text: String
+        public let count: Int
+
+        public init(text: String, count: Int) {
+            self.text = text
+            self.count = count
+        }
+    }
+
+    public struct Rendering: Codable, Equatable, Sendable {
+        /// Empty for tags with no English of their own.
+        public let text: String
+        public let count: Int
+        public let variants: [Count]
+
+        public init(text: String, count: Int, variants: [Count]) {
+            self.text = text
+            self.count = count
+            self.variants = variants
+        }
+    }
+
+    public struct Parsing: Codable, Equatable, Sendable {
+        public let code: String
+        public let description: String?
+        public let count: Int
+
+        public init(code: String, description: String?, count: Int) {
+            self.code = code
+            self.description = description
+            self.count = count
+        }
+    }
+
+    public struct Grammar: Codable, Equatable, Sendable {
+        public let feature: String
+        public let value: String
+        public let count: Int
+
+        public init(feature: String, value: String, count: Int) {
+            self.feature = feature
+            self.value = value
+            self.count = count
+        }
+    }
+
+    public struct Division: Codable, Equatable, Sendable {
+        public let name: String
+        public let firstBook: Int
+        public let lastBook: Int
+        public let occurrences: Int
+        public let verses: Int
+        public let taggedWords: Int
+        public let expectedOccurrences: Double
+        public let perThousandWords: Double
+        /// `more`, `fewer` or `asExpected`: whether the count differs from
+        /// what the division's share of the words predicts beyond what chance
+        /// explains (log-likelihood, p < 0.001).
+        public let standing: String
+
+        public init(_ division: LampStrongsAnalysis.Division) {
+            name = division.name
+            firstBook = division.bookRange.lowerBound
+            lastBook = division.bookRange.upperBound
+            occurrences = division.occurrenceCount
+            verses = division.verseCount
+            taggedWords = division.wordCount
+            expectedOccurrences = (division.expectedCount * 10).rounded() / 10
+            perThousandWords = (division.ratePerThousandWords * 100).rounded() / 100
+            standing = division.expectation.rawValue
+        }
+    }
+
+    public struct Companion: Codable, Equatable, Sendable {
+        public let entry: Entry
+        public let sharedVerses: Int
+        public let verses: Int
+        /// How many times more often the two share a verse than chance predicts.
+        public let timesChance: Double
+
+        public init(entry: Entry, sharedVerses: Int, verses: Int, timesChance: Double) {
+            self.entry = entry
+            self.sharedVerses = sharedVerses
+            self.verses = verses
+            self.timesChance = timesChance
+        }
+    }
+
+    public let entry: Entry
+    public let translationID: String
+    public let translationName: String
+    public let occurrences: Int
+    public let verses: Int
+    /// Tagged words of the key's language in range: what the rates measure against.
+    public let taggedWords: Int
+    public let perThousandWords: Double
+    public let renderings: [Rendering]
+    public let originalForms: [Count]
+    public let parsings: [Parsing]
+    public let grammar: [Grammar]
+    public let books: [Division]
+    public let sections: [Division]
+    public let companions: [Companion]
+    /// The first verses with an occurrence, in canonical order.
+    public let references: [String]
+    public let referencesOmitted: Int
+
+    public init(
+        entry: Entry,
+        translationID: String,
+        translationName: String,
+        occurrences: Int,
+        verses: Int,
+        taggedWords: Int,
+        perThousandWords: Double,
+        renderings: [Rendering],
+        originalForms: [Count],
+        parsings: [Parsing],
+        grammar: [Grammar],
+        books: [Division],
+        sections: [Division],
+        companions: [Companion],
+        references: [String],
+        referencesOmitted: Int
+    ) {
+        self.entry = entry
+        self.translationID = translationID
+        self.translationName = translationName
+        self.occurrences = occurrences
+        self.verses = verses
+        self.taggedWords = taggedWords
+        self.perThousandWords = perThousandWords
+        self.renderings = renderings
+        self.originalForms = originalForms
+        self.parsings = parsings
+        self.grammar = grammar
+        self.books = books
+        self.sections = sections
+        self.companions = companions
+        self.references = references
+        self.referencesOmitted = referencesOmitted
+    }
+}
+
 public enum LampAgentError: Error, LocalizedError, Equatable, Sendable {
     case disabled
     case invalidReference(String)
