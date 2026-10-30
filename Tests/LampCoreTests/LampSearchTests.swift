@@ -78,6 +78,11 @@ struct LampSearchTests {
         #expect(LampStrongsSearch.holdsKey(json, key: "G26"))
         #expect(!LampStrongsSearch.holdsKey(json, key: "G2"))
         #expect(LampStrongsSearch.sqlPrefilterPattern(for: "G0026") == "%26%")
+        let prefilter = LampStrongsSearch.sqlPrefilter(for: "g0026", column: "a")
+        #expect(prefilter.arguments == ["%G26%", "%G026%", "%G0026%", "%G00026%"])
+        #expect(prefilter.condition == "(a LIKE ? OR a LIKE ? OR a LIKE ? OR a LIKE ?)")
+        #expect(LampStrongsSearch.sqlPrefilter(for: "G3588a", column: "a").arguments == ["%G3588%", "%G03588%"])
+        #expect(LampStrongsSearch.sqlPrefilter(for: "26", column: "a") == ("a LIKE ?", ["%26%"]))
         #expect(LampStrongsSearch.markedText("God is love", annotationsJSON: json, key: "G2316")
             == "<mark>God</mark> is love")
     }

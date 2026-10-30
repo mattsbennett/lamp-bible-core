@@ -700,7 +700,7 @@ public actor LampLibrary {
         let resultLimit = min(max(limit, 1), 500)
         let firstBook = bookRange?.lowerBound ?? Int.min
         let lastBook = bookRange?.upperBound ?? Int.max
-        let prefilter = LampStrongsSearch.sqlPrefilterPattern(for: normalized)
+        let prefilter = LampStrongsSearch.sqlPrefilter(for: normalized, column: "v.annotations_json")
         let modules = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
@@ -712,8 +712,9 @@ public actor LampLibrary {
                 let tables = try tableNames(in: db)
                 let table: String
                 let books: String
-                var condition = "v.annotations_json LIKE ? AND v.book BETWEEN ? AND ?"
-                var arguments: StatementArguments = [prefilter, firstBook, lastBook]
+                var condition = "\(prefilter.condition) AND v.book BETWEEN ? AND ?"
+                var arguments = StatementArguments(prefilter.arguments)
+                arguments += [firstBook, lastBook]
                 if tables.contains("verses"), tables.contains("books") {
                     table = "verses"
                     books = "JOIN books b ON b.id = v.book"
@@ -721,7 +722,9 @@ public actor LampLibrary {
                     table = "translation_verses"
                     books = "JOIN translation_books b ON b.translation_id = v.translation_id AND b.book_number = v.book"
                     condition = "v.translation_id = ? AND " + condition
-                    arguments = [module.id, prefilter, firstBook, lastBook]
+                    arguments = [module.id]
+                    arguments += StatementArguments(prefilter.arguments)
+                    arguments += [firstBook, lastBook]
                 } else {
                     return []
                 }

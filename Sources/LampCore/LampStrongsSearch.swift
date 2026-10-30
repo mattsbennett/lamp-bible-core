@@ -11,10 +11,32 @@ public enum LampStrongsSearch {
 
     /// A LIKE pattern for the annotations of every verse that might tag
     /// `key`, however it is written, to be confirmed with `holdsKey`: the
-    /// key's number, which any of its forms contains.
+    /// key's number, which any of its forms contains. It also matches every
+    /// verse whose offsets hold that number, which `sqlPrefilter` does not.
     public static func sqlPrefilterPattern(for key: String) -> String {
         let digits = LampStrongsKey.normalized(key).filter { $0.isASCII && $0.isNumber }
         return digits.isEmpty ? "%\"strongs\"%" : "%\(digits)%"
+    }
+
+    /// A LIKE condition on `column` for the annotations of every verse that
+    /// might tag `key`, to be confirmed with `holdsKey`: its letter and
+    /// number, plain or padded to five digits ("G26", "G026" … "G00026").
+    ///
+    /// The number alone also matched every verse whose offsets held it, as
+    /// `"start":26` does, so G26 read 12,494 of the KJV's verses in full to
+    /// find the 106 that hold it; with its letter it reads 727. A bare number
+    /// names no letter and falls back to the number alone.
+    public static func sqlPrefilter(for key: String, column: String) -> (condition: String, arguments: [String]) {
+        let normalized = LampStrongsKey.normalized(key)
+        let letters = String(normalized.prefix { $0.isLetter })
+        let digits = String(normalized.dropFirst(letters.count).prefix { $0.isASCII && $0.isNumber })
+        guard !letters.isEmpty, !digits.isEmpty else {
+            return ("\(column) LIKE ?", [sqlPrefilterPattern(for: key)])
+        }
+        let forms = (digits.count...max(digits.count, 5)).map {
+            "%" + letters + String(repeating: "0", count: $0 - digits.count) + digits + "%"
+        }
+        return ("(" + forms.map { _ in "\(column) LIKE ?" }.joined(separator: " OR ") + ")", forms)
     }
 
     /// Whether a verse's annotations tag `key`, read as the reader reads
