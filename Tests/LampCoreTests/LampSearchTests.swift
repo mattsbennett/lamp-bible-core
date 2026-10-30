@@ -77,6 +77,8 @@ struct LampSearchTests {
         #expect(LampStrongsSearch.holdsKey(json, key: "g3588"))
         #expect(LampStrongsSearch.holdsKey(json, key: "G26"))
         #expect(!LampStrongsSearch.holdsKey(json, key: "G2"))
+        #expect(LampStrongsSearch.keys(in: json) == ["G3588", "G2316", "G26"])
+        #expect(LampStrongsSearch.keys(in: #"[{"data":{"strongs":"g26; G26|H853 h0430"}}]"#) == ["G26", "H853", "H430"])
         #expect(LampStrongsSearch.sqlPrefilterPattern(for: "G0026") == "%26%")
         let prefilter = LampStrongsSearch.sqlPrefilter(for: "g0026", column: "a")
         #expect(prefilter.arguments == ["%G26%", "%G026%", "%G0026%", "%G00026%"])

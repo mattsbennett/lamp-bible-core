@@ -39,6 +39,19 @@ public enum LampStrongsSearch {
         return ("(" + forms.map { _ in "\(column) LIKE ?" }.joined(separator: " OR ") + ")", forms)
     }
 
+    /// The Strong's keys a verse's annotations tag, normalized, each once, in
+    /// the order they first appear: what `holdsKey` reads, for a caller that
+    /// indexes verses by key.
+    public static func keys(in annotationsJSON: String) -> [String] {
+        var seen = Set<String>()
+        var keys: [String] = []
+        LampStrongsAnalyzer.forEachTag(in: annotationsJSON) { tag in
+            let key = LampStrongsKey.normalized(tag)
+            if !key.isEmpty, seen.insert(key).inserted { keys.append(key) }
+        }
+        return keys
+    }
+
     /// Whether a verse's annotations tag `key`, read as the reader reads
     /// them: each key a tag lists on its own, padding and case aside.
     public static func holdsKey(_ annotationsJSON: String?, key: String) -> Bool {
