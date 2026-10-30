@@ -320,8 +320,26 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
     }
 }
 
+/// What an analysis measures every key against in range, taken from a
+/// Strong's index rather than counted from every verse: the tags of the key's
+/// language in each book's chapters, each time they are written, and the
+/// verses holding any of them.
+public struct LampStrongsCorpus: Equatable, Sendable {
+    public var chapterWords: [Int: [Int: Int]]
+    public var taggedVerseCount: Int
+
+    public init(chapterWords: [Int: [Int: Int]], taggedVerseCount: Int) {
+        self.chapterWords = chapterWords
+        self.taggedVerseCount = taggedVerseCount
+    }
+}
+
 /// Builds a `LampStrongsAnalysis` from verse rows. Hand it every verse in
 /// range, in any order, then ask for `analysis()`.
+///
+/// Given a corpus from a Strong's index, it needs only the verses that hold
+/// the key, and `analysis(verseCounts:)` asks the index how many verses hold
+/// each companion it weighs. The analysis is the same either way.
 ///
 /// Every verse's tags are counted, because the counts are measured against all
 /// of them; only verses holding the key are read in full. The count reads the
@@ -336,6 +354,8 @@ public struct LampStrongsAnalyzer {
     private let keyLanguage: Character?
     private let bareKey: Substring?
     private let keepsVerseText: Bool
+    /// Whether the totals come from every verse added, or were given.
+    private let countsCorpus: Bool
 
     private var normalizedTags: [String: String] = [:]
     private var chapterWords: [Int: [Int: Int]] = [:]
@@ -358,7 +378,8 @@ public struct LampStrongsAnalyzer {
         translationName: String,
         translationAbbreviation: String? = nil,
         language: String? = nil,
-        includingVerseText: Bool = false
+        includingVerseText: Bool = false,
+        corpus: LampStrongsCorpus? = nil
     ) {
         let normalized = LampStrongsKey.normalized(key)
         self.key = normalized
@@ -370,6 +391,11 @@ public struct LampStrongsAnalyzer {
         keyLanguage = first == "H" || first == "G" ? first : nil
         bareKey = first?.isNumber == true ? Substring(normalized) : nil
         keepsVerseText = includingVerseText
+        countsCorpus = corpus == nil
+        if let corpus {
+            chapterWords = corpus.chapterWords
+            taggedVerseCount = corpus.taggedVerseCount
+        }
     }
 
     /// `text` is read only when the verse holds the key.
@@ -382,10 +408,12 @@ public struct LampStrongsAnalyzer {
         }
         guard !tags.isEmpty else { return }
         let (book, chapter, _) = LampBibleReferenceFormatter.components(of: reference)
-        chapterWords[book, default: [:]][chapter, default: 0] += tags.count
-        taggedVerseCount += 1
         let distinct = Set(tags)
-        for tag in distinct { verseFrequency[tag, default: 0] += 1 }
+        if countsCorpus {
+            chapterWords[book, default: [:]][chapter, default: 0] += tags.count
+            taggedVerseCount += 1
+            for tag in distinct { verseFrequency[tag, default: 0] += 1 }
+        }
         guard distinct.contains(where: isKey) else { return }
 
         let verseText = text()
@@ -399,6 +427,20 @@ public struct LampStrongsAnalyzer {
     }
 
     public func analysis() -> LampStrongsAnalysis {
+        analysis(verseFrequency: verseFrequency)
+    }
+
+    /// The analysis, with `verseCounts` saying how many verses in range hold
+    /// each key asked about: the keys sharing enough of this one's verses to
+    /// be weighed as companions. For an analyzer given a corpus.
+    public func analysis(verseCounts: ([String]) throws -> [String: Int]) rethrows -> LampStrongsAnalysis {
+        let hitVerses = Set(occurrences.map(\.reference)).count
+        let candidates = sharedVerses.filter { $0.value >= Self.minimumShared(hitVerses: hitVerses) }.map(\.key)
+        let counts = try verseCounts(candidates.sorted())
+        return analysis(verseFrequency: verseFrequency.merging(counts) { _, given in given })
+    }
+
+    private func analysis(verseFrequency: [String: Int]) -> LampStrongsAnalysis {
         let ordered = occurrences.sorted {
             ($0.reference, $0.startOffset) < ($1.reference, $1.startOffset)
         }
@@ -423,7 +465,7 @@ public struct LampStrongsAnalyzer {
             grammar: grammar(ordered),
             books: books,
             sections: sections(books, totalHits: ordered.count, totalWords: totalWords),
-            companions: companions(hitVerses: references.count),
+            companions: companions(hitVerses: references.count, verseFrequency: verseFrequency),
             verseTexts: verseTexts
         )
     }
@@ -797,9 +839,13 @@ public struct LampStrongsAnalyzer {
     /// times chance, a name found three times, each beside the key, outranks
     /// every real companion. A pair must also share three verses, or two
     /// where the key has fewer than twenty.
-    private func companions(hitVerses: Int, limit: Int = 25) -> [LampStrongsAnalysis.Companion] {
+    private func companions(
+        hitVerses: Int,
+        verseFrequency: [String: Int],
+        limit: Int = 25
+    ) -> [LampStrongsAnalysis.Companion] {
         guard hitVerses > 0, taggedVerseCount > 0 else { return [] }
-        let minimumShared = hitVerses < 20 ? 2 : 3
+        let minimumShared = Self.minimumShared(hitVerses: hitVerses)
         return sharedVerses.compactMap { tag, shared -> LampStrongsAnalysis.Companion? in
             guard shared >= minimumShared, let verses = verseFrequency[tag] else { return nil }
             let keyness = LampStrongsAnalysis.keyness(
@@ -815,5 +861,9 @@ public struct LampStrongsAnalyzer {
         .sorted { ($1.keyness, $0.key) < ($0.keyness, $1.key) }
         .prefix(limit)
         .map { $0 }
+    }
+
+    private static func minimumShared(hitVerses: Int) -> Int {
+        hitVerses < 20 ? 2 : 3
     }
 }

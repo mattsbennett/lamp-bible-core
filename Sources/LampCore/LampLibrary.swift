@@ -19,6 +19,10 @@ public actor LampLibrary {
     /// Each translation's verse numbering, read once: comparing translations
     /// asks for it on every chapter.
     private var versifications: [String: LampVersification] = [:]
+    private var strongsIndexQueue: DatabaseQueue?
+    /// Each translation's fingerprint as last read, until a module is written.
+    private var strongsFingerprints: [String: String] = [:]
+    private var strongsIndexesBuilding: Set<String> = []
 
     public init(
         rootURL: URL? = nil,
@@ -685,10 +689,12 @@ public actor LampLibrary {
     /// Verses whose tags hold `key`, each with its text marked where the key
     /// is tagged.
     ///
-    /// A key can be written padded or in either case, or listed with others
-    /// under one word, as the KJV tags "God" with "G3588,G2316". The query
-    /// finds every verse that might hold it, and each is confirmed by reading
-    /// its tags, so the verses are those the reader and the analysis see.
+    /// A translation with a current Strong's index is answered from it. One
+    /// without is searched: a key can be written padded or in either case, or
+    /// listed with others under one word, as the KJV tags "God" with
+    /// "G3588,G2316", so the query finds every verse that might hold it and
+    /// each is confirmed by reading its tags. Either way the verses are those
+    /// the reader and the analysis see.
     private func strongsVerses(
         key: String,
         moduleIDs: Set<String>?,
@@ -707,14 +713,28 @@ public actor LampLibrary {
         var found: [[(result: LampTranslationSearchResult, marked: String)]] = []
         for module in modules {
             try Task.checkCancellation()
+            let indexed = try indexedReferences(
+                moduleID: module.id, key: normalized, bookRange: bookRange, limit: resultLimit
+            )
+            if indexed?.isEmpty == true {
+                found.append([])
+                continue
+            }
             let queue = try openDatabase(moduleID: module.id)
             let matches = try queue.read { db -> [(result: LampTranslationSearchResult, marked: String)] in
                 let tables = try tableNames(in: db)
                 let table: String
                 let books: String
-                var condition = "\(prefilter.condition) AND v.book BETWEEN ? AND ?"
-                var arguments = StatementArguments(prefilter.arguments)
-                arguments += [firstBook, lastBook]
+                var condition: String
+                var arguments: StatementArguments
+                if let indexed {
+                    condition = "v.ref IN (\(Array(repeating: "?", count: indexed.count).joined(separator: ", ")))"
+                    arguments = StatementArguments(indexed)
+                } else {
+                    condition = "\(prefilter.condition) AND v.book BETWEEN ? AND ?"
+                    arguments = StatementArguments(prefilter.arguments)
+                    arguments += [firstBook, lastBook]
+                }
                 if tables.contains("verses"), tables.contains("books") {
                     table = "verses"
                     books = "JOIN books b ON b.id = v.book"
@@ -722,9 +742,9 @@ public actor LampLibrary {
                     table = "translation_verses"
                     books = "JOIN translation_books b ON b.translation_id = v.translation_id AND b.book_number = v.book"
                     condition = "v.translation_id = ? AND " + condition
-                    arguments = [module.id]
-                    arguments += StatementArguments(prefilter.arguments)
-                    arguments += [firstBook, lastBook]
+                    var scoped: StatementArguments = [module.id]
+                    scoped += arguments
+                    arguments = scoped
                 } else {
                     return []
                 }
@@ -742,7 +762,7 @@ public actor LampLibrary {
                 var matches: [(result: LampTranslationSearchResult, marked: String)] = []
                 while matches.count < resultLimit, let row = try rows.next() {
                     let annotations: String? = row["annotations_json"]
-                    guard LampStrongsSearch.holdsKey(annotations, key: normalized) else { continue }
+                    guard indexed != nil || LampStrongsSearch.holdsKey(annotations, key: normalized) else { continue }
                     let text: String = row["text"]
                     matches.append((
                         LampTranslationSearchResult(
@@ -766,6 +786,202 @@ public actor LampLibrary {
         return Self.sharedEvenly(found, limit: resultLimit)
     }
 
+    private var strongsIndexURL: URL {
+        rootURL.appendingPathComponent("Indexes", isDirectory: true)
+            .appendingPathComponent("StrongsIndex.sqlite")
+    }
+
+    private func openStrongsIndex() throws -> DatabaseQueue {
+        if let strongsIndexQueue { return strongsIndexQueue }
+        try fileManager.createDirectory(
+            at: strongsIndexURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let queue = try DatabaseQueue(path: strongsIndexURL.path)
+        try queue.write(LampStrongsIndex.createTables)
+        strongsIndexQueue = queue
+        return queue
+    }
+
+    /// The table holding a translation's verses and, where several share it,
+    /// the rows that are its own; nil for one without Strong's tags to read.
+    private func verseSource(in db: Database, moduleID: String) throws -> (table: String, translationID: String?)? {
+        let tables = try tableNames(in: db)
+        let source: (table: String, translationID: String?)
+        if tables.contains("verses"), tables.contains("books") {
+            source = ("verses", nil)
+        } else if tables.contains("translation_verses") {
+            source = ("translation_verses", moduleID)
+        } else {
+            return nil
+        }
+        return try columnNames(in: db, table: source.table).contains("annotations_json") ? source : nil
+    }
+
+    private func strongsFingerprint(moduleID: String) throws -> String? {
+        if let known = strongsFingerprints[moduleID] { return known }
+        let fingerprint = try openDatabase(moduleID: moduleID).read { db -> String? in
+            guard let source = try verseSource(in: db, moduleID: moduleID) else { return nil }
+            return try LampStrongsIndex.fingerprint(table: source.table, translationID: source.translationID, in: db)
+        }
+        strongsFingerprints[moduleID] = fingerprint
+        return fingerprint
+    }
+
+    /// The verses the Strong's index says tag `key`, or nil when it holds no
+    /// current index of the translation and its verses must be read.
+    private func indexedReferences(
+        moduleID: String,
+        key: String,
+        bookRange: ClosedRange<Int>?,
+        limit: Int
+    ) throws -> [Int]? {
+        guard fileManager.fileExists(atPath: strongsIndexURL.path),
+              let fingerprint = try strongsFingerprint(moduleID: moduleID) else { return nil }
+        return try openStrongsIndex().read { db in
+            guard try LampStrongsIndex.isCurrent(translationID: moduleID, fingerprint: fingerprint, in: db) else {
+                return nil
+            }
+            return try LampStrongsIndex.references(
+                of: key, translationID: moduleID, bookRange: bookRange, limit: limit, in: db
+            )
+        }
+    }
+
+    /// `key` analysed with the Strong's index: the totals it is measured
+    /// against from the index, and only the verses holding it read. Nil when
+    /// the index holds no current index of the translation.
+    private func indexedAnalysis(
+        module: LampInstalledModule,
+        key: String,
+        bookRange: ClosedRange<Int>?,
+        includingVerseText: Bool
+    ) throws -> LampStrongsAnalysis? {
+        guard fileManager.fileExists(atPath: strongsIndexURL.path),
+              let fingerprint = try strongsFingerprint(moduleID: module.id) else { return nil }
+        let index = try openStrongsIndex()
+        let indexed = try index.read { db -> (LampStrongsCorpus, [Int])? in
+            guard try LampStrongsIndex.isCurrent(translationID: module.id, fingerprint: fingerprint, in: db) else {
+                return nil
+            }
+            return (
+                try LampStrongsIndex.corpus(for: key, translationID: module.id, bookRange: bookRange, in: db),
+                try LampStrongsIndex.references(of: key, translationID: module.id, bookRange: bookRange, in: db)
+            )
+        }
+        guard let (corpus, references) = indexed else { return nil }
+        var analyzer = LampStrongsAnalyzer(
+            key: key,
+            translationID: module.id,
+            translationName: module.name,
+            translationAbbreviation: module.abbreviation,
+            language: module.language,
+            includingVerseText: includingVerseText,
+            corpus: corpus
+        )
+        try openDatabase(moduleID: module.id).read { db in
+            guard let source = try verseSource(in: db, moduleID: module.id) else { return }
+            for start in stride(from: 0, to: references.count, by: 500) {
+                let batch = Array(references[start..<min(start + 500, references.count)])
+                var arguments: StatementArguments = source.translationID.map { [$0] } ?? []
+                arguments += StatementArguments(batch)
+                for row in try Row.fetchAll(db, sql: """
+                    SELECT ref, text, annotations_json FROM \(source.table)
+                    WHERE \(source.translationID == nil ? "" : "translation_id = ? AND ")ref IN (\(Array(repeating: "?", count: batch.count).joined(separator: ", ")))
+                    """, arguments: arguments) {
+                    analyzer.add(reference: row["ref"], text: row["text"], annotationsJSON: row["annotations_json"])
+                }
+            }
+        }
+        return try analyzer.analysis { keys in
+            try index.read {
+                try LampStrongsIndex.verseCounts(of: keys, translationID: module.id, bookRange: bookRange, in: $0)
+            }
+        }
+    }
+
+    /// Builds the Strong's index of each tagged translation in `moduleIDs`,
+    /// or of every one, that has none current, a book at a time. Between
+    /// books it gives way to the library's other work, so a search runs while
+    /// it builds, and finds its verses by reading them until the index is
+    /// whole. A translation no longer installed leaves the index.
+    public func buildStrongsIndexes(moduleIDs: Set<String>? = nil) async throws {
+        for module in try prunedStrongsIndex() where (moduleIDs == nil || moduleIDs?.contains(module.id) == true)
+            && !strongsIndexesBuilding.contains(module.id) {
+            try Task.checkCancellation()
+            guard let fingerprint = try strongsIndexToBuild(moduleID: module.id) else { continue }
+            strongsIndexesBuilding.insert(module.id)
+            defer { strongsIndexesBuilding.remove(module.id) }
+            for book in try startedStrongsIndex(moduleID: module.id) {
+                try Task.checkCancellation()
+                try indexStrongsBook(book, moduleID: module.id)
+                await Task.yield()
+            }
+            // A module written while its index was built reads differently
+            // now, and stays unindexed until it is built again.
+            guard strongsFingerprints[module.id] == fingerprint else { continue }
+            try finishStrongsIndex(moduleID: module.id, fingerprint: fingerprint)
+        }
+    }
+
+    private func finishStrongsIndex(moduleID: String, fingerprint: String) throws {
+        try openStrongsIndex().write {
+            try LampStrongsIndex.finish(translationID: moduleID, fingerprint: fingerprint, in: $0)
+        }
+    }
+
+    /// The installed translations, with every other one removed from the index.
+    private func prunedStrongsIndex() throws -> [LampInstalledModule] {
+        let translations = try installedModules().filter { $0.kind == .translation }
+        let installedIDs = Set(translations.map(\.id))
+        try openStrongsIndex().write { db in
+            for gone in try String.fetchAll(db, sql: "SELECT translation_id FROM strongs_index_translations")
+            where !installedIDs.contains(gone) {
+                try LampStrongsIndex.remove(translationID: gone, in: db)
+            }
+        }
+        return translations
+    }
+
+    /// The fingerprint to build a translation's index to, or nil when it has
+    /// no tags to index or its index is current.
+    private func strongsIndexToBuild(moduleID: String) throws -> String? {
+        guard let fingerprint = try strongsFingerprint(moduleID: moduleID) else { return nil }
+        let current = try openStrongsIndex().read {
+            try LampStrongsIndex.isCurrent(translationID: moduleID, fingerprint: fingerprint, in: $0)
+        }
+        return current ? nil : fingerprint
+    }
+
+    /// Clears a translation from the index and returns its books to index.
+    private func startedStrongsIndex(moduleID: String) throws -> [Int] {
+        try openStrongsIndex().write { try LampStrongsIndex.remove(translationID: moduleID, in: $0) }
+        return try openDatabase(moduleID: moduleID).read { db in
+            guard let source = try verseSource(in: db, moduleID: moduleID) else { return [] }
+            return try Int.fetchAll(db, sql: """
+                SELECT DISTINCT book FROM \(source.table) \(source.translationID == nil ? "" : "WHERE translation_id = ?")
+                ORDER BY book
+                """, arguments: source.translationID.map { [$0] } ?? [])
+        }
+    }
+
+    private func indexStrongsBook(_ book: Int, moduleID: String) throws {
+        let rows = try openDatabase(moduleID: moduleID).read { db -> [(Int, String?)] in
+            guard let source = try verseSource(in: db, moduleID: moduleID) else { return [] }
+            var arguments: StatementArguments = source.translationID.map { [$0] } ?? []
+            arguments += [book]
+            return try Row.fetchAll(db, sql: """
+                SELECT ref, annotations_json FROM \(source.table)
+                WHERE \(source.translationID == nil ? "" : "translation_id = ? AND ")book = ?
+                  AND annotations_json IS NOT NULL
+                """, arguments: arguments).map { ($0["ref"], $0["annotations_json"]) }
+        }
+        try openStrongsIndex().write { db in
+            for (reference, annotations) in rows {
+                try LampStrongsIndex.add(reference: reference, annotationsJSON: annotations, translationID: moduleID, in: db)
+            }
+        }
+    }
+
     /// `key` analysed in each translation in range that tags its language
     /// there, in installed order. Unlike a search this reads the whole range
     /// rather than a page of hits, because every count is measured against
@@ -784,6 +1000,12 @@ public actor LampLibrary {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
         return try modules.compactMap { module in
+            try Task.checkCancellation()
+            if let analysis = try indexedAnalysis(
+                module: module, key: key, bookRange: bookRange, includingVerseText: includingVerseText
+            ) {
+                return analysis.wordCount > 0 ? analysis : nil
+            }
             let queue = try openDatabase(moduleID: module.id)
             let analysis = try queue.read { db -> LampStrongsAnalysis? in
                 let tables = try tableNames(in: db)
@@ -4196,6 +4418,7 @@ public actor LampLibrary {
     private func forgetOpenDatabases() {
         openDatabases.removeAll()
         versifications.removeAll()
+        strongsFingerprints.removeAll()
     }
 
     private func preparedBundledDatabaseURL() throws -> URL? {
