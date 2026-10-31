@@ -12,8 +12,9 @@ import FoundationModels
 /// `LampAgentReadingPlanRequest` takes, and `LampReadingPlanRequest.draft`
 /// lays out the days, so no reference, count or date is the model's own
 /// arithmetic. Its books are held to the 66 by name, so it cannot name one
-/// that isn't there. Show the draft before installing it: the model can still
-/// misread what was asked.
+/// that isn't there, and a chapter number the person didn't write is dropped,
+/// so it cannot count a book's chapters either. Show the draft before
+/// installing it: the model can still misread what was asked.
 @available(macOS 26, iOS 26, *)
 public struct LampReadingPlanAssistant: Sendable {
     public init() {}
@@ -50,7 +51,7 @@ public struct LampReadingPlanAssistant: Sendable {
         let session = LanguageModelSession(instructions: Self.instructions(today: today, calendar: calendar))
         do {
             let answer = try await session.respond(to: words, generating: PlanAnswer.self).content
-            return answer.request(today: today, calendar: calendar)
+            return answer.request(asked: words, today: today, calendar: calendar)
         } catch let error as CancellationError {
             throw error
         } catch {
@@ -113,14 +114,20 @@ public struct LampReadingPlanAssistant: Sendable {
 
             Examples:
             - "The Gospels in 30 days": one track, Matthew to John. 30 days.
+            - "The Gospels in a month, weekdays only": one track, Matthew to \
+            John. 1 month. Rest on Saturday and Sunday.
             - "The Bible in a year": two tracks, Genesis to Malachi, and Matthew \
-            to Revelation. 365 days.
+            to Revelation. 1 year.
             - "The New Testament in 90 days with a psalm a day": two tracks, \
             Matthew to Revelation, and Psalms at 1 chapter a day. 90 days.
             - "John, a chapter a day, weekdays only": one track, John at 1 chapter \
-            a day. 0 days. Rest on Saturday and Sunday.
+            a day. No length. Rest on Saturday and Sunday.
             - "Romans 1 to 8 over two weeks": one track, Romans chapters 1 to 8. \
-            14 days.
+            2 weeks.
+
+            Give chapters only when the request gives chapter numbers. Never \
+            work out how many chapters a book has: a whole book is the book \
+            alone, with no chapters.
 
             Name and describe the plan plainly, by what it reads and when. Say \
             nothing about what the passages teach.
@@ -171,10 +178,13 @@ struct PlanAnswer {
     var tracks: [TrackAnswer]
 
     @Guide(
-        description: "How many days have a reading, when the request gives a length: 30 for a month, 365 for a year. 0 when it gives a pace instead.",
+        description: "How long the request says the plan takes, counted in lengthUnit: 30 for 30 days, 1 for a month or a year, 2 for two weeks. 0 when it gives a pace instead.",
         .range(0...366)
     )
-    var readingDays: Int
+    var length: Int
+
+    @Guide(description: "What the length counts")
+    var lengthUnit: LengthUnitAnswer
 
     @Guide(description: "When the plan starts. Today unless the request says otherwise.")
     var start: StartAnswer
@@ -182,18 +192,72 @@ struct PlanAnswer {
     @Guide(description: "Days of the week with no reading. Empty unless the request asks for days off.")
     var restDays: [WeekdayAnswer]
 
-    /// The answer as a request, its start a date.
-    func request(today: Date, calendar: Calendar) -> LampAgentReadingPlanRequest {
-        LampAgentReadingPlanRequest(
+    /// The answer to `words` as a request, its start a date and its length
+    /// the days with a reading.
+    func request(asked words: String, today: Date, calendar: Calendar) -> LampAgentReadingPlanRequest {
+        let written = Self.numbers(in: words)
+        let start = start.day(after: today, calendar: calendar)
+        return LampAgentReadingPlanRequest(
             name: name,
             description: description,
             tracks: tracks.map {
-                .init(passages: $0.passages.map(\.text), chaptersPerDay: $0.chaptersPerDay > 0 ? $0.chaptersPerDay : nil)
+                .init(
+                    passages: $0.passages.map { $0.text(keeping: written) },
+                    chaptersPerDay: $0.chaptersPerDay > 0 ? $0.chaptersPerDay : nil
+                )
             },
-            readingDays: readingDays > 0 ? readingDays : nil,
-            startDate: start.date(after: today, calendar: calendar),
+            readingDays: readingDays(from: start, calendar: calendar),
+            startDate: StartAnswer.text(start, calendar: calendar),
             restDays: restDays.map(\.rawValue)
         )
+    }
+
+    /// The days with a reading before the length has passed, so "a month,
+    /// weekdays only" reads on the weekdays of a month rather than on thirty
+    /// of them; nil for a plan set by its pace.
+    func readingDays(from start: Date, calendar: Calendar) -> Int? {
+        guard length > 0,
+              let end = calendar.date(byAdding: lengthUnit.component, value: length, to: start),
+              let days = calendar.dateComponents([.day], from: start, to: end).day
+        else { return nil }
+        let resting = Set(restDays.compactMap { LampWeekday(rawValue: $0.rawValue)?.calendarWeekday })
+        // With no day left to read on, the builder says so.
+        guard resting.count < 7 else { return days }
+        return (0..<days).filter { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: start) else { return false }
+            return !resting.contains(calendar.component(.weekday, from: date))
+        }.count
+    }
+
+    /// The numbers `words` give, in digits or spelled out: "Romans 1 to 8",
+    /// "the first eight chapters of Romans".
+    static func numbers(in words: String) -> Set<Int> {
+        let spelled = NumberFormatter()
+        spelled.numberStyle = .spellOut
+        spelled.locale = Locale(identifier: "en_US")
+        let digits = words.split { !($0.isASCII && $0.isNumber) }.compactMap { Int($0) }
+        let names = words.lowercased().split { !$0.isLetter && $0 != "-" }.compactMap {
+            spelled.number(from: String($0))?.intValue
+        }
+        return Set(digits + names)
+    }
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable
+enum LengthUnitAnswer {
+    case days
+    case weeks
+    case months
+    case years
+
+    var component: Calendar.Component {
+        switch self {
+        case .days: .day
+        case .weeks: .weekOfYear
+        case .months: .month
+        case .years: .year
+        }
     }
 }
 
@@ -222,21 +286,35 @@ struct PassageAnswer {
     @Guide(description: "The last book: the first again for a single book", .anyOf(bookNames))
     var lastBook: String
 
-    @Guide(description: "The first chapter, when the request names chapters. 0 for the start of the first book.", .range(0...150))
+    @Guide(
+        description: "The first chapter, only when the request gives chapter numbers. 0 for the start of the first book. Never count a book's chapters.",
+        .range(0...150)
+    )
     var firstChapter: Int
 
-    @Guide(description: "The last chapter, when the request names chapters. 0 for the end of the last book.", .range(0...150))
+    @Guide(
+        description: "The last chapter, only when the request gives chapter numbers. 0 for the end of the last book. Never count a book's chapters.",
+        .range(0...150)
+    )
     var lastChapter: Int
 
-    /// As people write a passage, which `LampPlanPassage` reads.
-    var text: String {
-        if firstChapter == 0 && lastChapter == 0 {
+    /// As people write a passage, which `LampPlanPassage` reads, keeping a
+    /// chapter only when it is among the numbers the person wrote.
+    ///
+    /// A chapter they didn't write is the model's own count, which runs past
+    /// a book's end ("Mark 1–20") or stops short of it. A last chapter past
+    /// the end can only mean the end, and a whole book is its name alone.
+    func text(keeping written: Set<Int>) -> String {
+        let chapters = LampCanonicalBooks.book(named: lastBook)?.verseCounts.count ?? 1
+        let first = firstChapter > 0 && written.contains(firstChapter) ? firstChapter : 1
+        let last = lastChapter > 0 && written.contains(lastChapter) ? min(lastChapter, chapters) : chapters
+        if first == 1 && last == chapters {
             return firstBook == lastBook ? firstBook : "\(firstBook)–\(lastBook)"
         }
-        let last = lastChapter > 0
-            ? lastChapter
-            : LampCanonicalBooks.book(named: lastBook)?.verseCounts.count ?? 1
-        return "\(firstBook) \(max(firstChapter, 1))–\(lastBook) \(last)"
+        if firstBook == lastBook {
+            return first == last ? "\(firstBook) \(first)" : "\(firstBook) \(first)–\(last)"
+        }
+        return "\(firstBook) \(first)–\(lastBook) \(last)"
     }
 }
 
@@ -249,8 +327,8 @@ enum StartAnswer {
     case firstOfNextMonth
     case firstOfNextYear
 
-    /// Year-month-day, as `LampAgentReadingPlanRequest` takes a start.
-    func date(after today: Date, calendar: Calendar) -> String {
+    /// The day the plan starts, counting from `today`.
+    func day(after today: Date, calendar: Calendar) -> Date {
         let day = calendar.startOfDay(for: today)
         let date: Date? = switch self {
         case .today:
@@ -264,7 +342,16 @@ enum StartAnswer {
         case .firstOfNextYear:
             calendar.nextDate(after: day, matching: DateComponents(month: 1, day: 1), matchingPolicy: .nextTime)
         }
-        let parts = calendar.dateComponents([.year, .month, .day], from: date ?? day)
+        return date ?? day
+    }
+
+    /// Year-month-day, as `LampAgentReadingPlanRequest` takes a start.
+    func date(after today: Date, calendar: Calendar) -> String {
+        Self.text(day(after: today, calendar: calendar), calendar: calendar)
+    }
+
+    static func text(_ date: Date, calendar: Calendar) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 }
