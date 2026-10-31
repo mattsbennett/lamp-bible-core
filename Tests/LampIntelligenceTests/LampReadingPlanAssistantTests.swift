@@ -77,6 +77,32 @@ struct LampReadingPlanAssistantTests {
         #expect(start(.firstOfNextMonth, from: date(2026, 11, 1)) == "2026-12-01")
     }
 
+    /// What the model throws reaches people as something to do, in the
+    /// 26 releases' errors and the 27 ones'.
+    @available(macOS 26, iOS 26, *)
+    @Test func theModelsFailuresAreSaidPlainly() {
+        func explained(_ error: any Error) -> LampReadingPlanAssistantError {
+            LampReadingPlanAssistant.explained(error)
+        }
+        let context = LanguageModelSession.GenerationError.Context(debugDescription: "test")
+        #expect(explained(LanguageModelSession.GenerationError.exceededContextWindowSize(context)) == .tooLong)
+        #expect(explained(LanguageModelSession.GenerationError.guardrailViolation(context)) == .declined)
+        #expect(explained(LanguageModelSession.GenerationError.decodingFailure(context)) == .notUnderstood)
+        #expect(explained(LanguageModelSession.GenerationError.concurrentRequests(context)) == .busy)
+        #expect(explained(LanguageModelSession.GenerationError.unsupportedLanguageOrLocale(context)) == .unsupportedLanguage)
+        // What the iOS simulator throws without the guardrail's assets.
+        #expect(explained(NSError(domain: "com.apple.SensitiveContentAnalysisML", code: 15)) == .failed)
+        if #available(macOS 27, iOS 27, *) {
+            #expect(explained(LanguageModelError.contextSizeExceeded(
+                .init(contextSize: 4_096, tokenCount: 5_000, debugDescription: "test")
+            )) == .tooLong)
+            #expect(explained(LanguageModelError.refusal(.init(explanation: "No", debugDescription: "test"))) == .declined)
+            #expect(explained(LanguageModelError.timeout(.init(debugDescription: "test"))) == .busy)
+            #expect(explained(LanguageModelSession.Error.concurrentRequests) == .busy)
+        }
+        #expect(LampReadingPlanAssistantError.failed.errorDescription?.hasPrefix("Apple Intelligence") == true)
+    }
+
     /// Asks the model itself, so it runs only when asked to, on a Mac where
     /// Apple Intelligence is on: `LAMP_LIVE_MODEL=1 swift test`.
     @available(macOS 26, iOS 26, *)

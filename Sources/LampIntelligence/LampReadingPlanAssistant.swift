@@ -29,21 +29,72 @@ public struct LampReadingPlanAssistant: Sendable {
         case .unavailable(.appleIntelligenceNotEnabled):
             "Turn on Apple Intelligence in Settings to make a plan from a description."
         case .unavailable(.modelNotReady):
-            "Apple Intelligence is still getting ready. Try again later."
+            notReady
         case .unavailable:
             "Apple Intelligence isn't available right now."
         }
     }
 
+    private static let notReady = "Apple Intelligence is still getting ready. Try again later."
+
     /// The plan `words` describe, starting from `today`.
+    ///
+    /// Throws a `LampReadingPlanAssistantError` to show as it is, or
+    /// `CancellationError`.
     public func request(
         for words: String,
         today: Date = Date(),
         calendar: Calendar = LampPlanCalendar.calendar
     ) async throws -> LampAgentReadingPlanRequest {
+        if let reason = Self.unavailableReason { throw LampReadingPlanAssistantError.unavailable(reason) }
         let session = LanguageModelSession(instructions: Self.instructions(today: today, calendar: calendar))
-        let answer = try await session.respond(to: words, generating: PlanAnswer.self).content
-        return answer.request(today: today, calendar: calendar)
+        do {
+            let answer = try await session.respond(to: words, generating: PlanAnswer.self).content
+            return answer.request(today: today, calendar: calendar)
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            throw Self.explained(error)
+        }
+    }
+
+    /// The model's failure as something a person can act on. Its own
+    /// descriptions name its internals: a simulator without the guardrail's
+    /// assets says "SensitiveContentAnalysisML error 15".
+    ///
+    /// The errors moved in the 27 releases, so both the new types and the
+    /// 26 ones are read.
+    static func explained(_ error: any Error) -> LampReadingPlanAssistantError {
+        if #available(macOS 27, iOS 27, *) {
+            switch error {
+            case let error as LanguageModelError:
+                switch error {
+                case .contextSizeExceeded: return .tooLong
+                case .rateLimited, .timeout: return .busy
+                case .guardrailViolation, .refusal: return .declined
+                case .unsupportedLanguageOrLocale: return .unsupportedLanguage
+                default: return .failed
+                }
+            case is GeneratedContent.ParsingError:
+                return .notUnderstood
+            case is SystemLanguageModel.Error:
+                return .unavailable(notReady)
+            case let error as LanguageModelSession.Error where error == .concurrentRequests:
+                return .busy
+            default:
+                break
+            }
+        }
+        guard let error = error as? LanguageModelSession.GenerationError else { return .failed }
+        switch error {
+        case .exceededContextWindowSize: return .tooLong
+        case .guardrailViolation, .refusal: return .declined
+        case .unsupportedLanguageOrLocale: return .unsupportedLanguage
+        case .rateLimited, .concurrentRequests: return .busy
+        case .decodingFailure, .unsupportedGuide: return .notUnderstood
+        case .assetsUnavailable: return .unavailable(notReady)
+        @unknown default: return .failed
+        }
     }
 
     static func instructions(today: Date, calendar: Calendar) -> String {
@@ -74,6 +125,36 @@ public struct LampReadingPlanAssistant: Sendable {
             Name and describe the plan plainly, by what it reads and when. Say \
             nothing about what the passages teach.
             """
+    }
+}
+
+/// Why the model gave no plan, in words to show.
+public enum LampReadingPlanAssistantError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+    case tooLong
+    case declined
+    case unsupportedLanguage
+    case busy
+    case notUnderstood
+    case failed
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable(let reason):
+            reason
+        case .tooLong:
+            "That description is too long for Apple Intelligence. Try a sentence or two."
+        case .declined:
+            "Apple Intelligence wouldn't make a plan from that description. Try putting it another way, or fill in the plan yourself."
+        case .unsupportedLanguage:
+            "Apple Intelligence doesn't support this language or region yet. Fill in the plan yourself instead."
+        case .busy:
+            "Apple Intelligence is busy. Try again in a moment."
+        case .notUnderstood:
+            "Apple Intelligence couldn't turn that into a plan. Try saying what to read and for how long."
+        case .failed:
+            "Apple Intelligence couldn't make a plan just now. Try again, or fill in the plan yourself."
+        }
     }
 }
 
