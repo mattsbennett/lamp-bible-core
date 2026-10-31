@@ -306,6 +306,120 @@ public struct LampAgentReadingPlanDay: Codable, Equatable, Sendable {
     }
 }
 
+/// A reading plan asked for in the words an agent writes: passages as people
+/// write them, a start date as 2026-11-01, rest days by name. Whatever asks,
+/// a tool's arguments or the on-device model's answer, says it this way.
+public struct LampAgentReadingPlanRequest: Codable, Equatable, Sendable {
+    public struct Track: Codable, Equatable, Sendable {
+        /// Read in order: "Matthew–John", "Psalms 1–41", "NT".
+        public var passages: [String]
+        public var chaptersPerDay: Int?
+
+        public init(passages: [String], chaptersPerDay: Int? = nil) {
+            self.passages = passages
+            self.chaptersPerDay = chaptersPerDay
+        }
+    }
+
+    public var name: String
+    public var description: String?
+    public var tracks: [Track]
+    public var readingDays: Int?
+    /// The first day, as year-month-day. Nil is today.
+    public var startDate: String?
+    /// "saturday", "sun", or "weekends" for both.
+    public var restDays: [String]?
+
+    public init(
+        name: String,
+        description: String? = nil,
+        tracks: [Track],
+        readingDays: Int? = nil,
+        startDate: String? = nil,
+        restDays: [String]? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.tracks = tracks
+        self.readingDays = readingDays
+        self.startDate = startDate
+        self.restDays = restDays
+    }
+
+    public func request(
+        today: Date = Date(),
+        calendar: Calendar = LampPlanCalendar.calendar
+    ) throws -> LampReadingPlanRequest {
+        LampReadingPlanRequest(
+            name: name,
+            description: description,
+            tracks: try tracks.map { track in
+                .init(passages: try track.passages.map(LampPlanPassage.init), chaptersPerDay: track.chaptersPerDay)
+            },
+            readingDays: readingDays,
+            start: try startDate.map { try Self.date($0, calendar: calendar) } ?? today,
+            restDays: Set(try (restDays ?? []).flatMap(Self.weekdays))
+        )
+    }
+
+    private static func date(_ text: String, calendar: Calendar) throws -> Date {
+        let parts = text.trimmingCharacters(in: .whitespaces).split(separator: "-").compactMap { Int($0) }
+        let components = parts.count == 3 ? DateComponents(year: parts[0], month: parts[1], day: parts[2]) : nil
+        guard let components,
+              let date = calendar.date(from: components),
+              // No 30 February rolled over into March.
+              calendar.dateComponents([.year, .month, .day], from: date) == components else {
+            throw LampReadingPlanError.unknownDate(text)
+        }
+        return date
+    }
+
+    /// A weekday by its name or the start of it, "sat" or "thurs", one or
+    /// many: "sundays".
+    private static func weekdays(_ text: String) throws -> [LampWeekday] {
+        var name = text.trimmingCharacters(in: .whitespaces).lowercased()
+        if name == "weekend" || name == "weekends" { return [.saturday, .sunday] }
+        if name.count > 3 && name.hasSuffix("s") { name.removeLast() }
+        guard name.count >= 3,
+              let day = LampWeekday.allCases.first(where: { $0.rawValue.hasPrefix(name) }) else {
+            throw LampReadingPlanError.unknownWeekday(text)
+        }
+        return [day]
+    }
+}
+
+/// A made plan as an agent shows it, before anything is added.
+public struct LampAgentReadingPlanDraft: Codable, Equatable, Sendable {
+    public struct Day: Codable, Equatable, Sendable {
+        /// Year-month-day.
+        public let date: String
+        /// The plan's day number, as read_plan_day takes it.
+        public let day: Int
+        public let readings: [String]
+    }
+
+    public let name: String
+    public let description: String?
+    public let readingDays: Int
+    public let readingsPerDay: Int?
+    public let days: [Day]
+
+    public init(_ draft: LampReadingPlanDraft, calendar: Calendar = LampPlanCalendar.calendar) {
+        name = draft.plan.name
+        description = draft.plan.description
+        readingDays = draft.plan.duration
+        readingsPerDay = draft.plan.readingsPerDay
+        days = draft.days.map { day in
+            let parts = calendar.dateComponents([.year, .month, .day], from: day.date)
+            return Day(
+                date: String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0),
+                day: day.number,
+                readings: day.readings.map(\.displayDescription)
+            )
+        }
+    }
+}
+
 public struct LampAgentDevotional: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let moduleID: String

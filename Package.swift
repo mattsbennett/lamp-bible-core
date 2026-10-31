@@ -14,6 +14,9 @@ let package = Package(
         // SwiftUI stays out of LampCore: the module CLI and the MCP server link
         // it headlessly and must not pull in a UI framework.
         .library(name: "LampPresentationUI", targets: ["LampPresentationUI"]),
+        // Apple Intelligence stays out of LampCore for the same reason: the
+        // apps ask the on-device model, the headless tools never do.
+        .library(name: "LampIntelligence", targets: ["LampIntelligence"]),
         .executable(name: "lamp-module", targets: ["LampModuleCLI"]),
     ],
     dependencies: [
@@ -37,6 +40,10 @@ let package = Package(
             name: "LampPresentationUI",
             dependencies: ["LampCore"]
         ),
+        .target(
+            name: "LampIntelligence",
+            dependencies: ["LampCore", "LampModuleKit"]
+        ),
         .executableTarget(
             name: "LampModuleCLI",
             dependencies: [
@@ -57,6 +64,10 @@ let package = Package(
                 "LampPresentationUI",
                 "LampCore",
             ]
+        ),
+        .testTarget(
+            name: "LampIntelligenceTests",
+            dependencies: ["LampIntelligence", "LampCore"]
         ),
         .testTarget(
             name: "LampCoreTests",

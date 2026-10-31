@@ -316,6 +316,15 @@ public actor LampAgentLibrary {
         return LampAgentReadingPlanDay(result)
     }
 
+    /// A reading plan laid out from what to read and how fast, to show before
+    /// anything is added. Nothing is installed: the dates and readings are
+    /// the ones `LampLibrary.installReadingPlan` would install for the same
+    /// request on the same day.
+    public func draftReadingPlan(_ request: LampAgentReadingPlanRequest) async throws -> LampAgentReadingPlanDraft {
+        try requireEnabled()
+        return LampAgentReadingPlanDraft(try request.request().draft())
+    }
+
     public func listBooks() async throws -> [LampAgentBook] {
         try requireEnabled()
         let allowed = Set(try await permittedInstalledModules(kinds: [.book]).map(\.id))

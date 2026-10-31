@@ -1395,6 +1395,23 @@ public actor LampLibrary {
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// Installs a made plan as a plan module, as if its file had been added.
+    @discardableResult
+    public func installReadingPlan(_ draft: LampReadingPlanDraft) throws -> LampInstalledModule {
+        let folder = fileManager.temporaryDirectory
+            .appendingPathComponent("lamp-plan-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: folder) }
+        // The compiler holds a module's file to its ID.
+        let moduleURL = folder.appendingPathComponent(draft.plan.id).appendingPathExtension("lamp")
+        _ = try LampModuleCompiler().compile(
+            data: try draft.moduleJSON(),
+            sourceFilename: "\(draft.plan.id).json",
+            destinationURL: moduleURL
+        )
+        return try install(from: moduleURL)
+    }
+
     public func readingPlanDay(moduleID: String, day: Int) throws -> LampReadingPlanDay? {
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in
