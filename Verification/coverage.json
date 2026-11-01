@@ -812,6 +812,9 @@
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalFiles.swift": {
       "boundary": "Gathers what the Mac holds as `LampSyncFilePlan.Local`: each installed module placed by core's `LampInstalledModuleFile.syncPath()`, never its storage-key filename, and a digest of the bytes on disk. It decides nothing; the plan does (`filePlanAction`)."
     },
+    "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalWork.swift": {
+      "boundary": "When the Mac starts a pass, not what a pass does: the modification times of everything it publishes that no ledger records \u2014 modules installed and removed, decks, workspaces and skills \u2014 so work done here is published without anyone pressing Sync. It decides nothing. A source left out of it is not lost but late: it waits for the next pass, and what that pass then does to it is `filePlanAction`'s. The kinds are held to core's own by `everyKindOfSyncedFileIsReadFromSomewhere` in the Mac's tests."
+    },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift": {
       "boundary": "The Mac's install, merge and removal of single files for its pass, through the same library calls the archive pass made. Merges import by value, and what goes back up is the re-export from the merged library. Record decisions are core's (`decide`, `importOutcome`); the file-level ones are the plan's (`filePlanAction`).",
       "rules": [
