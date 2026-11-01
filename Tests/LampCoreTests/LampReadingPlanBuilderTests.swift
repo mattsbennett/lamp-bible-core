@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import LampModuleKit
 import Testing
 @testable import LampCore
@@ -311,5 +312,82 @@ struct LampReadingPlanBuilderTests {
             ledger.readings[readingID]?.deletedAt != nil,
             "and each of them says when, so none comes back"
         )
+    }
+
+    /// Unless a bundled plan of the same ID stands in.
+    ///
+    /// Then removing the installed copy uncovers the bundled plan instead of
+    /// taking the plan away, and the reader goes on reading it: following it
+    /// and the days already ticked still mean what they meant, because a
+    /// tick's ID names a day of whichever plan answers to that ID. Wiping
+    /// them would be a deletion nobody asked for — and, now that removals are
+    /// recorded, one that travels.
+    @Test func abundledPlanStandingInKeepsTheFollowingAndTheTicks() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-shadowed-plan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let databaseURL = root.appendingPathComponent("bundled.sqlite")
+        do {
+            let queue = try DatabaseQueue(path: databaseURL.path)
+            try await queue.writeWithoutTransaction { db in
+                try db.execute(sql: "PRAGMA journal_mode = DELETE")
+                try db.execute(sql: #"""
+                    CREATE TABLE plans (
+                        id TEXT PRIMARY KEY, name TEXT, description TEXT, author TEXT,
+                        full_description TEXT, duration INTEGER, readings_per_day INTEGER
+                    );
+                    CREATE TABLE plan_days (
+                        plan_id TEXT, day INTEGER, readings_json TEXT
+                    );
+                    INSERT INTO plans VALUES ('PLAN', 'Bundled Plan', NULL, NULL, NULL, 1, 1);
+                    INSERT INTO plan_days VALUES ('PLAN', 1, '[{"sv":1001001,"ev":1001999}]');
+                    """#)
+            }
+        }
+        let archiveURL = root.appendingPathComponent("bundled_modules.db.zlib")
+        let compressed = try (Data(contentsOf: databaseURL) as NSData).compressed(using: .zlib) as Data
+        try compressed.write(to: archiveURL)
+        let library = LampLibrary(
+            rootURL: root.appendingPathComponent("Library"),
+            bundledModulesArchiveURL: archiveURL
+        )
+
+        // Installed under the bundled plan's own ID, which is the only way
+        // this happens: someone installs a plan file that shadows it.
+        let draft = try LampReadingPlanRequest(
+            name: "A Plan Of My Own",
+            tracks: [.init(passages: [try passage("Luke")])],
+            readingDays: 4,
+            start: date(2026, 11, 1)
+        ).draft(id: "PLAN", calendar: calendar)
+        _ = try await library.installReadingPlan(draft)
+        #expect(
+            try await library.readingPlans().map(\.name) == ["A Plan Of My Own"],
+            "the installed copy shadows the bundled one"
+        )
+
+        try await library.setPlanSelected(moduleID: "PLAN", selected: true)
+        let firstDay = try #require(draft.days.first).number
+        try await library.setReadingCompleted(
+            planID: "PLAN", day: firstDay, readingIndex: 0, year: 2026, completed: true
+        )
+        let readingID = LampLibrary.completedReadingID(
+            planID: "PLAN", day: firstDay, readingIndex: 0, year: 2026
+        )
+
+        try await library.remove(moduleID: "PLAN")
+
+        #expect(
+            try await library.readingPlans().map(\.name) == ["Bundled Plan"],
+            "the bundled plan is uncovered, so there is still a plan to read"
+        )
+        #expect(try await library.selectedPlanIDs() == ["PLAN"], "still followed")
+        let ledger = try await library.planProgressLedger()
+        #expect(ledger.selectedPlanIDs == ["PLAN"])
+        #expect(ledger.selections["PLAN"]?.deletedAt == nil, "nothing told the other devices to unfollow")
+        #expect(ledger.completedReadings.keys.contains(readingID), "and the day stays ticked")
+        #expect(ledger.readings[readingID]?.deletedAt == nil)
     }
 }

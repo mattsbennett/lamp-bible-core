@@ -303,6 +303,18 @@ public actor LampLibrary {
         if fileManager.fileExists(atPath: moduleURL.path) {
             try fileManager.removeItem(at: moduleURL)
         }
+        // An installed plan can shadow a bundled one of the same ID, and
+        // removing it uncovers the bundled plan rather than taking the plan
+        // away: it is still there to be read tomorrow, so following it and
+        // the days already ticked still mean something. A tick's ID names a
+        // day of whichever plan answers to that ID, so it goes on meaning the
+        // same day. Rare — someone has to install a plan file under a bundled
+        // plan's ID — but wiping their progress would be a deletion nobody
+        // asked for, and one that travels to their other devices.
+        if try bundledModules().contains(where: { $0.kind == .plan && $0.id == moduleID }) {
+            return
+        }
+
         let userQueue = try openUserDatabase()
         try userQueue.write { db in
             let completed = try String.fetchAll(
