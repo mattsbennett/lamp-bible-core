@@ -305,8 +305,25 @@ public actor LampLibrary {
         }
         let userQueue = try openUserDatabase()
         try userQueue.write { db in
+            let completed = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM completed_readings WHERE plan_id = ?",
+                arguments: [moduleID]
+            )
             try db.execute(sql: "DELETE FROM selected_plans WHERE plan_id = ?", arguments: [moduleID])
             try db.execute(sql: "DELETE FROM completed_readings WHERE plan_id = ?", arguments: [moduleID])
+            // The same reason unticking one reading records the time it
+            // happened: a row deleted with nothing said about when says
+            // nothing at all, so another device's older tick wins and brings
+            // it back. Removing a plan unticks every one of its readings and
+            // stops following it, and both have to be recorded here, in the
+            // transaction that does them, or the plan goes and its progress
+            // comes back.
+            try Self.updatePlanProgressLedger(db) { ledger in
+                let now = Self.nowMilliseconds()
+                ledger.recordDeselection(moduleID, at: now)
+                for id in completed { ledger.recordUncompletion(id, at: now) }
+            }
         }
     }
 

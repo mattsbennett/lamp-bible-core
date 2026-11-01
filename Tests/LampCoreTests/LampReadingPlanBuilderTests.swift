@@ -263,4 +263,53 @@ struct LampReadingPlanBuilderTests {
         // Sundays have no day of their own.
         #expect(try await library.readingPlanDay(moduleID: draft.plan.id, day: 306) == nil)
     }
+
+    /// A plan that goes takes its progress with it, and says so.
+    ///
+    /// Unticking one reading records when it happened, so another device's
+    /// older tick cannot outrank it. Removing a plan unticks every reading at
+    /// once and stops following it, and both have to be recorded the same
+    /// way: a row deleted with nothing said about when says nothing at all.
+    /// Otherwise the plan is deleted on every device and its ticks come back
+    /// from the one that still holds them.
+    @Test func removingAPlanRecordsTheUnfollowAndEveryUntick() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-removed-plan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+
+        let draft = try LampReadingPlanRequest(
+            name: "Luke",
+            tracks: [.init(passages: [try passage("Luke")])],
+            readingDays: 4,
+            start: date(2026, 11, 1)
+        ).draft(calendar: calendar)
+        let installed = try await library.installReadingPlan(draft)
+        try await library.setPlanSelected(moduleID: installed.id, selected: true)
+        let firstDay = try #require(draft.days.first).number
+        try await library.setReadingCompleted(
+            planID: installed.id, day: firstDay, readingIndex: 0, year: 2026, completed: true
+        )
+        let readingID = LampLibrary.completedReadingID(
+            planID: installed.id, day: firstDay, readingIndex: 0, year: 2026
+        )
+        #expect(try await library.planProgressLedger().completedReadings.keys.contains(readingID))
+
+        try await library.remove(moduleID: installed.id)
+
+        let ledger = try await library.planProgressLedger()
+        #expect(try await library.readingPlans().isEmpty, "the plan is gone")
+        #expect(try await library.selectedPlanIDs().isEmpty, "and unfollowed")
+        #expect(ledger.selectedPlanIDs.isEmpty)
+        #expect(
+            ledger.selections[installed.id]?.deletedAt != nil,
+            "when it stopped being followed is recorded, which is what outranks the other device"
+        )
+        #expect(ledger.completedReadings.isEmpty, "every tick taken back")
+        #expect(
+            ledger.readings[readingID]?.deletedAt != nil,
+            "and each of them says when, so none comes back"
+        )
+    }
 }
