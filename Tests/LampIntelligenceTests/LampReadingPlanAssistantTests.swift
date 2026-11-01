@@ -25,7 +25,7 @@ struct LampReadingPlanAssistantTests {
             {"name": "Mark on Weekdays", "description": "Mark, two chapters each weekday.",
              "tracks": [{"passages": [{"firstBook": "Mark", "lastBook": "Mark", "firstChapter": 0, "lastChapter": 0}],
                          "chaptersPerDay": 2}],
-             "length": 0, "lengthUnit": "days", "start": "nextMonday", "restDays": ["saturday", "sunday"]}
+             "length": 0, "lengthUnit": "days", "start": "nextMonday"}
             """#))
         let request = answer.request(asked: "Mark, two chapters each weekday", today: date(2026, 10, 31), calendar: calendar)
         #expect(request == LampAgentReadingPlanRequest(
@@ -34,7 +34,7 @@ struct LampReadingPlanAssistantTests {
             tracks: [.init(passages: ["Mark"], chaptersPerDay: 2)],
             readingDays: nil,
             startDate: "2026-11-02",
-            restDays: ["saturday", "sunday"]
+            restDays: ["sunday", "saturday"]
         ))
         let draft = try request.request(calendar: calendar).draft(calendar: calendar)
         #expect(draft.days.count == 8)
@@ -68,7 +68,7 @@ struct LampReadingPlanAssistantTests {
     @Test func onlyChaptersPeopleWriteAreKept() throws {
         func text(_ words: String, _ book: String, _ first: Int, _ last: Int) throws -> String {
             let text = PassageAnswer(firstBook: book, lastBook: book, firstChapter: first, lastChapter: last)
-                .text(keeping: PlanAnswer.numbers(in: words))
+                .text(keeping: PlanWords(words).numbers)
             _ = try LampPlanPassage(text)
             return text
         }
@@ -81,25 +81,28 @@ struct LampReadingPlanAssistantTests {
         #expect(try text("Romans 8 this week", "Romans", 8, 8) == "Romans 8")
         // A last chapter past the end can only mean the end.
         #expect(try text("Mark 1-20", "Mark", 1, 20) == "Mark")
-        #expect(PlanAnswer.numbers(in: "Psalms 1–41 in twenty-one days, 2nd try") == [1, 41, 21, 2])
+        #expect(PlanWords("Psalms 1–41 in twenty-one days, 2nd try").numbers == [1, 41, 21, 2])
     }
 
     /// What the phone's model answered to "the gospels in a month, weekdays
-    /// only": the Gospels, read on the weekdays before a month is out.
+    /// only": chapters nobody wrote, Mark's past its end, and on the second
+    /// try a chapter a day nobody asked for, on Saturdays only. The plan is
+    /// the Gospels, read on the weekdays before a month is out.
     @available(macOS 26, iOS 26, *)
     @Test func aMonthOfWeekdaysIsTheWeekdaysOfAMonth() throws {
         let answer = try PlanAnswer(GeneratedContent(json: #"""
-            {"name": "Gospels in a Month", "description": "The four Gospels on weekdays over a month.",
+            {"name": "Gospels in a Month", "description": "Reading the Gospels, one chapter a day, on weekdays only.",
              "tracks": [{"passages": [
                  {"firstBook": "Matthew", "lastBook": "Matthew", "firstChapter": 1, "lastChapter": 28},
                  {"firstBook": "Mark", "lastBook": "Mark", "firstChapter": 1, "lastChapter": 20},
                  {"firstBook": "Luke", "lastBook": "Luke", "firstChapter": 1, "lastChapter": 24},
                  {"firstBook": "John", "lastBook": "John", "firstChapter": 1, "lastChapter": 21}],
-                 "chaptersPerDay": 0}],
-             "length": 1, "lengthUnit": "months", "start": "today", "restDays": ["saturday", "sunday"]}
+                 "chaptersPerDay": 1}],
+             "length": 1, "lengthUnit": "months", "start": "today"}
             """#))
         let request = answer.request(asked: "the gospels in a month, weekdays only", today: date(2026, 10, 31), calendar: calendar)
-        #expect(request.tracks.first?.passages == ["Matthew", "Mark", "Luke", "John"])
+        #expect(request.tracks == [.init(passages: ["Matthew", "Mark", "Luke", "John"])])
+        #expect(request.restDays == ["sunday", "saturday"])
         // Saturday 31 October to Sunday 29 November.
         #expect(request.readingDays == 20)
         let draft = try request.request(calendar: calendar).draft(calendar: calendar)
@@ -110,9 +113,9 @@ struct LampReadingPlanAssistantTests {
 
     @available(macOS 26, iOS 26, *)
     @Test func aLengthIsMeasuredOnTheCalendar() throws {
-        func readingDays(_ length: Int, _ unit: LengthUnitAnswer, from start: Date, resting: [WeekdayAnswer] = []) -> Int? {
-            PlanAnswer(name: "", description: "", tracks: [], length: length, lengthUnit: unit, start: .today, restDays: resting)
-                .readingDays(from: start, calendar: calendar)
+        func readingDays(_ length: Int, _ unit: LengthUnitAnswer, from start: Date, resting: Set<LampWeekday> = []) -> Int? {
+            PlanAnswer(name: "", description: "", tracks: [], length: length, lengthUnit: unit, start: .today)
+                .readingDays(from: start, resting: resting, calendar: calendar)
         }
         #expect(readingDays(30, .days, from: date(2026, 10, 31)) == 30)
         #expect(readingDays(1, .months, from: date(2026, 10, 31)) == 30)
@@ -134,8 +137,53 @@ struct LampReadingPlanAssistantTests {
         #expect(draft.days.last?.date == date(2028, 2, 29))
 
         // Every day a rest day: the builder says there is none to read on.
-        let everyDay: [WeekdayAnswer] = [.sunday, .monday, .tuesday, .wednesday, .thursday, .friday, .saturday]
-        #expect(readingDays(1, .weeks, from: date(2026, 11, 2), resting: everyDay) == 7)
+        #expect(readingDays(1, .weeks, from: date(2026, 11, 2), resting: Set(LampWeekday.allCases)) == 7)
+    }
+
+    /// The days of the week are read from the words, never the model's
+    /// answer: on the phone it rested Sunday to Friday for "weekdays only".
+    @available(macOS 26, iOS 26, *)
+    @Test func theWordsSettleTheWeek() {
+        let weekend: Set<LampWeekday> = [.saturday, .sunday]
+        let weekdays: Set<LampWeekday> = [.monday, .tuesday, .wednesday, .thursday, .friday]
+        let resting: [(String, Set<LampWeekday>)] = [
+            ("the gospels in a month, weekdays only", weekend),
+            ("John, a chapter a day on weekdays, starting Monday", weekend),
+            ("Mark, two chapters each weekday", weekend),
+            ("The Bible in a year, weekends off", weekend),
+            ("every day except Saturdays and Sundays", weekend),
+            ("Acts, Monday to Friday", weekend),
+            ("Acts Mon-Fri", weekend),
+            ("Genesis from Monday through Friday", weekend),
+            ("the Bible in a year, but weekdays only", weekend),
+            ("Luke on weekends only", weekdays),
+            ("Romans, no reading on Sundays", [.sunday]),
+            ("the Psalms, skip Sundays", [.sunday]),
+            ("Job every day but Sunday", [.sunday]),
+            ("Hebrews, Sundays as rest days", [.sunday]),
+            ("weekdays only, and Fridays off", weekend.union([.friday])),
+            ("Mark on Mondays, Wednesdays and Fridays", [.sunday, .tuesday, .thursday, .saturday]),
+            ("a psalm on Sunday mornings", weekdays.union([.saturday])),
+            ("the Gospels, starting Sunday, weekdays only", weekend),
+            ("the gospels in 30 days", []),
+            ("Psalms daily starting next Monday", []),
+            ("Ruth, beginning this Saturday", []),
+            ("Proverbs, a chapter a day", []),
+        ]
+        for (words, rest) in resting {
+            #expect(PlanWords(words).restDays == rest, "\(words)")
+        }
+
+        let paced = [
+            "Proverbs, a chapter a day", "Mark, two chapters each weekday", "the NT in 90 days with a psalm each day",
+            "Psalms daily", "3 chapters/day of Isaiah", "one chapter-a-day of Acts", "a chapter of John every day",
+        ]
+        let spread = [
+            "the gospels in a month, weekdays only", "The Bible in a year", "Romans 1 to 8 over two weeks",
+            "the Gospels in a month, reading every day", "Genesis, chapters in order, every day",
+        ]
+        for words in paced { #expect(PlanWords(words).setPace, "\(words)") }
+        for words in spread { #expect(!PlanWords(words).setPace, "\(words)") }
     }
 
     @available(macOS 26, iOS 26, *)
@@ -205,7 +253,9 @@ struct LampReadingPlanAssistantTests {
 
         let weekdayGospels = try await draft("the gospels in a month, weekdays only")
         #expect(weekdayGospels.days.count == 20)
-        #expect(books(weekdayGospels) == 40...43)
+        #expect(weekdayGospels.days.allSatisfy { !calendar.isDateInWeekend($0.date) })
+        // Spread, not a chapter a day: the last day reaches John.
+        #expect(weekdayGospels.days.last.map { $0.readings.last!.endReference / 1_000_000 } == 43)
 
         let proverbs = try await draft("Proverbs, a chapter a day")
         #expect(proverbs.days.count == 31)

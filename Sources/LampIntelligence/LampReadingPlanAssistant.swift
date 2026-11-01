@@ -12,9 +12,11 @@ import FoundationModels
 /// `LampAgentReadingPlanRequest` takes, and `LampReadingPlanRequest.draft`
 /// lays out the days, so no reference, count or date is the model's own
 /// arithmetic. Its books are held to the 66 by name, so it cannot name one
-/// that isn't there, and a chapter number the person didn't write is dropped,
-/// so it cannot count a book's chapters either. Show the draft before
-/// installing it: the model can still misread what was asked.
+/// that isn't there. What the words settle, `PlanWords` reads from the words:
+/// a chapter number the person didn't write is dropped, a pace stands only
+/// when they set one, and the days of the week are theirs, not the model's.
+/// Show the draft before installing it: the model can still misread what
+/// was asked.
 @available(macOS 26, iOS 26, *)
 public struct LampReadingPlanAssistant: Sendable {
     public init() {}
@@ -115,13 +117,13 @@ public struct LampReadingPlanAssistant: Sendable {
             Examples:
             - "The Gospels in 30 days": one track, Matthew to John. 30 days.
             - "The Gospels in a month, weekdays only": one track, Matthew to \
-            John. 1 month. Rest on Saturday and Sunday.
+            John. 1 month.
             - "The Bible in a year": two tracks, Genesis to Malachi, and Matthew \
             to Revelation. 1 year.
             - "The New Testament in 90 days with a psalm a day": two tracks, \
             Matthew to Revelation, and Psalms at 1 chapter a day. 90 days.
             - "John, a chapter a day, weekdays only": one track, John at 1 chapter \
-            a day. No length. Rest on Saturday and Sunday.
+            a day. No length.
             - "Romans 1 to 8 over two weeks": one track, Romans chapters 1 to 8. \
             2 weeks.
 
@@ -189,57 +191,42 @@ struct PlanAnswer {
     @Guide(description: "When the plan starts. Today unless the request says otherwise.")
     var start: StartAnswer
 
-    @Guide(description: "Days of the week with no reading. Empty unless the request asks for days off.")
-    var restDays: [WeekdayAnswer]
-
     /// The answer to `words` as a request, its start a date and its length
-    /// the days with a reading.
+    /// the days with a reading. The rest days are the words' own, and a pace
+    /// stands only when the words set one.
     func request(asked words: String, today: Date, calendar: Calendar) -> LampAgentReadingPlanRequest {
-        let written = Self.numbers(in: words)
+        let words = PlanWords(words)
         let start = start.day(after: today, calendar: calendar)
         return LampAgentReadingPlanRequest(
             name: name,
             description: description,
             tracks: tracks.map {
                 .init(
-                    passages: $0.passages.map { $0.text(keeping: written) },
-                    chaptersPerDay: $0.chaptersPerDay > 0 ? $0.chaptersPerDay : nil
+                    passages: $0.passages.map { $0.text(keeping: words.numbers) },
+                    chaptersPerDay: words.setPace && $0.chaptersPerDay > 0 ? $0.chaptersPerDay : nil
                 )
             },
-            readingDays: readingDays(from: start, calendar: calendar),
+            readingDays: readingDays(from: start, resting: words.restDays, calendar: calendar),
             startDate: StartAnswer.text(start, calendar: calendar),
-            restDays: restDays.map(\.rawValue)
+            restDays: LampWeekday.allCases.filter(words.restDays.contains).map(\.rawValue)
         )
     }
 
     /// The days with a reading before the length has passed, so "a month,
     /// weekdays only" reads on the weekdays of a month rather than on thirty
     /// of them; nil for a plan set by its pace.
-    func readingDays(from start: Date, calendar: Calendar) -> Int? {
+    func readingDays(from start: Date, resting: Set<LampWeekday>, calendar: Calendar) -> Int? {
         guard length > 0,
               let end = calendar.date(byAdding: lengthUnit.component, value: length, to: start),
               let days = calendar.dateComponents([.day], from: start, to: end).day
         else { return nil }
-        let resting = Set(restDays.compactMap { LampWeekday(rawValue: $0.rawValue)?.calendarWeekday })
+        let resting = Set(resting.map(\.calendarWeekday))
         // With no day left to read on, the builder says so.
         guard resting.count < 7 else { return days }
         return (0..<days).filter { offset in
             guard let date = calendar.date(byAdding: .day, value: offset, to: start) else { return false }
             return !resting.contains(calendar.component(.weekday, from: date))
         }.count
-    }
-
-    /// The numbers `words` give, in digits or spelled out: "Romans 1 to 8",
-    /// "the first eight chapters of Romans".
-    static func numbers(in words: String) -> Set<Int> {
-        let spelled = NumberFormatter()
-        spelled.numberStyle = .spellOut
-        spelled.locale = Locale(identifier: "en_US")
-        let digits = words.split { !($0.isASCII && $0.isNumber) }.compactMap { Int($0) }
-        let names = words.lowercased().split { !$0.isLetter && $0 != "-" }.compactMap {
-            spelled.number(from: String($0))?.intValue
-        }
-        return Set(digits + names)
     }
 }
 
@@ -268,7 +255,7 @@ struct TrackAnswer {
     var passages: [PassageAnswer]
 
     @Guide(
-        description: "Chapters a day, when the request sets a pace such as a chapter a day. 0 when the track is spread over the plan's days.",
+        description: "Chapters a day, only when the request itself sets a pace such as a chapter a day. 0 when the track is spread over the plan's days.",
         .range(0...20)
     )
     var chaptersPerDay: Int
@@ -354,11 +341,5 @@ enum StartAnswer {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
-}
-
-@available(macOS 26, iOS 26, *)
-@Generable
-enum WeekdayAnswer: String {
-    case sunday, monday, tuesday, wednesday, thursday, friday, saturday
 }
 #endif
