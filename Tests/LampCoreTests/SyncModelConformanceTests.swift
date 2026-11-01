@@ -103,7 +103,7 @@ struct SyncModelConformanceTests {
         "selectedCandidateIndex", "resolvedRecordRevision", "moduleFolderListing", "initialSync",
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
-        "filePlanAction", "deleteTarget", "listedRevision", "settingsUpdate", "bundlePathHolds", "directoryWrite",
+        "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
         "macMigrationStep", "writeOutcome", "passTrace",
@@ -1025,6 +1025,24 @@ struct SyncModelConformanceTests {
             let listing = try await LampSyncFilePlan.listing(in: store, manifest: manifest(holding: state, at: path))
             let revision = listing[path].map(LampSyncConditionalWrite.token(for:)) ?? "-"
             #expect(revision == f[3] && store.asked == (f[4] == "true"), "listedRevision \(f.joined(separator: " "))")
+        }
+    }
+
+    /// A fetch of bytes this client's own records name at the revision being
+    /// fetched: all it can see of a client that holds content without saying
+    /// so, which is fetched again on every pass and never carries out a
+    /// deletion made elsewhere.
+    @Test func fetchedAgain() throws {
+        let cases = SyncModel.cases("fetchedAgain")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let recorded = f[0] == "-" ? nil : quoted("r\(f[0])")
+            let listed = f[1] == "-" ? nil : quoted("r\(f[1])")
+            #expect(
+                LampSyncUnclaimedInstalls.isFetchedAgain(recorded: recorded, listed: listed)
+                    == (f[2] == "true"),
+                "fetchedAgain \(f.joined(separator: " "))"
+            )
         }
     }
 

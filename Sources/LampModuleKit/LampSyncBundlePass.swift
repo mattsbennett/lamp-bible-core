@@ -89,6 +89,14 @@ public struct LampSyncBundlePass {
         /// A file the server would not take, or one whose work failed. The
         /// pass carries on and reports, rather than abandoning the rest.
         public var failures: [String] = []
+        /// Files fetched although this client's own records say it installed
+        /// those very bytes and has not deleted them since
+        /// (`LampSyncUnclaimedInstalls`). Not a failure of this pass — it
+        /// does exactly what the plan says — but the fingerprint of a client
+        /// holding content without saying so, which costs it this download on
+        /// every pass and a deletion from another device never carried out.
+        /// Show it: nothing else about either consequence is visible.
+        public var fetchedAgain: [String] = []
         /// The bundle revision this pass left behind.
         public var bundleRevision: String?
         /// The bundle this pass wrote, as written: what a caller applies
@@ -254,6 +262,12 @@ public struct LampSyncBundlePass {
             deletedLocally: gathered.deletedLocally,
             listing: listing
         ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
+
+        // Read before anything is fetched, since fetching is what records the
+        // revision that would hide it.
+        outcome.fetchedAgain = LampSyncUnclaimedInstalls.paths(
+            downloads: plan.downloads, records: records, source: source, listing: listing
+        )
 
         // A local copy is acted on — installed over or deleted — only while
         // it is still the one the plan saw, as a write to the server is

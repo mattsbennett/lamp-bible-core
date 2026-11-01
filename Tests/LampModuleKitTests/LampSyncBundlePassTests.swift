@@ -1042,6 +1042,131 @@ struct LampSyncBundlePassTests {
             #expect(library.installed == (reaped ? [] : [path]), "server at \(onServer)")
         }
     }
+
+    // MARK: - A client that does not say what it holds
+
+    /// The fingerprint of the bug that kept a reading plan on the owner's
+    /// phone after they deleted it on their Mac: the phone held the plan and
+    /// never said so, so every pass fetched it again and the deletion was
+    /// asked of a client that, as far as the plan could tell, had nothing to
+    /// delete. Core cannot look inside another app's database, so it says
+    /// what it can see — this download has happened before.
+    @Test func afetchOfBytesThisClientHasHadBeforeIsReported() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"")
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+        let library = StubLibrary()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(library.installed == [path], "the plan is fetched and installed again")
+        #expect(outcome.fetchedAgain == [path])
+    }
+
+    /// A first install is the ordinary case and says nothing: no record means
+    /// this client has never had the file.
+    @Test func afirstFetchIsNotReported() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"")
+        var records = LampSyncFileRecords()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(outcome.installed == [path])
+        #expect(outcome.fetchedAgain.isEmpty)
+    }
+
+    /// Nor does fetching a copy that has moved on since: that is another
+    /// device's edit arriving, which is sync working.
+    @Test func afetchOfAnewerCopyIsNotReported() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-2\"")
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(outcome.installed == [path])
+        #expect(outcome.fetchedAgain.isEmpty)
+    }
+
+    /// A client that does say what it holds fetches nothing, so there is
+    /// nothing to report. The same library, the same records: the only
+    /// difference is the claim.
+    @Test func aclaimedFileIsNeitherFetchedNorReported() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"")
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+        let library = StubLibrary()
+
+        var gathering = LampSyncBundlePass.Gathered()
+        gathering.heldWithoutAFile = [path]
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(gathering: { gathering }, records: &records)
+
+        #expect(library.installed.isEmpty)
+        #expect(outcome.fetchedAgain.isEmpty)
+    }
+
+    /// A picture is fetched whenever this client does not hold it, whether
+    /// or not the listing reached it, so a download with nothing known on
+    /// either side is ordinary and says nothing.
+    @Test func afetchOfApictureWithNoRevisionEitherSideIsNotReported() async throws {
+        let path = "DevotionalMedia/devotionals/w1/a.jpg"
+        var manifest = LampSyncLibraryManifest()
+        manifest = try manifest.recordingWrite(path, revision: "\"pic-1\"", replacing: nil, at: 1_000)
+        var bundle = LampSyncSettingsBundle()
+        bundle.manifest = manifest
+        let store = FakeStore()
+        store.bodies[bundlePath] = try bundle.encoded()
+        store.revisions[bundlePath] = "\"bundle-1\""
+        store.bodies[path] = Data("a picture".utf8)
+        // Deliberately no revision for it, and none passed in extraListing:
+        // media is unlisted, and the caller asks for each one it knows of.
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: nil)
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(outcome.fetchedAgain.isEmpty)
+    }
+
+    /// And a deletion carried out leaves no record behind, which is why
+    /// having one is a claim worth making something of: a file this client
+    /// deleted on purpose can never be reported this way.
+    @Test func adeletionCarriedOutLeavesNoRecordToReport() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"", deletedAt: 1_500)
+        let url = try makeFile("a plan")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+        let library = StubLibrary()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([local(path, url, "a plan")]) },
+            records: &records
+        )
+
+        #expect(outcome.deletedLocally == [path])
+        #expect(records.record(path, in: source) == nil)
+        #expect(outcome.fetchedAgain.isEmpty)
+    }
+
 }
 
 // MARK: - Doubles

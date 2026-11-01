@@ -2994,6 +2994,70 @@ theorem aSettledDeletionNeedsNothing (cls : FileClass) (e : ManifestEntry) (d : 
     filePlanAction cls (some e) none none none = {} := by
   simp [filePlanAction, gone, deleted]
 
+/-! ### Saying what you hold
+
+Every rule above reads `held`, and `held` is what a client *says* it holds,
+not what it has. Core has no way to look: it cannot read another app's
+database, and a client holding content without saying so is, path by path,
+indistinguishable from one that never had it.
+
+Two things follow from getting that wrong, and both are silent. The file comes
+down and is installed again on every pass, for ever. And a deletion made on
+another device is never carried out, because the plan asks a client to delete
+only what it says it holds. Both happened at once: a reading plan installed on
+the phone was never registered among its modules, so the phone claimed nothing
+at `Plans/<id>.lamp` — it fetched the plan again every pass, and a plan its
+owner deleted on their Mac stayed on their phone through sync after sync.
+
+Nothing here can prevent it. What it can do is name the obligation and prove
+what breaking it costs, so the cost is written down rather than discovered.
+`fetchedAgain` is the one part of it a pass can see for itself. -/
+
+theorem anUnclaimedMemberComesDownForEver (cls : FileClass) (e : ManifestEntry) (r : Nat)
+    (member : entryIsMember e = true) :
+    filePlanAction cls (some e) none none (some r) = { download := true } := by
+  cases cls <;> simp [filePlanAction, member, changeAction]
+
+theorem anUnclaimedDeletionIsNeverCarriedOut (cls : FileClass) (e : ManifestEntry)
+    (d : Nat) (listed : Option Nat)
+    (gone : entryIsMember e = false) (deleted : e.deletedAt = some d) :
+    (filePlanAction cls (some e) none none listed).deleteLocally = false := by
+  have keeps := (changeActionNeverDeletes cls none listed).1
+  cases listed with
+  | none => simp [filePlanAction, gone, deleted]
+  | some r =>
+    by_cases hr : deletesRevision e r = true
+    · simp [filePlanAction, gone, deleted, hr]
+    · simp only [Bool.not_eq_true] at hr
+      simp [filePlanAction, gone, deleted, hr, keeps]
+
+-- What a pass can see for itself: it is fetching bytes its own records say it
+-- installed, at the very revision it is about to install. Either the client
+-- holds them and did not say so, or it lost them without recording a
+-- deletion — and a deletion carried out forgets the record, so the second is
+-- never the ordinary case. (`LampSyncUnclaimedInstalls`.)
+--
+-- Both revisions unknown is not a match, though two absences are equal:
+-- media is fetched whenever this client does not hold it, listed or not.
+def fetchedAgain (recorded listed : Option Nat) : Bool :=
+  recorded.isSome && listed.isSome && recorded == listed
+
+theorem afirstFetchIsNotReported (listed : Option Nat) : fetchedAgain none listed = false := by
+  simp [fetchedAgain]
+
+theorem afetchOfAmovedCopyIsNotReported (recorded listed : Nat) (moved : recorded ≠ listed) :
+    fetchedAgain (some recorded) (some listed) = false := by
+  simp [fetchedAgain, moved]
+
+-- The case it is for: a member nobody claims is downloaded (above), and the
+-- record of the last install names the revision being downloaded.
+theorem therepeatedFetchIsTheOneReported (cls : FileClass) (e : ManifestEntry) (r : Nat)
+    (member : entryIsMember e = true) :
+    (filePlanAction cls (some e) none none (some r)).download = true
+      ∧ fetchedAgain (some r) (some r) = true := by
+  refine ⟨?_, by simp [fetchedAgain]⟩
+  simp [anUnclaimedMemberComesDownForEver cls e r member]
+
 /-! ### A tree taken in together
 
 A workspace's files are staged as they arrive and taken in together once
@@ -4544,6 +4608,14 @@ def localDeletionName : LocalDeletion → String
     IO.println <| conformanceLine "deleteTarget"
       [localKindName kind, localDeletionName (deleteTarget kind (some 7)),
        toString (mayRecordRemoval kind (some 7))]
+
+#eval show IO Unit from do
+  -- A fetch of what this client's records already name: the revision it last
+  -- installed against the one on the server, unknown either side included.
+  for recorded in [none, some 1, some 2] do
+    for listed in [none, some 1, some 2] do
+      IO.println <| conformanceLine "fetchedAgain"
+        [optNat recorded, optNat listed, toString (fetchedAgain recorded listed)]
 
 #eval show IO Unit from do
   -- The manifest's view of a listed file: unknown, a member with or without

@@ -344,13 +344,29 @@
         "aSaveAfterTheDeletionSurvives",
         "refusedTombstoneAction",
         "aRefusedTombstoneHidesNothing",
-        "refusedTombstoneActionNeverDeletes"
+        "refusedTombstoneActionNeverDeletes",
+        "anUnclaimedMemberComesDownForEver",
+        "anUnclaimedDeletionIsNeverCarriedOut"
       ],
       "conformance": [
         "filePlanAction",
         "listedRevision"
       ],
       "boundary": "Gathering the plan's inputs per path and listing each folder is Swift's; the decision for one path, and which revision a listed file is compared by, are held by tables. A path no library deletes is never tombstoned, asked to be deleted here, or reaped; under a tombstone it is planned as a member, and its next write supersedes the tombstone. A write that survives a tombstone carries its time in `supersede`, and is recorded after it. A copy's save time is the caller's to report: one with none loses to any tombstone."
+    },
+    "Sources/LampModuleKit/LampSyncUnclaimedInstalls.swift": {
+      "rules": [
+        "fetchedAgain",
+        "afirstFetchIsNotReported",
+        "afetchOfAmovedCopyIsNotReported",
+        "therepeatedFetchIsTheOneReported",
+        "anUnclaimedMemberComesDownForEver",
+        "anUnclaimedDeletionIsNeverCarriedOut"
+      ],
+      "conformance": [
+        "fetchedAgain"
+      ],
+      "boundary": "All a pass can see of a client that holds content without saying so: it is fetching bytes its own records name at the revision it is about to install. Whether the client really holds them is outside the model \u2014 core cannot read another app's database \u2014 so this reports and never corrects. Revision equality is `namesSameRevision`'s, and the two consequences of the unclaimed case are theorems about `filePlanAction`."
     },
     "Sources/LampModuleKit/LampSyncFileRecords.swift": {
       "rules": [
