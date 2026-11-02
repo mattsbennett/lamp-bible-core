@@ -234,3 +234,26 @@ public enum LampHebrewMorphology {
         "r": "Participle", "s": "Participle passive",
     ]
 }
+
+/// Which decoder reads a code, decided by the Strong's key beside it.
+///
+/// The code alone does not say which language it belongs to — `HR` could be a
+/// Robinson code as easily as a Hebrew one — so the key's letter decides, and a
+/// word with no key is left unread rather than guessed at.
+public enum LampMorphology {
+    public static func features(of code: String, strongsKey: String?) -> [LampGrammarValue] {
+        switch strongsKey?.first {
+        case "G": LampGreekMorphology.features(of: code)
+        case "H": LampHebrewMorphology.features(of: code)
+        default: []
+        }
+    }
+
+    public static func describe(_ code: String, strongsKey: String?) -> String? {
+        switch strongsKey?.first {
+        case "G": LampGreekMorphology.describe(code)
+        case "H": LampHebrewMorphology.describe(code)
+        default: nil
+        }
+    }
+}

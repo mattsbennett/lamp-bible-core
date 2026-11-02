@@ -124,3 +124,33 @@ struct LampHebrewMorphologyTests {
         #expect(LampHebrewMorphology.describe(code) == parsing)
     }
 }
+
+/// Which decoder reads a code is decided by the key beside it, in one place, so
+/// a passage and an analysis of the same word cannot parse it differently.
+struct LampMorphologyDispatchTests {
+    @Test func thekeysLetterChoosesTheDecoder() {
+        #expect(
+            LampMorphology.describe("HVqp3ms", strongsKey: "H1254")
+                == "Verb · Qal · Perfect · Third · Singular · Masculine"
+        )
+        #expect(
+            LampMorphology.describe("N-NSF", strongsKey: "G26")
+                == "Noun · Nominative · Singular · Feminine"
+        )
+    }
+
+    /// A code says nothing about which language it belongs to — `HR` could be a
+    /// Robinson code as easily as a Hebrew one — so a word with no key, or a
+    /// key of neither language, is left unread.
+    @Test(arguments: [nil, "", "X123", "1234"] as [String?])
+    func acodeWithNoUsableKeyIsLeftUnread(key: String?) {
+        #expect(LampMorphology.describe("HVqp3ms", strongsKey: key) == nil)
+        #expect(LampMorphology.features(of: "N-NSF", strongsKey: key).isEmpty)
+    }
+
+    /// Reading a Hebrew code under a Greek key must not half-succeed.
+    @Test func thewrongDecoderReadsNothingRatherThanGuessing() {
+        #expect(LampMorphology.describe("HVqp3ms", strongsKey: "G26") == nil)
+        #expect(LampMorphology.describe("N-NSF", strongsKey: "H1254") == nil)
+    }
+}

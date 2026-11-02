@@ -746,22 +746,12 @@ public struct LampStrongsAnalyzer {
         }
     }
 
-    /// Robinson's codes for a Greek key, STEPBible's for a Hebrew one. A key
-    /// whose letter is neither reads as no features rather than as a guess.
     private func describe(_ code: String) -> String? {
-        switch key.first {
-        case "G": LampGreekMorphology.describe(code)
-        case "H": LampHebrewMorphology.describe(code)
-        default: nil
-        }
+        LampMorphology.describe(code, strongsKey: key)
     }
 
     private func morphologyFeatures(of code: String) -> [LampGrammarValue] {
-        switch key.first {
-        case "G": LampGreekMorphology.features(of: code)
-        case "H": LampHebrewMorphology.features(of: code)
-        default: []
-        }
+        LampMorphology.features(of: code, strongsKey: key)
     }
 
     private static func mostCommon(_ counts: [String: Int]) -> String {

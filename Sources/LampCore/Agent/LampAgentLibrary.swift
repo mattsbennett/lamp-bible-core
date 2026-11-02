@@ -692,6 +692,9 @@ public actor LampAgentLibrary {
             strongs: annotation.strongs,
             lemma: annotation.lemma,
             morphology: annotation.morphology,
+            parsing: annotation.morphology.flatMap {
+                LampMorphology.describe($0, strongsKey: annotation.strongs)
+            },
             scriptureReference: annotation.scriptureDescription
         )
     }

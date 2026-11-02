@@ -94,6 +94,9 @@ public struct LampAgentAnnotation: Codable, Equatable, Sendable {
     public let strongs: String?
     public let lemma: String?
     public let morphology: String?
+    /// The morphology code read out, when the key says which language it is.
+    /// Here so that reading a passage needs no further call per word.
+    public let parsing: String?
     public let scriptureReference: String?
 
     public init(
@@ -104,6 +107,7 @@ public struct LampAgentAnnotation: Codable, Equatable, Sendable {
         strongs: String?,
         lemma: String?,
         morphology: String?,
+        parsing: String? = nil,
         scriptureReference: String?
     ) {
         self.kind = kind
@@ -113,6 +117,7 @@ public struct LampAgentAnnotation: Codable, Equatable, Sendable {
         self.strongs = strongs
         self.lemma = lemma
         self.morphology = morphology
+        self.parsing = parsing
         self.scriptureReference = scriptureReference
     }
 }
