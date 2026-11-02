@@ -1257,6 +1257,38 @@ struct LampSyncBundlePassTests {
         )
     }
 
+    /// A deletion older than the tombstone lifetime, of a file still on the
+    /// server: the tombstone is kept, not pruned, and the file is reaped.
+    ///
+    /// Raised by the phone's session against the report change: a device
+    /// offline for months, carrying a deletion older than the lifetime, and
+    /// whether that deletion is simply lost. For a listed kind it is not —
+    /// `prunes` will not drop a tombstone while its file is still listed,
+    /// whatever its age, because until the file is gone the tombstone is what
+    /// tells the other devices to reap it. So the pass tombstones, reports,
+    /// and reaps; the next pass finds nothing listed and may then prune.
+    @Test func alateDeletionOfAfileStillOnTheServerIsNotPrunedAway() async throws {
+        let path = "Dictionaries/old.lamp"
+        // Written long ago, deleted on a device that has been away since.
+        let store = try seeded(path: path, revision: "\"old-1\"")
+        var records = LampSyncFileRecords()
+        let longAgo: Int64 = 1_000
+        let now = longAgo + LampSyncLibraryManifest.tombstoneLifetime + 1
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { now }
+        ).run(
+            gathering: { gathered([], deletedLocally: [path: longAgo]) },
+            records: &records
+        )
+
+        let entry = outcome.written?.bundle.manifest.entry(at: path)
+        #expect(entry?.deletedAt == longAgo, "the tombstone survived its own lifetime")
+        #expect(entry?.isMember == false)
+        #expect(outcome.tombstoned == [path], "and a caller is told, so it can forget its record")
+        #expect(outcome.reaped == [path])
+    }
+
     /// And a deletion made since the last pass is reported, which is what a
     /// caller clearing its own record of the removal depends on.
     @Test func adeletionTheManifestTakesIsReported() async throws {
@@ -1292,6 +1324,48 @@ struct LampSyncBundlePassTests {
         )
 
         #expect(outcome.tombstoned == [path])
+    }
+
+    /// Every path a library deletes is one a listing reaches, and that is
+    /// what keeps a late deletion from being lost.
+    ///
+    /// `prunes` drops a tombstone once it is older than the lifetime, and for
+    /// a listed kind only once its file is gone from the listing too. An
+    /// unlisted kind goes by age alone — so a deletion of one, carried by a
+    /// device that had been away longer than the lifetime, would be
+    /// tombstoned and pruned inside a single update: the file reaped, and no
+    /// record left for any other device to read. Any device still holding a
+    /// copy with nothing recorded against it would publish it again.
+    ///
+    /// Unreachable today, and this is why: nothing unlisted is deletable.
+    /// Media and workspace files are `unsupported`, so the plan never
+    /// tombstones them. A deck asset is the one unlisted path a library does
+    /// delete, and no ledger on either device records one, so it never
+    /// reaches `deletedLocally` either — but it is the gap to watch, and
+    /// making any unlisted kind deletable opens it.
+    @Test func everyDeletablePathIsOneAlistingReaches() throws {
+        let paths = [
+            "Translations/kjv.lamp", "Plans/mcheyne.lamp", "Notes/notes.lamp",
+            "Notes/imported.lamp", "Highlights/set-1.lamp", "Quizzes/q1.lamp",
+            "DevotionalMedia/devotionals/w1/a.jpg", "BookMedia/atonement/plate.jpg",
+            "Workspaces/Presentations/sunday.lampdeck",
+            "Workspaces/Presentations/Assets/a1b2c3.jpg",
+            "Workspaces/Devotionals/advent/Documents/notes.md",
+        ]
+        var sawUnlistedAndDeletable: [String] = []
+        for path in paths {
+            let kind = try #require(LampSyncFolderLayout.kind(of: path), "\(path)")
+            if LampSyncLocalDeletion.target(of: path).isAllowed, !kind.isListed {
+                sawUnlistedAndDeletable.append(path)
+            }
+        }
+        #expect(
+            sawUnlistedAndDeletable == ["Workspaces/Presentations/Assets/a1b2c3.jpg"],
+            "an unlisted kind a library deletes can lose a late deletion to the prune"
+        )
+        // And the one that is: no ledger records a deck image going, so the
+        // plan is never asked to tombstone one.
+        #expect(LampSyncFolderLayout.kind(of: "Workspaces/Presentations/Assets/a1b2c3.jpg")?.isMedia == true)
     }
 
     // MARK: - The deletion nobody here will carry out
