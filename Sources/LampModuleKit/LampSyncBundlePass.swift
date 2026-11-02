@@ -97,6 +97,13 @@ public struct LampSyncBundlePass {
         /// every pass and a deletion from another device never carried out.
         /// Show it: nothing else about either consequence is visible.
         public var fetchedAgain: [String] = []
+        /// Files another device deleted that this pass will not delete here,
+        /// although this client's own records say it installed them and has
+        /// recorded no deletion of its own (`LampSyncUnclaimedInstalls`). The
+        /// same fault as `fetchedAgain`, caught where somebody notices it:
+        /// nothing else says why a thing deleted on one device is still on
+        /// this one after pass upon pass.
+        public var deletionsNotCarriedOut: [String] = []
         /// The bundle revision this pass left behind.
         public var bundleRevision: String?
         /// The bundle this pass wrote, as written: what a caller applies
@@ -264,9 +271,18 @@ public struct LampSyncBundlePass {
         ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
 
         // Read before anything is fetched, since fetching is what records the
-        // revision that would hide it.
+        // revision that would hide it — and before anything is reaped, which
+        // is what forgets the record a deletion left behind.
         outcome.fetchedAgain = LampSyncUnclaimedInstalls.paths(
             downloads: plan.downloads, records: records, source: source, listing: listing
+        )
+        outcome.deletionsNotCarriedOut = LampSyncUnclaimedInstalls.deletionsNotCarriedOut(
+            manifest: opened.bundle.manifest,
+            claimed: Set(locals.map(\.path)),
+            deletedHere: Set(gathered.deletedLocally.keys),
+            records: records,
+            source: source,
+            planned: plannedKinds
         )
 
         // A local copy is acted on — installed over or deleted — only while

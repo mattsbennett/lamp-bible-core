@@ -63,6 +63,22 @@ struct LampSyncBundlePassTests {
         return store
     }
 
+    /// A library holding one media file. Deliberately with no revision for
+    /// it anywhere: media is unlisted, and a caller that passes none in
+    /// `extraListing` — which the phone never does — leaves the pass with
+    /// nothing the server said about it.
+    private func seededMedia(at path: String) throws -> FakeStore {
+        var bundle = LampSyncSettingsBundle()
+        bundle.manifest = try LampSyncLibraryManifest()
+            .recordingWrite(path, revision: "\"pic-1\"", replacing: nil, at: 1_000)
+        let store = FakeStore()
+        store.bodies[bundlePath] = try bundle.encoded()
+        store.revisions[bundlePath] = "\"bundle-1\""
+        store.bodies[path] = Data("a picture".utf8)
+        store.operations.removeAll()
+        return store
+    }
+
     // MARK: - Tests
 
     /// A pass on an untouched library must write the bundle before any file.
@@ -1118,29 +1134,44 @@ struct LampSyncBundlePassTests {
         #expect(outcome.fetchedAgain.isEmpty)
     }
 
-    /// A picture is fetched whenever this client does not hold it, whether
-    /// or not the listing reached it, so a download with nothing known on
-    /// either side is ordinary and says nothing.
-    @Test func afetchOfApictureWithNoRevisionEitherSideIsNotReported() async throws {
+    /// A picture, where no listing can help. Nothing lists media — the
+    /// manifest names each file and a caller asks the server for its
+    /// revision one path at a time, or doesn't — so a client that asks for
+    /// none, as the phone does, has no revision to compare and the rule
+    /// could never report anything at all. A picture never changes at its
+    /// path, so the record is the whole answer: having one means this client
+    /// installed those very bytes, whatever the server says now.
+    @Test func apictureThisClientHasHadBeforeIsReportedThoughNothingListsIt() async throws {
         let path = "DevotionalMedia/devotionals/w1/a.jpg"
-        var manifest = LampSyncLibraryManifest()
-        manifest = try manifest.recordingWrite(path, revision: "\"pic-1\"", replacing: nil, at: 1_000)
-        var bundle = LampSyncSettingsBundle()
-        bundle.manifest = manifest
-        let store = FakeStore()
-        store.bodies[bundlePath] = try bundle.encoded()
-        store.revisions[bundlePath] = "\"bundle-1\""
-        store.bodies[path] = Data("a picture".utf8)
-        // Deliberately no revision for it, and none passed in extraListing:
-        // media is unlisted, and the caller asks for each one it knows of.
+        let store = try seededMedia(at: path)
         var records = LampSyncFileRecords()
-        records.recordInstall(path, in: source, revision: nil)
+        records.recordInstall(path, in: source, revision: "\"pic-1\"")
 
         let outcome = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(gathering: { gathered([]) }, records: &records)
 
-        #expect(outcome.fetchedAgain.isEmpty)
+        #expect(outcome.installed == [path], "fetched, since a copy it does not hold comes down")
+        #expect(outcome.fetchedAgain == [path])
+    }
+
+    /// And a picture this client has no record of is a first fetch, as any
+    /// other first fetch is. A record with no revision in it is no record of
+    /// a revision: the folder provider had not answered with one.
+    @Test func apictureWithNoRecordedRevisionIsAfirstFetch() async throws {
+        let path = "DevotionalMedia/devotionals/w1/a.jpg"
+        for keepsARecord in [false, true] {
+            let store = try seededMedia(at: path)
+            var records = LampSyncFileRecords()
+            if keepsARecord { records.recordInstall(path, in: source, revision: nil) }
+
+            let outcome = try await LampSyncBundlePass(
+                store: store, library: StubLibrary(), source: source, now: { 2_000 }
+            ).run(gathering: { gathered([]) }, records: &records)
+
+            #expect(outcome.installed == [path], "record: \(keepsARecord)")
+            #expect(outcome.fetchedAgain.isEmpty, "record: \(keepsARecord)")
+        }
     }
 
     /// And a deletion carried out leaves no record behind, which is why
@@ -1165,6 +1196,148 @@ struct LampSyncBundlePassTests {
         #expect(outcome.deletedLocally == [path])
         #expect(records.record(path, in: source) == nil)
         #expect(outcome.fetchedAgain.isEmpty)
+    }
+
+    // MARK: - The deletion nobody here will carry out
+
+    /// The shape the reading plan was actually in by the time anyone looked.
+    /// The Mac had already reaped the file, so the server listed nothing,
+    /// nothing was fetched and nothing was reaped: the pass did no work at
+    /// this path at all and said nothing about it, pass after pass, while
+    /// the plan sat on the phone. The record is what tells the two cases
+    /// apart — a client that never had the file has none.
+    @Test func adeletionNobodyHereWillCarryOutIsReportedWhenTheFileIsAlreadyGone() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"", deletedAt: 1_500)
+        store.bodies[path] = nil
+        store.revisions[path] = nil
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+        let library = StubLibrary()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(library.installed.isEmpty)
+        #expect(library.deleted.isEmpty, "nothing is deleted: the plan claims nothing here")
+        #expect(outcome.reaped.isEmpty)
+        #expect(outcome.fetchedAgain.isEmpty, "there is nothing to fetch")
+        #expect(outcome.deletionsNotCarriedOut == [path])
+    }
+
+    /// With the file still on the server it is reaped, and the same silence
+    /// followed: a reap deletes the server's copy and leaves this client's
+    /// alone. Reported there too, and read before the reap, which is what
+    /// forgets the record.
+    @Test func adeletionNobodyHereWillCarryOutIsReportedWhenTheFileIsReaped() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+        let library = StubLibrary()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(outcome.reaped == [path])
+        #expect(library.deleted.isEmpty)
+        #expect(outcome.deletionsNotCarriedOut == [path])
+    }
+
+    /// A client that says what it holds carries the deletion out, and is not
+    /// reported. The same records and the same bundle: the claim is the only
+    /// difference, which is the point of saying it.
+    @Test func adeletionTheClientClaimsIsCarriedOutAndNotReported() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"", deletedAt: 1_500)
+        let url = try makeFile("a plan")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+        let library = StubLibrary()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(gathering: { gathered([local(path, url, "a plan")]) }, records: &records)
+
+        #expect(library.deleted == [path])
+        #expect(outcome.deletionsNotCarriedOut.isEmpty)
+    }
+
+    /// A deletion made here is why the tombstone is there. Claiming nothing
+    /// at the path is right, and the record goes with the reap. Under a
+    /// tombstone another device already wrote, which is where this and the
+    /// case above look alike from the outside: the same bundle, the same
+    /// records, the same empty claim. What this client deleted itself is the
+    /// only thing that distinguishes them.
+    @Test func adeletionMadeHereIsNotReported() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"plan-1\"")
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([], deletedLocally: [path: 1_600]) },
+            records: &records
+        )
+
+        #expect(outcome.tombstoned == [path])
+        #expect(outcome.deletionsNotCarriedOut.isEmpty)
+    }
+
+    /// The notes collection is the path no library deletes as a file: every
+    /// note lives in it, and a tombstone an older client recorded is
+    /// superseded rather than carried out. Nothing is waiting to happen, so
+    /// there is nothing to report.
+    @Test func atombstoneNoLibraryCarriesOutIsNotReported() async throws {
+        let path = "Notes/notes.lamp"
+        let store = try seeded(path: path, revision: "\"notes-1\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"notes-1\"")
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(outcome.deletionsNotCarriedOut.isEmpty)
+    }
+
+    /// A deletion of something this client never installed: the ordinary
+    /// case, and the one the record tells apart.
+    @Test func adeletionOfApathThisClientNeverHadIsNotReported() async throws {
+        let path = "Plans/plan-abc.lamp"
+        let store = try seeded(path: path, revision: "\"plan-1\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records)
+
+        #expect(outcome.deletionsNotCarriedOut.isEmpty)
+    }
+
+    /// And nothing is said about a kind this client does not sync. The phone
+    /// takes no decks, so a deck deleted on the Mac is not a deletion the
+    /// phone is failing to carry out.
+    @Test func adeletionOfAkindThisClientDoesNotSyncIsNotReported() async throws {
+        let path = "Workspaces/Presentations/d1.lampdeck"
+        let store = try seeded(path: path, revision: "\"deck-1\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+        records.recordInstall(path, in: source, revision: "\"deck-1\"")
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([]) },
+            records: &records,
+            plannedKinds: { if case .module = $0 { true } else { false } }
+        )
+
+        #expect(outcome.deletionsNotCarriedOut.isEmpty)
     }
 
 }

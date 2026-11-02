@@ -103,7 +103,8 @@ struct SyncModelConformanceTests {
         "selectedCandidateIndex", "resolvedRecordRevision", "moduleFolderListing", "initialSync",
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
-        "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain", "settingsUpdate", "bundlePathHolds", "directoryWrite",
+        "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain",
+        "deletionNotCarriedOut", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
         "macMigrationStep", "writeOutcome", "passTrace",
@@ -1031,17 +1032,60 @@ struct SyncModelConformanceTests {
     /// A fetch of bytes this client's own records name at the revision being
     /// fetched: all it can see of a client that holds content without saying
     /// so, which is fetched again on every pass and never carries out a
-    /// deletion made elsewhere.
+    /// deletion made elsewhere. Media answers from the record alone, since
+    /// its bytes never change at a path and nothing lists it.
     @Test func fetchedAgain() throws {
         let cases = SyncModel.cases("fetchedAgain")
         #expect(!cases.isEmpty)
         for f in cases {
-            let recorded = f[0] == "-" ? nil : quoted("r\(f[0])")
-            let listed = f[1] == "-" ? nil : quoted("r\(f[1])")
+            let kind: LampSyncFileKind = switch f[0] {
+            case "media": .deckAsset
+            case "listed": .module(.books)
+            default: .workspaceFile
+            }
+            let recorded = f[1] == "-" ? nil : quoted("r\(f[1])")
+            let listed = f[2] == "-" ? nil : quoted("r\(f[2])")
             #expect(
-                LampSyncUnclaimedInstalls.isFetchedAgain(recorded: recorded, listed: listed)
-                    == (f[2] == "true"),
+                LampSyncUnclaimedInstalls.isFetchedAgain(
+                    kind: kind, recorded: recorded, listed: listed
+                ) == (f[3] == "true"),
                 "fetchedAgain \(f.joined(separator: " "))"
+            )
+        }
+    }
+
+    /// The other half of the same fault, where somebody notices it: a
+    /// tombstoned path this client's records name and its claims do not, so
+    /// the deletion is never carried out here.
+    ///
+    /// `deletable` is not a parameter on this side — it is the path's own
+    /// (`LampSyncLocalDeletion`) — so a book stands for the paths a library
+    /// deletes and the notes collection for the one it never does.
+    @Test func deletionNotCarriedOut() throws {
+        let cases = SyncModel.cases("deletionNotCarriedOut")
+        #expect(!cases.isEmpty)
+        for f in cases {
+            let member = f[0] == "true"
+            let path = f[4] == "true" ? "Books/a.lamp" : "Notes/notes.lamp"
+            let manifest = try LampSyncLibraryManifest()
+                .recordingWrite(path, revision: "r1", replacing: nil, at: member ? 2 : 1)
+                .removing(path, at: member ? 1 : 2, revision: "r1")
+            #expect(manifest.entry(at: path)?.isMember == member)
+
+            var records = LampSyncFileRecords()
+            if f[1] != "-" { records.recordInstall(path, in: "s", revision: "r\(f[1])") }
+
+            let reported = LampSyncUnclaimedInstalls.deletionsNotCarriedOut(
+                manifest: manifest,
+                claimed: f[2] == "true" ? [path] : [],
+                deletedHere: f[3] == "true" ? [path] : [],
+                records: records,
+                source: "s",
+                planned: { _ in true }
+            )
+            #expect(
+                reported == (f[5] == "true" ? [path] : []),
+                "deletionNotCarriedOut \(f.joined(separator: " "))"
             )
         }
     }

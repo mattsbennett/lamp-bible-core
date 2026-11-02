@@ -3031,32 +3031,140 @@ theorem anUnclaimedDeletionIsNeverCarriedOut (cls : FileClass) (e : ManifestEntr
     · simp only [Bool.not_eq_true] at hr
       simp [filePlanAction, gone, deleted, hr, keeps]
 
--- What a pass can see for itself: it is fetching bytes its own records say it
--- installed, at the very revision it is about to install. Either the client
--- holds them and did not say so, or it lost them without recording a
--- deletion — and a deletion carried out forgets the record, so the second is
--- never the ordinary case. (`LampSyncUnclaimedInstalls`.)
---
--- Both revisions unknown is not a match, though two absences are equal:
--- media is fetched whenever this client does not hold it, listed or not.
-def fetchedAgain (recorded listed : Option Nat) : Bool :=
-  recorded.isSome && listed.isSome && recorded == listed
+-- A claim is honoured only where a recorded install stands behind it, and
+-- that guard is load-bearing rather than tidy. A client may hold a path's
+-- content without holding a *file* at that path — an editable collection is
+-- merged into the library — and it says so through `heldWithoutAFile`, which
+-- carries no revision of its own. Honoured with none, the claim reads as a
+-- file never uploaded from here, and the plan asks for it to be published:
+-- an upload of a path with nothing to send. So a claim with no record is
+-- dropped, which is also what keeps a client free to name every member of a
+-- merged kind without first knowing whether it ever had that one.
+theorem aclaimWithNoRecordWouldBeAskedToPublishNothing (cls : FileClass) (saved : Option Nat) :
+    (changeAction cls (some ⟨false, none, saved⟩) none).upload = some .ifAbsent := by
+  cases cls <;> simp [changeAction, uploadAction]
 
-theorem afirstFetchIsNotReported (listed : Option Nat) : fetchedAgain none listed = false := by
+-- What a pass can see for itself: a path its own records name, with no claim
+-- behind it. Either the client holds those bytes and did not say so, or it
+-- lost them without recording a deletion — and a deletion carried out
+-- forgets the record, so the second is never the ordinary case.
+-- (`LampSyncUnclaimedInstalls`.)
+--
+-- For a fetch, the record has to name the revision being fetched: one naming
+-- another revision is the server's copy having moved, which is an ordinary
+-- download, and a first fetch has no record at all. Media is the exception
+-- and has to be: a path never changes its bytes, so the record names the same
+-- content whatever the server says, and the record alone is the answer.
+-- Which matters because nothing lists media — a caller asks for each such
+-- revision one path at a time, or doesn't, and a client that asks for none
+-- could never be told anything by comparing revisions.
+def fetchedAgain (cls : FileClass) (recorded listed : Option Nat) : Bool :=
+  match recorded with
+  | none => false
+  | some _ => if cls == .media then true else listed.isSome && recorded == listed
+
+theorem afirstFetchIsNotReported (cls : FileClass) (listed : Option Nat) :
+    fetchedAgain cls none listed = false := by
   simp [fetchedAgain]
 
-theorem afetchOfAmovedCopyIsNotReported (recorded listed : Nat) (moved : recorded ≠ listed) :
-    fetchedAgain (some recorded) (some listed) = false := by
-  simp [fetchedAgain, moved]
+theorem afetchOfAmovedCopyIsNotReported (cls : FileClass) (recorded listed : Nat)
+    (notMedia : cls ≠ .media) (moved : recorded ≠ listed) :
+    fetchedAgain cls (some recorded) (some listed) = false := by
+  cases cls <;> simp_all [fetchedAgain]
 
 -- The case it is for: a member nobody claims is downloaded (above), and the
 -- record of the last install names the revision being downloaded.
 theorem therepeatedFetchIsTheOneReported (cls : FileClass) (e : ManifestEntry) (r : Nat)
     (member : entryIsMember e = true) :
     (filePlanAction cls (some e) none none (some r)).download = true
-      ∧ fetchedAgain (some r) (some r) = true := by
-  refine ⟨?_, by simp [fetchedAgain]⟩
-  simp [anUnclaimedMemberComesDownForEver cls e r member]
+      ∧ fetchedAgain cls (some r) (some r) = true := by
+  refine ⟨?_, ?_⟩
+  · simp [anUnclaimedMemberComesDownForEver cls e r member]
+  · cases cls <;> simp [fetchedAgain]
+
+-- Media with no listing at all: the download happens anyway, because a copy
+-- this client does not hold is fetched whether or not anybody asked the
+-- server about it — and now it is reported, where before the missing
+-- revision was the reason nothing could be.
+theorem anUnclaimedMediaMemberComesDownUnlisted (e : ManifestEntry) (r : Nat)
+    (member : entryIsMember e = true) :
+    filePlanAction .media (some e) none none none = { download := true }
+      ∧ fetchedAgain .media (some r) none = true := by
+  refine ⟨by simp [filePlanAction, member, changeAction], by simp [fetchedAgain]⟩
+
+/-! ### The deletion that is never carried out
+
+The other consequence, and the one somebody notices: a thing deleted on one
+device still on this one, pass after pass. It was thought uncatchable, on the
+grounds that a client claiming nothing at a tombstoned path looks exactly
+like one that never had the file. It does not. One that never had it has no
+record, and the record is the same evidence a repeated fetch is read from —
+still there on the pass the deletion arrives, whether or not the file is on
+the server for the plan to fetch or to reap.
+
+Two exclusions, both ordinary business. A deletion made *here* is why the
+tombstone exists, so claiming nothing at that path is right and the record
+goes when the file is reaped. And a path no library deletes is never carried
+out anywhere by design (`refusedTombstoneAction`). -/
+
+def deletionNotCarriedOut (e : ManifestEntry) (recorded : Option Nat)
+    (claimed deletedHere deletable : Bool) : Bool :=
+  !entryIsMember e && recorded.isSome && !claimed && !deletedHere && deletable
+
+-- What it reports is exactly a deletion this pass does not carry out, and no
+-- later pass will either: nothing about the path changes between passes.
+theorem whatIsReportedIsNeverDeleted (cls : FileClass) (e : ManifestEntry) (d r : Nat)
+    (listed : Option Nat) (deleted : e.deletedAt = some d)
+    (reported : deletionNotCarriedOut e (some r) false false true = true) :
+    (filePlanAction cls (some e) none none listed).deleteLocally = false := by
+  have gone : entryIsMember e = false := by
+    simpa [deletionNotCarriedOut] using reported
+  exact anUnclaimedDeletionIsNeverCarriedOut cls e d listed gone deleted
+
+-- The shape the reading plan actually had by the time anybody looked: the
+-- Mac had already reaped the file, so the server listed nothing and the plan
+-- for the path was empty — no fetch to notice, no reap to notice. The pass
+-- did nothing at all, and said nothing at all. Now it says this.
+theorem thepassThatDoesNothingSaysSo (cls : FileClass) (e : ManifestEntry) (d r : Nat)
+    (gone : entryIsMember e = false) (deleted : e.deletedAt = some d) :
+    filePlanAction cls (some e) none none none = {}
+      ∧ deletionNotCarriedOut e (some r) false false true = true := by
+  refine ⟨by simp [filePlanAction, gone, deleted], by simp [deletionNotCarriedOut, gone]⟩
+
+theorem apathNeverInstalledHereIsNotReported (e : ManifestEntry)
+    (claimed deletedHere deletable : Bool) :
+    deletionNotCarriedOut e none claimed deletedHere deletable = false := by
+  simp [deletionNotCarriedOut]
+
+-- A claimed path is not reported, and it is not reported because the
+-- deletion is carried out: a copy saved no later than the deletion goes.
+theorem aclaimedDeletionIsCarriedOutAndNotReported (cls : FileClass) (e : ManifestEntry)
+    (d r : Nat) (recorded : Option Nat) (deletedHere deletable : Bool)
+    (gone : entryIsMember e = false) (deleted : e.deletedAt = some d)
+    (deletesIt : deletesRevision e r = true) :
+    (filePlanAction cls (some e) (some ⟨false, some r, none⟩) none (some r)).deleteLocally = true
+      ∧ deletionNotCarriedOut e recorded true deletedHere deletable = false := by
+  refine ⟨?_, by simp [deletionNotCarriedOut]⟩
+  simp [filePlanAction, gone, deleted, deletesIt, savedAfter]
+
+theorem adeletionMadeHereIsNotReported (e : ManifestEntry) (recorded : Option Nat)
+    (claimed deletable : Bool) :
+    deletionNotCarriedOut e recorded claimed true deletable = false := by
+  simp [deletionNotCarriedOut]
+
+-- A path no library deletes is not reported, and is not reported because
+-- nothing is waiting to happen: it is planned as a member, and its next
+-- write supersedes the tombstone.
+theorem arefusedTombstoneIsNotReported (e : ManifestEntry) (recorded : Option Nat)
+    (claimed deletedHere : Bool) :
+    deletionNotCarriedOut e recorded claimed deletedHere false = false := by
+  simp [deletionNotCarriedOut]
+
+-- And a member is not a deletion at all: the download, not this.
+theorem amemberIsNotAdeletion (e : ManifestEntry) (recorded : Option Nat)
+    (claimed deletedHere deletable : Bool) (member : entryIsMember e = true) :
+    deletionNotCarriedOut e recorded claimed deletedHere deletable = false := by
+  simp [deletionNotCarriedOut, member]
 
 /-! ### A tree taken in together
 
@@ -4611,11 +4719,29 @@ def localDeletionName : LocalDeletion → String
 
 #eval show IO Unit from do
   -- A fetch of what this client's records already name: the revision it last
-  -- installed against the one on the server, unknown either side included.
-  for recorded in [none, some 1, some 2] do
-    for listed in [none, some 1, some 2] do
-      IO.println <| conformanceLine "fetchedAgain"
-        [optNat recorded, optNat listed, toString (fetchedAgain recorded listed)]
+  -- installed against the one on the server, unknown either side included,
+  -- for each class — media answers from the record alone.
+  for cls in [FileClass.media, .listed, .unlisted] do
+    for recorded in [none, some 1, some 2] do
+      for listed in [none, some 1, some 2] do
+        IO.println <| conformanceLine "fetchedAgain"
+          [fileClassName cls, optNat recorded, optNat listed,
+           toString (fetchedAgain cls recorded listed)]
+
+#eval show IO Unit from do
+  -- A tombstoned path this client's records name and its claims do not.
+  -- `member` is the manifest's answer, and a member is never this.
+  for member in [false, true] do
+    let e : ManifestEntry :=
+      if member then ⟨some 2, none, some 1, none⟩ else ⟨some 1, none, some 2, none⟩
+    for recorded in [none, some 1] do
+      for claimed in [false, true] do
+        for deletedHere in [false, true] do
+          for deletable in [false, true] do
+            IO.println <| conformanceLine "deletionNotCarriedOut"
+              [toString member, optNat recorded, toString claimed, toString deletedHere,
+               toString deletable,
+               toString (deletionNotCarriedOut e recorded claimed deletedHere deletable)]
 
 #eval show IO Unit from do
   -- The manifest's view of a listed file: unknown, a member with or without

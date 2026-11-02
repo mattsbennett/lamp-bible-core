@@ -360,13 +360,23 @@
         "afirstFetchIsNotReported",
         "afetchOfAmovedCopyIsNotReported",
         "therepeatedFetchIsTheOneReported",
+        "anUnclaimedMediaMemberComesDownUnlisted",
         "anUnclaimedMemberComesDownForEver",
-        "anUnclaimedDeletionIsNeverCarriedOut"
+        "anUnclaimedDeletionIsNeverCarriedOut",
+        "deletionNotCarriedOut",
+        "whatIsReportedIsNeverDeleted",
+        "thepassThatDoesNothingSaysSo",
+        "apathNeverInstalledHereIsNotReported",
+        "aclaimedDeletionIsCarriedOutAndNotReported",
+        "adeletionMadeHereIsNotReported",
+        "arefusedTombstoneIsNotReported",
+        "amemberIsNotAdeletion"
       ],
       "conformance": [
-        "fetchedAgain"
+        "fetchedAgain",
+        "deletionNotCarriedOut"
       ],
-      "boundary": "All a pass can see of a client that holds content without saying so: it is fetching bytes its own records name at the revision it is about to install. Whether the client really holds them is outside the model \u2014 core cannot read another app's database \u2014 so this reports and never corrects. Revision equality is `namesSameRevision`'s, and the two consequences of the unclaimed case are theorems about `filePlanAction`."
+      "boundary": "All a pass can see of a client that holds content without saying so: its own records name a path, and its claims do not. Whether the client really holds it is outside the model — core cannot read another app's database — so this reports and never corrects. A fetch compares revisions by `namesSameRevision`, except for media, whose bytes never change at a path and which nothing lists, so there the record alone is the answer. A deletion is read from the manifest's tombstones, less what this client deleted itself and less the paths no library deletes (`LampSyncLocalDeletion`), and is read before the reap that forgets the record. Both consequences of the unclaimed case, and that what is reported is exactly what the pass leaves undone, are theorems about `filePlanAction`."
     },
     "Sources/LampModuleKit/LampSyncFileRecords.swift": {
       "rules": [
@@ -829,7 +839,7 @@
       "boundary": "Gathers what the Mac holds as `LampSyncFilePlan.Local`: each installed module placed by core's `LampInstalledModuleFile.syncPath()`, never its storage-key filename, and a digest of the bytes on disk. It decides nothing; the plan does (`filePlanAction`)."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalWork.swift": {
-      "boundary": "When the Mac starts a pass, not what a pass does: the modification times of everything it publishes that no ledger records \u2014 modules installed and removed, decks, workspaces and skills \u2014 so work done here is published without anyone pressing Sync. It decides nothing. A source left out of it is not lost but late: it waits for the next pass, and what that pass then does to it is `filePlanAction`'s. The kinds are held to core's own by `everyKindOfSyncedFileIsReadFromSomewhere` in the Mac's tests."
+      "boundary": "When the Mac starts a pass, not what a pass does: the modification times of everything it publishes that no ledger records — modules installed and removed, decks, workspaces and skills — so work done here is published without anyone pressing Sync. It decides nothing. A source left out of it is not lost but late: it waits for the next pass, and what that pass then does to it is `filePlanAction`'s. The kinds are held to core's own by `everyKindOfSyncedFileIsReadFromSomewhere` in the Mac's tests."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift": {
       "boundary": "The Mac's install, merge and removal of single files for its pass, through the same library calls the archive pass made. Merges import by value, and what goes back up is the re-export from the merged library. Record decisions are core's (`decide`, `importOutcome`); the file-level ones are the plan's (`filePlanAction`).",

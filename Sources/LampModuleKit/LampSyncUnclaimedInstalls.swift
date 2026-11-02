@@ -1,8 +1,6 @@
 import Foundation
 
-/// Files a pass is about to fetch that this client's own records say it
-/// already installed — the same bytes, at the same revision, with no
-/// deletion recorded since.
+/// The fingerprint of a client holding content without saying so.
 ///
 /// Every decision a pass makes reads what the client *says* it holds
 /// (`LampSyncFilePlan.Local`). Core cannot check the claim: it has no way to
@@ -21,19 +19,13 @@ import Foundation
 /// deleted on their Mac stayed on their phone through sync after sync, with
 /// nothing anywhere saying why.
 ///
-/// What is caught is the cause, which shows long before the symptom. Every
-/// pass from the day that plan arrived fetched it again, so this would have
-/// been saying so for weeks before anybody deleted anything. The symptom
-/// cannot be caught here: once the path is tombstoned the plan is to reap the
-/// server's copy and delete nothing locally, and a client that claims nothing
-/// at a tombstoned path looks exactly like one that never had the file.
-///
-/// So the one thing core can do, it does here: notice the fingerprint. A
-/// record naming the revision now being downloaded means this client had
-/// those bytes and did not say so — or lost them without recording a
-/// deletion, since a deletion carried out forgets the record
-/// (`LampSyncFileRecords.forget`). Either way it is worth saying out loud,
-/// because otherwise it is a pass that quietly does the same work for ever.
+/// What core can see is this client's own records. A record is a path this
+/// client installed and has not deleted since — a deletion carried out
+/// forgets it (`LampSyncFileRecords.forget`). So a record with no claim
+/// behind it is the fingerprint: either the client holds those bytes and did
+/// not say so, or it lost them without recording a deletion. Both are worth
+/// saying out loud, because otherwise a pass quietly does the same work for
+/// ever, or quietly fails to carry out a deletion.
 ///
 /// Reported, never corrected. Core taking a client's record as a claim to
 /// hold the file would be guessing on the client's behalf, and the guess
@@ -47,12 +39,21 @@ public enum LampSyncUnclaimedInstalls {
     /// what a first download is. A record naming another revision means the
     /// server's copy has moved since, which is an ordinary download.
     ///
-    /// Neither being known is not a match either, though `namesSameRevision`
-    /// would call two absences equal. A writing's attachment and a book's
-    /// picture are fetched whenever this client does not hold them, listed or
-    /// not, so that pair comes up — and it says nothing at all.
-    public static func isFetchedAgain(recorded: String?, listed: String?) -> Bool {
-        guard recorded != nil, listed != nil else { return false }
+    /// Media is the exception, and it has to be: a path never changes its
+    /// bytes, so the recorded revision names the same content whatever the
+    /// server now says, and the record alone is the whole answer. It matters
+    /// because nothing lists media — the manifest names every such file and a
+    /// caller asks for its revision one path at a time, or doesn't. A client
+    /// that asks for none has no listing at all, and comparing revisions
+    /// there could never report anything: on the phone, where no media
+    /// revision is ever gathered, that silence covered every attachment and
+    /// every picture a book shows.
+    public static func isFetchedAgain(
+        kind: LampSyncFileKind, recorded: String?, listed: String?
+    ) -> Bool {
+        guard let recorded else { return false }
+        if kind.isMedia { return true }
+        guard let listed else { return false }
         return LampSyncConditionalWrite.namesSameRevision(recorded, listed)
     }
 
@@ -64,8 +65,51 @@ public enum LampSyncUnclaimedInstalls {
         source: String,
         listing: [String: String]
     ) -> [String] {
-        downloads.filter {
-            isFetchedAgain(recorded: records.record($0, in: source)?.effectiveRevision, listed: listing[$0])
+        downloads.filter { path in
+            guard let kind = LampSyncFolderLayout.kind(of: path) else { return false }
+            return isFetchedAgain(
+                kind: kind,
+                recorded: records.record(path, in: source)?.effectiveRevision,
+                listed: listing[path]
+            )
+        }
+    }
+
+    /// Tombstoned paths this client's own records say it installed, which it
+    /// neither claims nor deleted here: deletions this pass will not carry
+    /// out, and no later pass will either.
+    ///
+    /// This is the symptom rather than the cause, and it is the one somebody
+    /// notices — the plan still on the phone after sync after sync. It was
+    /// thought uncatchable, on the grounds that a client claiming nothing at
+    /// a tombstoned path looks exactly like one that never had the file. It
+    /// does not: one that never had it has no record. The record is the same
+    /// evidence `isFetchedAgain` reads, and it is still there on the pass the
+    /// deletion arrives, whether or not the file is still on the server for
+    /// the plan to fetch or reap.
+    ///
+    /// Two exclusions, both of them ordinary business rather than a fault.
+    /// A deletion made *here* is why the tombstone exists, so this client is
+    /// right not to claim the path and its record goes when the file is
+    /// reaped. And a path no library deletes (`LampSyncLocalDeletion`) is
+    /// never carried out anywhere: under a tombstone some older client
+    /// recorded it is planned as a member and its next write supersedes the
+    /// tombstone.
+    public static func deletionsNotCarriedOut(
+        manifest: LampSyncLibraryManifest,
+        claimed: Set<String>,
+        deletedHere: Set<String>,
+        records: LampSyncFileRecords,
+        source: String,
+        planned: (LampSyncFileKind) -> Bool
+    ) -> [String] {
+        manifest.tombstones.compactMap { entry in
+            guard let kind = entry.kind, planned(kind),
+                  !claimed.contains(entry.path), !deletedHere.contains(entry.path),
+                  LampSyncLocalDeletion.target(of: entry.path).isAllowed,
+                  records.record(entry.path, in: source) != nil
+            else { return nil }
+            return entry.path
         }
     }
 }
