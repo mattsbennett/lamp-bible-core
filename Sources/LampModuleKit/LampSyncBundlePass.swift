@@ -489,7 +489,19 @@ public struct LampSyncBundlePass {
         guard let snapshot else { throw LampSyncSettingsStore.StoreError.tooManyAttempts }
         outcome.bundleRevision = snapshot.revision
         outcome.written = snapshot
-        outcome.tombstoned = tombstone.keys.sorted()
+        // What the manifest took, not what the plan asked for
+        // (`recordsAdeletion`). A client whose deletions come from a ledger
+        // rather than a queue asks for the same ones on every pass, and a
+        // caller that forgets a local record, writes a file or tells somebody
+        // on the strength of the ask does it on every pass too.
+        //
+        // Measured against the bundle this pass read. Another device
+        // tombstoning the same path in between makes that a deletion this
+        // pass only shares the credit for, which is the safe way to be wrong:
+        // a caller may act once too often, never once too few.
+        outcome.tombstoned = tombstone.keys.filter {
+            snapshot.bundle.manifest.recordsAdeletion(of: $0, notIn: opened.bundle.manifest)
+        }.sorted()
         records.confirmRecorded(
             written.compactMapValues(\.revision), in: source
         )

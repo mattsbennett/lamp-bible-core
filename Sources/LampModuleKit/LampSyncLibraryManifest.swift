@@ -106,6 +106,33 @@ public struct LampSyncLibraryManifest: Codable, Equatable, Sendable {
         entries[path]
     }
 
+    /// Whether this manifest records a deletion of `path` that `earlier` did
+    /// not: the tombstone having been *taken*, rather than asked for.
+    ///
+    /// A pass asks for a tombstone on every path its client says it has
+    /// deleted, and whether that is news depends entirely on the client. The
+    /// phone's deletions are a queue it clears once they are carried. The
+    /// Mac's come from ledgers that keep their records for ever — the decks it
+    /// has deleted, the highlight sets — so a pass there asks for the same
+    /// tombstones on every pass, and the manifest already holds every one of
+    /// them.
+    ///
+    /// So anything a caller does *because* a deletion was recorded has to ask
+    /// this, and never read the list of asks. The Mac's record of removed
+    /// modules read the asks: it rewrote itself on every pass, and since its
+    /// date is read as a sign of work to publish, the Mac saw work every time
+    /// it published and synced every six seconds for as long as it was open.
+    ///
+    /// A tombstone this same update pruned is not recorded either, which is
+    /// the other half of the same answer: one re-asserted past its lifetime
+    /// is added and dropped inside one change, and leaves nothing to act on.
+    public func recordsAdeletion(of path: String, notIn earlier: Self) -> Bool {
+        guard let entry = entries[path], !entry.isMember else { return false }
+        let before = earlier.entries[path]
+        return (entry.deletedAt, entry.deletedRevision)
+            != (before?.deletedAt, before?.deletedRevision)
+    }
+
     /// Records a write of `revision` at `path` over `previous`, the revision
     /// the write was conditioned on (nil for a file created where none was).
     ///

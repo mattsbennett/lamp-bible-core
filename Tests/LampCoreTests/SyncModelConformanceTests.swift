@@ -103,7 +103,7 @@ struct SyncModelConformanceTests {
         "selectedCandidateIndex", "resolvedRecordRevision", "moduleFolderListing", "initialSync",
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
-        "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain",
+        "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain", "recordsAdeletion",
         "deletionNotCarriedOut", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
@@ -1050,6 +1050,41 @@ struct SyncModelConformanceTests {
                     kind: kind, recorded: recorded, listed: listed
                 ) == (f[3] == "true"),
                 "fetchedAgain \(f.joined(separator: " "))"
+            )
+        }
+    }
+
+    /// Whether the manifest ended a pass holding a deletion it did not hold
+    /// before. What a pass asks for is not news: the Mac's deletions come
+    /// from ledgers that keep their records for ever, so it asks for the same
+    /// tombstones on every pass, and anything done on the strength of the ask
+    /// is done on every pass too.
+    @Test func recordsAdeletion() throws {
+        let cases = SyncModel.cases("recordsAdeletion")
+        #expect(!cases.isEmpty)
+        let path = "Dictionaries/x.lamp"
+
+        func manifest(_ state: String) throws -> LampSyncLibraryManifest {
+            switch state {
+            case "absent": return LampSyncLibraryManifest()
+            case "member":
+                return try LampSyncLibraryManifest()
+                    .recordingWrite(path, revision: nil, replacing: nil, at: 9)
+                    .removing(path, at: 1, revision: nil)
+            default:
+                let at = Int64(state.split(separator: ":")[1])!
+                return try LampSyncLibraryManifest()
+                    .recordingWrite(path, revision: nil, replacing: nil, at: 1)
+                    .removing(path, at: at, revision: nil)
+            }
+        }
+
+        for f in cases {
+            let before = try manifest(f[0])
+            let after = try manifest(f[1])
+            #expect(
+                after.recordsAdeletion(of: path, notIn: before) == (f[2] == "true"),
+                "recordsAdeletion \(f.joined(separator: " "))"
             )
         }
     }

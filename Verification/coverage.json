@@ -446,15 +446,23 @@
         "pruneTombstone",
         "pruneNeverDropsAMember",
         "pruneWaitsForTheReap",
-        "tombstoneLifetimeCost"
+        "tombstoneLifetimeCost",
+        "recordsAdeletion",
+        "thesameDeletionAskedForAgainIsNotRecorded",
+        "adeletionPrunedByTheSameUpdateIsNotRecorded",
+        "amemberIsNeverArecordedDeletion",
+        "afirstDeletionIsRecorded",
+        "alaterDeletionIsRecordedAgain",
+        "thesameTimeAtAnotherRevisionIsRecorded"
       ],
       "conformance": [
         "manifestMerge",
         "recordWrite",
         "adoptFile",
-        "pruneTombstone"
+        "pruneTombstone",
+        "recordsAdeletion"
       ],
-      "boundary": "Revisions compare as tokens here and as numbers in the model; the tables use single-digit revisions, where the two orders agree. Coding, path validation and sorting are Swift's."
+      "boundary": "Revisions compare as tokens here and as numbers in the model; the tables use single-digit revisions, where the two orders agree. Coding, path validation and sorting are Swift's. `recordsAdeletion` separates a deletion the manifest took from one a pass merely asked for: a client whose deletions come from a permanent ledger rather than a consumable queue asks for the same tombstones on every pass, so anything done because one was recorded must read this and not the plan's list."
     },
     "Sources/LampModuleKit/LampSyncLocalFile.swift": {
       "boundary": "A local file as the plan reads it, and its digest, read every pass. Each app extends `LampSyncLocalFiles` with its own enumeration; nothing here decides anything."

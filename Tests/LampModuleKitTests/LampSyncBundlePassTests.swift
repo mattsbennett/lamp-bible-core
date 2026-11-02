@@ -1198,6 +1198,102 @@ struct LampSyncBundlePassTests {
         #expect(outcome.fetchedAgain.isEmpty)
     }
 
+    // MARK: - What the manifest took, not what the plan asked for
+
+    /// A deletion the manifest already holds is not reported again, however
+    /// often the client asks for it.
+    ///
+    /// The Mac asks on every pass and cannot help it: its deletions come from
+    /// the deck ledger and the personal ledger, which keep their records for
+    /// ever, not from a queue it clears. A caller that forgets a local
+    /// record, writes a file or tells somebody on the strength of the ask
+    /// does it on every pass — which is what had the Mac rewriting the record
+    /// of its removed modules every pass, and so syncing every six seconds
+    /// for as long as it was open.
+    @Test func adeletionTheManifestAlreadyHoldsIsNotReportedAgain() async throws {
+        let path = "Workspaces/Presentations/sunday.lampdeck"
+        let store = try seeded(path: path, revision: "\"deck-1\"", deletedAt: 1_500)
+        store.bodies[path] = nil
+        store.revisions[path] = nil
+        var records = LampSyncFileRecords()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            // As the deck ledger hands it over, every pass, for ever.
+            gathering: { gathered([], deletedLocally: [path: 1_500]) },
+            records: &records
+        )
+
+        #expect(outcome.tombstoned.isEmpty)
+        // And the manifest still holds it, which is the point: nothing was
+        // undone, there was simply nothing new to tell anybody.
+        #expect(outcome.written?.bundle.manifest.entry(at: path)?.deletedAt == 1_500)
+    }
+
+    /// A deletion asked for so long ago that this very update prunes it is
+    /// not reported either: added and dropped inside one change, leaving
+    /// nothing for a caller to act on.
+    @Test func adeletionPrunedByTheSameUpdateIsNotReported() async throws {
+        let path = "Dictionaries/old.lamp"
+        let store = try seeded(path: path, revision: "\"old-1\"")
+        store.bodies[path] = nil
+        store.revisions[path] = nil
+        var records = LampSyncFileRecords()
+        let longAgo: Int64 = 1_000
+        let now = longAgo + LampSyncLibraryManifest.tombstoneLifetime + 1
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { now }
+        ).run(
+            gathering: { gathered([], deletedLocally: [path: longAgo]) },
+            records: &records
+        )
+
+        #expect(outcome.tombstoned.isEmpty)
+        #expect(
+            outcome.written?.bundle.manifest.entry(at: path) == nil,
+            "the tombstone was asked for and pruned in the same update"
+        )
+    }
+
+    /// And a deletion made since the last pass is reported, which is what a
+    /// caller clearing its own record of the removal depends on.
+    @Test func adeletionTheManifestTakesIsReported() async throws {
+        let path = "Dictionaries/old.lamp"
+        let store = try seeded(path: path, revision: "\"old-1\"")
+        var records = LampSyncFileRecords()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([], deletedLocally: [path: 1_900]) },
+            records: &records
+        )
+
+        #expect(outcome.tombstoned == [path])
+        #expect(outcome.reaped == [path])
+    }
+
+    /// A deletion the manifest holds, moved on by a later one: news again,
+    /// since the tombstone that is there now is not the one that was.
+    @Test func alaterDeletionOfTheSamePathIsReported() async throws {
+        let path = "Dictionaries/old.lamp"
+        let store = try seeded(path: path, revision: "\"old-1\"", deletedAt: 1_500)
+        store.bodies[path] = nil
+        store.revisions[path] = nil
+        var records = LampSyncFileRecords()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([], deletedLocally: [path: 1_800]) },
+            records: &records
+        )
+
+        #expect(outcome.tombstoned == [path])
+    }
+
     // MARK: - The deletion nobody here will carry out
 
     /// The shape the reading plan was actually in by the time anyone looked.

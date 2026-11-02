@@ -2811,6 +2811,63 @@ theorem tombstoneLifetimeCost :
       ∧ entryIsMember (recordWrite emptyEntry (some 1) none 1) = true := by
   decide
 
+-- Whether the manifest ended a pass holding a deletion it did not hold
+-- before: the tombstone having been *taken*, rather than asked for.
+--
+-- A pass asks for one on every path its client says it has deleted, and
+-- whether that is news is the client's business, not the manifest's. The
+-- phone's deletions are a queue it clears. The Mac's come from ledgers that
+-- keep their records for ever — every deck it has deleted, every highlight
+-- set — so it asks for the same tombstones on every pass and the manifest
+-- already holds them all.
+--
+-- Which is why anything done *because* a deletion was recorded has to read
+-- this. The Mac's record of its removed modules read the asks instead, and so
+-- rewrote itself on every pass; that file's date is read as a sign of work to
+-- publish, so the Mac saw work every time it published and ran a pass every
+-- six seconds for as long as it was open. (`recordsAdeletion`.)
+def recordsAdeletion (before after : Option ManifestEntry) : Bool :=
+  match after with
+  | none => false
+  | some a =>
+    !entryIsMember a && (a.deleted != (before.bind (·.deletedAt), before.bind (·.deletedRevision)))
+
+-- The case that bit: the same deletion, asked for again.
+theorem thesameDeletionAskedForAgainIsNotRecorded (e : ManifestEntry)
+    (gone : entryIsMember e = false) :
+    recordsAdeletion (some e) (some e) = false := by
+  simp [recordsAdeletion, gone, ManifestEntry.deleted]
+
+-- And one this very update pruned: asked for past its lifetime, added and
+-- dropped inside one change, leaving nothing for a caller to act on.
+theorem adeletionPrunedByTheSameUpdateIsNotRecorded (before : Option ManifestEntry) :
+    recordsAdeletion before none = false := by
+  simp [recordsAdeletion]
+
+-- A member is never a deletion, whatever was asked.
+theorem amemberIsNeverArecordedDeletion (before : Option ManifestEntry) (a : ManifestEntry)
+    (member : entryIsMember a = true) :
+    recordsAdeletion before (some a) = false := by
+  simp [recordsAdeletion, member]
+
+-- What it does report. A path the manifest knew nothing of, now tombstoned;
+-- and one whose deletion has moved on since, because the tombstone there now
+-- is not the one that was. Concrete, since the interesting content is the
+-- comparison and not the arithmetic: presentSince 1, deleted at 5, then 9.
+theorem afirstDeletionIsRecorded :
+    recordsAdeletion none (some ⟨some 1, none, some 5, none⟩) = true := by decide
+
+theorem alaterDeletionIsRecordedAgain :
+    recordsAdeletion (some ⟨some 1, none, some 5, none⟩) (some ⟨some 1, none, some 9, none⟩)
+      = true := by decide
+
+-- The same deletion recorded under a different revision is news too: a
+-- caller told the file went at one revision and then another has had two
+-- different things happen to it.
+theorem thesameTimeAtAnotherRevisionIsRecorded :
+    recordsAdeletion (some ⟨some 1, none, some 5, some 2⟩) (some ⟨some 1, none, some 5, some 3⟩)
+      = true := by decide
+
 /-! ### What a pass does with each file
 
 `LampSyncFilePlan.plan` decides, per path, from the manifest entry, this
@@ -4727,6 +4784,19 @@ def localDeletionName : LocalDeletion → String
         IO.println <| conformanceLine "fetchedAgain"
           [fileClassName cls, optNat recorded, optNat listed,
            toString (fetchedAgain cls recorded listed)]
+
+#eval show IO Unit from do
+  -- Whether the manifest ended a pass holding a deletion it did not hold
+  -- before. `before` and `after` are each absent, a member, or a tombstone
+  -- at one of two times.
+  let states : List (String × Option ManifestEntry) :=
+    [("absent", none), ("member", some ⟨some 9, none, some 1, none⟩),
+     ("gone:5", some ⟨some 1, none, some 5, none⟩),
+     ("gone:9", some ⟨some 1, none, some 9, none⟩)]
+  for (beforeName, before) in states do
+    for (afterName, after) in states do
+      IO.println <| conformanceLine "recordsAdeletion"
+        [beforeName, afterName, toString (recordsAdeletion before after)]
 
 #eval show IO Unit from do
   -- A tombstoned path this client's records name and its claims do not.
