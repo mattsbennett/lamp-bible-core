@@ -733,8 +733,8 @@ public struct LampStrongsAnalyzer {
     private func grammar(_ occurrences: [LampStrongsAnalysis.Occurrence]) -> [LampStrongsAnalysis.GrammarCount] {
         var counts: [LampGrammarValue: Int] = [:]
         for occurrence in occurrences {
-            guard let code = occurrence.morphology, key.first == "G" else { continue }
-            for value in LampGreekMorphology.features(of: code) { counts[value, default: 0] += 1 }
+            guard let code = occurrence.morphology else { continue }
+            for value in morphologyFeatures(of: code) { counts[value, default: 0] += 1 }
         }
         let order = Dictionary(uniqueKeysWithValues: LampGrammarFeature.allCases.enumerated().map { ($1, $0) })
         return counts.map { value, count in
@@ -746,9 +746,22 @@ public struct LampStrongsAnalyzer {
         }
     }
 
-    /// Robinson's codes are Greek; a Hebrew key's codes are left unread.
+    /// Robinson's codes for a Greek key, STEPBible's for a Hebrew one. A key
+    /// whose letter is neither reads as no features rather than as a guess.
     private func describe(_ code: String) -> String? {
-        key.first == "G" ? LampGreekMorphology.describe(code) : nil
+        switch key.first {
+        case "G": LampGreekMorphology.describe(code)
+        case "H": LampHebrewMorphology.describe(code)
+        default: nil
+        }
+    }
+
+    private func morphologyFeatures(of code: String) -> [LampGrammarValue] {
+        switch key.first {
+        case "G": LampGreekMorphology.features(of: code)
+        case "H": LampHebrewMorphology.features(of: code)
+        default: []
+        }
     }
 
     private static func mostCommon(_ counts: [String: Int]) -> String {

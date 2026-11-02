@@ -1,8 +1,13 @@
 import Foundation
 
 /// One grammatical property of a tagged word, such as its tense or case.
+/// The order of the cases is the order features are reported in, so a listing
+/// reads the way a parsing is spoken. Greek uses the tense/voice/mood run and
+/// Hebrew the stem/form/state one; neither sees the other's.
 public enum LampGrammarFeature: String, CaseIterable, Codable, Sendable {
     case partOfSpeech
+    case stem
+    case form
     case tense
     case voice
     case mood
@@ -10,10 +15,13 @@ public enum LampGrammarFeature: String, CaseIterable, Codable, Sendable {
     case grammaticalCase
     case number
     case gender
+    case state
 
     public var title: String {
         switch self {
         case .partOfSpeech: "Part of speech"
+        case .stem: "Stem"
+        case .form: "Form"
         case .tense: "Tense"
         case .voice: "Voice"
         case .mood: "Mood"
@@ -21,6 +29,7 @@ public enum LampGrammarFeature: String, CaseIterable, Codable, Sendable {
         case .grammaticalCase: "Case"
         case .number: "Number"
         case .gender: "Gender"
+        case .state: "State"
         }
     }
 }
