@@ -18,45 +18,115 @@ import Foundation
 ///
 /// And a word can be several morphemes, written with `/` between them:
 /// `Hc/Vqw3ms` is a consecutive conjunction joined to a verb, `HNcmsc/Sp3ms` a
-/// construct noun with a pronominal suffix. The features reported are the
-/// content morpheme's — the noun, verb, adjective or pronoun — because the
-/// analysis that asks for them is keyed on that morpheme's Strong's number, and
-/// the article or conjunction beside it has a number of its own. Where no
-/// segment is a content word, the first is read.
+/// construct noun with a pronominal suffix. One of them is reported: the one
+/// the word's Strong's number names, because that is the morpheme an analysis
+/// asking for a parsing is keyed on. Which one that is cannot be read off the
+/// code, which is why the number is passed in beside it.
 ///
 /// Derived from the Translators Expansion of Hebrew Morphology Codes (TEHMC),
 /// by STEPBible.org based on work at Tyndale House, Cambridge, CC BY 4.0,
 /// <https://STEPBible.github.io/STEPBible-Data>.
 public enum LampHebrewMorphology {
-    public static func features(of code: String) -> [LampGrammarValue] {
+    public static func features(of code: String, strongsKey: String?) -> [LampGrammarValue] {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let (language, segment) = contentSegment(of: trimmed) else { return [] }
+        guard let (language, segment) = contentSegment(of: trimmed, strongsKey: strongsKey)
+        else { return [] }
         return features(of: segment, language: language)
     }
 
     /// The features joined for display, or nil for a code this does not know.
-    public static func describe(_ code: String) -> String? {
-        let values = features(of: code)
+    public static func describe(_ code: String, strongsKey: String?) -> String? {
+        let values = features(of: code, strongsKey: strongsKey)
         return values.isEmpty ? nil : values.map(\.value).joined(separator: " · ")
     }
 
     // MARK: - Segments
 
-    private static let contentFunctions: Set<Character> = ["N", "V", "A", "P"]
-
     /// Splits a code into its morphemes and returns the one worth reading, with
     /// the language the first morpheme declared. Only the first carries the
     /// language letter, so the others are read under it.
-    private static func contentSegment(of code: String) -> (Character, Substring)? {
+    private static func contentSegment(
+        of code: String, strongsKey: String?
+    ) -> (Character, Substring)? {
         let parts = code.split(separator: "/", omittingEmptySubsequences: true)
         guard let first = parts.first, let language = first.first,
               language == "H" || language == "A" else { return nil }
         let segments = parts.enumerated().map { index, part in
             index == 0 ? part.dropFirst() : part
         }.filter { !$0.isEmpty }
-        guard let fallback = segments.first else { return nil }
-        let content = segments.first { contentFunctions.contains($0.first ?? " ") }
-        return (language, content ?? fallback)
+        guard !segments.isEmpty else { return nil }
+        return (language, segments[contentIndex(of: segments, strongsKey: strongsKey)])
+    }
+
+    /// Which morpheme the word's number names.
+    ///
+    /// `HC/R/Sp3ms` is a conjunction, a preposition and a suffix whether the
+    /// preposition is אֶל, a word with a Strong's number of its own, or an
+    /// inseparable לְ, which has none — and the morpheme worth reading is the
+    /// preposition in the first and the suffix in the second. The code is the
+    /// same both times, so the number decides: STEPBible numbers every
+    /// morpheme, lexically where it is a word and out of its own 9000s where it
+    /// is a piece of grammar, and the number stored beside the code is the one
+    /// the word is keyed on. A grammatical number therefore names a morpheme
+    /// outright. Only when the number is lexical is the code read, and then the
+    /// morpheme wanted is the first that is a word rather than a clitic.
+    ///
+    /// Measured against TAHOT's own alignment of numbers to morphemes, which
+    /// braces the one each word is keyed on: of its 145,688 segmented words
+    /// this reads 145,683 as the data does, and `LampHebrewMorphologyTests`
+    /// names the five it does not.
+    private static func contentIndex(of segments: [Substring], strongsKey: String?) -> Int {
+        // The last, where a word carries two morphemes of the same function:
+        // Aramaic `AR/R` is keyed on the second. No parsing in TAHOT turns on
+        // it — both read as a preposition — so the first would measure as well
+        // here while naming the morpheme the data does not.
+        if let number = grammaticalNumber(of: strongsKey), let names = morpheme(named: number),
+           let named = segments.lastIndex(where: names) {
+            return named
+        }
+        if let word = segments.firstIndex(where: isWord) { return word }
+        // Nothing but grammar, and a suffix is the least likely to be the word:
+        // `HR/Sp3ms` with no number to go on reads as its preposition.
+        return segments.lastIndex { $0.first != "S" } ?? 0
+    }
+
+    /// Whether a morpheme is a word rather than something a word carries.
+    ///
+    /// The clitics are the conjunction, the suffixes, and three particles that
+    /// attach to what follows them: the article, the interrogative hé, and the
+    /// shortened relative שֶׁ. A particle of any other form is a word — `To` is
+    /// אֵת, `Tn` is לֹא — which is why the form is read and not just the
+    /// function.
+    private static func isWord(_ segment: Substring) -> Bool {
+        switch segment.first {
+        case "N", "V", "A", "P", "D": true
+        case "T": !"adir".contains(segment.dropFirst().first ?? " ")
+        default: false
+        }
+    }
+
+    /// The morpheme a number out of STEPBible's 9000s names, as a test of a
+    /// segment's function. Read from TAHOT's own numbering of its morphemes.
+    private static func morpheme(named number: Int) -> ((Substring) -> Bool)? {
+        switch number {
+        case 9001, 9002: { $0.first == "C" || $0.first == "c" }
+        case 9003...9006: { $0.first == "R" }
+        case 9007: { $0.hasPrefix("Tr") }
+        case 9008: { $0.hasPrefix("Ti") }
+        case 9009, 9010: { $0.hasPrefix("Ta") || $0.hasPrefix("Td") }
+        case 9011...9013, 9020...9049: { $0.first == "S" }
+        default: nil
+        }
+    }
+
+    /// The number read as an integer, and only if it is one of the 9000s a
+    /// morpheme of grammar carries. A lexical number says nothing about which
+    /// morpheme it belongs to, so it is left alone.
+    private static func grammaticalNumber(of key: String?) -> Int? {
+        guard let key, let language = key.first, language == "H" || language == "A",
+              let number = Int(key.dropFirst().prefix(while: \.isNumber)), number >= 9000
+        else { return nil }
+        return number
     }
 
     // MARK: - One segment
@@ -244,7 +314,7 @@ public enum LampMorphology {
     public static func features(of code: String, strongsKey: String?) -> [LampGrammarValue] {
         switch strongsKey?.first {
         case "G": LampGreekMorphology.features(of: code)
-        case "H": LampHebrewMorphology.features(of: code)
+        case "H": LampHebrewMorphology.features(of: code, strongsKey: strongsKey)
         default: []
         }
     }
@@ -252,7 +322,7 @@ public enum LampMorphology {
     public static func describe(_ code: String, strongsKey: String?) -> String? {
         switch strongsKey?.first {
         case "G": LampGreekMorphology.describe(code)
-        case "H": LampHebrewMorphology.describe(code)
+        case "H": LampHebrewMorphology.describe(code, strongsKey: strongsKey)
         default: nil
         }
     }

@@ -45,7 +45,7 @@ struct LampHebrewMorphologyTests {
         ("AVap3ms", "Verb · Aphel · Perfect · Third · Singular · Masculine"),
     ])
     func acodeReadsAsItsParsing(code: String, parsing: String) {
-        #expect(LampHebrewMorphology.describe(code) == parsing)
+        #expect(LampHebrewMorphology.describe(code, strongsKey: nil) == parsing)
     }
 
     /// A proper noun carries no number or state, and what follows its form is a
@@ -57,50 +57,119 @@ struct LampHebrewMorphologyTests {
         ("HNpt", "Noun · Proper · Title"),
     ])
     func apropernounStopsAtItsKind(code: String, parsing: String) {
-        #expect(LampHebrewMorphology.describe(code) == parsing)
+        #expect(LampHebrewMorphology.describe(code, strongsKey: nil) == parsing)
     }
 
     /// The form letter `c` is an infinitive with one field after it and an
     /// imperfect with three, so the fields are counted before they are read.
     @Test func theletterCIsToldApartByWhatFollowsIt() {
-        #expect(LampHebrewMorphology.describe("HVqcc") == "Verb · Qal · Infinitive · Construct")
+        #expect(LampHebrewMorphology.describe("HVqcc", strongsKey: nil)
+                == "Verb · Qal · Infinitive · Construct")
         #expect(
-            LampHebrewMorphology.describe("HVqc3ms")
+            LampHebrewMorphology.describe("HVqc3ms", strongsKey: nil)
                 == "Verb · Qal · Imperfect · Third · Singular · Masculine"
         )
     }
 
-    /// A word of several morphemes reports the content one's parsing. The
-    /// analysis asking is keyed on that morpheme's Strong's number, and the
-    /// article or conjunction beside it has a number of its own.
+    /// A word of several morphemes reports the one its number names, which is
+    /// the morpheme an analysis asking for the parsing is keyed on.
     @Test(arguments: [
-        ("Hc/Vqw3ms", "Verb · Qal · Consecutive Imperfect · Third · Singular · Masculine"),
-        ("HC/Vqp3ms", "Verb · Qal · Perfect · Third · Singular · Masculine"),
-        ("HTd/Ncmpa", "Noun · Common · Plural · Masculine · Absolute"),
-        ("HR/Ncfsa", "Noun · Common · Singular · Feminine · Absolute"),
-        ("HNcmsc/Sp3ms", "Noun · Common · Singular · Masculine · Construct"),
-        ("HR/Td/Ncmsa", "Noun · Common · Singular · Masculine · Absolute"),
+        ("Hc/Vqw3ms", "H559", "Verb · Qal · Consecutive Imperfect · Third · Singular · Masculine"),
+        ("HC/Vqp3ms", "H1254", "Verb · Qal · Perfect · Third · Singular · Masculine"),
+        ("HTd/Ncmpa", "H8064", "Noun · Common · Plural · Masculine · Absolute"),
+        ("HR/Ncfsa", "H7225", "Noun · Common · Singular · Feminine · Absolute"),
+        ("HNcmsc/Sp3ms", "H2233", "Noun · Common · Singular · Masculine · Construct"),
+        ("HR/Td/Ncmsa", "H776", "Noun · Common · Singular · Masculine · Absolute"),
+        ("HR/Ncmsc/Sp3ms", "H4327", "Noun · Common · Singular · Masculine · Construct"),
     ])
-    func asegmentedCodeReadsItsContentMorpheme(code: String, parsing: String) {
-        #expect(LampHebrewMorphology.describe(code) == parsing)
+    func asegmentedCodeReadsTheMorphemeItsNumberNames(
+        code: String, key: String, parsing: String
+    ) {
+        #expect(LampHebrewMorphology.describe(code, strongsKey: key) == parsing)
     }
 
-    /// With nothing but prefixes and suffixes, the first morpheme is read
-    /// rather than nothing at all.
-    @Test func acodeOfNoContentWordStillReadsItsFirstMorpheme() {
-        #expect(LampHebrewMorphology.describe("HR/Sp3ms") == "Preposition")
+    /// A word of nothing but grammar is keyed on one of its own pieces, and the
+    /// number says which. These read wrongly until the number was consulted:
+    /// וְאֵת is the object marker with a conjunction on it, not a conjunction,
+    /// and לוֹ is a suffix on a preposition that has no number of its own.
+    @Test(arguments: [
+        // וְאֵת — H9002 is the prefixed waw, so H853 is the particle's.
+        ("HC/To", "H853", "Particle · Object indicator"),
+        // לוֹ — H9033 is the third masculine singular suffix itself.
+        ("HRd/Sp3ms", "H9033", "Suffix · Personal · Third · Singular · Masculine"),
+        ("HR/Sp2ms", "H9031", "Suffix · Personal · Second · Singular · Masculine"),
+        // וְלֹא and הֲלֹא — a conjunction and an interrogative hé on לֹא.
+        ("HC/Tn", "H3808", "Particle · Negative"),
+        ("HTi/Tn", "H3808", "Particle · Negative"),
+        // הַזֶּה — the article on a demonstrative.
+        ("HTd/Tm", "H2088", "Particle · Demonstrative"),
+        // וְאֶל — a conjunction on a preposition that has a number of its own.
+        ("HC/R", "H413", "Preposition"),
+        // שֶׁ־ is the shortened relative, a clitic as the article is.
+        ("HTr/Vqi3mp", "H559", "Verb · Qal · Imperfect · Third · Plural · Masculine"),
+        ("HTr/D", "H8033", "Adverb"),
+    ])
+    func awordOfNothingButGrammarIsReadByItsNumber(
+        code: String, key: String, parsing: String
+    ) {
+        #expect(LampHebrewMorphology.describe(code, strongsKey: key) == parsing)
+    }
+
+    /// One code, two different morphemes, told apart by the number alone: a
+    /// conjunction with אֶל and a suffix is keyed on אֶל, while a conjunction
+    /// with an inseparable לְ and a suffix is keyed on the suffix, because the
+    /// לְ has no number of its own. Nothing in `HC/R/Sp3ms` distinguishes them,
+    /// which is why the code is not read on its own.
+    @Test func onecodeTwoMorphemesToldApartByTheNumber() {
+        #expect(LampHebrewMorphology.describe("HC/R/Sp3ms", strongsKey: "H413") == "Preposition")
+        #expect(
+            LampHebrewMorphology.describe("HC/R/Sp3ms", strongsKey: "H9033")
+                == "Suffix · Personal · Third · Singular · Masculine"
+        )
+    }
+
+    /// With no number to go on the code is all there is, and a suffix is the
+    /// least likely of its morphemes to be the word: `HR/Sp3ms` reads as its
+    /// preposition rather than as nothing at all.
+    @Test func withoutAnumberTheLeastUnlikelyMorphemeIsRead() {
+        #expect(LampHebrewMorphology.describe("HR/Sp3ms", strongsKey: nil) == "Preposition")
+    }
+
+    /// Where TAHOT's own numbering contradicts its codes, the code is followed.
+    /// Both are the data's, and naming the words is what stops the difference
+    /// looking like a defect — the courtesy the TEHMC rows below are shown.
+    ///
+    /// These are the whole of it. Reading all 145,688 of TAHOT's segmented
+    /// words against the morpheme it braces, 145,683 agree.
+    @Test(arguments: [
+        // A preposition and a suffix numbered with the verb that governs them,
+        // which belongs to neither morpheme: Isa 44:17 (H5456, סָגַד),
+        // Hos 8:12 (H3789, כָּתַב), Psa 89:28 (H8104, שָׁמַר) and Pro 23:24
+        // (H8055, שָׂמַח). Four words, each read as its preposition.
+        "H5456", "H3789", "H8104", "H8055",
+    ])
+    func aprepositionNumberedWithItsClausesVerbReadsAsThePreposition(key: String) {
+        #expect(LampHebrewMorphology.describe("HR/Sp3ms", strongsKey: key) == "Preposition")
+    }
+
+    /// 2Sa 18:20 — עַל־כֵּן is two words joined by a maqaf and carries a number
+    /// each, so which is "the" morpheme has no answer. The adverb is read and
+    /// the preposition is not.
+    @Test func twowordsJoinedByAmaqafReadAsTheSecond() {
+        #expect(LampHebrewMorphology.describe("HR//D", strongsKey: "H5921") == "Adverb")
+        #expect(LampHebrewMorphology.describe("HR//D", strongsKey: "H3651") == "Adverb")
     }
 
     @Test(arguments: ["", "G", "X", "HZ", "HVz", "HV", "HNc", "HNcm", "V-PAI-3S", "nonsense"])
     func acodeThisDoesNotKnowReadsAsNothing(code: String) {
-        #expect(LampHebrewMorphology.describe(code) == nil)
-        #expect(LampHebrewMorphology.features(of: code).isEmpty)
+        #expect(LampHebrewMorphology.describe(code, strongsKey: nil) == nil)
+        #expect(LampHebrewMorphology.features(of: code, strongsKey: nil).isEmpty)
     }
 
     /// The features come back labelled, which is what the grammar summary
     /// counts, and in the order a parsing is spoken.
     @Test func thefeaturesAreLabelledAndOrdered() {
-        let features = LampHebrewMorphology.features(of: "HVqp3ms")
+        let features = LampHebrewMorphology.features(of: "HVqp3ms", strongsKey: nil)
         #expect(features.map(\.feature) == [.partOfSpeech, .stem, .form, .person, .number, .gender])
         #expect(features.map(\.value) == ["Verb", "Qal", "Perfect", "Third", "Singular", "Masculine"])
     }
@@ -121,7 +190,7 @@ struct LampHebrewMorphologyTests {
         ("HVqrcsc", "Verb · Qal · Participle · Singular · Either gender · Construct"),
     ])
     func wheretehmcDisagreesWithItselfTheCommonerReadingIsTaken(code: String, parsing: String) {
-        #expect(LampHebrewMorphology.describe(code) == parsing)
+        #expect(LampHebrewMorphology.describe(code, strongsKey: nil) == parsing)
     }
 }
 
