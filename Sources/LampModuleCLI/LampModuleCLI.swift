@@ -26,6 +26,8 @@ enum LampModuleCLI {
                 exit(EXIT_FAILURE)
             }
             succeeded = importTranslation(sourcePath: arguments[1], outputDirectory: arguments[2], options: options)
+        case "parse" where arguments.count == 1:
+            succeeded = parse()
         case "convert" where arguments.count >= 3:
             guard let options = importOptions(Array(arguments.dropFirst(3))), let id = options["id"] else {
                 printUsage()
@@ -213,6 +215,25 @@ enum LampModuleCLI {
         }
     }
 
+    /// Reads `code<tab>key` a line at a time and writes the parsing of each,
+    /// so that a decoder owned here can be measured against morphology data
+    /// that lives elsewhere — `lamp-bible-modules` checks its STEPBible
+    /// sources through this. A code this cannot read writes an empty line
+    /// rather than stopping, because a run over a whole text is reporting on
+    /// the data as much as reading it.
+    private static func parse() -> Bool {
+        while let line = readLine(strippingNewline: true) {
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard let code = fields.first, !code.isEmpty else {
+                print("")
+                continue
+            }
+            let key = fields.count > 1 && !fields[1].isEmpty ? String(fields[1]) : nil
+            print(LampMorphology.describe(String(code), strongsKey: key) ?? "")
+        }
+        return true
+    }
+
     private static func printInspection(_ inspection: ModuleInspection, url: URL) {
         let kind = inspection.kind?.rawValue ?? "unknown"
         let status = inspection.canCompile ? "valid" : "invalid"
@@ -248,6 +269,7 @@ enum LampModuleCLI {
               lamp-module verify <module.lamp>
               lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY]
               lamp-module convert <bible file, folder or zip> <output.json> --id ID [--name NAME] [--abbreviation ABBR] [--language CODE] [--license TEXT] [--key UNLOCK-KEY]
+              lamp-module parse < lines of "morphology-code<tab>strongs-key"
             """)
     }
 }
