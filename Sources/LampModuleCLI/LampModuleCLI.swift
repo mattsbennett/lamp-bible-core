@@ -89,6 +89,13 @@ enum LampModuleCLI {
         var options: [String: String] = [:]
         var remaining = arguments[...]
         while let flag = remaining.popFirst() {
+            // The one flag that carries no value: the source is a Septuagint,
+            // so its Greek Esther and Daniel are that book rather than two
+            // books Lamp does not number.
+            if flag == "--septuagint" {
+                options["septuagint"] = "yes"
+                continue
+            }
             guard ["--name", "--abbreviation", "--language", "--key", "--id", "--license"].contains(flag), let value = remaining.popFirst() else {
                 return nil
             }
@@ -100,7 +107,8 @@ enum LampModuleCLI {
     private static func importTranslation(sourcePath: String, outputDirectory: String, options: [String: String]) -> Bool {
         let sourceURL = URL(fileURLWithPath: sourcePath)
         do {
-            let imported = try LampTranslationImporter().read(sourceURL, unlockKey: options["key"])
+            let imported = try LampTranslationImporter(isSeptuagint: options["septuagint"] != nil)
+                .read(sourceURL, unlockKey: options["key"])
             let stem = sourceURL.deletingPathExtension().lastPathComponent
             let abbreviation = options["abbreviation"] ?? imported.suggestedAbbreviation ?? stem
             let name = options["name"] ?? imported.suggestedName ?? abbreviation
@@ -125,7 +133,8 @@ enum LampModuleCLI {
     private static func convertTranslation(sourcePath: String, outputPath: String, id: String, options: [String: String]) -> Bool {
         let sourceURL = URL(fileURLWithPath: sourcePath)
         do {
-            let imported = try LampTranslationImporter().read(sourceURL, unlockKey: options["key"])
+            let imported = try LampTranslationImporter(isSeptuagint: options["septuagint"] != nil)
+                .read(sourceURL, unlockKey: options["key"])
             let abbreviation = options["abbreviation"] ?? imported.suggestedAbbreviation ?? id
             let json = try imported.moduleJSON(
                 id: id,
@@ -267,8 +276,8 @@ enum LampModuleCLI {
               lamp-module inspect <module.json> [module.json ...]
               lamp-module build <module.json> [output.lamp]
               lamp-module verify <module.lamp>
-              lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY]
-              lamp-module convert <bible file, folder or zip> <output.json> --id ID [--name NAME] [--abbreviation ABBR] [--language CODE] [--license TEXT] [--key UNLOCK-KEY]
+              lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY] [--septuagint]
+              lamp-module convert <bible file, folder or zip> <output.json> --id ID [--name NAME] [--abbreviation ABBR] [--language CODE] [--license TEXT] [--key UNLOCK-KEY] [--septuagint]
               lamp-module parse < lines of "morphology-code<tab>strongs-key"
             """)
     }

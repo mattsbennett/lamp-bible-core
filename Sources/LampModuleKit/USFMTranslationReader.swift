@@ -7,6 +7,21 @@ import Foundation
 /// translation format. Introductions, cross-references, figures, published
 /// verse numbers and reference ranges have no place in it and are dropped.
 struct USFMTranslationReader {
+    /// Whether the source is a Septuagint, which decides what its own Esther
+    /// and Daniel codes are read as. See `canonicalBook(for:)`.
+    let isSeptuagint: Bool
+
+    init(isSeptuagint: Bool = false) {
+        self.isSeptuagint = isSeptuagint
+    }
+
+    /// A Septuagint's Esther and Daniel, and the books Lamp keys them as.
+    /// Ordered rather than a dictionary so a source holding both of a pair is
+    /// always reported against the same one.
+    static let septuagintBookCodes: [(greek: String, canonical: String)] = [
+        ("ESG", "EST"), ("DAG", "DAN"),
+    ]
+
     private enum Token {
         case marker(name: String, closing: Bool)
         /// The rest of the line after a marker such as `\id` or `\toc1`.
@@ -46,6 +61,10 @@ struct USFMTranslationReader {
     /// name is often there, the same in every book; a description that
     /// differs from book to book is the book's own.
     private var bookDescriptions: [String: Int] = [:]
+    /// Every code read from an `\id` line, including the ones left out, so a
+    /// source holding both halves of a Septuagint pair can be told apart from
+    /// one holding either.
+    private var bookCodes: Set<String> = []
     private var bookCount = 0
     private var inChapter = false
     private var block = Block.skipped
@@ -68,6 +87,13 @@ struct USFMTranslationReader {
 
     mutating func finish() throws -> LampImportedTranslation {
         endBlock()
+        if isSeptuagint, let both = Self.septuagintBookCodes.first(where: {
+            bookCodes.contains($0.greek) && bookCodes.contains($0.canonical)
+        }) {
+            throw LampTranslationImportError.greekAndCanonicalOfOneBook(
+                greek: both.greek, canonical: both.canonical
+            )
+        }
         let books = collector.finish()
         guard !books.isEmpty else {
             throw LampTranslationImportError.noScripture(skippedBooks: collector.report.skippedBooks)
@@ -138,7 +164,8 @@ struct USFMTranslationReader {
         inChapter = false
         block = .skipped
         let code = String(content.prefix(while: { !$0.isWhitespace }).prefix(3)).uppercased()
-        guard let book = LampCanonicalBooks.book(usfmCode: code) else {
+        bookCodes.insert(code)
+        guard let book = canonicalBook(for: code) else {
             collector.skipBook(code, reported: !Self.peripheralBooks.contains(code))
             return
         }
@@ -149,6 +176,20 @@ struct USFMTranslationReader {
         if !description.isEmpty {
             bookDescriptions[description, default: 0] += 1
         }
+    }
+
+    /// `ESG` and `DAG`, Greek Esther and Greek Daniel, are a Septuagint's own
+    /// codes for the books Lamp keys as Esther and Daniel — the reading
+    /// `LampVersification` already takes for the `lxx` scheme, where it notes
+    /// that the Septuagint has no Esther or Daniel of its own codes. Anywhere
+    /// else they are separate deuterocanonical books, which Lamp does not
+    /// number and leaves out, so this is off unless the import was told the
+    /// source is a Septuagint.
+    private func canonicalBook(for code: String) -> LampCanonicalBook? {
+        if isSeptuagint, let pair = Self.septuagintBookCodes.first(where: { $0.greek == code }) {
+            return LampCanonicalBooks.book(usfmCode: pair.canonical)
+        }
+        return LampCanonicalBooks.book(usfmCode: code)
     }
 
     // MARK: - Markers

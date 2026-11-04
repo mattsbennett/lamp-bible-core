@@ -174,6 +174,67 @@ struct LampTranslationImportTests {
         }
     }
 
+    /// A Septuagint numbers Greek Esther and Greek Daniel, and a Lamp
+    /// translation keys both as the book they are: `LampVersification` says so
+    /// for the `lxx` scheme, and an import that left them out gave a
+    /// Septuagint 36 books with Esther and Daniel missing and nothing said
+    /// beyond a line in the skipped list.
+    @Test func aSeptuagintsGreekEstherAndDanielAreThoseBooks() throws {
+        let usfm = #"""
+            \id ESG Esther
+            \c 1
+            \v 1 In the second year of the reign of Artaxerxes the great.
+            \id DAG Daniel
+            \c 3
+            \v 24 And they walked in the midst of the fire.
+            """#
+
+        let septuagint = try read(usfm, isSeptuagint: true)
+
+        #expect(septuagint.report.skippedBooks.isEmpty)
+        #expect(septuagint.report.bookCount == 2)
+        #expect(verse(septuagint, 17_001_001)?.text
+            == "In the second year of the reign of Artaxerxes the great.")
+        #expect(verse(septuagint, 27_003_024)?.text == "And they walked in the midst of the fire.")
+    }
+
+    /// And anywhere else they are two of the books Lamp does not number, which
+    /// is why reading them as Esther and Daniel is something an import has to
+    /// be told. A Bible with the Apocrypha carries `ESG` beside its own Esther.
+    @Test func greekEstherAndDanielAreLeftOutOfAnythingElse() throws {
+        let imported = try read(#"""
+            \id ESG
+            \c 1
+            \v 1 Greek Esther.
+            \id JUD
+            \c 1
+            \v 1 Jude, a servant of Jesus Christ.
+            """#)
+
+        #expect(imported.report.skippedBooks == ["ESG"])
+        #expect(verse(imported, 17_001_001) == nil)
+        #expect(verse(imported, 65_001_001) != nil)
+    }
+
+    /// A source holding both is not a Septuagint, whatever it was read as, and
+    /// keying its Greek Esther as Esther would merge two books into one and
+    /// report nothing. Both orders, since which arrives first is the order the
+    /// files happened to be read in.
+    @Test(arguments: [["ESG", "EST"], ["EST", "ESG"]])
+    func bothEsthersInOneSourceIsRefused(codes: [String]) throws {
+        let usfm = codes
+            .map { "\\id \($0)\n\\c 1\n\\v 1 Esther, as \($0).\n" }
+            .joined()
+
+        #expect(throws: LampTranslationImportError.greekAndCanonicalOfOneBook(
+            greek: "ESG", canonical: "EST"
+        )) {
+            try read(usfm, isSeptuagint: true)
+        }
+        // Read as anything else, the Greek one is simply left out.
+        #expect(try read(usfm).report.skippedBooks == ["ESG"])
+    }
+
     /// The official BSB marks continuation paragraphs with `\vid|MRK 7:9\*`,
     /// inside verses as well as around headings.
     @Test func attributeMilestonesHoldNoTextAndEndNothing() throws {
@@ -421,8 +482,9 @@ struct LampTranslationImportTests {
 
     // MARK: - Helpers
 
-    private func read(_ usfm: String) throws -> LampImportedTranslation {
-        try LampTranslationImporter().read(data: Data(usfm.utf8), filename: "test.usfm")
+    private func read(_ usfm: String, isSeptuagint: Bool = false) throws -> LampImportedTranslation {
+        try LampTranslationImporter(isSeptuagint: isSeptuagint)
+            .read(data: Data(usfm.utf8), filename: "test.usfm")
     }
 
     private func readXML(_ xml: String) throws -> LampImportedTranslation {

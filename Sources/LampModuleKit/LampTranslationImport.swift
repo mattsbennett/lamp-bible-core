@@ -50,6 +50,9 @@ public enum LampTranslationImportError: Error, LocalizedError, Equatable, Sendab
     case invalidXML(String)
     case unreadableArchive(String)
     case noScripture(skippedBooks: [String])
+    /// A source read as a Septuagint holds both a Greek book and the
+    /// Hebrew-canon book Lamp would key it as, which no Septuagint does.
+    case greekAndCanonicalOfOneBook(greek: String, canonical: String)
     /// A locked SWORD module, read without the key bought for it.
     case needsUnlockKey(moduleName: String, unlockURL: String?)
     case wrongUnlockKey(moduleName: String)
@@ -71,6 +74,9 @@ public enum LampTranslationImportError: Error, LocalizedError, Equatable, Sendab
                 return "No verses were found in the file."
             }
             return "No verses from the 66 books were found. Left out: \(skippedBooks.joined(separator: ", "))."
+        case .greekAndCanonicalOfOneBook(let greek, let canonical):
+            let name = LampCanonicalBooks.book(usfmCode: canonical)?.name ?? canonical
+            return "This source has both ‘\(greek)’ and ‘\(canonical)’, so it isn’t a Septuagint: Lamp keys one \(name). Read it without the Septuagint option, which leaves ‘\(greek)’ out."
         case .needsUnlockKey(let moduleName, _):
             return "“\(moduleName)” is locked. Enter the unlock key you received for it."
         case .wrongUnlockKey(let moduleName):
@@ -290,7 +296,14 @@ public struct LampImportedTranslation: Sendable {
 /// Only the 66 books are kept, in the standard verse grid every Lamp
 /// translation shares; what is left out is listed in the report.
 public struct LampTranslationImporter: Sendable {
-    public init() {}
+    /// Whether the source is a Septuagint. It governs one thing today: that
+    /// `ESG` and `DAG` are read as Esther and Daniel rather than left out as
+    /// books Lamp does not number. See `USFMTranslationReader`.
+    public let isSeptuagint: Bool
+
+    public init(isSeptuagint: Bool = false) {
+        self.isSeptuagint = isSeptuagint
+    }
 
     /// `unlockKey` opens a locked SWORD module; reading one without it throws
     /// `.needsUnlockKey`, and an app asks for the key and reads again.
@@ -393,7 +406,7 @@ public struct LampTranslationImporter: Sendable {
     private func read(files: [(path: String, data: Data)], name: String) throws -> LampImportedTranslation {
         let usfm = files.filter { Self.looksLikeUSFM($0.data) }
         if !usfm.isEmpty {
-            var reader = USFMTranslationReader()
+            var reader = USFMTranslationReader(isSeptuagint: isSeptuagint)
             for file in usfm.sorted(by: { $0.path.localizedStandardCompare($1.path) == .orderedAscending }) {
                 guard let text = Self.decodeText(file.data) else {
                     throw LampTranslationImportError.unreadableText(file.path)
