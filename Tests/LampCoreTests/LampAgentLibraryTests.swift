@@ -286,6 +286,42 @@ struct LampAgentLibraryTests {
         #expect(units.last?.sections == ["Preamble (1:1–5)", "The light"])
     }
 
+    /// A passage is stored under the chapter it starts in, so a verse in a
+    /// later chapter is reached only by its range.
+    @Test func commentaryOnAPassageFromAnEarlierChapterIsServed() async throws {
+        let fixture = try temporaryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = try await commentaryLibrary(in: fixture, [
+            "CROSSING": #"""
+            {"meta":{"schemaVersion":"2.2","id":"CROSSING","seriesAbbrev":"CC","seriesFull":"Crossing Commentary","title":"Mark"},
+             "book":"Mark","bookNumber":41,
+             "chapters":[
+               {"chapter":8,"pericopae":[
+                 {"title":"Peter's Confession (8:27–33)","sv":41008027,"ev":41008033,"content":[
+                   {"type":"commentary","content":{"text":"Who do you say I am?"}}
+                 ]},
+                 {"title":"Following Jesus (8:34–9:1)","sv":41008034,"ev":41009001,"content":[
+                   {"type":"commentary","content":{"text":"Take up the cross."}}
+                 ]}
+               ]},
+               {"chapter":9,"pericopae":[
+                 {"title":"The Transfiguration (9:2–8)","sv":41009002,"ev":41009008,"content":[
+                   {"type":"commentary","content":{"text":"On the mountain."}}
+                 ]}
+               ]}
+             ]}
+            """#,
+        ])
+        let agent = LampAgentLibrary(library: library)
+
+        let verse = try await agent.readCommentary(reference: "Mark 9:1").units
+        #expect(verse.map(\.commentary) == ["Take up the cross."])
+        #expect(verse.first?.sections == ["Following Jesus (8:34–9:1)"])
+
+        let range = try await agent.readCommentary(reference: "Mark 9:1-2").units
+        #expect(range.map(\.commentary) == ["Take up the cross.", "On the mountain."])
+    }
+
     /// A client sets aside a result over its cap rather than shortening it, so
     /// a call stops short of its limit and says where to go on.
     @Test func commentaryLongerThanOneResultIsReadInTurns() async throws {

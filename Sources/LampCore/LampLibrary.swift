@@ -1322,11 +1322,16 @@ public actor LampLibrary {
         }
     }
 
+    /// A unit is stored under the chapter its passage starts in. With
+    /// `includingEarlierPassages`, the units of a passage that starts in an
+    /// earlier chapter and runs into this one are read too, as Mark 8:34–9:1
+    /// is for Mark 9.
     public func commentary(
         bookNumber: Int,
         chapterNumber: Int,
         reference: Int? = nil,
-        moduleIDs: Set<String>? = nil
+        moduleIDs: Set<String>? = nil,
+        includingEarlierPassages: Bool = false
     ) throws -> [LampCommentaryUnit] {
         let commentaries = try installedModules().filter {
             $0.kind == .commentary && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
@@ -1341,10 +1346,16 @@ public actor LampLibrary {
 
                 var condition = "book = ? AND chapter = ?"
                 var arguments: StatementArguments = [bookNumber, chapterNumber]
+                if includingEarlierPassages {
+                    condition = "book = ? AND (chapter = ? OR (chapter < ? AND COALESCE(ev, sv) >= ?))"
+                    arguments += [chapterNumber, bookNumber * 1_000_000 + chapterNumber * 1_000]
+                }
                 let columns = try columnNames(in: db, table: "commentary_units")
                 if columns.contains("module_id") {
                     condition = "module_id = ? AND " + condition
-                    arguments = [commentaryModule.id, bookNumber, chapterNumber]
+                    var scoped: StatementArguments = [commentaryModule.id]
+                    scoped += arguments
+                    arguments = scoped
                 }
                 if let reference {
                     condition += " AND ((sv <= ? AND COALESCE(ev, sv) >= ?) OR level = 0)"

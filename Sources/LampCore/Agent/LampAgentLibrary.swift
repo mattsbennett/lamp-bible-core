@@ -251,10 +251,13 @@ public actor LampAgentLibrary {
             let firstChapter = bookNumber == range.start.book ? range.start.chapter : 1
             let lastChapter = bookNumber == range.end.book ? range.end.chapter : 999
             for chapterNumber in firstChapter...lastChapter {
+                // A passage running into the range from an earlier chapter is
+                // stored under that chapter; later chapters' are read in turn.
                 let units = try await library.commentary(
                     bookNumber: bookNumber,
                     chapterNumber: chapterNumber,
-                    moduleIDs: allowedIDs
+                    moduleIDs: allowedIDs,
+                    includingEarlierPassages: chapterNumber == firstChapter
                 )
                 var byModule: [String: [LampCommentaryUnit]] = [:]
                 for unit in units {
