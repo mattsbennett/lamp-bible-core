@@ -1,0 +1,89 @@
+import Foundation
+
+/// A writing's kind, as its writer names it.
+///
+/// The vocabulary is open. `suggestions` is what the editors offer; a writer
+/// who needs a kind that is not there types it, and it is stored, shown,
+/// filtered and grouped like any other. The filter lists and the group-by are
+/// built from the kinds a library actually holds, so nothing has to be added
+/// here for a new kind to work — which is the point, because a closed list
+/// cannot hold the kinds real writing comes in.
+///
+/// A kind is **stored as it was written** and **compared folded**. Those are
+/// two jobs and two functions: `canonical(_:)` tidies a kind without taking
+/// the writer's capitals off it, so "Q&A" and "ClassDiscussion_1" survive the
+/// round trip, while `foldedKey(_:)` is what tells one kind from another, so
+/// "Handout" and "handout" never become two. Folding on the way in would be
+/// irreversible — capitals cannot be put back once saved — and nobody asked
+/// for it. Tags already work this way.
+public enum LampWritingCategory {
+    /// The kinds the editors offer, in the order they offer them.
+    ///
+    /// Writing already carrying a kind that is not here keeps it: dropping a
+    /// suggestion is not dropping a value.
+    public static let suggestions = [
+        "devotional", "exhortation", "reflection", "study", "prayer",
+    ]
+
+    /// The spelling a kind is stored in: whitespace tidied, and the two kinds
+    /// that have one right spelling snapped to it — a suggestion keeps the
+    /// spelling it is offered in, and `sermon` reads as the `exhortation` it
+    /// was renamed to. Any other kind keeps the writer's own capitals. Blank
+    /// is no kind at all rather than an empty one.
+    public static func canonical(_ written: String?) -> String? {
+        guard let written else { return nil }
+        let tidied = written.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !tidied.isEmpty else { return nil }
+        if tidied.caseInsensitiveCompare("sermon") == .orderedSame { return "exhortation" }
+        return suggestions.first { $0.caseInsensitiveCompare(tidied) == .orderedSame } ?? tidied
+    }
+
+    /// What tells one kind from another. Two writings share a kind when their
+    /// folded keys match, so a filter, a group-by and a search all agree
+    /// whatever case each was typed in.
+    public static func foldedKey(_ stored: String?) -> String? {
+        canonical(stored)?.lowercased()
+    }
+
+    /// The kind as shown: canonical first, so a stored `sermon` reads as
+    /// Exhortation on every platform rather than only where a view remembers
+    /// to map it, then the first letter raised and **the rest left as typed**.
+    /// "handout" shows as "Handout"; "Q&A" and "ClassDiscussion_1" show as
+    /// themselves.
+    public static func displayName(_ stored: String?) -> String? {
+        guard let kind = canonical(stored), let first = kind.first else { return nil }
+        return first.uppercased() + kind.dropFirst()
+    }
+
+    /// The kinds to offer a writer whose library already holds `stored`: every
+    /// suggestion, then every other kind they have used, so the list grows
+    /// with their writing rather than with releases.
+    ///
+    /// One kind appears once. Where a library holds two spellings of the same
+    /// kind, the earlier in order wins, which is the one that kept its
+    /// capital — the deliberate spelling, and the one `displayName` would have
+    /// produced anyway.
+    public static func offered(forLibraryHolding stored: [String?]) -> [String] {
+        let suggested = Set(suggestions.compactMap(foldedKey))
+        var byKey: [String: String] = [:]
+        for kind in stored.compactMap(canonical) {
+            guard let key = foldedKey(kind), !suggested.contains(key) else { continue }
+            if let held = byKey[key], held <= kind { continue }
+            byKey[key] = kind
+        }
+        return suggestions + byKey.values.sorted()
+    }
+
+    /// The stored values a request for `requested` should match. A library an
+    /// older build wrote still holds `sermon`, so a request for an exhortation
+    /// asks for both names; case is folded by the comparison itself rather
+    /// than here, because the stored spelling is the writer's.
+    public static func storedValuesMatching(_ requested: some Collection<String>) -> [String] {
+        var wanted: Set<String> = []
+        for kind in requested.compactMap(canonical) {
+            wanted.insert(kind)
+            if kind == "exhortation" { wanted.insert("sermon") }
+        }
+        return wanted.sorted()
+    }
+}

@@ -446,7 +446,9 @@ public enum LampPersonalMarkdownParser {
             author: metadata["author"]?.nilIfBlank,
             date: metadata["date"]?.nilIfBlank,
             tags: frontmatter?.tags ?? commaSeparated(metadata["tags"]),
-            category: metadata["category"]?.nilIfBlank,
+            // Importing is authoring, so the kind is tidied on the way in:
+            // a hand-written `Sermon` lands as the exhortation it names.
+            category: LampWritingCategory.canonical(metadata["category"]),
             seriesName: frontmatter?.series["name"] ?? metadata["series"]?.nilIfBlank,
             seriesOrder: frontmatter?.series["order"].flatMap(Int.init)
                 ?? metadata["series order"].flatMap(Int.init),

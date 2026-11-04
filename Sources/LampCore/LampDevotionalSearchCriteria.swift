@@ -31,8 +31,13 @@ public struct LampDevotionalSearchCriteria: Codable, Equatable, Sendable {
            !tags.contains(where: { requested in
                candidateTags.contains { $0.localizedCaseInsensitiveContains(requested) }
            }) { return false }
-        if let categories, !categories.isEmpty,
-           !categories.contains(category ?? "") { return false }
+        if let categories, !categories.isEmpty {
+            // Writing of no kind is of no kind, not of every kind: a blank
+            // among the requests folds to nothing and must not meet it.
+            guard let kind = LampWritingCategory.foldedKey(category),
+                  categories.contains(where: { LampWritingCategory.foldedKey($0) == kind })
+            else { return false }
+        }
         return true
     }
 
@@ -55,9 +60,14 @@ public struct LampDevotionalSearchCriteria: Codable, Equatable, Sendable {
             arguments += tags.sorted().map { "%\($0)%" }
         }
         if let categories, !categories.isEmpty {
-            clauses.append("\(column)category IN (" + Array(repeating: "?", count: categories.count)
-                .joined(separator: ", ") + ")")
-            arguments += categories.sorted()
+            // The kinds are an open vocabulary, so the comparison folds case
+            // and takes in the old `sermon` name; a request of nothing but
+            // blanks named no kind, and so matches no writing rather than all.
+            let wanted = LampWritingCategory.storedValuesMatching(categories)
+            clauses.append(wanted.isEmpty ? "1 = 0"
+                : "\(column)category COLLATE NOCASE IN ("
+                    + Array(repeating: "?", count: wanted.count).joined(separator: ", ") + ")")
+            arguments += wanted
         }
         return (clauses, arguments)
     }
