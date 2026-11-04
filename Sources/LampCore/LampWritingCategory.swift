@@ -96,13 +96,19 @@ public enum LampWritingCategory {
     /// A Mac editor autosaves every 1.5 seconds, so that is not a rare event:
     /// it is every save of every writing.
     ///
-    /// So where what is shown still names the kind the library holds, the
-    /// library's own spelling stays — a shared module's `sermon` is not
-    /// renamed, and a writer's `handout` is not recapitalised for having been
-    /// displayed. Where they differ, the writer meant it, and their spelling
-    /// is tidied and kept.
+    /// So where what is shown is the held kind, or exactly how that kind is
+    /// shown, the library's own spelling stays — a shared module's `sermon` is
+    /// not renamed, and a writer's `handout` is not recapitalised for having
+    /// been displayed. Anything else is an edit, and the writer's spelling is
+    /// tidied and kept.
+    ///
+    /// The comparison is exact, not folded. Folding looks safer and is not: it
+    /// treats a capitals-only correction as no correction, so a writer whose
+    /// `q&a` is shown "Q&a" could type "Q&A" and watch it revert, with no way
+    /// to fix it but to clear the kind, save, and type it again. Capitals are
+    /// the one thing a writer can only ever change deliberately.
     public static func kindToStore(shown: String?, held: String?) -> String? {
-        foldedKey(shown) == foldedKey(held) ? held : canonical(shown)
+        shown == held || shown == displayName(held) ? held : canonical(shown)
     }
 
     /// The stored values a request for `requested` should match. A library an

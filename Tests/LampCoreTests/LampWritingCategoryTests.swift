@@ -133,6 +133,30 @@ struct LampWritingCategoryTests {
         #expect(LampWritingCategory.kindToStore(shown: shown, held: held) == held)
     }
 
+    /// The gap every case above missed: each of them showed a kind exactly as
+    /// `displayName` renders it, so none of them was an edit. A writer who
+    /// corrects the capitals and nothing else has made the one edit that can
+    /// only have been deliberate, and folding the comparison would discard it
+    /// — leaving no way to fix a capital but to clear the kind, save, and type
+    /// it again.
+    @Test(arguments: [
+        ("Q&A", "q&a"),
+        ("ClassDiscussion", "classdiscussion"),
+        ("handout", "Handout"),
+        ("NIV", "niv"),
+    ])
+    func correctingThecapitalsOfAkindIsAnEdit(shown: String, held: String) {
+        #expect(LampWritingCategory.kindToStore(shown: shown, held: held) == shown)
+    }
+
+    /// And the correction sticks: the next autosave shows what was just
+    /// stored, which must not be read as another edit.
+    @Test func acorrectedKindSurvivesTheNextSave() {
+        let corrected = LampWritingCategory.kindToStore(shown: "Q&A", held: "q&a")
+        #expect(corrected == "Q&A")
+        #expect(LampWritingCategory.kindToStore(shown: "Q&A", held: corrected) == "Q&A")
+    }
+
     /// Where the writer did mean it, their spelling is kept — tidied, and
     /// snapped only where a kind has one right spelling.
     @Test(arguments: [
