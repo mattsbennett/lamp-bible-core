@@ -5,6 +5,37 @@ import LampModuleKit
 import Testing
 
 struct LampLibraryTests {
+    /// The cheap identifier query and the full one have to agree, because the
+    /// deck sweep trusts the cheap one to say which writings are held and
+    /// deletes the decks of every writing it does not name. A `WHERE` clause
+    /// added to one and not the other would not fail a build: it would
+    /// quietly start deleting decks of writings that are still there.
+    @Test func thecheapIdentifierQueryNamesTheSameWritings() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-ids-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+
+        #expect(try await library.personalDevotionalIDs().isEmpty)
+
+        for title in ["First", "Second", "Third"] {
+            _ = try await library.savePersonalDevotional(
+                LampDevotional(
+                    id: "", moduleID: "personal-devotionals", moduleName: "My Writing",
+                    title: title, content: "Something written.", isEditable: true
+                )
+            )
+        }
+        let whole = Set(try await library.personalDevotionals().map(\.id))
+        #expect(whole.count == 3)
+        #expect(try await library.personalDevotionalIDs() == whole)
+
+        let gone = try #require(whole.first)
+        try await library.deletePersonalDevotional(id: gone)
+        #expect(try await library.personalDevotionalIDs() == whole.subtracting([gone]))
+    }
+
     @Test func commentarySeriesUsesItsOwnNameInsteadOfTheFirstBookTitle() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-series-metadata-\(UUID().uuidString)", isDirectory: true)

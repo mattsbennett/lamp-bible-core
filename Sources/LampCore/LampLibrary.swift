@@ -1652,6 +1652,20 @@ public actor LampLibrary {
         return results.sorted(by: devotionalSort)
     }
 
+    /// Just the identifiers of the writings this library holds.
+    ///
+    /// `personalDevotionals()` selects every column — content, content JSON,
+    /// media JSON — which is a great deal of reading to take an identifier
+    /// off. The deck sweep asks which writings are held on every sync pass
+    /// once any writing has ever been deleted, the launch pass included,
+    /// where this actor is already competing with the reader's first chapter.
+    public func personalDevotionalIDs() throws -> Set<String> {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT id FROM personal_devotionals"))
+        }
+    }
+
     public func personalDevotionals(query: String? = nil) throws -> [LampDevotional] {
         let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines)
         let queue = try openUserDatabase()
