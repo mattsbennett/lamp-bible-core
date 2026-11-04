@@ -195,6 +195,59 @@ struct LampLibraryTests {
         #expect(try file.syncPath() == "Dictionaries/selected.lamp")
     }
 
+    /// A module is read from the file its storage key names. A copy under
+    /// another name is never opened, and listing it gave sync two files for
+    /// one module, of which it published the first: the user's NAS kept an
+    /// old NIC for a week that way, while the Mac read the new one.
+    @Test func amoduleCopyUnderAnotherNameIsNotPartOfTheLibrary() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-module-strays-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func archive(named name: String) async throws -> (database: URL, archive: URL) {
+            let databaseURL = root.appendingPathComponent("\(UUID().uuidString).sqlite")
+            let queue = try DatabaseQueue(path: databaseURL.path)
+            try await queue.write { db in
+                try db.execute(sql: "CREATE TABLE module_format (module_id TEXT, module_type TEXT)")
+                try db.execute(sql: "INSERT INTO module_format VALUES ('selected', 'dictionary')")
+                try db.execute(sql: "CREATE TABLE module_metadata (id TEXT, name TEXT, language TEXT)")
+                try db.execute(sql: "INSERT INTO module_metadata VALUES ('selected', ?, 'en')", arguments: [name])
+                try db.execute(sql: "CREATE TABLE dictionary_entries (id TEXT, module_id TEXT)")
+                try db.execute(sql: "INSERT INTO dictionary_entries VALUES ('selected:G1', 'selected')")
+            }
+            try queue.close()
+            let archiveURL = databaseURL.deletingPathExtension().appendingPathExtension("lamp")
+            try ((Data(contentsOf: databaseURL) as NSData).compressed(using: .zlib) as Data)
+                .write(to: archiveURL)
+            return (databaseURL, archiveURL)
+        }
+        let libraryURL = root.appendingPathComponent("Library")
+        let library = LampLibrary(rootURL: libraryURL)
+        _ = try await library.install(from: try await archive(named: "Installed dictionary").archive)
+        let installed = try #require(try await library.installedModuleFiles().first)
+
+        // An older copy of the same module, left under a name that is not its key.
+        let older = try await archive(named: "Older dictionary")
+        let stray = String(repeating: "0", count: 64)
+        try FileManager.default.copyItem(
+            at: older.database,
+            to: libraryURL.appendingPathComponent("Databases/\(stray).sqlite")
+        )
+        try FileManager.default.copyItem(
+            at: older.archive,
+            to: libraryURL.appendingPathComponent("Modules/\(stray).lamp")
+        )
+
+        let files = try await library.installedModuleFiles()
+        #expect(files.map(\.fileURL.lastPathComponent) == [installed.fileURL.lastPathComponent],
+                "sync was handed a second file for one module")
+        #expect(try await library.installedModules().map(\.name) == ["Installed dictionary"])
+
+        try await library.remove(moduleID: "selected")
+        #expect(try await library.installedModules().isEmpty,
+                "removed, and still listed from a copy nothing opens")
+    }
+
     @Test func installRejectsForeignOwnedRowsBeforeReplacingModule() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-owned-install-\(UUID().uuidString)", isDirectory: true)

@@ -45,29 +45,7 @@ public actor LampLibrary {
     }
 
     public func installedModules() throws -> [LampInstalledModule] {
-        try prepareDirectories()
-        let databaseURLs = try fileManager.contentsOfDirectory(
-            at: databasesURL,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )
-
-        let localModules = databaseURLs
-            .filter { $0.pathExtension.lowercased() == "sqlite" }
-            .compactMap { databaseURL in
-                let storageKey = databaseURL.deletingPathExtension().lastPathComponent
-                let lampURL = modulesURL
-                    .appendingPathComponent(storageKey)
-                    .appendingPathExtension("lamp")
-                let byteCount = (try? lampURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                return try? inspectDatabase(
-                    at: databaseURL,
-                    fallbackID: nil,
-                    compressedByteCount: byteCount,
-                    // Already verified when it was installed.
-                    verifyIntegrity: false
-                )
-            }
+        let localModules = try installedDatabases().map(\.module)
         var modulesByKey = Dictionary(
             uniqueKeysWithValues: try bundledModules().map { ("\($0.kind.rawValue):\($0.id)", $0) }
         )
@@ -84,6 +62,32 @@ public actor LampLibrary {
     /// that publishes modules as files. Modules shipped inside the app are
     /// not here: they have no file of their own, and are never published.
     public func installedModuleFiles() throws -> [LampInstalledModuleFile] {
+        try installedDatabases()
+            .compactMap { installed -> LampInstalledModuleFile? in
+                guard installed.hasModuleFile else { return nil }
+                return LampInstalledModuleFile(module: installed.module, fileURL: installed.moduleFileURL)
+            }
+            .sorted {
+                $0.module.kind != $1.module.kind
+                    ? $0.module.kind.rawValue < $1.module.kind.rawValue
+                    : $0.module.id < $1.module.id
+            }
+    }
+
+    /// The installed databases the library reads, each with its module.
+    ///
+    /// A module is read from the file its storage key names and from no
+    /// other, so a database under any other name is not part of the library
+    /// even when it holds a module. Listing one anyway gave a module two
+    /// files: five old copies of NIC lay beside the one this Mac read, and
+    /// sync, which publishes one file per module ID and keeps the first it is
+    /// handed, was handed an old one. The newer NIC never left this Mac, and
+    /// removing NIC would have left it listed, from a copy nothing opens.
+    private func installedDatabases() throws -> [(
+        module: LampInstalledModule,
+        moduleFileURL: URL,
+        hasModuleFile: Bool
+    )] {
         try prepareDirectories()
         let databaseURLs = try fileManager.contentsOfDirectory(
             at: databasesURL,
@@ -92,24 +96,20 @@ public actor LampLibrary {
         )
         return databaseURLs
             .filter { $0.pathExtension.lowercased() == "sqlite" }
-            .compactMap { databaseURL -> LampInstalledModuleFile? in
-                let lampURL = modulesURL
-                    .appendingPathComponent(databaseURL.deletingPathExtension().lastPathComponent)
+            .compactMap { databaseURL in
+                let name = databaseURL.deletingPathExtension().lastPathComponent
+                let moduleFileURL = modulesURL
+                    .appendingPathComponent(name)
                     .appendingPathExtension("lamp")
-                guard let byteCount = try? lampURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-                      let module = try? inspectDatabase(
-                          at: databaseURL,
-                          fallbackID: nil,
-                          compressedByteCount: byteCount,
-                          // Already verified when it was installed.
-                          verifyIntegrity: false
-                      ) else { return nil }
-                return LampInstalledModuleFile(module: module, fileURL: lampURL)
-            }
-            .sorted {
-                $0.module.kind != $1.module.kind
-                    ? $0.module.kind.rawValue < $1.module.kind.rawValue
-                    : $0.module.id < $1.module.id
+                let byteCount = try? moduleFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                guard let module = try? inspectDatabase(
+                    at: databaseURL,
+                    fallbackID: nil,
+                    compressedByteCount: byteCount ?? 0,
+                    // Already verified when it was installed.
+                    verifyIntegrity: false
+                ), name == storageKey(for: module.id) else { return nil }
+                return (module, moduleFileURL, byteCount != nil)
             }
     }
 

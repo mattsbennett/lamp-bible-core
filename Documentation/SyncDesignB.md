@@ -84,7 +84,9 @@ extension LampSyncContentKind {
 names another module is refused on download (`matchesContentIdentity`), never
 misread. The Mac's installed files are named by a storage key, so the Mac
 places them by `LampInstalledModuleFile.syncPath()`, from
-`LampLibrary.installedModuleFiles()`, never by filename.
+`LampLibrary.installedModuleFiles()`, never by filename. That list holds
+only files at their module's storage key, the ones the library reads, so no
+module reaches the plan with two files.
 
 **A retired alias is outside the layout.** `Notes/bible-notes.lamp` is the
 copy the old sync left under notes' former ID, merged into `notes` long ago
