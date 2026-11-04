@@ -74,6 +74,17 @@ struct LampWritingCategoryTests {
         #expect(LampWritingCategory.displayName(stored) == shown)
     }
 
+    /// A filter lists what a library holds and nothing else — a suggestion
+    /// nobody has written is not a filter worth offering.
+    @Test func thekindsHeldAreTheOnesWritten() {
+        let held = LampWritingCategory.kindsHeld([
+            "study", "Handout", "handout", nil, "", "Sermon", "STUDY",
+        ])
+        #expect(held == ["Handout", "exhortation", "study"])
+        #expect(LampWritingCategory.kindsHeld([]).isEmpty)
+        #expect(LampWritingCategory.kindsHeld([nil, "", "  "]).isEmpty)
+    }
+
     /// What the editor offers grows with the writing: the suggestions first,
     /// in their own order, then whatever else the writer has used.
     @Test func thekindsOfferedIncludeTheOnesAlreadyWritten() {

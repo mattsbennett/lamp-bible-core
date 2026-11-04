@@ -55,23 +55,32 @@ public enum LampWritingCategory {
         return first.uppercased() + kind.dropFirst()
     }
 
-    /// The kinds to offer a writer whose library already holds `stored`: every
-    /// suggestion, then every other kind they have used, so the list grows
-    /// with their writing rather than with releases.
+    /// Every kind a library holds, each once, in order.
     ///
-    /// One kind appears once. Where a library holds two spellings of the same
+    /// This is what a filter lists, and no more: offering a filter for a kind
+    /// nobody has written is noise. Where a library holds two spellings of one
     /// kind, the earlier in order wins, which is the one that kept its
     /// capital — the deliberate spelling, and the one `displayName` would have
     /// produced anyway.
-    public static func offered(forLibraryHolding stored: [String?]) -> [String] {
-        let suggested = Set(suggestions.compactMap(foldedKey))
+    public static func kindsHeld(_ stored: [String?]) -> [String] {
         var byKey: [String: String] = [:]
         for kind in stored.compactMap(canonical) {
-            guard let key = foldedKey(kind), !suggested.contains(key) else { continue }
+            guard let key = foldedKey(kind) else { continue }
             if let held = byKey[key], held <= kind { continue }
             byKey[key] = kind
         }
-        return suggestions + byKey.values.sorted()
+        return byKey.values.sorted()
+    }
+
+    /// The kinds to offer a writer whose library already holds `stored`: every
+    /// suggestion, then every other kind they have used, so the list grows
+    /// with their writing rather than with releases.
+    public static func offered(forLibraryHolding stored: [String?]) -> [String] {
+        let suggested = Set(suggestions.compactMap(foldedKey))
+        return suggestions + kindsHeld(stored).filter {
+            guard let key = foldedKey($0) else { return false }
+            return !suggested.contains(key)
+        }
     }
 
     /// The stored values a request for `requested` should match. A library an
