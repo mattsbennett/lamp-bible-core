@@ -468,6 +468,8 @@ public struct LampCommentaryUnit: Identifiable, Equatable, Sendable {
     public let endReference: Int?
     public let unitType: String
     public let level: Int
+    /// The unit this one sits under, in the module's own outline.
+    public let parentID: String?
     public let title: String?
     public let introduction: String?
     public let translation: String?
@@ -487,6 +489,7 @@ public struct LampCommentaryUnit: Identifiable, Equatable, Sendable {
         endReference: Int?,
         unitType: String,
         level: Int,
+        parentID: String? = nil,
         title: String? = nil,
         introduction: String? = nil,
         translation: String? = nil,
@@ -505,6 +508,7 @@ public struct LampCommentaryUnit: Identifiable, Equatable, Sendable {
         self.endReference = endReference
         self.unitType = unitType
         self.level = level
+        self.parentID = parentID
         self.title = title
         self.introduction = introduction
         self.translation = translation

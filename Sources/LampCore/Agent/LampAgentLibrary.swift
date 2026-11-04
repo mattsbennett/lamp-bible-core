@@ -199,11 +199,34 @@ public actor LampAgentLibrary {
         return passages
     }
 
+    /// What one `readCommentary` call returns at most, in characters of text.
+    ///
+    /// A client puts a cap on what it will show a model, and a result over it
+    /// is not shortened but set aside — Claude Code saves it to a file, which a
+    /// reader chat has no tool to open. John 1:1–2 came back as 77,000
+    /// characters and was lost whole that way. This leaves room under the cap.
+    static let commentaryCharacterBudget = 30_000
+
+    /// Commentary on a range, served as its text and the headings it sits under.
+    ///
+    /// A unit with no text of its own is not served. It is a heading, or the
+    /// container a module files a pericope's blocks under; its title reaches
+    /// the agent as one of the `sections` of the units beneath it. Its
+    /// footnotes are left behind. Every unit with text carries the notes its
+    /// text cites, and a container's are its whole source scope: in NIC that
+    /// runs to hundreds of notes gathered from across a volume, and served
+    /// first, they were all an agent got of a passage.
+    ///
+    /// `limit` counts units with text, and a call stops short of it once its
+    /// text passes `commentaryCharacterBudget`; `nextOffset` continues from
+    /// there. Within a chapter the modules take turns, so one long commentary
+    /// cannot fill a call before the others are heard from.
     public func readCommentary(
         reference: String,
         moduleIDs: Set<String>? = nil,
-        limit: Int = 30
-    ) async throws -> [LampAgentCommentary] {
+        limit: Int = 30,
+        offset: Int = 0
+    ) async throws -> LampAgentCommentaryReading {
         try requireEnabled()
         let range = try LampReferenceParser.parse(reference)
         let modules = try await selectedModules(
@@ -215,8 +238,11 @@ public actor LampAgentLibrary {
         let allowedIDs = Set(modules.map(\.id))
         let startReference = packed(range.start, missingVerse: 1)
         let endReference = packed(range.end, missingVerse: 999)
+        let first = max(offset, 0)
+        let pageLimit = min(max(limit, 1), policy.maximumSearchResults)
+        var outline = LampCommentaryOutline()
         var seen = Set<String>()
-        var results: [LampAgentCommentary] = []
+        var ordered: [LampCommentaryUnit] = []
 
         outer: for bookNumber in range.start.book...range.end.book {
             let firstChapter = bookNumber == range.start.book ? range.start.chapter : 1
@@ -227,29 +253,23 @@ public actor LampAgentLibrary {
                     chapterNumber: chapterNumber,
                     moduleIDs: allowedIDs
                 )
+                var byModule: [String: [LampCommentaryUnit]] = [:]
                 for unit in units {
+                    outline.add(unit)
                     let unitEnd = unit.endReference ?? unit.startReference
-                    guard unit.startReference <= endReference, unitEnd >= startReference,
+                    guard LampCommentaryOutline.hasText(unit),
+                          unit.startReference <= endReference, unitEnd >= startReference,
                           seen.insert(unit.id).inserted else { continue }
-                    results.append(LampAgentCommentary(
-                        unitID: unit.unitID,
-                        moduleID: unit.moduleID,
-                        moduleName: unit.moduleName,
-                        seriesAbbreviation: unit.seriesAbbreviation,
-                        reference: LampBibleReferenceFormatter.describeRange(
-                            from: unit.startReference,
-                            to: unitEnd
-                        ),
-                        title: unit.title,
-                        introduction: limitedOptionalText(unit.introduction),
-                        translation: limitedOptionalText(unit.translation),
-                        commentary: limitedOptionalText(unit.commentary),
-                        footnotes: limitedOptionalText(unit.footnotes)
-                    ))
-                    if results.count == min(max(limit, 1), policy.maximumSearchResults) {
-                        break outer
+                    byModule[unit.moduleID, default: []].append(unit)
+                }
+                let turns = modules.compactMap { byModule[$0.id] }
+                for index in 0..<(turns.map(\.count).max() ?? 0) {
+                    for units in turns where index < units.count {
+                        ordered.append(units[index])
                     }
                 }
+                // One unit past the page is enough to know there is more.
+                if ordered.count > first + pageLimit { break outer }
                 // A parser-valid cross-book request can contain many chapters.
                 // Stop at the canonical chapter count rather than probing to 999.
                 if bookNumber != range.end.book,
@@ -258,7 +278,47 @@ public actor LampAgentLibrary {
                 }
             }
         }
-        return results
+
+        var page: [LampAgentCommentary] = []
+        var characters = 0
+        for unit in ordered.dropFirst(first) where page.count < pageLimit {
+            let served = agentCommentary(unit, sections: outline.sections(above: unit))
+            // Always one, however long, or a call could never move on.
+            guard page.isEmpty
+                || characters + served.characterCount <= Self.commentaryCharacterBudget
+            else { break }
+            page.append(served)
+            characters += served.characterCount
+        }
+        let next = first + page.count
+        // Served a module at a time, in the order they were listed.
+        let byModule = Dictionary(grouping: page, by: \.moduleID)
+        return LampAgentCommentaryReading(
+            units: modules.flatMap { byModule[$0.id] ?? [] },
+            nextOffset: next < ordered.count ? next : nil
+        )
+    }
+
+    private func agentCommentary(
+        _ unit: LampCommentaryUnit,
+        sections: [String]
+    ) -> LampAgentCommentary {
+        LampAgentCommentary(
+            unitID: unit.unitID,
+            moduleID: unit.moduleID,
+            moduleName: unit.moduleName,
+            seriesAbbreviation: unit.seriesAbbreviation,
+            reference: LampBibleReferenceFormatter.describeRange(
+                from: unit.startReference,
+                to: unit.endReference ?? unit.startReference
+            ),
+            sections: sections.isEmpty ? nil : sections,
+            title: unit.title,
+            introduction: limitedOptionalText(unit.introduction),
+            translation: limitedOptionalText(unit.translation),
+            commentary: limitedOptionalText(unit.commentary),
+            footnotes: limitedOptionalText(unit.footnotes)
+        )
     }
 
     public func searchDictionary(
@@ -723,5 +783,74 @@ public actor LampAgentLibrary {
               (1...endBook.chapterCount).contains(range.end.chapter) else {
             throw LampAgentError.invalidReference(source)
         }
+    }
+}
+
+/// The commentary units one call has read, arranged so a unit can be served
+/// with the headings above it.
+///
+/// A module says where a unit sits in two ways. A unit with units under it
+/// contains them, and its title belongs to each. A titled unit with no text
+/// and nothing under it heads the units after it at its own level instead:
+/// that is how NIC files the sub-headings inside a pericope.
+private struct LampCommentaryOutline {
+    private var units: [String: LampCommentaryUnit] = [:]
+    private var children: [String: [LampCommentaryUnit]] = [:]
+
+    static func hasText(_ unit: LampCommentaryUnit) -> Bool {
+        [unit.introduction, unit.translation, unit.commentary].contains {
+            !($0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }
+    }
+
+    mutating func add(_ unit: LampCommentaryUnit) {
+        guard units.updateValue(unit, forKey: unit.id) == nil else { return }
+        children[Self.level(unit.moduleID, under: unit.parentID), default: []].append(unit)
+    }
+
+    /// Outermost first. Only units this call read are known, so a heading in
+    /// a chapter before the range is not among them.
+    func sections(above unit: LampCommentaryUnit) -> [String] {
+        var titles: [String] = []
+        var visited = Set<String>()
+        var node = unit
+        while visited.insert(node.id).inserted {
+            if let heading = heading(before: node) { titles.append(heading) }
+            guard let parentID = node.parentID,
+                  let parent = units["\(node.moduleID):\(parentID)"] else { break }
+            if let title = Self.title(of: parent) { titles.append(title) }
+            node = parent
+        }
+        return titles.reversed()
+    }
+
+    private func heading(before node: LampCommentaryUnit) -> String? {
+        (children[Self.level(node.moduleID, under: node.parentID)] ?? [])
+            .filter { $0.orderIndex < node.orderIndex && isHeading($0) }
+            .max { $0.orderIndex < $1.orderIndex }
+            .flatMap(Self.title)
+    }
+
+    private func isHeading(_ unit: LampCommentaryUnit) -> Bool {
+        !Self.hasText(unit)
+            && Self.title(of: unit) != nil
+            && children[Self.level(unit.moduleID, under: unit.unitID)] == nil
+    }
+
+    private static func title(of unit: LampCommentaryUnit) -> String? {
+        guard let title = unit.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else { return nil }
+        return title
+    }
+
+    private static func level(_ moduleID: String, under parentID: String?) -> String {
+        "\(moduleID)\u{1F}\(parentID ?? "")"
+    }
+}
+
+private extension LampAgentCommentary {
+    var characterCount: Int {
+        ([title, introduction, translation, commentary, footnotes] + (sections ?? []))
+            .reduce(0) { $0 + ($1?.count ?? 0) }
     }
 }

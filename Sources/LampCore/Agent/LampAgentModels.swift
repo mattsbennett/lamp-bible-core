@@ -188,6 +188,19 @@ public struct LampAgentTranslationPassage: Codable, Equatable, Sendable {
     }
 }
 
+/// One call's worth of commentary on a range, and where the next call starts
+/// when the range holds more than fits in one.
+public struct LampAgentCommentaryReading: Codable, Equatable, Sendable {
+    public let units: [LampAgentCommentary]
+    /// The `offset` that continues from here, or nil when nothing is left.
+    public let nextOffset: Int?
+
+    public init(units: [LampAgentCommentary], nextOffset: Int?) {
+        self.units = units
+        self.nextOffset = nextOffset
+    }
+}
+
 public struct LampAgentCommentary: Codable, Equatable, Identifiable, Sendable {
     public var id: String { "\(moduleID):\(unitID)" }
     public let unitID: String
@@ -195,6 +208,8 @@ public struct LampAgentCommentary: Codable, Equatable, Identifiable, Sendable {
     public let moduleName: String
     public let seriesAbbreviation: String?
     public let reference: String
+    /// The headings this unit sits under, outermost first.
+    public let sections: [String]?
     public let title: String?
     public let introduction: String?
     public let translation: String?
@@ -207,6 +222,7 @@ public struct LampAgentCommentary: Codable, Equatable, Identifiable, Sendable {
         moduleName: String,
         seriesAbbreviation: String?,
         reference: String,
+        sections: [String]? = nil,
         title: String?,
         introduction: String?,
         translation: String?,
@@ -218,6 +234,7 @@ public struct LampAgentCommentary: Codable, Equatable, Identifiable, Sendable {
         self.moduleName = moduleName
         self.seriesAbbreviation = seriesAbbreviation
         self.reference = reference
+        self.sections = sections
         self.title = title
         self.introduction = introduction
         self.translation = translation

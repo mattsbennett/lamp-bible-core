@@ -1350,8 +1350,9 @@ public actor LampLibrary {
                     condition += " AND ((sv <= ? AND COALESCE(ev, sv) >= ?) OR level = 0)"
                     arguments += [reference, reference]
                 }
+                let parent = columns.contains("parent_id") ? "parent_id" : "NULL AS parent_id"
                 let rows = try Row.fetchAll(db, sql: """
-                    SELECT id, book, chapter, sv, ev, unit_type, level, title,
+                    SELECT id, book, chapter, sv, ev, unit_type, level, \(parent), title,
                            introduction_json, translation_json, commentary_json,
                            footnotes_json, order_index
                     FROM commentary_units
@@ -1381,6 +1382,7 @@ public actor LampLibrary {
                         endReference: row["ev"],
                         unitType: row["unit_type"],
                         level: row["level"],
+                        parentID: row["parent_id"],
                         title: row["title"],
                         introduction: plainText(fromJSONString: introductionJSON),
                         translation: plainText(fromJSONString: translationJSON),

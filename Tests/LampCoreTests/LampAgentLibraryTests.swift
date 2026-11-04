@@ -191,4 +191,113 @@ struct LampAgentLibraryTests {
         )
         #expect(section.content == "Grace and truth came through Jesus Christ.")
     }
+
+    /// Laid out as NIC is: a pericope with no text of its own, holding every
+    /// note in its source scope, over blocks that each carry the notes they
+    /// cite, with a sub-heading among them.
+    ///
+    /// Served as stored, the container came first and was all a reader chat
+    /// got of John 1:1–2 — its notes, and none of the exposition.
+    @Test func commentaryIsServedAsItsTextUnderItsHeadings() async throws {
+        let fixture = try temporaryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = try await commentaryLibrary(in: fixture, [
+            "OUTLINED": #"""
+            {"meta":{"schemaVersion":"2.2","id":"OUTLINED","seriesAbbrev":"OC","seriesFull":"Outlined Commentary","title":"John"},
+             "book":"John","bookNumber":43,
+             "footnotes":[
+               {"id":"1","label":"1","content":{"text":"A note the exposition cites."}},
+               {"id":"2","label":"2","content":{"text":"A note gathered from elsewhere in the volume."}}
+             ],
+             "chapters":[{"chapter":1,"pericopae":[
+               {"title":"Preamble (1:1–5)","sv":43001001,"ev":43001005,"footnoteIds":["1","2"],"content":[
+                 {"type":"commentary","content":{"text":"The Word was there before anything.","footnote_refs":[{"id":"1","offset":10}]}},
+                 {"type":"heading","content":{"text":"The light"}},
+                 {"type":"commentary","sv":43001004,"ev":43001005,"content":{"text":"Life is the light."}}
+               ]}
+             ]}]}
+            """#,
+        ])
+        let units = try await LampAgentLibrary(library: library)
+            .readCommentary(reference: "John 1:4").units
+
+        #expect(units.map(\.commentary) == ["The Word was there before anything.", "Life is the light."])
+        #expect(units.allSatisfy { !($0.footnotes ?? "").contains("gathered") },
+                "a container's notes were served, which are its whole source scope")
+        #expect(units.first?.footnotes?.contains("A note the exposition cites.") == true)
+        #expect(units.first?.sections == ["Preamble (1:1–5)"],
+                "a heading reached the text before it")
+        #expect(units.last?.sections == ["Preamble (1:1–5)", "The light"])
+    }
+
+    /// A client sets aside a result over its cap rather than shortening it, so
+    /// a call stops short of its limit and says where to go on.
+    @Test func commentaryLongerThanOneResultIsReadInTurns() async throws {
+        let paragraph = String(repeating: "Exposition. ", count: 400)
+        func module(_ id: String, name: String, blocks: Int) -> String {
+            let content = (0..<blocks).map { index in
+                #"{"type":"commentary","content":{"text":"\#(index) \#(paragraph)"}}"#
+            }.joined(separator: ",")
+            return #"""
+            {"meta":{"schemaVersion":"2.2","id":"\#(id)","seriesAbbrev":"\#(id)","seriesFull":"\#(name)","title":"John"},
+             "book":"John","bookNumber":43,
+             "chapters":[{"chapter":1,"pericopae":[{"title":"All of it","sv":43001001,"ev":43001005,"content":[\#(content)]}]}]}
+            """#
+        }
+        // Named so the long one is listed first: read a module at a time, it
+        // would fill every call before the short one was reached.
+        let fixture = try temporaryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = try await commentaryLibrary(in: fixture, [
+            "LONG": module("LONG", name: "A Long Commentary", blocks: 12),
+            "SHORT": module("SHORT", name: "B Short Commentary", blocks: 1),
+        ])
+        let agent = LampAgentLibrary(library: library)
+
+        var offset: Int? = 0
+        var calls: [LampAgentCommentaryReading] = []
+        while let next = offset, calls.count < 20 {
+            let reading = try await agent.readCommentary(reference: "John 1:1", offset: next)
+            calls.append(reading)
+            offset = reading.nextOffset
+        }
+        #expect(calls.count > 1)
+        for reading in calls {
+            let characters = reading.units.reduce(0) { $0 + ($1.commentary?.count ?? 0) }
+            #expect(characters <= 30_000, "one call held \(characters) characters")
+        }
+        let served = calls.flatMap(\.units)
+        #expect(served.count == 13)
+        #expect(Set(served.map(\.id)).count == 13, "a unit was served twice, or one was skipped")
+        #expect(calls.first?.units.contains { $0.moduleID == "SHORT" } == true,
+                "the first call was all one commentary")
+
+        let limited = try await agent.readCommentary(reference: "John 1:1", limit: 2)
+        #expect(limited.units.count == 2)
+        #expect(limited.nextOffset == 2)
+    }
+
+    private func temporaryFixture() throws -> URL {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-agent-commentary-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        return fixture
+    }
+
+    private func commentaryLibrary(
+        in fixture: URL,
+        _ modules: [String: String]
+    ) async throws -> LampLibrary {
+        let library = LampLibrary(rootURL: fixture.appendingPathComponent("Library"))
+        for (id, json) in modules {
+            let moduleURL = fixture.appendingPathComponent("\(id).lamp")
+            _ = try LampModuleCompiler().compile(
+                data: Data(json.utf8),
+                sourceFilename: "\(id).json",
+                destinationURL: moduleURL
+            )
+            _ = try await library.install(from: moduleURL)
+        }
+        return library
+    }
 }
