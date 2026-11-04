@@ -118,6 +118,43 @@ struct LampWritingCategoryTests {
             == LampWritingCategory.suggestions + ["Handout"])
     }
 
+    /// An editor shows Exhortation and the library holds exhortation, so the
+    /// two differ on every save of every writing. None of those saves renames
+    /// anything.
+    @Test(arguments: [
+        ("Exhortation", "exhortation"),
+        ("Study", "study"),
+        ("Exhortation", "sermon"),
+        ("Handout", "handout"),
+        ("Q&A", "Q&A"),
+        ("Class discussion", "class discussion"),
+    ])
+    func showingAkindDoesNotRenameIt(shown: String, held: String) {
+        #expect(LampWritingCategory.kindToStore(shown: shown, held: held) == held)
+    }
+
+    /// Where the writer did mean it, their spelling is kept — tidied, and
+    /// snapped only where a kind has one right spelling.
+    @Test(arguments: [
+        ("Handout", "study", "Handout"),
+        ("  Study Questions  ", "study", "Study Questions"),
+        ("Exhortation", "study", "exhortation"),
+        ("sermon", "study", "exhortation"),
+        ("Q&A", nil, "Q&A"),
+    ])
+    func renamingAkindKeepsTheWritersSpelling(shown: String, held: String?, stored: String) {
+        #expect(LampWritingCategory.kindToStore(shown: shown, held: held) == stored)
+    }
+
+    /// Opening a writing must not give it a kind, and clearing the field must
+    /// be able to take one away.
+    @Test func akindIsNeitherInventedNorTrapped() {
+        #expect(LampWritingCategory.kindToStore(shown: "", held: nil) == nil)
+        #expect(LampWritingCategory.kindToStore(shown: nil, held: nil) == nil)
+        #expect(LampWritingCategory.kindToStore(shown: "", held: "study") == nil)
+        #expect(LampWritingCategory.kindToStore(shown: "Study", held: nil) == "study")
+    }
+
     /// The bug this fixes: every surface shows a kind capitalised, so a reader
     /// typing what they saw found nothing, because the comparison was exact.
     @Test func akindIsFoundWhateverTheCaseItIsAskedIn() {

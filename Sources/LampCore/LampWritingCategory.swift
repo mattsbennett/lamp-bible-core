@@ -87,6 +87,24 @@ public enum LampWritingCategory {
         }
     }
 
+    /// The kind to store, given what an editor is showing and what the library
+    /// already holds.
+    ///
+    /// An editor shows a kind the way the rest of the app does — Exhortation,
+    /// not exhortation — so what is shown nearly always differs from what is
+    /// stored, and writing it back blindly would rename a kind nobody touched.
+    /// A Mac editor autosaves every 1.5 seconds, so that is not a rare event:
+    /// it is every save of every writing.
+    ///
+    /// So where what is shown still names the kind the library holds, the
+    /// library's own spelling stays — a shared module's `sermon` is not
+    /// renamed, and a writer's `handout` is not recapitalised for having been
+    /// displayed. Where they differ, the writer meant it, and their spelling
+    /// is tidied and kept.
+    public static func kindToStore(shown: String?, held: String?) -> String? {
+        foldedKey(shown) == foldedKey(held) ? held : canonical(shown)
+    }
+
     /// The stored values a request for `requested` should match. A library an
     /// older build wrote still holds `sermon`, so a request for an exhortation
     /// asks for both names; case is folded by the comparison itself rather
