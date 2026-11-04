@@ -286,6 +286,38 @@ struct LampAgentLibraryTests {
         #expect(units.last?.sections == ["Preamble (1:1–5)", "The light"])
     }
 
+    /// A commentary keeps its source's font-encoded Greek and Hebrew as written
+    /// and gives each span its Unicode reading in an annotation.
+    @Test func commentaryEncodedGreekAndHebrewReadAsUnicode() async throws {
+        let fixture = try temporaryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = try await commentaryLibrary(in: fixture, [
+            "ENCODED": #"""
+            {"meta":{"schemaVersion":"2.2","id":"ENCODED","seriesAbbrev":"EC","seriesFull":"Encoded Commentary","title":"John"},
+             "book":"John","bookNumber":43,
+             "footnotes":[
+               {"id":"1","label":"1","content":{"text":"Hebrew vDlUwM here.","annotations":[
+                 {"type":"hebrew","start":7,"end":13,"text":"vDlUwM","data":{"unicode":"שָׁלוֹם","sourceEncoding":"accordance-hebrew"}}
+               ]}}
+             ],
+             "chapters":[{"chapter":1,"pericopae":[
+               {"title":"The Word (1:1)","sv":43001001,"ev":43001001,"footnoteIds":["1"],"content":[
+                 {"type":"commentary","content":{"text":"The phrase oJ lo/gos is masculine; qeo/v is not.","annotations":[
+                   {"type":"greek","start":11,"end":20,"text":"oJ lo/gos","data":{"unicode":"ὁ λόγος","sourceEncoding":"accordance-greek"}},
+                   {"type":"greek","start":0,"end":5,"text":"qeo/v","data":{"unicode":"θεός","sourceEncoding":"accordance-greek"}}
+                 ],"footnote_refs":[{"id":"1","offset":20}]}}
+               ]}
+             ]}]}
+            """#,
+        ])
+        let unit = try await LampAgentLibrary(library: library)
+            .readCommentary(reference: "John 1:1").units.first
+
+        #expect(unit?.commentary == "The phrase ὁ λόγος is masculine; qeo/v is not.",
+                "a span whose offsets miss its own text was rewritten, or a matching one was not")
+        #expect(unit?.footnotes?.contains("Hebrew שָׁלוֹם here.") == true)
+    }
+
     /// A passage is stored under the chapter it starts in, so a verse in a
     /// later chapter is reached only by its range.
     @Test func commentaryOnAPassageFromAnEarlierChapterIsServed() async throws {

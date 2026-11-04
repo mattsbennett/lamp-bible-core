@@ -1395,10 +1395,10 @@ public actor LampLibrary {
                         level: row["level"],
                         parentID: row["parent_id"],
                         title: row["title"],
-                        introduction: plainText(fromJSONString: introductionJSON),
-                        translation: plainText(fromJSONString: translationJSON),
-                        commentary: plainText(fromJSONString: commentaryJSON),
-                        footnotes: plainText(fromJSONString: footnotesJSON),
+                        introduction: plainText(fromJSONString: introductionJSON, decodingEncodedSpans: true),
+                        translation: plainText(fromJSONString: translationJSON, decodingEncodedSpans: true),
+                        commentary: plainText(fromJSONString: commentaryJSON, decodingEncodedSpans: true),
+                        footnotes: plainText(fromJSONString: footnotesJSON, decodingEncodedSpans: true),
                         scriptureLinks: scriptureLinks,
                         orderIndex: row["order_index"]
                     )
@@ -2533,7 +2533,7 @@ public actor LampLibrary {
                             let start: Int = row["sv"]
                             let end: Int? = row["ev"]
                             let body = [introduction, translation, commentary, footnotes]
-                                .compactMap { plainText(fromJSONString: $0) }
+                                .compactMap { plainText(fromJSONString: $0, decodingEncodedSpans: true) }
                                 .joined(separator: " ")
                             let title: String? = row["title"]
                             return LampModuleSearchResult(
@@ -6146,13 +6146,44 @@ public actor LampLibrary {
         return nil
     }
 
-    private func plainText(fromJSONString json: String?) -> String? {
+    private func plainText(fromJSONString json: String?, decodingEncodedSpans: Bool = false) -> String? {
         guard let json,
               let data = json.data(using: .utf8),
               let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
             return nil
         }
-        return plainText(from: value)
+        return plainText(from: value, decodingEncodedSpans: decodingEncodedSpans)
+    }
+
+    /// A module keeps text set in a legacy font encoding as its source has it
+    /// ("oJ lo/gos" for ὁ λόγος) and gives each such span its Unicode reading,
+    /// as `data.unicode` beside a `data.sourceEncoding`. The span reads as that
+    /// Unicode. Offsets count Unicode scalars, and a span whose offsets do not
+    /// land on its own `text` is left as written.
+    private func decodingEncodedSpans(in text: String, annotations: [Any]) -> String {
+        let spans = annotations.compactMap { value -> (start: Int, end: Int, source: String, unicode: String)? in
+            guard let annotation = value as? [String: Any],
+                  let data = annotation["data"] as? [String: Any],
+                  data["sourceEncoding"] != nil,
+                  let unicode = stringValue(data["unicode"]), !unicode.isEmpty,
+                  let source = stringValue(annotation["text"]),
+                  let start = integerValue(annotation["start"]),
+                  let end = integerValue(annotation["end"]),
+                  start >= 0, end > start else { return nil }
+            return (start, end, source, unicode)
+        }
+        guard !spans.isEmpty else { return text }
+        var scalars = Array(text.unicodeScalars)
+        // From the end, so the spans before each one keep their offsets.
+        for span in spans.sorted(by: { $0.start > $1.start }) where span.end <= scalars.count {
+            var written = String.UnicodeScalarView()
+            written.append(contentsOf: scalars[span.start..<span.end])
+            guard String(written) == span.source else { continue }
+            scalars.replaceSubrange(span.start..<span.end, with: span.unicode.unicodeScalars)
+        }
+        var decoded = String.UnicodeScalarView()
+        decoded.append(contentsOf: scalars)
+        return String(decoded)
     }
 
     private func annotatedText(
@@ -6308,25 +6339,35 @@ public actor LampLibrary {
         }
     }
 
-    private func plainText(from value: Any?) -> String? {
+    private func plainText(from value: Any?, decodingEncodedSpans: Bool = false) -> String? {
         guard let value, !(value is NSNull) else { return nil }
         if let string = value as? String {
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         }
         if let values = value as? [Any] {
-            let text = values.compactMap { plainText(from: $0) }.joined(separator: "\n\n")
+            let text = values
+                .compactMap { plainText(from: $0, decodingEncodedSpans: decodingEncodedSpans) }
+                .joined(separator: "\n\n")
             return text.isEmpty ? nil : text
         }
         if let object = value as? [String: Any] {
+            if decodingEncodedSpans,
+               let text = object["text"] as? String,
+               let annotations = object["annotations"] as? [Any],
+               let decoded = plainText(from: self.decodingEncodedSpans(in: text, annotations: annotations)) {
+                return decoded
+            }
             for key in ["text", "content", "value", "note", "body"] {
-                if let text = plainText(from: object[key]) { return text }
+                if let text = plainText(from: object[key], decodingEncodedSpans: decodingEncodedSpans) {
+                    return text
+                }
             }
             let ignoredKeys: Set<String> = ["id", "type", "style", "level", "annotations"]
             let text = object
                 .filter { !ignoredKeys.contains($0.key) }
                 .sorted { $0.key < $1.key }
-                .compactMap { plainText(from: $0.value) }
+                .compactMap { plainText(from: $0.value, decodingEncodedSpans: decodingEncodedSpans) }
                 .joined(separator: "\n\n")
             return text.isEmpty ? nil : text
         }
