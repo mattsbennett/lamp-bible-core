@@ -48,6 +48,44 @@ struct LampLibraryVersificationTests {
         #expect(hebrew.convert(ref(29, 3, 1), to: .standard(.english)) == ref(29, 2, 28))
     }
 
+    /// The Septuagint's numbering, which the bundled `LXX` and `Brenton`
+    /// declare and which the skills shipped with Lamp describe to a reader.
+    /// It is not a constant offset: the two traditions join and split psalms
+    /// in different places, and the Septuagint has no Nehemiah of its own.
+    @Test func mapsTheSeptuagintsOwnNumbering() {
+        let english = LampVersification.standard(.english)
+        let septuagint = LampVersification.standard(.septuagint)
+        func asSeptuagint(_ book: Int, _ chapter: Int, _ verse: Int) -> Int? {
+            english.convert(ref(book, chapter, verse), to: septuagint)
+        }
+
+        // A psalm's title is the Septuagint's verse 1, not an unnumbered line.
+        #expect(asSeptuagint(19, 22, 0) == ref(19, 21, 1))
+        #expect(asSeptuagint(19, 22, 1) == ref(19, 21, 2))
+        #expect(septuagint.convert(ref(19, 21, 2), to: english) == ref(19, 22, 1))
+
+        // One lower through the middle of the book, and the joins and splits
+        // that stop it being an offset.
+        #expect(asSeptuagint(19, 1, 1) == ref(19, 1, 1))
+        #expect(asSeptuagint(19, 10, 1) == ref(19, 9, 22))
+        #expect(asSeptuagint(19, 11, 1) == ref(19, 10, 1))
+        #expect(asSeptuagint(19, 114, 1) == ref(19, 113, 1))
+        #expect(asSeptuagint(19, 115, 1) == ref(19, 113, 9))
+        #expect(asSeptuagint(19, 116, 1) == ref(19, 114, 1))
+        #expect(asSeptuagint(19, 117, 1) == ref(19, 116, 1))
+        #expect(asSeptuagint(19, 147, 1) == ref(19, 146, 1))
+        #expect(asSeptuagint(19, 148, 1) == ref(19, 148, 1))
+        #expect(septuagint.verseCounts[19]?[151] == 7)
+
+        // Nehemiah is numbered as Ezra 11-23, and Ezra's own chapters are not
+        // moved: a module of this scheme carries no Nehemiah book at all.
+        #expect(asSeptuagint(16, 1, 1) == ref(15, 11, 1))
+        #expect(asSeptuagint(16, 13, 31) == ref(15, 23, 31))
+        #expect(asSeptuagint(15, 10, 44) == ref(15, 10, 44))
+        #expect(septuagint.verseCounts[16] == nil)
+        #expect(septuagint.verseCounts[15]?[23] == 31)
+    }
+
     @Test func readsABundledTranslationsSchemeAndItsDepartures() async throws {
         let fixtureURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-versification-\(UUID().uuidString)", isDirectory: true)
