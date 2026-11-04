@@ -82,6 +82,62 @@ struct LampAgentLibraryTests {
         }
     }
 
+    /// A module holding part of the Bible is the normal case — `TAHOT` is the
+    /// Hebrew, `TAGNT` the Greek, the Septuagint modules have no Nehemiah — and
+    /// asking one for a book it does not carry used to be reported as the
+    /// reference being invalid, which sent the caller to correct `John 1:1`.
+    @Test func amoduleWithoutTheBookSaysSoRatherThanBlamingTheReference() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-agent-books-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        let moduleURL = fixture.appendingPathComponent("AGENT_JOHN.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "1.0", "id": "AGENT_JOHN", "type": "translation",
+                "name": "John Only", "abbreviation": "JO", "language": "en"
+              },
+              "books": [{
+                "id": "John", "name": "John", "number": 43, "testament": "NT",
+                "chapters": [
+                  {"chapter": 1, "verses": [
+                    {"v": 1, "ref": 43001001, "content": {"text": "The Word was in the beginning"}}
+                  ]}
+                ]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "AGENT_JOHN.json",
+            destinationURL: moduleURL
+        )
+        let library = LampLibrary(rootURL: fixture.appendingPathComponent("Library"))
+        _ = try await library.install(from: moduleURL)
+        let agent = LampAgentLibrary(library: library)
+
+        await #expect(throws: LampAgentError.bookNotInModule(
+            book: "Nehemiah", moduleID: "AGENT_JOHN"
+        )) {
+            try await agent.readPassage(reference: "Nehemiah 1:1", translationIDs: ["AGENT_JOHN"])
+        }
+        let said = LampAgentError.bookNotInModule(book: "Nehemiah", moduleID: "AGENT_JOHN")
+            .errorDescription ?? ""
+        #expect(said.contains("‘AGENT_JOHN’ has no Nehemiah"))
+        #expect(!said.contains("not a valid Bible reference"))
+        #expect(said.contains("inside another"))
+
+        // A chapter the module's own book does not reach is still the
+        // reference's problem, and a reference that cannot be read still is.
+        await #expect(throws: LampAgentError.invalidReference("John 99:1")) {
+            try await agent.readPassage(reference: "John 99:1", translationIDs: ["AGENT_JOHN"])
+        }
+        await #expect(throws: LampAgentError.self) {
+            try await agent.readPassage(reference: "not a reference", translationIDs: ["AGENT_JOHN"])
+        }
+    }
+
     @Test func accessPolicyRoundTripsAsJSON() throws {
         let policy = LampAgentAccessPolicy(
             allowedModuleIDs: ["A", "B"],

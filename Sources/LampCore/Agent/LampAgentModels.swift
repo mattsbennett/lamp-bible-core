@@ -835,6 +835,11 @@ public struct LampAgentStrongsAnalysis: Codable, Equatable, Sendable {
 public enum LampAgentError: Error, LocalizedError, Equatable, Sendable {
     case disabled
     case invalidReference(String)
+    /// A reference that is a real one, asked of a module that does not carry
+    /// that book. Told apart from an unreadable reference because the remedy
+    /// differs: the caller has nothing to correct, and the module may hold the
+    /// text under another book.
+    case bookNotInModule(book: String, moduleID: String)
     case referenceRangeTooLarge(Int)
     case moduleNotAllowed(String)
     case noMatchingModule(LampModuleKind)
@@ -846,6 +851,10 @@ public enum LampAgentError: Error, LocalizedError, Equatable, Sendable {
             "Lamp module access is disabled in Settings."
         case .invalidReference(let reference):
             "‘\(reference)’ is not a valid Bible reference. Try a form such as John 1:1–3."
+        case .bookNotInModule(let book, let moduleID):
+            "‘\(moduleID)’ has no \(book). A module may cover only part of the Bible, "
+                + "or number a book's chapters inside another, as a Septuagint "
+                + "numbers Nehemiah inside Ezra."
         case .referenceRangeTooLarge(let maximum):
             "That passage is too large. Request at most \(maximum) verses at a time."
         case .moduleNotAllowed(let moduleID):

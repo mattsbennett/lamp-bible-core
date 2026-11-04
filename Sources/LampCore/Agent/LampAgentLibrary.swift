@@ -126,14 +126,17 @@ public actor LampAgentLibrary {
                 uniqueKeysWithValues: try await library.translationBooks(moduleID: translation.id)
                     .map { ($0.id, $0) }
             )
-            try validate(range, against: books, source: reference)
+            try validate(range, against: books, in: translation.id, source: reference)
             var verses: [LampAgentVerse] = []
             var headings: [LampAgentHeading] = []
             var foundMore = false
 
             passage: for bookNumber in range.start.book...range.end.book {
                 guard let book = books[bookNumber] else {
-                    throw LampAgentError.invalidReference(reference)
+                    throw LampAgentError.bookNotInModule(
+                        book: Self.bookName(bookNumber),
+                        moduleID: translation.id
+                    )
                 }
                 let firstChapter = bookNumber == range.start.book ? range.start.chapter : 1
                 let lastChapter = bookNumber == range.end.book ? range.end.chapter : book.chapterCount
@@ -772,17 +775,34 @@ public actor LampAgentLibrary {
         point.book * 1_000_000 + point.chapter * 1_000 + (point.verse ?? missingVerse)
     }
 
+    /// A module that does not carry the book is a different answer from a
+    /// reference that could not be read, and calling `John 1:1` an invalid
+    /// reference because the module asked is the Hebrew sends the caller to
+    /// correct a reference that was right.
     private func validate(
         _ range: LampAgentReferenceRange,
         against books: [Int: LampTranslationBook],
+        in moduleID: String,
         source: String
     ) throws {
+        for number in [range.start.book, range.end.book] where books[number] == nil {
+            throw LampAgentError.bookNotInModule(
+                book: Self.bookName(number),
+                moduleID: moduleID
+            )
+        }
         guard let startBook = books[range.start.book],
               let endBook = books[range.end.book],
               (1...startBook.chapterCount).contains(range.start.chapter),
               (1...endBook.chapterCount).contains(range.end.chapter) else {
             throw LampAgentError.invalidReference(source)
         }
+    }
+
+    /// The book a number is, for an error its caller reads: its own name, the
+    /// number being Lamp's and meaning nothing to them.
+    private static func bookName(_ number: Int) -> String {
+        LampCanonicalBooks.book(number)?.name ?? "book \(number)"
     }
 }
 
