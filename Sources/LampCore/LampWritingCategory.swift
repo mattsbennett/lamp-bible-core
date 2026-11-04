@@ -62,6 +62,10 @@ public enum LampWritingCategory {
     /// kind, the earlier in order wins, which is the one that kept its
     /// capital — the deliberate spelling, and the one `displayName` would have
     /// produced anyway.
+    ///
+    /// Ordered on the folded key, not the spelling: sorting the spellings puts
+    /// every capital first, so a list of Handout, Exhortation, Lament, Study
+    /// reads as though it were unsorted.
     public static func kindsHeld(_ stored: [String?]) -> [String] {
         var byKey: [String: String] = [:]
         for kind in stored.compactMap(canonical) {
@@ -69,7 +73,7 @@ public enum LampWritingCategory {
             if let held = byKey[key], held <= kind { continue }
             byKey[key] = kind
         }
-        return byKey.values.sorted()
+        return byKey.sorted { $0.key < $1.key }.map(\.value)
     }
 
     /// The kinds to offer a writer whose library already holds `stored`: every

@@ -74,13 +74,22 @@ struct LampWritingCategoryTests {
         #expect(LampWritingCategory.displayName(stored) == shown)
     }
 
+    /// Sorting the spellings would put every capital first, so a list read as
+    /// though it were unsorted: Handout, Exhortation, Lament, Study.
+    @Test func thekindsHeldAreInTheOrderAreaderReadsThem() {
+        #expect(
+            LampWritingCategory.kindsHeld(["study", "Handout", "exhortation", "Lament"])
+                == ["exhortation", "Handout", "Lament", "study"]
+        )
+    }
+
     /// A filter lists what a library holds and nothing else — a suggestion
     /// nobody has written is not a filter worth offering.
     @Test func thekindsHeldAreTheOnesWritten() {
         let held = LampWritingCategory.kindsHeld([
             "study", "Handout", "handout", nil, "", "Sermon", "STUDY",
         ])
-        #expect(held == ["Handout", "exhortation", "study"])
+        #expect(held == ["exhortation", "Handout", "study"])
         #expect(LampWritingCategory.kindsHeld([]).isEmpty)
         #expect(LampWritingCategory.kindsHeld([nil, "", "  "]).isEmpty)
     }
@@ -91,7 +100,7 @@ struct LampWritingCategoryTests {
         let offered = LampWritingCategory.offered(forLibraryHolding: [
             "study", "Handout", "class discussion", nil, "", "sermon",
         ])
-        #expect(offered == LampWritingCategory.suggestions + ["Handout", "class discussion"])
+        #expect(offered == LampWritingCategory.suggestions + ["class discussion", "Handout"])
     }
 
     /// A kind the writer has used that is also suggested is offered once, in
