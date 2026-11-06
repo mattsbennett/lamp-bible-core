@@ -15,13 +15,17 @@ public actor LampLibrary {
     private let bundledModulesArchiveURL: URL?
     private var cachedBundledDatabaseURL: URL?
     private var cachedBundledModules: [LampInstalledModule]?
-    private var openDatabases: [String: DatabaseQueue] = [:]
+    private var cachedBundledModulesRevision: LampDatabaseFileRevision?
+    private var openDatabases: [String: (revision: LampDatabaseFileRevision, queue: DatabaseQueue)] = [:]
+    private var installedMetadata: [String: (
+        revision: LampDatabaseFileRevision, byteCount: Int, module: LampInstalledModule
+    )] = [:]
     /// Each translation's verse numbering, read once: comparing translations
     /// asks for it on every chapter.
     private var versifications: [String: LampVersification] = [:]
     private var strongsIndexQueue: DatabaseQueue?
     /// Each translation's fingerprint as last read, until a module is written.
-    private var strongsFingerprints: [String: String] = [:]
+    private var strongsFingerprints: [String: (revision: LampDatabaseFileRevision, value: String)] = [:]
     private var strongsIndexesBuilding: Set<String> = []
 
     public init(
@@ -94,6 +98,8 @@ public actor LampLibrary {
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
+        let livePaths = Set(databaseURLs.map(\.path))
+        installedMetadata = installedMetadata.filter { livePaths.contains($0.key) }
         return databaseURLs
             .filter { $0.pathExtension.lowercased() == "sqlite" }
             .compactMap { databaseURL in
@@ -102,13 +108,20 @@ public actor LampLibrary {
                     .appendingPathComponent(name)
                     .appendingPathExtension("lamp")
                 let byteCount = try? moduleFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
-                guard let module = try? inspectDatabase(
-                    at: databaseURL,
-                    fallbackID: nil,
-                    compressedByteCount: byteCount ?? 0,
-                    // Already verified when it was installed.
-                    verifyIntegrity: false
-                ), name == storageKey(for: module.id) else { return nil }
+                guard let revision = try? LampDatabaseFileRevision(url: databaseURL) else { return nil }
+                let module: LampInstalledModule
+                if let cached = installedMetadata[databaseURL.path],
+                   cached.revision == revision, cached.byteCount == (byteCount ?? 0) {
+                    module = cached.module
+                } else {
+                    guard let inspected = try? inspectDatabase(
+                        at: databaseURL, fallbackID: nil,
+                        compressedByteCount: byteCount ?? 0, verifyIntegrity: false
+                    ) else { return nil }
+                    module = inspected
+                    installedMetadata[databaseURL.path] = (revision, byteCount ?? 0, module)
+                }
+                guard name == storageKey(for: module.id) else { return nil }
                 return (module, moduleFileURL, byteCount != nil)
             }
     }
@@ -348,8 +361,8 @@ public actor LampLibrary {
     /// its departures as a JSON array of mapping lines in
     /// `versification_mappings`.
     public func versification(moduleID: String) throws -> LampVersification {
-        if let known = versifications[moduleID] { return known }
         let queue = try openDatabase(moduleID: moduleID)
+        if let known = versifications[moduleID] { return known }
         let declared: (scheme: String?, departures: String?) = try queue.read { db in
             let tables = try tableNames(in: db)
             if tables.contains("translation_meta") {
@@ -847,12 +860,32 @@ public actor LampLibrary {
     }
 
     private func strongsFingerprint(moduleID: String) throws -> String? {
-        if let known = strongsFingerprints[moduleID] { return known }
+        let url = try databaseURL(moduleID: moduleID).resolvingSymlinksInPath()
+        let revision = try LampDatabaseFileRevision(url: url)
+        if let known = strongsFingerprints[moduleID], known.revision == revision { return known.value }
+        let fileRevision = try revision.serialized()
+        let index = try openStrongsIndex()
+        if let known = try index.read({
+            try LampStrongsIndex.cachedFingerprint(
+                translationID: moduleID, databasePath: url.path, fileRevision: fileRevision, in: $0
+            )
+        }) {
+            strongsFingerprints[moduleID] = (revision, known)
+            return known
+        }
         let fingerprint = try openDatabase(moduleID: moduleID).read { db -> String? in
             guard let source = try verseSource(in: db, moduleID: moduleID) else { return nil }
             return try LampStrongsIndex.fingerprint(table: source.table, translationID: source.translationID, in: db)
         }
-        strongsFingerprints[moduleID] = fingerprint
+        // A concurrent replacement must not associate an old digest with a
+        // newer file's revision. Let this call use the uncached fallback.
+        guard let fingerprint, try LampDatabaseFileRevision(url: url) == revision else { return nil }
+        try index.write {
+            try LampStrongsIndex.cacheFingerprint(
+                fingerprint, translationID: moduleID, databasePath: url.path, fileRevision: fileRevision, in: $0
+            )
+        }
+        strongsFingerprints[moduleID] = (revision, fingerprint)
         return fingerprint
     }
 
@@ -947,7 +980,7 @@ public actor LampLibrary {
             }
             // A module written while its index was built reads differently
             // now, and stays unindexed until it is built again.
-            guard strongsFingerprints[module.id] == fingerprint else { continue }
+            guard strongsFingerprints[module.id]?.value == fingerprint else { continue }
             try finishStrongsIndex(moduleID: module.id, fingerprint: fingerprint)
         }
     }
@@ -2500,55 +2533,111 @@ public actor LampLibrary {
                 let queue = try openDatabase(moduleID: module.id)
                 let remaining = resultLimit - countForKind(.commentary)
                 let matches = try queue.read { db -> [LampModuleSearchResult] in
-                    guard try tableNames(in: db).contains("commentary_units") else { return [] }
+                    let tables = try tableNames(in: db)
+                    guard tables.contains("commentary_units") else { return [] }
                     let columns = try columnNames(in: db, table: "commentary_units")
-                    // The compiled text holds a unit's title, introduction,
-                    // translation and commentary but not its footnotes, which
-                    // are searched in the words of their JSON. A module from
-                    // before that text is searched in the words of each.
-                    let like = columns.contains("search_text")
-                        ? parsedQuery.sqlLikePredicate(columns: ["title", "search_text"], jsonColumns: ["footnotes_json"])
-                        : parsedQuery.sqlLikePredicate(columns: ["title"], jsonColumns: [
-                            "introduction_json", "translation_json", "commentary_json", "footnotes_json",
-                        ])
-                    var condition = like.condition
-                    var arguments = StatementArguments(like.arguments)
+                    let hasSearchText = columns.contains("search_text")
+                    let hasFootnotesText = columns.contains("footnotes_text")
+                    let hasFTS = tables.contains("commentary_units_fts") && !parsedQuery.fts5Query.isEmpty
+                    let ftsColumns = hasFTS ? try columnNames(in: db, table: "commentary_units_fts") : []
+                    let fullFTS = hasFootnotesText && ftsColumns.contains("footnotes_text")
+                    var conditions: [String] = []
+                    var arguments = StatementArguments()
                     if columns.contains("module_id") {
-                        condition = "module_id = ? AND " + condition
-                        arguments = StatementArguments([module.id] + like.arguments)
+                        conditions.append("u.module_id = ?")
+                        arguments += [module.id]
                     }
-                    arguments += [remaining]
-                    return try Row.fetchAll(db, sql: """
-                        SELECT id, book, chapter, sv, ev, title,
-                               introduction_json, translation_json, commentary_json, footnotes_json
-                        FROM commentary_units
-                        WHERE \(condition)
-                        ORDER BY book, chapter, order_index
-                        LIMIT ?
-                        """, arguments: arguments).map { row in
-                            let introduction: String? = row["introduction_json"]
-                            let translation: String? = row["translation_json"]
-                            let commentary: String? = row["commentary_json"]
-                            let footnotes: String? = row["footnotes_json"]
-                            let start: Int = row["sv"]
-                            let end: Int? = row["ev"]
-                            let body = [introduction, translation, commentary, footnotes]
-                                .compactMap { plainText(fromJSONString: $0, decodingEncodedSpans: true) }
-                                .joined(separator: " ")
-                            let title: String? = row["title"]
-                            return LampModuleSearchResult(
-                                id: "commentary:\(module.id):\(row["id"] as String)",
-                                kind: .commentary,
-                                moduleID: module.id,
-                                moduleName: module.name,
-                                title: title?.isEmpty == false
-                                    ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                                subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                                snippet: snippet(body),
-                                startReference: start,
-                                endReference: end
-                            )
+                    if fullFTS {
+                        conditions.append("u.rowid IN (SELECT rowid FROM commentary_units_fts WHERE commentary_units_fts MATCH ?)")
+                        arguments += [parsedQuery.fts5Query]
+                    } else if hasFTS {
+                        // Old indexes omit footnotes. Each term can occur in
+                        // either the indexed body or the notes, including mixed
+                        // queries with terms split between the two.
+                        for term in parsedQuery.terms {
+                            let single = LampSearchQuery(term.isExact ? "\"" + term.text + "\"" : term.text)
+                            let notes = single.sqlLikePredicate(columns: [], jsonColumns: ["u.footnotes_json"])
+                            if single.fts5Query.isEmpty {
+                                conditions.append(notes.condition)
+                                arguments += StatementArguments(notes.arguments)
+                            } else {
+                                conditions.append("(u.rowid IN (SELECT rowid FROM commentary_units_fts WHERE commentary_units_fts MATCH ?) OR \(notes.condition))")
+                                arguments += [single.fts5Query]
+                                arguments += StatementArguments(notes.arguments)
+                            }
                         }
+                    } else {
+                        let like = hasSearchText
+                            ? parsedQuery.sqlLikePredicate(columns: ["u.title", "u.search_text"], jsonColumns: ["u.footnotes_json"])
+                            : parsedQuery.sqlLikePredicate(columns: ["u.title"], jsonColumns: [
+                                "u.introduction_json", "u.translation_json", "u.commentary_json", "u.footnotes_json",
+                            ])
+                        conditions.append(like.condition)
+                        arguments += StatementArguments(like.arguments)
+                    }
+                    let body = hasSearchText ? "u.search_text" : "NULL AS search_text"
+                    let notes = hasFootnotesText ? "u.footnotes_text" : "NULL AS footnotes_text"
+                    let legacyBody = hasSearchText ? "" : ", u.introduction_json, u.translation_json, u.commentary_json"
+                    let legacyNotes = hasFootnotesText ? "" : ", u.footnotes_json"
+                    // The projection keeps legacy-font source spellings. Only
+                    // return/decode body JSON when Unicode replacement spans
+                    // are actually present; ordinary previews stay text-only.
+                    let encodedBody = hasSearchText ? """
+                        , CASE WHEN instr(u.introduction_json, '"sourceEncoding"') > 0
+                                 OR instr(u.translation_json, '"sourceEncoding"') > 0
+                                 OR instr(u.commentary_json, '"sourceEncoding"') > 0
+                          THEN '[' || COALESCE(u.introduction_json, 'null') || ','
+                                   || COALESCE(u.translation_json, 'null') || ','
+                                   || COALESCE(u.commentary_json, 'null') || ']'
+                          END AS encoded_body_json
+                        """ : ", NULL AS encoded_body_json"
+                    let encodedNotes = hasFootnotesText ? """
+                        , CASE WHEN instr(u.footnotes_json, '"sourceEncoding"') > 0
+                          THEN u.footnotes_json END AS encoded_footnotes_json
+                        """ : ", NULL AS encoded_footnotes_json"
+                    let rows = try Row.fetchCursor(db, sql: """
+                        SELECT u.id, u.sv, u.ev, u.title, \(body), \(notes)\(legacyBody)\(legacyNotes)\(encodedBody)\(encodedNotes)
+                        FROM commentary_units u
+                        WHERE \(conditions.joined(separator: " AND "))
+                        ORDER BY u.book, u.chapter, u.order_index, u.rowid
+                        """, arguments: arguments)
+                    var found: [LampModuleSearchResult] = []
+                    while found.count < remaining, let row = try rows.next() {
+                        var text: String
+                        if hasSearchText {
+                            text = row["search_text"] ?? ""
+                        } else {
+                            text = ["introduction_json", "translation_json", "commentary_json"]
+                                .compactMap { plainText(fromJSONString: row[$0], decodingEncodedSpans: true) }
+                                .joined(separator: " ")
+                        }
+                        var displayText = plainText(fromJSONString: row["encoded_body_json"], decodingEncodedSpans: true) ?? text
+                        // No JSON decode on the normal indexed-body path.
+                        if !parsedQuery.matchesWordPrefixes(text) {
+                            let footnotes: String = hasFootnotesText
+                                ? row["footnotes_text"] ?? ""
+                                : plainText(fromJSONString: row["footnotes_json"], decodingEncodedSpans: true) ?? ""
+                            text += "\n\n" + footnotes
+                            displayText += "\n\n" + (plainText(
+                                fromJSONString: row["encoded_footnotes_json"], decodingEncodedSpans: true
+                            ) ?? footnotes)
+                        }
+                        if !fullFTS {
+                            let title: String = row["title"] ?? ""
+                            guard parsedQuery.matchesWordPrefixes(title + " " + text) else { continue }
+                        }
+                        let start: Int = row["sv"]
+                        let end: Int? = row["ev"]
+                        let title: String? = row["title"]
+                        found.append(LampModuleSearchResult(
+                            id: "commentary:\(module.id):\(row["id"] as String)",
+                            kind: .commentary, moduleID: module.id, moduleName: module.name,
+                            title: title?.isEmpty == false ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
+                            subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
+                            snippet: snippet(displayText), startReference: start, endReference: end
+                        ))
+                    }
+                    return found
                 }
                 results += matches
                 if countForKind(.commentary) >= resultLimit { break }
@@ -2556,39 +2645,45 @@ public actor LampLibrary {
         }
 
         if hasTextQuery && wants(.book) {
-            let like = parsedQuery.sqlLikePredicate(columns: ["title", "subtitle", "search_text"])
             for module in installed where module.kind == .book && includesModule(module.id) {
                 try Task.checkCancellation()
                 let queue = try openDatabase(moduleID: module.id)
                 let remaining = resultLimit - countForKind(.book)
-                results += try queue.read { db in
-                    guard try tableNames(in: db).contains("book_sections") else { return [] }
-                    var arguments = StatementArguments([module.id] + like.arguments)
-                    arguments += [remaining]
-                    return try Row.fetchAll(db, sql: """
-                        SELECT id, title, subtitle, key_scriptures_json,
-                               content_json, search_text
-                        FROM book_sections
-                        WHERE module_id = ?
-                          AND \(like.condition)
-                        ORDER BY rowid
-                        LIMIT ?
-                        """, arguments: arguments).map { row in
-                            let scripturesJSON: String? = row["key_scriptures_json"]
-                            let scriptures = devotionalScriptureLinks(from: scripturesJSON)
-                            let contentJSON: String = row["content_json"]
-                            return LampModuleSearchResult(
-                                id: "book:\(module.id):\(row["id"] as String)",
-                                kind: .book,
-                                moduleID: module.id,
-                                moduleName: module.name,
-                                title: row["title"],
-                                subtitle: row["subtitle"],
-                                snippet: snippet(plainText(fromJSONString: contentJSON) ?? contentJSON),
-                                startReference: scriptures.first?.startReference,
-                                endReference: scriptures.first?.endReference
-                            )
-                        }
+                results += try queue.read { db -> [LampModuleSearchResult] in
+                    let tables = try tableNames(in: db)
+                    guard tables.contains("book_sections") else { return [] }
+                    let hasFTS = tables.contains("book_sections_fts") && !parsedQuery.fts5Query.isEmpty
+                    let like = parsedQuery.sqlLikePredicate(columns: ["s.title", "s.subtitle", "s.search_text"])
+                    var arguments: StatementArguments = [module.id]
+                    let condition: String
+                    if hasFTS {
+                        condition = "s.rowid IN (SELECT rowid FROM book_sections_fts WHERE book_sections_fts MATCH ?)"
+                        arguments += [parsedQuery.fts5Query]
+                    } else {
+                        condition = like.condition
+                        arguments += StatementArguments(like.arguments)
+                    }
+                    let rows = try Row.fetchCursor(db, sql: """
+                        SELECT s.id, s.title, s.subtitle, s.key_scriptures_json, s.search_text
+                        FROM book_sections s
+                        WHERE s.module_id = ? AND \(condition)
+                        ORDER BY s.rowid
+                        """, arguments: arguments)
+                    var found: [LampModuleSearchResult] = []
+                    while found.count < remaining, let row = try rows.next() {
+                        let text: String = row["search_text"]
+                        if !hasFTS, !parsedQuery.matchesWordPrefixes(text) { continue }
+                        let scriptures = devotionalScriptureLinks(from: row["key_scriptures_json"])
+                        found.append(LampModuleSearchResult(
+                            id: "book:\(module.id):\(row["id"] as String)",
+                            kind: .book, moduleID: module.id, moduleName: module.name,
+                            title: row["title"], subtitle: row["subtitle"],
+                            snippet: snippet(text),
+                            startReference: scriptures.first?.startReference,
+                            endReference: scriptures.first?.endReference
+                        ))
+                    }
+                    return found
                 }
                 if countForKind(.book) >= resultLimit { break }
             }
@@ -4454,15 +4549,19 @@ public actor LampLibrary {
     }
 
     private func openDatabase(moduleID: String) throws -> DatabaseQueue {
+        try openReadOnlyDatabase(at: databaseURL(moduleID: moduleID))
+    }
+
+    private func databaseURL(moduleID: String) throws -> URL {
         let url = databasesURL
             .appendingPathComponent(storageKey(for: moduleID))
             .appendingPathExtension("sqlite")
         if fileManager.fileExists(atPath: url.path) {
-            return try openReadOnlyDatabase(at: url)
+            return url
         }
         if try bundledModules().contains(where: { $0.id == moduleID }),
            let bundledURL = try preparedBundledDatabaseURL() {
-            return try openReadOnlyDatabase(at: bundledURL)
+            return bundledURL
         }
         throw LampLibraryError.moduleNotFound(moduleID)
     }
@@ -4478,11 +4577,18 @@ public actor LampLibrary {
     /// `forgetOpenDatabases()` drops the cache whenever a database file is
     /// rewritten or removed, so nothing can read through a stale handle.
     private func openReadOnlyDatabase(at url: URL) throws -> DatabaseQueue {
-        if let existing = openDatabases[url.path] { return existing }
+        let revision = try LampDatabaseFileRevision(url: url)
+        if let existing = openDatabases[url.path], existing.revision == revision { return existing.queue }
+        if openDatabases[url.path] != nil {
+            // Another process may have reinstalled the module. A live reader
+            // must not keep using the old inode or its derived verse numbering.
+            versifications.removeAll()
+            strongsFingerprints.removeAll()
+        }
         var configuration = Configuration()
         configuration.readonly = true
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
-        openDatabases[url.path] = queue
+        openDatabases[url.path] = (revision, queue)
         return queue
     }
 
@@ -4492,6 +4598,7 @@ public actor LampLibrary {
         openDatabases.removeAll()
         versifications.removeAll()
         strongsFingerprints.removeAll()
+        installedMetadata.removeAll()
     }
 
     private func preparedBundledDatabaseURL() throws -> URL? {
@@ -4553,8 +4660,9 @@ public actor LampLibrary {
     }
 
     private func bundledModules() throws -> [LampInstalledModule] {
-        if let cachedBundledModules { return cachedBundledModules }
         guard let databaseURL = try preparedBundledDatabaseURL() else { return [] }
+        let revision = try LampDatabaseFileRevision(url: databaseURL)
+        if let cachedBundledModules, cachedBundledModulesRevision == revision { return cachedBundledModules }
         let queue = try openReadOnlyDatabase(at: databaseURL)
         let modules = try queue.read { db -> [LampInstalledModule] in
             let tables = try tableNames(in: db)
@@ -4618,6 +4726,7 @@ public actor LampLibrary {
             return modules
         }
         cachedBundledModules = modules
+        cachedBundledModulesRevision = revision
         return modules
     }
 

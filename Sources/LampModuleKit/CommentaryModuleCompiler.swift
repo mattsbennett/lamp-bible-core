@@ -58,8 +58,8 @@ extension LampModuleCompiler {
                         INSERT INTO commentary_units (
                             id, module_id, book, chapter, sv, ev, unit_type, level,
                             parent_id, title, suffix, introduction_json, translation_json,
-                            commentary_json, footnotes_json, search_text, order_index
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            commentary_json, footnotes_json, search_text, order_index, footnotes_text
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                     arguments: [
                         row.id,
@@ -79,9 +79,11 @@ extension LampModuleCompiler {
                         row.footnotesJSON,
                         row.searchText,
                         row.orderIndex,
+                        row.footnotesText,
                     ]
                 )
             }
+            try db.execute(sql: "INSERT INTO commentary_units_fts(commentary_units_fts) VALUES('rebuild')")
         }
 
         try optimize(queue)
@@ -126,7 +128,8 @@ extension LampModuleCompiler {
                 commentary_json TEXT,
                 footnotes_json TEXT,
                 search_text TEXT NOT NULL DEFAULT '',
-                order_index INTEGER NOT NULL DEFAULT 0
+                order_index INTEGER NOT NULL DEFAULT 0,
+                footnotes_text TEXT NOT NULL DEFAULT ''
             )
             """)
         try db.execute(sql: "CREATE INDEX idx_comm_units_module ON commentary_units(module_id)")
@@ -134,6 +137,12 @@ extension LampModuleCompiler {
         try db.execute(sql: "CREATE INDEX idx_comm_units_book_chapter ON commentary_units(book, chapter)")
         try db.execute(sql: "CREATE INDEX idx_comm_units_parent ON commentary_units(parent_id)")
         try db.execute(sql: "CREATE INDEX idx_comm_units_type ON commentary_units(unit_type)")
+        try db.execute(sql: """
+            CREATE VIRTUAL TABLE commentary_units_fts USING fts5(
+                title, search_text, footnotes_text,
+                content='commentary_units', content_rowid='rowid'
+            )
+            """)
     }
 }
 
@@ -152,6 +161,7 @@ private struct CommentaryUnitRow {
     let commentaryJSON: String?
     let footnotesJSON: String?
     let searchText: String
+    let footnotesText: String
     let orderIndex: Int
 }
 
@@ -430,6 +440,7 @@ private struct CommentaryUnitBuilder {
             commentaryJSON: try? JSONSupport.jsonString(commentary),
             footnotesJSON: try? JSONSupport.jsonString(footnotes),
             searchText: searchText,
+            footnotesText: JSONSupport.plainText(footnotes),
             orderIndex: orderIndex
         ))
         orderIndex += 1

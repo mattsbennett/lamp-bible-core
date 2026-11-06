@@ -44,7 +44,35 @@ public enum LampStrongsIndex {
                 verses INTEGER NOT NULL,
                 PRIMARY KEY (translation_id, language, book, chapter)
             ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS strongs_source_fingerprints (
+                translation_id TEXT PRIMARY KEY,
+                database_path TEXT NOT NULL,
+                file_revision TEXT NOT NULL,
+                format_version INTEGER NOT NULL,
+                fingerprint TEXT NOT NULL
+            );
             """)
+    }
+
+    /// The digest is still content-derived. A filesystem revision only decides
+    /// whether that already-computed digest can be reused across helper runs.
+    static func cachedFingerprint(
+        translationID: String, databasePath: String, fileRevision: String, in db: Database
+    ) throws -> String? {
+        try String.fetchOne(db, sql: """
+            SELECT fingerprint FROM strongs_source_fingerprints
+            WHERE translation_id = ? AND database_path = ? AND file_revision = ? AND format_version = ?
+            """, arguments: [translationID, databasePath, fileRevision, formatVersion])
+    }
+
+    static func cacheFingerprint(
+        _ fingerprint: String, translationID: String, databasePath: String, fileRevision: String, in db: Database
+    ) throws {
+        try db.execute(sql: """
+            INSERT OR REPLACE INTO strongs_source_fingerprints
+                (translation_id, database_path, file_revision, format_version, fingerprint)
+            VALUES (?, ?, ?, ?, ?)
+            """, arguments: [translationID, databasePath, fileRevision, formatVersion, fingerprint])
     }
 
     /// A digest of a translation's tags, each verse's reference and

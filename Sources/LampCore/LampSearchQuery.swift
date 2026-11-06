@@ -14,37 +14,44 @@ public struct LampSearchTerm: Equatable, Sendable {
     /// apostrophe make no difference, so "Lord's" finds "Lord’s" and "λογος"
     /// finds "λόγος".
     public func matches(_ text: String) -> Bool {
-        !ranges(in: text, wordStartsOnly: false).isEmpty
+        !ranges(in: text, wordStartsOnly: false, maximumMatches: 1).isEmpty
     }
 
     /// Where this term falls in `text`, as Character offsets. A quoted term
     /// must stand as a whole word or phrase. A typed word, which the full-text
     /// index matches at the start of a word, is found there when
     /// `wordStartsOnly` is set.
-    func ranges(in text: String, wordStartsOnly: Bool) -> [Range<Int>] {
-        let haystack = Array(LampSearchQuery.foldingApostrophes(text))
+    func ranges(in text: String, wordStartsOnly: Bool, maximumMatches: Int? = nil) -> [Range<Int>] {
         let needle = LampSearchQuery.foldingApostrophes(self.text)
-        guard !needle.isEmpty, !haystack.isEmpty else { return [] }
-        let folded = String(haystack)
+        // No text-wide normalization is needed for the usual word query.
+        // Only a needle containing an apostrophe needs its equivalent forms.
+        let folded = needle.contains("'") ? LampSearchQuery.foldingApostrophes(text) : text
+        guard !needle.isEmpty, !folded.isEmpty else { return [] }
         var found: [Range<Int>] = []
         var searchStart = folded.startIndex
+        var searchOffset = 0
         while searchStart < folded.endIndex,
               let match = folded.range(
                 of: needle,
                 options: [.caseInsensitive, .diacriticInsensitive],
                 range: searchStart..<folded.endIndex
               ) {
-            let lower = folded.distance(from: folded.startIndex, to: match.lowerBound)
-            let upper = folded.distance(from: folded.startIndex, to: match.upperBound)
-            func isWordCharacter(_ offset: Int) -> Bool {
-                haystack.indices.contains(offset) && (haystack[offset].isLetter || haystack[offset].isNumber)
+            // Count from the previous match, not from the beginning each time.
+            // Repeated common words in a long chapter otherwise become quadratic.
+            let lower = searchOffset + folded.distance(from: searchStart, to: match.lowerBound)
+            let upper = lower + folded.distance(from: match.lowerBound, to: match.upperBound)
+            func isWordCharacter(_ index: String.Index) -> Bool {
+                index < folded.endIndex && (folded[index].isLetter || folded[index].isNumber)
             }
-            let startsWord = !isWordCharacter(lower - 1)
-            let endsWord = !isWordCharacter(upper)
+            let startsWord = match.lowerBound == folded.startIndex
+                || !isWordCharacter(folded.index(before: match.lowerBound))
+            let endsWord = !isWordCharacter(match.upperBound)
             if isExact ? startsWord && endsWord : (!wordStartsOnly || startsWord) {
                 found.append(lower..<upper)
+                if let maximumMatches, found.count >= maximumMatches { break }
             }
             searchStart = folded.index(after: match.lowerBound)
+            searchOffset = lower + 1
         }
         return found
     }
@@ -82,6 +89,14 @@ public struct LampSearchQuery: Equatable, Sendable {
 
     public func matches(_ text: String) -> Bool {
         terms.allSatisfy { $0.matches(text) }
+    }
+
+    /// Refines a legacy LIKE prefilter to the same word-start boundary used
+    /// by indexed book/commentary searches. A quoted term also ends a word.
+    func matchesWordPrefixes(_ text: String) -> Bool {
+        terms.allSatisfy {
+            !$0.ranges(in: text, wordStartsOnly: true, maximumMatches: 1).isEmpty
+        }
     }
 
     public var plainText: String {
@@ -210,14 +225,60 @@ public struct LampSearchQuery: Equatable, Sendable {
     /// the full-text index finds it, or anywhere when it starts no word, as a
     /// substring search finds it. Text without a match is cut from its start.
     public func markedSnippet(_ text: String, limit: Int = 280) -> String {
-        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let characters = Array(collapsed)
-        var marks: [Range<Int>] = []
-        for term in terms {
-            let starts = term.ranges(in: collapsed, wordStartsOnly: true)
-            marks += starts.isEmpty ? term.ranges(in: collapsed, wordStartsOnly: false) : starts
+        guard limit > 0, !text.isEmpty else { return "" }
+        // A phrase may cross a paragraph break. Normalize that exceptional
+        // case before locating it; ordinary word snippets need no full copy.
+        if terms.contains(where: { $0.text.contains(where: \.isWhitespace) }),
+           text.contains("  ") || text.contains(where: { $0.isWhitespace && $0 != " " }) {
+            return markedSnippet(text.split(whereSeparator: \.isWhitespace).joined(separator: " "), limit: limit)
         }
-        marks.sort { $0.lowerBound < $1.lowerBound }
+        // Locate only the first useful occurrence of each term. Once a window
+        // is chosen, find/highlight matches only inside that bounded window.
+        let matches = terms.map { term -> (term: LampSearchTerm, startsWord: Bool, first: Int?) in
+            if let first = term.ranges(in: text, wordStartsOnly: true, maximumMatches: 1).first {
+                return (term, true, first.lowerBound)
+            }
+            return (term, false, term.ranges(in: text, wordStartsOnly: false, maximumMatches: 1).first?.lowerBound)
+        }
+        let first = matches.compactMap(\.first).min() ?? 0
+        var start = text.index(text.startIndex, offsetBy: max(0, first - limit / 3))
+        var rewind = 0
+        while start > text.startIndex, rewind < limit {
+            let previous = text.index(before: start)
+            if text[previous].isWhitespace { break }
+            start = previous
+            rewind += 1
+        }
+
+        // Collapse just enough text to display the snippet, not a whole book
+        // chapter. Keep one extra character to detect a clipped final word.
+        var characters: [Character] = []
+        characters.reserveCapacity(min(limit, 4096))
+        var cursor = start
+        var spacePending = false
+        while cursor < text.endIndex, characters.count <= limit {
+            let character = text[cursor]
+            cursor = text.index(after: cursor)
+            if character.isWhitespace {
+                if !characters.isEmpty { spacePending = true }
+            } else {
+                if spacePending { characters.append(" ") }
+                characters.append(character)
+                spacePending = false
+            }
+        }
+        var end = min(limit, characters.count)
+        let hasMore = cursor < text.endIndex || characters.count > end
+        if characters.count > end {
+            var cut = end
+            while cut > 0, !characters[cut - 1].isWhitespace { cut -= 1 }
+            if cut > end / 2 { end = cut - 1 }
+        }
+        characters = Array(characters.prefix(end))
+        let window = String(characters)
+        let marks = matches.flatMap {
+            $0.term.ranges(in: window, wordStartsOnly: $0.startsWord)
+        }.sorted { ($0.lowerBound, $0.upperBound) < ($1.lowerBound, $1.upperBound) }
         var merged: [Range<Int>] = []
         for mark in marks {
             if let last = merged.last, mark.lowerBound <= last.upperBound {
@@ -226,30 +287,15 @@ public struct LampSearchQuery: Equatable, Sendable {
                 merged.append(mark)
             }
         }
-
-        var window = 0..<characters.count
-        if characters.count > limit {
-            var start = max((merged.first?.lowerBound ?? 0) - limit / 3, 0)
-            while start > 0, !characters[start - 1].isWhitespace { start -= 1 }
-            var end = min(start + limit, characters.count)
-            if end < characters.count {
-                var cut = end
-                while cut > start, !characters[cut - 1].isWhitespace { cut -= 1 }
-                if cut > start + limit / 2 { end = cut - 1 }
-            }
-            window = start..<end
+        var result = start > text.startIndex ? "…" : ""
+        var offset = 0
+        for mark in merged {
+            result += String(characters[offset..<mark.lowerBound])
+                + "<mark>" + String(characters[mark]) + "</mark>"
+            offset = mark.upperBound
         }
-
-        var result = window.lowerBound > 0 ? "…" : ""
-        var cursor = window.lowerBound
-        for mark in merged where mark.lowerBound < window.upperBound && mark.upperBound > window.lowerBound {
-            let lower = max(mark.lowerBound, window.lowerBound)
-            let upper = min(mark.upperBound, window.upperBound)
-            result += String(characters[cursor..<lower]) + "<mark>" + String(characters[lower..<upper]) + "</mark>"
-            cursor = upper
-        }
-        result += String(characters[cursor..<window.upperBound])
-        return result.trimmingCharacters(in: .whitespaces) + (window.upperBound < characters.count ? "…" : "")
+        result += String(characters[offset...])
+        return result.trimmingCharacters(in: .whitespaces) + (hasMore ? "…" : "")
     }
 
     /// Curly and modifier apostrophes as the straight one, Character for
