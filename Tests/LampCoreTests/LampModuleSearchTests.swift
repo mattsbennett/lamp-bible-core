@@ -117,6 +117,36 @@ struct LampModuleSearchTests {
         #expect(merged.map(\.id) == ["b3", "a1", "b1", "a2", "b2", "a3", "c1"])
     }
 
+    /// Sections of the books asked about, one named for the words before one
+    /// whose text holds them, each keyed to its passage.
+    @Test func bookSectionsAreTakenBestFirstFromTheBooksAskedAbout() throws {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE book_sections (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT,
+                    key_scriptures_json TEXT, search_text TEXT NOT NULL DEFAULT '');
+                CREATE VIRTUAL TABLE book_sections_fts USING fts5(
+                    title, search_text, content='book_sections', content_rowid='rowid');
+                INSERT INTO book_sections (id, module_id, title, subtitle, key_scriptures_json, search_text) VALUES
+                    ('x-text', 'X', 'Chapter 1', NULL, NULL, 'Waiting in hope here.'),
+                    ('x-title', 'X', 'Hope', 'and patience', '[{"sv":45005005,"ev":45005006,"label":"Rom 5:5"}]', 'Waiting here.'),
+                    ('y-text', 'Y', 'Chapter 1', NULL, NULL, 'Hope in another book.');
+                INSERT INTO book_sections_fts(book_sections_fts) VALUES('rebuild');
+                """)
+        }
+        let hits = try queue.read { db in
+            try LampModuleSearch.books(
+                in: db, modules: [LampSearchedModule(id: "X", name: "Ex")], query: LampSearchQuery("hope"), limit: 5
+            )
+        }
+        #expect(hits.map(\.id) == ["book:X:x-title", "book:X:x-text"])
+        #expect(hits.first?.subtitle == "and patience")
+        #expect(hits.first?.startReference == 45_005_005)
+        #expect(hits.first?.endReference == 45_005_006)
+        #expect(hits.first?.moduleName == "Ex")
+    }
+
     @Test func noModulesOrNoQueryFindNothing() throws {
         let queue = try database([Unit(id: "x1", module: "X", sv: 1_001_001, text: "Hope.")])
         let noModules = try queue.read { db in

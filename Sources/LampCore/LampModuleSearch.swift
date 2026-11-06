@@ -182,6 +182,81 @@ public enum LampModuleSearch {
         return found
     }
 
+    /// How much a match counts toward a book section's rank by the column it
+    /// falls in: a section named for the words before one whose text uses
+    /// them.
+    static let bookColumnWeights: [String: Double] = [
+        "title": 5,
+        "search_text": 1,
+    ]
+
+    /// Book sections matching `query` in `db`, at most `limit` of them: the
+    /// best-ranked where the books have an index, else in reading order.
+    public static func books(
+        in db: Database,
+        modules: [LampSearchedModule],
+        query: LampSearchQuery,
+        limit: Int
+    ) throws -> [LampModuleSearchResult] {
+        guard limit > 0, !modules.isEmpty, !query.isEmpty, !query.plainText.isEmpty else { return [] }
+        let tables = try LampModuleText.tableNames(in: db)
+        guard tables.contains("book_sections") else { return [] }
+        let hasFTS = tables.contains("book_sections_fts") && !query.fts5Query.isEmpty
+        let names = Dictionary(modules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+
+        var conditions: [String] = []
+        var arguments = StatementArguments()
+        if hasFTS {
+            conditions.append("book_sections_fts MATCH ?")
+            arguments += [query.fts5Query]
+        }
+        // Every book's sections carry their book, in its own file or not.
+        conditions.append("s.module_id IN (\(modules.map { _ in "?" }.joined(separator: ", ")))")
+        arguments += StatementArguments(modules.map(\.id))
+        let source: String
+        let order: String
+        var limitClause = ""
+        if hasFTS {
+            let weights = try LampModuleText.orderedColumnNames(in: db, table: "book_sections_fts")
+                .map { LampModuleText.number(bookColumnWeights[$0] ?? 1) }
+                .joined(separator: ", ")
+            source = "book_sections_fts JOIN book_sections s ON s.rowid = book_sections_fts.rowid"
+            order = "bm25(book_sections_fts, \(weights)), s.rowid"
+            limitClause = "LIMIT ?"
+            arguments += [limit]
+        } else {
+            let like = query.sqlLikePredicate(columns: ["s.title", "s.subtitle", "s.search_text"])
+            conditions.append(like.condition)
+            arguments += StatementArguments(like.arguments)
+            source = "book_sections s"
+            order = "s.rowid"
+        }
+        let rows = try Row.fetchCursor(db, sql: """
+            SELECT s.id, s.module_id, s.title, s.subtitle, s.key_scriptures_json, s.search_text
+            FROM \(source)
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY \(order)
+            \(limitClause)
+            """, arguments: arguments)
+
+        var found: [LampModuleSearchResult] = []
+        while found.count < limit, let row = try rows.next() {
+            let text: String = row["search_text"]
+            if !hasFTS, !query.matchesWordPrefixes(text) { continue }
+            let moduleID: String = row["module_id"]
+            let scriptures = LampModuleText.scriptureLinks(fromJSONString: row["key_scriptures_json"])
+            found.append(LampModuleSearchResult(
+                id: "book:\(moduleID):\(row["id"] as String)",
+                kind: .book, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
+                title: row["title"], subtitle: row["subtitle"],
+                snippet: query.markedSnippet(text),
+                startReference: scriptures.first?.startReference,
+                endReference: scriptures.first?.endReference
+            ))
+        }
+        return found
+    }
+
     /// Results from every kind and database as one list, the best matches
     /// first by their title, subtitle and snippet: a rank that means the same
     /// whichever database a result came from, as an index's own does not.
@@ -269,6 +344,24 @@ enum LampModuleText {
         if let number = value as? NSNumber { return number.intValue }
         if let string = value as? String { return Int(string) }
         return nil
+    }
+
+    /// The passages a section or writing is keyed to, as its
+    /// `key_scriptures_json` lists them.
+    static func scriptureLinks(fromJSONString json: String?) -> [LampScriptureLink] {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        return values.compactMap { value in
+            guard let start = integerValue(value["sv"]) else { return nil }
+            return LampScriptureLink(
+                text: stringValue(value["label"]),
+                startReference: start,
+                endReference: integerValue(value["ev"])
+            )
+        }
     }
 
     static func plainText(fromJSONString json: String?, decodingEncodedSpans: Bool = false) -> String? {

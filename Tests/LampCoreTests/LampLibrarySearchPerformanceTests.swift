@@ -61,9 +61,12 @@ struct LampLibrarySearchPerformanceTests {
         }
         for indexed in [true, false] {
             if !indexed { try await queue.write { try $0.execute(sql: "DROP TABLE book_sections_fts") } }
+            // "beloved" holds "lov" but starts no word with it. With the index
+            // the section using the word most is taken first; without it,
+            // the first in reading order.
             let prefix = try await library.searchModules(query: "lov", kinds: [.book], limit: 1)
-            #expect(prefix.map(\.title) == ["Second"])
-            #expect(prefix.first?.snippet.contains("<mark>Lov</mark>e") == true)
+            #expect(prefix.map(\.title) == [indexed ? "Third" : "Second"])
+            #expect(prefix.first?.snippet.contains(indexed ? "<mark>Lov</mark>ing" : "<mark>Lov</mark>e") == true)
             #expect(try await library.searchModules(query: "\"faith works\"", kinds: [.book]).map(\.title) == ["Third"])
             #expect(try await library.searchModules(query: "faith works", kinds: [.book]).count == 3)
             #expect(try await library.searchModules(query: "neverpresent", kinds: [.book]).isEmpty)

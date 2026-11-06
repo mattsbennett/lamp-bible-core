@@ -2531,19 +2531,7 @@ public actor LampLibrary {
             // Each database is asked for the whole limit and the merge below
             // makes the cut. A database's units come best first, so giving the
             // first module by name every place would leave the rest unsearched.
-            // Modules sharing a database, as the bundled ones do, are asked
-            // together, as the phone asks its own.
-            var databases: [(url: URL, modules: [LampSearchedModule])] = []
-            for module in installed where module.kind == .commentary && includesModule(module.id) {
-                let url = try databaseURL(moduleID: module.id)
-                let searched = LampSearchedModule(id: module.id, name: module.name)
-                if let index = databases.firstIndex(where: { $0.url == url }) {
-                    databases[index].modules.append(searched)
-                } else {
-                    databases.append((url, [searched]))
-                }
-            }
-            for database in databases {
+            for database in try searchedDatabases(of: .commentary, in: installed, including: includesModule) {
                 try Task.checkCancellation()
                 let queue = try openReadOnlyDatabase(at: database.url)
                 results += try queue.read { db in
@@ -2555,47 +2543,15 @@ public actor LampLibrary {
         }
 
         if hasTextQuery && wants(.book) {
-            for module in installed where module.kind == .book && includesModule(module.id) {
+            // As commentaries are: each database asked for the whole limit.
+            for database in try searchedDatabases(of: .book, in: installed, including: includesModule) {
                 try Task.checkCancellation()
-                let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - countForKind(.book)
-                results += try queue.read { db -> [LampModuleSearchResult] in
-                    let tables = try tableNames(in: db)
-                    guard tables.contains("book_sections") else { return [] }
-                    let hasFTS = tables.contains("book_sections_fts") && !parsedQuery.fts5Query.isEmpty
-                    let like = parsedQuery.sqlLikePredicate(columns: ["s.title", "s.subtitle", "s.search_text"])
-                    var arguments: StatementArguments = [module.id]
-                    let condition: String
-                    if hasFTS {
-                        condition = "s.rowid IN (SELECT rowid FROM book_sections_fts WHERE book_sections_fts MATCH ?)"
-                        arguments += [parsedQuery.fts5Query]
-                    } else {
-                        condition = like.condition
-                        arguments += StatementArguments(like.arguments)
-                    }
-                    let rows = try Row.fetchCursor(db, sql: """
-                        SELECT s.id, s.title, s.subtitle, s.key_scriptures_json, s.search_text
-                        FROM book_sections s
-                        WHERE s.module_id = ? AND \(condition)
-                        ORDER BY s.rowid
-                        """, arguments: arguments)
-                    var found: [LampModuleSearchResult] = []
-                    while found.count < remaining, let row = try rows.next() {
-                        let text: String = row["search_text"]
-                        if !hasFTS, !parsedQuery.matchesWordPrefixes(text) { continue }
-                        let scriptures = devotionalScriptureLinks(from: row["key_scriptures_json"])
-                        found.append(LampModuleSearchResult(
-                            id: "book:\(module.id):\(row["id"] as String)",
-                            kind: .book, moduleID: module.id, moduleName: module.name,
-                            title: row["title"], subtitle: row["subtitle"],
-                            snippet: snippet(text),
-                            startReference: scriptures.first?.startReference,
-                            endReference: scriptures.first?.endReference
-                        ))
-                    }
-                    return found
+                let queue = try openReadOnlyDatabase(at: database.url)
+                results += try queue.read { db in
+                    try LampModuleSearch.books(
+                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit
+                    )
                 }
-                if countForKind(.book) >= resultLimit { break }
             }
         }
 
@@ -2773,6 +2729,27 @@ public actor LampLibrary {
         }
 
         return LampModuleSearch.ranked(results, by: parsedQuery, limit: resultLimit)
+    }
+
+    /// The installed modules of `kind` a search covers, by the database each
+    /// is in: modules sharing one, as the bundled ones do, are searched
+    /// together, as the phone searches its own.
+    private func searchedDatabases(
+        of kind: LampModuleKind,
+        in installed: [LampInstalledModule],
+        including: (String) -> Bool
+    ) throws -> [(url: URL, modules: [LampSearchedModule])] {
+        var databases: [(url: URL, modules: [LampSearchedModule])] = []
+        for module in installed where module.kind == kind && including(module.id) {
+            let url = try databaseURL(moduleID: module.id)
+            let searched = LampSearchedModule(id: module.id, name: module.name)
+            if let index = databases.firstIndex(where: { $0.url == url }) {
+                databases[index].modules.append(searched)
+            } else {
+                databases.append((url, [searched]))
+            }
+        }
+        return databases
     }
 
     /// Highlights of `colors`, or of any colour when none are given, whose
@@ -6294,19 +6271,7 @@ public actor LampLibrary {
     }
 
     private func devotionalScriptureLinks(from json: String?) -> [LampScriptureLink] {
-        guard let json,
-              let data = json.data(using: .utf8),
-              let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return []
-        }
-        return values.compactMap { value in
-            guard let start = integerValue(value["sv"]) else { return nil }
-            return LampScriptureLink(
-                text: stringValue(value["label"]),
-                startReference: start,
-                endReference: integerValue(value["ev"])
-            )
-        }
+        LampModuleText.scriptureLinks(fromJSONString: json)
     }
 
     private func plainText(from value: Any?, decodingEncodedSpans: Bool = false) -> String? {
