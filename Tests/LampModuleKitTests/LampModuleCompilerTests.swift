@@ -446,6 +446,14 @@ struct LampModuleCompilerTests {
             #expect((row["summary_json"] as String?)?.contains("God's promise") == true)
             #expect((row["content_json"] as String).contains("gave his Son") == true)
             #expect((row["search_text"] as String?)?.contains("Compare Romans 5") == true)
+            // Indexed by title and search text, as commentary, books and
+            // notes are, so a search can rank it rather than read it.
+            #expect(try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM devotional_entries_fts WHERE devotional_entries_fts MATCH 'romans'
+                """) == 1)
+            #expect(try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM devotional_entries_fts WHERE devotional_entries_fts MATCH 'title : hope'
+                """) == 1)
         }
     }
 
