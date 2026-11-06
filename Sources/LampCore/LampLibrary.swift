@@ -4702,10 +4702,31 @@ public actor LampLibrary {
         let markerURL = bundledDatabasesURL.appendingPathComponent("bundled_modules.version")
         let archiveSize = try archiveURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         let currentVersion = "\(archiveSize)"
-        if fileManager.fileExists(atPath: databaseURL.path),
-           (try? String(contentsOf: markerURL, encoding: .utf8)) == currentVersion {
+        func isCurrent() -> Bool {
+            fileManager.fileExists(atPath: databaseURL.path)
+                && (try? String(contentsOf: markerURL, encoding: .utf8)) == currentVersion
+        }
+        if isCurrent() {
             cachedBundledDatabaseURL = databaseURL
             return databaseURL
+        }
+
+        // The app and each lamp-mcp open the same library, and after an install
+        // that changes the bundle each found it out of date at once: they wrote
+        // over one another's file, checked it as another replaced it, and deleted
+        // what another had just put in place. One extracts while the rest wait,
+        // and those find its marker when their turn comes.
+        let lock = try LampFileLock(url: bundledDatabasesURL.appendingPathComponent(".prepare.lock"))
+        defer { lock.unlock() }
+        if isCurrent() {
+            cachedBundledDatabaseURL = databaseURL
+            return databaseURL
+        }
+        // What a holder before this one left when it died mid-extraction. Only
+        // the lock's holder writes these, so none is still being written.
+        for leftover in (try? fileManager.contentsOfDirectory(atPath: bundledDatabasesURL.path)) ?? []
+            where leftover.hasPrefix(".bundled_modules-") {
+            try? fileManager.removeItem(at: bundledDatabasesURL.appendingPathComponent(leftover))
         }
 
         let hasSecurityScope = archiveURL.startAccessingSecurityScopedResource()
@@ -4722,22 +4743,39 @@ public actor LampLibrary {
         } else {
             databaseData = sourceData
         }
-        // The bundled database is being replaced on disk, so any connection still
-        // held to the previous copy has to go before the new one is opened below.
-        try databaseData.write(to: databaseURL, options: [.atomic])
-        forgetOpenDatabases()
-
-        // Verified here, once, rather than on every read of the bundled modules.
-        // The version marker is written only after the check passes, so a corrupt
-        // extraction is redone on the next launch instead of being trusted.
-        let queue = try openReadOnlyDatabase(at: databaseURL)
-        let integrityResults = try queue.read { db in
+        // Extracted and checked under a name of its own, and only then put in
+        // place, so no reader meets a file half written or not yet checked, and
+        // a bad extraction never takes the place of a good one. Verified here,
+        // once, rather than on every read of the bundled modules.
+        let extractedURL = bundledDatabasesURL
+            .appendingPathComponent(".bundled_modules-\(UUID().uuidString).sqlite")
+        defer { try? fileManager.removeItem(at: extractedURL) }
+        try databaseData.write(to: extractedURL)
+        var checking = Configuration()
+        checking.readonly = true
+        let integrityResults = try DatabaseQueue(path: extractedURL.path, configuration: checking).read { db in
             try String.fetchAll(db, sql: "PRAGMA quick_check")
         }
         guard integrityResults == ["ok"] else {
-            try? fileManager.removeItem(at: databaseURL)
             throw LampLibraryError.integrityCheckFailed(integrityResults.joined(separator: "; "))
         }
+
+        // The marker goes before the file is replaced, and the new one only
+        // after, so a crash between leaves an extraction to redo rather than
+        // one to trust. rename(2) replaces the file in one step: a connection
+        // still on the previous copy reads that copy to the end, and is
+        // dropped here so that the next read opens the new one.
+        try? fileManager.removeItem(at: markerURL)
+        let renameError = extractedURL.withUnsafeFileSystemRepresentation { from in
+            databaseURL.withUnsafeFileSystemRepresentation { to -> Int32 in
+                guard let from, let to else { return EINVAL }
+                return rename(from, to) == 0 ? 0 : errno
+            }
+        }
+        guard renameError == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(renameError), userInfo: [NSFilePathErrorKey: databaseURL.path])
+        }
+        forgetOpenDatabases()
 
         try currentVersion.write(to: markerURL, atomically: true, encoding: .utf8)
         cachedBundledDatabaseURL = databaseURL

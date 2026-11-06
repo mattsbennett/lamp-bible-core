@@ -139,4 +139,102 @@ struct LampLibraryCacheTests {
         try Data(contentsOf: source).write(to: prepared, options: .atomic)
         #expect(try await reader.installedModules().map(\.name) == ["Bravo"])
     }
+
+    /// A bundle of a few megabytes, so that extracting and checking it take
+    /// long enough for libraries opened together to overlap.
+    private func bundle(at url: URL, named name: String) throws {
+        let writer = try DatabaseQueue(path: url.path)
+        try writer.write { db in
+            try db.execute(sql: """
+                CREATE TABLE translations(id TEXT, name TEXT, abbreviation TEXT, language TEXT);
+                CREATE TABLE padding(id INTEGER PRIMARY KEY, text TEXT);
+                """)
+            try db.execute(sql: "INSERT INTO translations VALUES('T', ?, 'T', 'en')", arguments: [name])
+            for row in 0..<4_000 {
+                try db.execute(
+                    sql: "INSERT INTO padding(id, text) VALUES (?, ?)",
+                    arguments: [row, String(repeating: "\(name) \(row) ", count: 60)]
+                )
+            }
+        }
+    }
+
+    @Test func librariesPreparingOneBundleTogetherAllGetIt() async throws {
+        for _ in 0..<4 {
+            let root = try fixture()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let source = root.appendingPathComponent("bundle.sqlite")
+            try bundle(at: source, named: "Alpha")
+            // As the app and each lamp-mcp do: libraries of their own, one root.
+            let libraries = (0..<6).map { _ in
+                LampLibrary(rootURL: root.appendingPathComponent("Library"), bundledModulesArchiveURL: source)
+            }
+            let names = try await withThrowingTaskGroup(of: [String].self) { group in
+                for library in libraries {
+                    group.addTask { try await library.installedModules().map(\.name) }
+                }
+                return try await group.reduce(into: []) { $0.append($1) }
+            }
+            #expect(names == Array(repeating: ["Alpha"], count: libraries.count))
+            let bundled = root.appendingPathComponent("Library/Bundled")
+            #expect(Set(try FileManager.default.contentsOfDirectory(atPath: bundled.path))
+                == [".prepare.lock", "bundled_modules.sqlite", "bundled_modules.version"])
+        }
+    }
+
+    @Test func aBundleThatFailsItsCheckLeavesThePreparedOneInPlace() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("bundle.sqlite")
+        try bundle(at: source, named: "Alpha")
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"), bundledModulesArchiveURL: source)
+        #expect(try await library.installedModules().map(\.name) == ["Alpha"])
+        let bundled = root.appendingPathComponent("Library/Bundled")
+        let prepared = bundled.appendingPathComponent("bundled_modules.sqlite")
+        let good = try Data(contentsOf: prepared)
+        let marker = bundled.appendingPathComponent("bundled_modules.version")
+        let goodMarker = try String(contentsOf: marker, encoding: .utf8)
+
+        // A new bundle, of another size, that is no database at all: a later
+        // library finds it out of date, and its extraction fails its check. A
+        // URL of its own, as a later process has: a URL keeps the file size
+        // it last read.
+        try Data("not a database".utf8).write(to: source)
+        let later = LampLibrary(
+            rootURL: root.appendingPathComponent("Library"),
+            bundledModulesArchiveURL: URL(fileURLWithPath: source.path)
+        )
+        await #expect(throws: (any Error).self) { try await later.installedModules() }
+        // The prepared file and its marker stay together, the marker still
+        // naming the old bundle, so the next launch tries the new one again.
+        #expect(try Data(contentsOf: prepared) == good)
+        #expect(try String(contentsOf: marker, encoding: .utf8) == goodMarker)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: bundled.path).allSatisfy {
+            !$0.hasPrefix(".bundled_modules-")
+        })
+
+        // A good bundle again, of a size its own (the marker is the size), is
+        // extracted over the one kept.
+        try FileManager.default.removeItem(at: source)
+        try bundle(at: source, named: "Bravo Bravo")
+        let last = LampLibrary(
+            rootURL: root.appendingPathComponent("Library"),
+            bundledModulesArchiveURL: URL(fileURLWithPath: source.path)
+        )
+        #expect(try await last.installedModules().map(\.name) == ["Bravo Bravo"])
+    }
+
+    @Test func anExtractionLeftHalfDoneIsClearedAway() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("bundle.sqlite")
+        try bundle(at: source, named: "Alpha")
+        let bundled = root.appendingPathComponent("Library/Bundled")
+        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
+        let leftover = bundled.appendingPathComponent(".bundled_modules-\(UUID().uuidString).sqlite")
+        try Data("half".utf8).write(to: leftover)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"), bundledModulesArchiveURL: source)
+        #expect(try await library.installedModules().map(\.name) == ["Alpha"])
+        #expect(!FileManager.default.fileExists(atPath: leftover.path))
+    }
 }
