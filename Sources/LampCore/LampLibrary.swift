@@ -1309,107 +1309,46 @@ public actor LampLibrary {
         let dictionaries = try installedModules().filter {
             $0.kind == .dictionary && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
-        var found: [[LampDictionaryResult]] = []
-
         let parsedQuery = LampSearchQuery(trimmedQuery)
-        let writtenInOriginalLanguage = trimmedQuery.unicodeScalars.contains { Self.isGreekOrHebrew($0) }
+        // Searched as the phone searches its own, by core: each database once,
+        // its dictionaries together, as the bundled ones share one.
+        var databases: [(url: URL, dictionaries: [LampInstalledModule])] = []
         for dictionary in dictionaries {
-            try Task.checkCancellation()
-            let queue = try openDatabase(moduleID: dictionary.id)
-            let entries = try queue.read { db -> [LampDictionaryResult] in
-                let tables = try tableNames(in: db)
-                guard tables.contains("dictionary_entries") else { return [] }
-                let columns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(dictionary_entries)")
-                    .compactMap { $0["name"] as String? })
-                guard columns.contains("senses_json") else { return [] }
-                var searchColumns = ["key", "lemma", "transliteration"]
-                if columns.contains("search_text") { searchColumns.append("search_text") }
-                let like = parsedQuery.sqlLikePredicate(columns: searchColumns, jsonColumns: ["senses_json"])
-                var moduleArguments = StatementArguments()
-                let moduleCondition: String
-                if columns.contains("module_id") {
-                    moduleCondition = "module_id = ? AND"
-                    moduleArguments += [dictionary.id]
-                } else {
-                    moduleCondition = ""
-                }
-                var condition = "(\(like.condition))"
-                var queryArguments = moduleArguments
-                queryArguments += StatementArguments(like.arguments)
-                // SQLite folds neither Greek accents and breathings nor Hebrew
-                // points, so "αγαπη" would never find ἀγάπη. A query in either
-                // script is matched against every headword here, with accents
-                // set aside, and those entries are found alongside.
-                if writtenInOriginalLanguage {
-                    var headwordArguments = moduleArguments
-                    headwordArguments += [""]
-                    let headwords = try Row.fetchAll(db, sql: """
-                        SELECT id, key, lemma, transliteration FROM dictionary_entries
-                        WHERE \(moduleCondition) COALESCE(lemma, '') <> ?
-                        """, arguments: headwordArguments)
-                    let ids: [DatabaseValue] = headwords.compactMap { row in
-                        let text = [row["key"], row["lemma"], row["transliteration"]]
-                            .compactMap { $0 as String? }.joined(separator: " ")
-                        return parsedQuery.matches(text) ? row["id"] : nil
-                    }
-                    if !ids.isEmpty {
-                        condition = "(\(condition) OR id IN (\(Array(repeating: "?", count: ids.count).joined(separator: ", "))))"
-                        queryArguments += StatementArguments(ids)
-                    }
-                }
-                queryArguments += [trimmedQuery, trimmedQuery]
-                // Found anywhere by LIKE, and kept where the query's own rule
-                // finds the words, as every other search keeps them.
-                let cursor = try Row.fetchCursor(db, sql: """
-                    SELECT id, key, lemma, transliteration, pronunciation, senses_json,
-                           \(columns.contains("search_text") ? "search_text" : "NULL AS search_text")
-                    FROM dictionary_entries
-                    WHERE \(moduleCondition) \(condition)
-                    ORDER BY
-                        CASE
-                            WHEN key = ? COLLATE NOCASE THEN 0
-                            WHEN lemma = ? COLLATE NOCASE THEN 1
-                            ELSE 2
-                        END,
-                        key, lemma
-                    """, arguments: queryArguments)
-                var rows: [Row] = []
-                while rows.count < resultLimit, let row = try cursor.next() {
-                    let text = [
-                        row["key"], row["lemma"], row["transliteration"], row["search_text"],
-                        LampModuleText.plainText(fromJSONString: row["senses_json"]),
-                    ].compactMap { $0 as String? }.joined(separator: " ")
-                    if parsedQuery.matches(text) { rows.append(row.copy()) }
-                }
-
-                return rows.map { row in
-                    let sensesJSON: String? = row["senses_json"]
-                    let idValue: DatabaseValue = row["id"]
-                    let entryID = String.fromDatabaseValue(idValue)
-                        ?? Int64.fromDatabaseValue(idValue).map(String.init)
-                        ?? "\(dictionary.id):\(row["key"] as String)"
-                    return LampDictionaryResult(
-                        entryID: entryID,
-                        moduleID: dictionary.id,
-                        moduleName: dictionary.name,
-                        key: row["key"],
-                        lemma: row["lemma"],
-                        transliteration: row["transliteration"],
-                        pronunciation: row["pronunciation"],
-                        senses: dictionarySenses(from: sensesJSON)
-                    )
-                }
+            let url = try databaseURL(moduleID: dictionary.id)
+            if let index = databases.firstIndex(where: { $0.url == url }) {
+                databases[index].dictionaries.append(dictionary)
+            } else {
+                databases.append((url, [dictionary]))
             }
-            found.append(entries)
+        }
+        var byDictionary: [String: [LampDictionarySearchHit]] = [:]
+        for database in databases {
+            try Task.checkCancellation()
+            let ids = database.dictionaries.map(\.id)
+            let hits = try openReadOnlyDatabase(at: database.url).read { db in
+                try LampModuleSearch.dictionaryEntries(in: db, dictionaries: ids, query: parsedQuery, limit: resultLimit)
+            }
+            // A dictionary's own file answers for it whatever it calls itself.
+            for hit in hits { byDictionary[ids.count == 1 ? ids[0] : hit.moduleID, default: []].append(hit) }
+        }
+        // In the order the library lists them, by name, as for translations.
+        let found = dictionaries.map { dictionary in
+            (byDictionary[dictionary.id] ?? []).map { hit in
+                LampDictionaryResult(
+                    entryID: hit.entryID,
+                    moduleID: dictionary.id,
+                    moduleName: dictionary.name,
+                    key: hit.key,
+                    lemma: hit.lemma,
+                    transliteration: hit.transliteration,
+                    pronunciation: hit.pronunciation,
+                    senses: dictionarySenses(from: hit.sensesJSON)
+                )
+            }
         }
         return LampModuleSearch.sharedEvenly(found, limit: resultLimit)
     }
 
-    /// Greek, including its extended accented letters, or Hebrew.
-    static func isGreekOrHebrew(_ scalar: Unicode.Scalar) -> Bool {
-        (0x0370...0x03FF).contains(scalar.value) || (0x1F00...0x1FFF).contains(scalar.value)
-            || (0x0590...0x05FF).contains(scalar.value)
-    }
 
     /// Returns dictionary entries whose keys exactly match the supplied keys.
     ///
