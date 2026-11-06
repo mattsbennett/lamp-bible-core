@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import LampModuleKit
 
 /// A module a search covers: its ID, as a database holding several modules
 /// keeps it in `module_id`, and the name its results show.
@@ -507,7 +508,7 @@ public enum LampModuleSearch {
             var holdsPhrase = false
             var shown: String?
             if readsText {
-                let texts = noteTexts(of: row, query: query)
+                let texts = noteTexts(of: row, query: query, shown: snippets)
                 if !hasFTS { holdsPhrase = query.holdsPhrase(texts.searched) }
                 if snippets { shown = texts.shown }
             }
@@ -552,23 +553,226 @@ public enum LampModuleSearch {
             let arguments: StatementArguments = columns.contains("module_id") ? [note, result.moduleID] : [note]
             guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments) else { return result }
             return result.withSnippet(
-                query.markedSnippet(noteTexts(of: row, query: query).shown, findingPhrase: result.holdsPhrase)
+                query.markedSnippet(noteTexts(of: row, query: query).shown ?? "", findingPhrase: result.holdsPhrase)
             )
         }
     }
 
     /// A note's text as searched, its title and the text and footnotes it is
-    /// searched by, and as
-    /// shown: its text, or the text it is searched by where only that holds
-    /// the words, a footnote's.
-    private static func noteTexts(of row: Row, query: LampSearchQuery) -> (searched: String, shown: String) {
+    /// searched by, and, where `shown`, the text a snippet is cut from: its
+    /// text, or the text it is searched by where only that holds the words,
+    /// a footnote's. Choosing that reads the note again, so a search whose
+    /// snippets wait for the merge doesn't.
+    private static func noteTexts(
+        of row: Row,
+        query: LampSearchQuery,
+        shown: Bool = true
+    ) -> (searched: String, shown: String?) {
         let title: String = row["title"] ?? ""
         let content: String = row["content"] ?? ""
         let searchText = (row["search_text"] as String?).flatMap { $0.isEmpty ? nil : $0 }
-        let shown = !query.matchesWordPrefixes(content) && searchText.map(query.matchesWordPrefixes) == true
-            ? searchText! : content
         // The search text holds the note's text and footnotes both.
-        return (title + " " + (searchText ?? content), shown)
+        let searched = title + " " + (searchText ?? content)
+        guard shown else { return (searched, nil) }
+        return (searched, !query.matchesWordPrefixes(content) && searchText.map(query.matchesWordPrefixes) == true
+            ? searchText! : content)
+    }
+
+    /// How much a match counts toward a writing's rank by the column it falls
+    /// in: a writing titled with the words before one whose text uses them.
+    static let devotionalColumnWeights: [String: Double] = [
+        "title": 5,
+        "search_text": 1,
+    ]
+
+    /// Devotionals matching `query` and `criteria` in `db`, at most `limit`
+    /// of them: the best-ranked where a text query has an index of title and
+    /// text to ask, else in the order of their series, place in it, date and
+    /// title. A search by date, tag or kind alone needs no words. Without
+    /// `snippets`, as `commentary`, for `devotionalSnippets` to replace.
+    ///
+    /// The date narrows the rows in SQL, where it compares as it does in
+    /// Swift; tags and kinds fold case and accents as only Swift folds them
+    /// (`LampDevotionalSearchCriteria.matches`), and are checked there.
+    /// Without the index a writing's words are matched in its title,
+    /// subtitle, author, tags and search text, which holds its footnotes as
+    /// well as its summary and text; once its footnotes weren't.
+    public static func devotionals(
+        in db: Database,
+        modules: [LampSearchedModule],
+        query: LampSearchQuery,
+        criteria: LampDevotionalSearchCriteria = .init(),
+        limit: Int,
+        snippets: Bool = true
+    ) throws -> [LampModuleSearchResult] {
+        let hasTextQuery = !query.isEmpty && !query.plainText.isEmpty
+        guard limit > 0, !modules.isEmpty, hasTextQuery || !criteria.isEmpty else { return [] }
+        let tables = try LampModuleText.tableNames(in: db)
+        guard tables.contains("devotional_entries") else { return [] }
+        let columns = try LampModuleText.columnNames(in: db, table: "devotional_entries")
+        let hasSearchText = columns.contains("search_text")
+        let ftsColumns = hasTextQuery && hasSearchText && tables.contains("devotional_entries_fts")
+            ? try LampModuleText.orderedColumnNames(in: db, table: "devotional_entries_fts") : []
+        let usesIndex = ftsColumns.contains("title") && ftsColumns.contains("search_text")
+        let sharesDatabase = columns.contains("module_id")
+        let names = Dictionary(modules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+
+        var conditions: [String] = []
+        var arguments = StatementArguments()
+        if usesIndex {
+            conditions.append("devotional_entries_fts MATCH ?")
+            arguments += [query.fts5Query]
+        }
+        if sharesDatabase {
+            conditions.append("d.module_id IN (\(modules.map { _ in "?" }.joined(separator: ", ")))")
+            arguments += StatementArguments(modules.map(\.id))
+        }
+        if let date = criteria.date {
+            conditions.append("d.date = ?")
+            arguments += [date]
+        }
+        if let monthDay = criteria.monthDay {
+            let suffix = "-" + monthDay
+            conditions.append("substr(d.date, -\(suffix.count)) = ?")
+            arguments += [suffix]
+        }
+        let source: String
+        let order: String
+        if usesIndex {
+            // The phone's index keeps its own copy, keyed by id; an index
+            // over the table's content is keyed by rowid.
+            let key = ftsColumns.contains("id") ? "devotional_entries_fts.id = d.id" : "devotional_entries_fts.rowid = d.rowid"
+            // Its id isn't text to rank by.
+            let weights = ftsColumns
+                .map { $0 == "id" ? "0" : LampModuleText.number(devotionalColumnWeights[$0] ?? 1) }
+                .joined(separator: ", ")
+            source = "devotional_entries_fts JOIN devotional_entries d ON \(key)"
+            order = "ORDER BY bm25(devotional_entries_fts, \(weights)), d.rowid"
+        } else {
+            source = "devotional_entries d"
+            order = ""
+        }
+        // A writing's words, where they're matched here; its summary and
+        // text, from its JSON, only where it has no search text.
+        let words = hasTextQuery && !usesIndex
+            ? (hasSearchText ? ", d.search_text" : ", NULL AS search_text") + """
+                , CASE WHEN \(hasSearchText ? "COALESCE(d.search_text, '') = ''" : "1") THEN d.summary_json END AS summary_json,
+                  CASE WHEN \(hasSearchText ? "COALESCE(d.search_text, '') = ''" : "1") THEN d.content_json END AS content_json
+                """
+            : ""
+        let rows = try Row.fetchCursor(db, sql: """
+            SELECT d.rowid AS devotional_rowid, d.id, \(sharesDatabase ? "d.module_id" : "NULL AS module_id"),
+                   d.title, d.subtitle, d.author, d.date, d.tags, d.category, d.series_name, d.series_order,
+                   d.key_scriptures_json\(words)
+            FROM \(source)
+            \(conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND "))
+            \(order)
+            """, arguments: arguments)
+
+        struct Found {
+            let rowid: Int64
+            let entryID: String
+            let result: LampModuleSearchResult
+            let seriesName: String
+            let seriesOrder: Int
+            let date: String
+        }
+        var found: [Found] = []
+        while !(usesIndex && found.count >= limit), let row = try rows.next() {
+            let tags = (row["tags"] as String?)?.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
+            guard criteria.matches(date: row["date"], tags: tags, category: row["category"]) else { continue }
+            let title: String = row["title"]
+            let subtitle: String? = row["subtitle"]
+            let author: String? = row["author"]
+            var holdsPhrase = false
+            if hasTextQuery && !usesIndex {
+                let text = (row["search_text"] as String?).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? [
+                        LampModuleText.plainText(fromJSONString: row["summary_json"]),
+                        (row["content_json"] as String?).map { LampPortableDevotionalContent.plainText(from: $0) ?? $0 },
+                    ].compactMap { $0 }.joined(separator: " ")
+                guard query.matches(([title, subtitle, author, text] + tags).compactMap { $0 }.joined(separator: " "))
+                else { continue }
+                holdsPhrase = query.holdsPhrase(text)
+            }
+            let moduleID: String = sharesDatabase ? row["module_id"] : modules[0].id
+            let scriptures = LampModuleText.scriptureLinks(fromJSONString: row["key_scriptures_json"])
+            found.append(Found(
+                rowid: row["devotional_rowid"],
+                entryID: row["id"],
+                result: LampModuleSearchResult(
+                    id: "devotional:\(moduleID):\(row["id"] as String)",
+                    kind: .devotional, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
+                    title: title, subtitle: subtitle ?? author,
+                    snippet: rankingSnippet(for: query),
+                    startReference: scriptures.first?.startReference,
+                    endReference: scriptures.first?.endReference,
+                    holdsPhrase: holdsPhrase
+                ),
+                seriesName: row["series_name"] ?? "", seriesOrder: row["series_order"] ?? 0, date: row["date"] ?? ""
+            ))
+        }
+        if !usesIndex {
+            // In series, then place in it, then date and title, as the
+            // library lists them: every match is read before any is kept.
+            found.sort { lhs, rhs in
+                if lhs.seriesName != rhs.seriesName {
+                    return lhs.seriesName.localizedStandardCompare(rhs.seriesName) == .orderedAscending
+                }
+                if lhs.seriesOrder != rhs.seriesOrder { return lhs.seriesOrder < rhs.seriesOrder }
+                if lhs.date != rhs.date { return lhs.date < rhs.date }
+                let order = lhs.result.title.localizedStandardCompare(rhs.result.title)
+                return order == .orderedSame ? lhs.result.id < rhs.result.id : order == .orderedAscending
+            }
+        }
+        let kept = Array(found.prefix(limit))
+        var together: Set<Int64> = []
+        if usesIndex, ftsColumns.contains("id"), let phrase = query.phraseFTS5Query, !kept.isEmpty {
+            // The phone's index numbers its own rows: ask it by id.
+            let rowids = Dictionary(kept.map { ($0.entryID, $0.rowid) }, uniquingKeysWith: { first, _ in first })
+            var phraseArguments: StatementArguments = [phrase]
+            phraseArguments += StatementArguments(kept.map(\.entryID))
+            together = Set(try String.fetchAll(db, sql: """
+                SELECT id FROM devotional_entries_fts
+                WHERE devotional_entries_fts MATCH ? AND id IN (\(kept.map { _ in "?" }.joined(separator: ", ")))
+                """, arguments: phraseArguments).compactMap { rowids[$0] })
+        } else if usesIndex {
+            together = try rowidsHoldingPhrase(kept.map(\.rowid), index: "devotional_entries_fts", query: query, in: db)
+        }
+        let results = kept.map { together.contains($0.rowid) ? $0.result.withPhrase() : $0.result }
+        return snippets ? try devotionalSnippets(for: results, in: db, query: query) : results
+    }
+
+    /// The snippets of devotional results found without them, read again
+    /// from the database they were found in: the summary where it holds the
+    /// words, else the text; a search by its facets alone, the opening.
+    public static func devotionalSnippets(
+        for results: [LampModuleSearchResult],
+        in db: Database,
+        query: LampSearchQuery
+    ) throws -> [LampModuleSearchResult] {
+        guard !results.isEmpty else { return results }
+        let byModule = try LampModuleText.columnNames(in: db, table: "devotional_entries").contains("module_id")
+        let sql = """
+            SELECT summary_json, content_json FROM devotional_entries
+            WHERE id = ?\(byModule ? " AND module_id = ?" : "")
+            """
+        let hasTextQuery = !query.isEmpty && !query.plainText.isEmpty
+        return try results.map { result in
+            let entry = String(result.id.dropFirst("devotional:\(result.moduleID):".count))
+            let arguments: StatementArguments = byModule ? [entry, result.moduleID] : [entry]
+            guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments) else { return result }
+            let contentJSON: String = row["content_json"]
+            let summary = LampModuleText.plainText(fromJSONString: row["summary_json"])
+            let content = LampPortableDevotionalContent.plainText(from: contentJSON) ?? contentJSON
+            let text = summary.flatMap { query.matches($0) ? $0 : nil } ?? content
+            return result.withSnippet(
+                hasTextQuery
+                    ? query.markedSnippet(text, findingPhrase: result.holdsPhrase)
+                    : LampModuleText.openingSnippet(text)
+            )
+        }
     }
 
     /// Quiz questions matching `query` in `db`, at most `limit` of them, in
@@ -760,6 +964,16 @@ enum LampModuleText {
     static func orderedColumnNames(in db: Database, table: String) throws -> [String] {
         try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
             .compactMap { $0["name"] as String? }
+    }
+
+    /// A text's opening, its whitespace collapsed: a result's snippet when
+    /// no words were asked for.
+    static func openingSnippet(_ text: String, limit: Int = 280) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return String(normalized.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
     }
 
     /// A weight as SQL takes it, without a locale's decimal comma.

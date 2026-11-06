@@ -447,6 +447,152 @@ struct LampModuleSearchTests {
         #expect(LampModuleSearch.plans(plans, query: LampSearchQuery("hope"), limit: 1).map(\.id) == ["plan:b"])
     }
 
+    private struct Writing {
+        let id: String
+        var module = "D"
+        let title: String
+        var subtitle: String? = nil
+        let date: String
+        let tags: String
+        let category: String
+        var summary: String? = nil
+        let content: String
+        var series: String? = nil
+        var order: Int? = nil
+        var searchText: String { [title, subtitle, summary, content].compactMap { $0 }.joined(separator: " ") }
+    }
+
+    private static let writings = [
+        Writing(id: "kingdom", title: "The Kingdom of God", date: "2026-01-01", tags: "Holy Spirit,Prayer",
+                category: "Reflection", content: "Seek it first."),
+        Writing(id: "etude", title: "A Study", date: "2026-12-31", tags: "étude", category: "Étude",
+                content: "The kingdom is near, and of all this God is the author."),
+        Writing(id: "morning", title: "Morning", date: "2025-12-31", tags: "prayer", category: "reflection",
+                summary: "Hope in the morning.", content: "Waiting for the kingdom."),
+        Writing(id: "series2", title: "Second", date: "2026-03-01", tags: "series", category: "Study",
+                content: "A kingdom of priests.", series: "Exodus", order: 2),
+        Writing(id: "series1", title: "First", date: "2026-03-02", tags: "series", category: "Study",
+                content: "Out of Egypt.", series: "Exodus", order: 1),
+        Writing(id: "other", module: "E", title: "Kingdom elsewhere", date: "2026-01-01", tags: "Prayer",
+                category: "Reflection", content: "The kingdom of God."),
+    ]
+
+    /// Writings in a database of several modules, as the phone keeps them:
+    /// with its index, keyed by id; an index over the table, keyed by rowid;
+    /// or none, as a module's file has.
+    private func devotionalsDatabase(index: String?) throws -> DatabaseQueue {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE devotional_entries (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT, author TEXT,
+                    date TEXT, tags TEXT, category TEXT, series_name TEXT, series_order INTEGER,
+                    key_scriptures_json TEXT, summary_json TEXT, content_json TEXT NOT NULL, search_text TEXT);
+                """)
+            for writing in Self.writings {
+                let content = try String(decoding: JSONSerialization.data(withJSONObject: [
+                    ["type": "paragraph", "content": ["text": writing.content]],
+                ]), as: UTF8.self)
+                try db.execute(sql: """
+                    INSERT INTO devotional_entries
+                    (id, module_id, title, subtitle, date, tags, category, series_name, series_order,
+                     summary_json, content_json, search_text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: [
+                        writing.id, writing.module, writing.title, writing.subtitle, writing.date, writing.tags,
+                        writing.category, writing.series, writing.order,
+                        writing.summary.map { #"{"text":"\#($0)"}"# }, content, writing.searchText,
+                    ])
+            }
+            switch index {
+            case "phone":
+                try db.execute(sql: """
+                    CREATE VIRTUAL TABLE devotional_entries_fts USING fts5(id UNINDEXED, title, search_text);
+                    INSERT INTO devotional_entries_fts(id, title, search_text) SELECT id, title, search_text FROM devotional_entries;
+                    """)
+            case "content":
+                try db.execute(sql: """
+                    CREATE VIRTUAL TABLE devotional_entries_fts USING fts5(
+                        title, search_text, content='devotional_entries', content_rowid='rowid');
+                    INSERT INTO devotional_entries_fts(devotional_entries_fts) VALUES('rebuild');
+                    """)
+            default: break
+            }
+        }
+        return queue
+    }
+
+    /// Whatever the index, a search by date, tags or kind keeps exactly the
+    /// writings the facets' own Swift test keeps, case and accents as it folds
+    /// them, at either end of a year, with words or without.
+    @Test func devotionalFacetsKeepWhatTheirOwnTestKeeps() throws {
+        let criteria: [LampDevotionalSearchCriteria] = [
+            .init(date: "2026-01-01"), .init(monthDay: "12-31"), .init(monthDay: "01-01"),
+            .init(tags: ["holy spirit"]), .init(tags: ["Prayer"]), .init(tags: ["ÉTUDE"]), .init(tags: ["etude"]),
+            .init(categories: ["reflection"]), .init(categories: ["REFLECTION"]),
+            .init(categories: ["etude"]), .init(categories: ["étude"]),
+            .init(monthDay: "12-31", categories: ["Étude"]),
+        ]
+        let modules = [LampSearchedModule(id: "D", name: "My Writing")]
+        for index in [nil, "phone", "content"] as [String?] {
+            let queue = try devotionalsDatabase(index: index)
+            for facets in criteria {
+                for text in ["", "kingdom"] {
+                    let query = LampSearchQuery(text)
+                    let found = try queue.read { db in
+                        try LampModuleSearch.devotionals(in: db, modules: modules, query: query, criteria: facets, limit: 50)
+                    }
+                    let expected = Self.writings.filter { writing in
+                        writing.module == "D"
+                            && facets.matches(
+                                date: writing.date,
+                                tags: writing.tags.split(separator: ",").map(String.init),
+                                category: writing.category
+                            )
+                            && (text.isEmpty || query.matches(writing.searchText + " " + writing.tags))
+                    }.map { "devotional:D:\($0.id)" }
+                    #expect(Set(found.map(\.id)) == Set(expected), "index \(index ?? "none"), \(facets), \"\(text)\"")
+                }
+            }
+        }
+    }
+
+    @Test func devotionalsComeBestFirstOrInTheirSeriesOrder() throws {
+        let modules = [LampSearchedModule(id: "D", name: "My Writing")]
+        // A search by facets alone, or without an index: series, place, date,
+        // title.
+        let bare = try devotionalsDatabase(index: nil)
+        let series = try bare.read { db in
+            try LampModuleSearch.devotionals(
+                in: db, modules: modules, query: LampSearchQuery(""), criteria: .init(tags: ["series"]), limit: 10
+            )
+        }
+        #expect(series.map(\.id) == ["devotional:D:series1", "devotional:D:series2"])
+        #expect(series.first?.snippet == "Out of Egypt.", "no words asked for: its opening")
+
+        for index in ["phone", "content"] {
+            let queue = try devotionalsDatabase(index: index)
+            let (kingdom, hope) = try queue.read { db in
+                (
+                    try LampModuleSearch.devotionals(in: db, modules: modules, query: LampSearchQuery("kingdom of god"), limit: 10),
+                    try LampModuleSearch.devotionals(in: db, modules: modules, query: LampSearchQuery("hope"), limit: 10)
+                )
+            }
+            #expect(kingdom.first?.id == "devotional:D:kingdom", "titled with the words: \(index)")
+            #expect(kingdom.first(where: { $0.holdsPhrase })?.id == "devotional:D:kingdom", "\(index)")
+            #expect(kingdom.filter(\.holdsPhrase).count == 1, "the study's words stand apart: \(index)")
+            #expect(hope.map(\.id) == ["devotional:D:morning"], "\(index)")
+            #expect(hope.first?.snippet == "<mark>Hope</mark> in the morning.", "its summary holds the word: \(index)")
+            let deferred = try queue.read { db in
+                let bare = try LampModuleSearch.devotionals(
+                    in: db, modules: modules, query: LampSearchQuery("kingdom of god"), limit: 10, snippets: false
+                )
+                return try LampModuleSearch.devotionalSnippets(for: bare, in: db, query: LampSearchQuery("kingdom of god"))
+            }
+            #expect(deferred == kingdom, "\(index)")
+        }
+    }
+
     @Test func noModulesOrNoQueryFindNothing() throws {
         let queue = try database([Unit(id: "x1", module: "X", sv: 1_001_001, text: "Hope.")])
         let noModules = try queue.read { db in

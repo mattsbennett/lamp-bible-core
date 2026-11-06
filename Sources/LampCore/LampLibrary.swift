@@ -2459,8 +2459,8 @@ public actor LampLibrary {
         }
         let includesModule: (String) -> Bool = { moduleIDs == nil || moduleIDs?.contains($0) == true }
         var results: [LampModuleSearchResult] = []
-        // Where each commentary, book and note result was found, to cut its
-        // snippet from once the merge has kept it.
+        // Where each commentary, book, note and devotional result was found,
+        // to cut its snippet from once the merge has kept it.
         var snippetSources: [LampModuleKind: [String: URL]] = [:]
         let countForKind: (LampModuleKind) -> Int = { kind in
             results.count { $0.kind == kind }
@@ -2614,30 +2614,48 @@ public actor LampLibrary {
 
         if (hasTextQuery || hasDevotionalCriteria) && wants(.devotional) {
             try Task.checkCancellation()
-            let matches = try devotionals(moduleIDs: moduleIDs).filter {
-                devotionalCriteria.matches(date: $0.date, tags: $0.tags, category: $0.category)
-                    && parsedQuery.matches([
-                        $0.title, $0.subtitle, $0.author, $0.summary, $0.content,
-                        $0.tags.joined(separator: " "),
-                    ].compactMap { $0 }.joined(separator: " "))
-            }
-            results += matches.prefix(resultLimit - countForKind(.devotional)).map { devotional in
-                LampModuleSearchResult(
-                    id: "devotional:\(devotional.moduleID):\(devotional.id)",
-                    kind: .devotional,
-                    moduleID: devotional.moduleID,
-                    moduleName: devotional.moduleName,
-                    title: devotional.title,
-                    subtitle: devotional.subtitle ?? devotional.author,
-                    snippet: snippet(
-                        devotional.summary.flatMap { parsedQuery.matches($0) ? $0 : nil } ?? devotional.content
-                    ),
-                    startReference: devotional.keyScriptures.first?.startReference,
-                    endReference: devotional.keyScriptures.first?.endReference,
-                    holdsPhrase: parsedQuery.holdsPhrase(
-                        [devotional.summary, devotional.content].compactMap { $0 }.joined(separator: " ")
+            // My writing, kept apart from any module's, and each devotional
+            // database are asked for the whole limit and the merge makes the
+            // cut, as for commentary.
+            if includesModule("personal-devotionals") {
+                results += try personalDevotionals().sorted(by: devotionalSort).filter {
+                    devotionalCriteria.matches(date: $0.date, tags: $0.tags, category: $0.category)
+                        && parsedQuery.matches([
+                            $0.title, $0.subtitle, $0.author, $0.summary, $0.content,
+                            $0.tags.joined(separator: " "),
+                        ].compactMap { $0 }.joined(separator: " "))
+                }
+                .prefix(resultLimit)
+                .map { devotional in
+                    LampModuleSearchResult(
+                        id: "devotional:\(devotional.moduleID):\(devotional.id)",
+                        kind: .devotional,
+                        moduleID: devotional.moduleID,
+                        moduleName: devotional.moduleName,
+                        title: devotional.title,
+                        subtitle: devotional.subtitle ?? devotional.author,
+                        snippet: snippet(
+                            devotional.summary.flatMap { parsedQuery.matches($0) ? $0 : nil } ?? devotional.content
+                        ),
+                        startReference: devotional.keyScriptures.first?.startReference,
+                        endReference: devotional.keyScriptures.first?.endReference,
+                        holdsPhrase: parsedQuery.holdsPhrase(
+                            [devotional.title, devotional.summary, devotional.content]
+                                .compactMap { $0 }.joined(separator: " ")
+                        )
                     )
-                )
+                }
+            }
+            for database in try searchedDatabases(of: .devotional, in: installed, including: includesModule) {
+                try Task.checkCancellation()
+                let queue = try openReadOnlyDatabase(at: database.url)
+                results += try queue.read { db in
+                    try LampModuleSearch.devotionals(
+                        in: db, modules: database.modules, query: parsedQuery, criteria: devotionalCriteria,
+                        limit: resultLimit, snippets: false
+                    )
+                }
+                for module in database.modules { snippetSources[.devotional, default: [:]][module.id] = database.url }
             }
         }
 
@@ -2678,8 +2696,8 @@ public actor LampLibrary {
         return try addingSnippets(to: merged, from: snippetSources, query: parsedQuery)
     }
 
-    /// The commentary, book and note results the merge kept, with their
-    /// snippets cut from the databases they were found in.
+    /// The commentary, book, note and devotional results the merge kept,
+    /// with their snippets cut from the databases they were found in.
     private func addingSnippets(
         to results: [LampModuleSearchResult],
         from sources: [LampModuleKind: [String: URL]],
@@ -2700,6 +2718,7 @@ public actor LampLibrary {
                     switch kind {
                     case .commentary: try LampModuleSearch.commentarySnippets(for: found, in: db, query: query)
                     case .notes: try LampModuleSearch.noteSnippets(for: found, in: db, query: query)
+                    case .devotional: try LampModuleSearch.devotionalSnippets(for: found, in: db, query: query)
                     default: try LampModuleSearch.bookSnippets(for: found, in: db, query: query)
                     }
                 }
@@ -4372,11 +4391,7 @@ public actor LampLibrary {
     }
 
     private func searchSnippet(_ text: String, limit: Int = 280) -> String {
-        let normalized = text
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.count > limit else { return normalized }
-        return String(normalized.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        LampModuleText.openingSnippet(text, limit: limit)
     }
 
     private func devotionalSort(_ lhs: LampDevotional, _ rhs: LampDevotional) -> Bool {

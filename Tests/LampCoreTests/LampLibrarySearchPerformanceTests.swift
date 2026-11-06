@@ -141,6 +141,33 @@ struct LampLibrarySearchPerformanceTests {
         #expect(hits.first?.snippet.contains("Waiting with patience") == true, "its snippet cut once kept")
     }
 
+    /// A search by a tag alone, with no words, finds the writings of every
+    /// devotional module holding it, each module taking its turn.
+    @Test func aSearchByFacetsAloneCoversEveryDevotionalModule() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        for (id, title) in [("D1", "Morning Prayer"), ("D2", "Evening Prayer")] {
+            _ = try await install(#"""
+                {"meta":{"schemaVersion":"1.0","id":"\#(id)","type":"devotional","title":"\#(title)",
+                         "tags":["Prayer"],"date":"2026-01-01","category":"Reflection"},
+                 "content":[{"type":"paragraph","content":{"text":"Pray without ceasing."}}]}
+                """#, id: id, in: root, library: library)
+        }
+        let byTag = try await library.searchModules(
+            query: "", kinds: [.devotional], devotionalCriteria: .init(tags: ["prayer"])
+        )
+        #expect(Set(byTag.map(\.moduleID)) == ["D1", "D2"])
+        #expect(byTag.allSatisfy { $0.snippet == "Pray without ceasing." })
+        let byKind = try await library.searchModules(
+            query: "", kinds: [.devotional], devotionalCriteria: .init(categories: ["reflection"]), limit: 1
+        )
+        #expect(byKind.count == 1)
+        #expect(try await library.searchModules(
+            query: "", kinds: [.devotional], devotionalCriteria: .init(tags: ["fasting"])
+        ).isEmpty)
+    }
+
     /// Exercise a newly compiled complete index, a shipped two-column index,
     /// and the oldest JSON-only schema. Mixed body/note queries must survive.
     @Test func commentaryFindsBodyAndFootnoteTermsAcrossAllIndexGenerations() async throws {
