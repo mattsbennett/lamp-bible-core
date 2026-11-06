@@ -81,9 +81,16 @@ public enum LampModuleSearch {
         let columns = try LampModuleText.columnNames(in: db, table: "commentary_units")
         let hasSearchText = columns.contains("search_text")
         let hasFootnotesText = columns.contains("footnotes_text")
-        let hasFTS = tables.contains("commentary_units_fts") && !query.fts5Query.isEmpty
-        let ftsColumns = hasFTS ? try LampModuleText.orderedColumnNames(in: db, table: "commentary_units_fts") : []
-        let fullFTS = hasFootnotesText && ftsColumns.contains("footnotes_text")
+        let indexed = tables.contains("commentary_units_fts")
+        let ftsColumns = indexed ? try LampModuleText.orderedColumnNames(in: db, table: "commentary_units_fts") : []
+        // An index of every unit's footnotes too answers the query; an older
+        // one, without them, each term it can find in the body, the notes
+        // read for it as well.
+        let asked = hasFootnotesText && ftsColumns.contains("footnotes_text")
+            ? try indexQuery(query, index: "commentary_units_fts", in: db) : nil
+        if case .nothing = asked { return [] }
+        let fullFTS = asked?.match != nil
+        let hasFTS = fullFTS || indexed && !query.fts5Query.isEmpty
         // A database holding several modules answers for the ones asked
         // about. A module's own file holds only it.
         let sharesDatabase = columns.contains("module_id")
@@ -91,9 +98,9 @@ public enum LampModuleSearch {
 
         var conditions: [String] = []
         var arguments = StatementArguments()
-        if fullFTS {
+        if let match = asked?.match {
             conditions.append("commentary_units_fts MATCH ?")
-            arguments += [query.fts5Query]
+            arguments += [match]
         }
         if sharesDatabase {
             conditions.append("u.module_id IN (\(modules.map { _ in "?" }.joined(separator: ", ")))")
@@ -198,6 +205,37 @@ public enum LampModuleSearch {
             guard let shown = item.shown else { return result }
             return result.withSnippet(query.markedSnippet(shown, findingPhrase: result.holdsPhrase))
         }
+    }
+
+    /// How an index is asked a query: by its MATCH argument, or not at all,
+    /// where no word of the index holds a term found within words, so that
+    /// nothing it covers can match.
+    enum IndexQuery {
+        case match(String)
+        case nothing
+
+        var match: String? {
+            if case .match(let match) = self { match } else { nil }
+        }
+    }
+
+    /// How `index` is asked `query`, each term found within words (`*faith`)
+    /// as the words of the index holding it, from its list of them
+    /// (`LampSearchWords`); nil where it can't answer, as where it has no
+    /// list of its words as it is now or too many hold the term, or the query
+    /// has nothing it can search by, so that the text is read instead.
+    static func indexQuery(_ query: LampSearchQuery, index: String, in db: Database) throws -> IndexQuery? {
+        guard query.hasWithinWordTerms else {
+            let match = query.fts5Query
+            return match.isEmpty ? nil : .match(match)
+        }
+        var words: [String: [String]] = [:]
+        for term in query.terms where term.isWithinWord && words[term.text] == nil {
+            guard let holding = try LampSearchWords.words(holding: term.text, index: index, in: db) else { return nil }
+            guard !holding.isEmpty else { return .nothing }
+            words[term.text] = holding
+        }
+        return .match(query.fts5Query { words[$0.text] ?? [] })
     }
 
     /// Which of `rowids` an index finds the query's words in together.
@@ -323,14 +361,17 @@ public enum LampModuleSearch {
         guard limit > 0, !modules.isEmpty, !query.isEmpty, !query.plainText.isEmpty else { return [] }
         let tables = try LampModuleText.tableNames(in: db)
         guard tables.contains("book_sections") else { return [] }
-        let hasFTS = tables.contains("book_sections_fts") && !query.fts5Query.isEmpty
+        let asked = tables.contains("book_sections_fts")
+            ? try indexQuery(query, index: "book_sections_fts", in: db) : nil
+        if case .nothing = asked { return [] }
+        let hasFTS = asked?.match != nil
         let names = Dictionary(modules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
 
         var conditions: [String] = []
         var arguments = StatementArguments()
-        if hasFTS {
+        if let match = asked?.match {
             conditions.append("book_sections_fts MATCH ?")
-            arguments += [query.fts5Query]
+            arguments += [match]
         }
         // Every book's sections carry their book, in its own file or not.
         conditions.append("s.module_id IN (\(modules.map { _ in "?" }.joined(separator: ", ")))")
@@ -446,9 +487,12 @@ public enum LampModuleSearch {
         let columns = try LampModuleText.columnNames(in: db, table: "note_entries")
         let hasTitle = columns.contains("title")
         let hasSearchText = columns.contains("search_text")
-        let ftsColumns = tables.contains("note_fts") && !query.fts5Query.isEmpty
+        let ftsColumns = tables.contains("note_fts")
             ? try LampModuleText.orderedColumnNames(in: db, table: "note_fts") : []
-        let hasFTS = hasTitle && hasSearchText && ftsColumns.contains("title") && ftsColumns.contains("search_text")
+        let asked = hasTitle && hasSearchText && ftsColumns.contains("title") && ftsColumns.contains("search_text")
+            ? try indexQuery(query, index: "note_fts", in: db) : nil
+        if case .nothing = asked { return [] }
+        let hasFTS = asked?.match != nil
         // A database holding several modules answers for the ones asked
         // about. A module's own file holds only it.
         let sharesDatabase = columns.contains("module_id")
@@ -456,9 +500,9 @@ public enum LampModuleSearch {
 
         var conditions: [String] = []
         var arguments = StatementArguments()
-        if hasFTS {
+        if let match = asked?.match {
             conditions.append("note_fts MATCH ?")
-            arguments += [query.fts5Query]
+            arguments += [match]
         }
         if sharesDatabase {
             conditions.append("n.module_id IN (\(modules.map { _ in "?" }.joined(separator: ", ")))")
@@ -509,7 +553,12 @@ public enum LampModuleSearch {
             var shown: String?
             if readsText {
                 let texts = noteTexts(of: row, query: query, shown: snippets)
-                if !hasFTS { holdsPhrase = query.holdsPhrase(texts.searched) }
+                if !hasFTS {
+                    // Found anywhere by LIKE; kept where the query's own rule
+                    // finds it, as the index would.
+                    guard query.matchesWordPrefixes(texts.searched) else { continue }
+                    holdsPhrase = query.holdsPhrase(texts.searched)
+                }
                 if snippets { shown = texts.shown }
             }
             let moduleID: String = sharesDatabase ? row["module_id"] : modules[0].id
@@ -613,15 +662,18 @@ public enum LampModuleSearch {
         let hasSearchText = columns.contains("search_text")
         let ftsColumns = hasTextQuery && hasSearchText && tables.contains("devotional_entries_fts")
             ? try LampModuleText.orderedColumnNames(in: db, table: "devotional_entries_fts") : []
-        let usesIndex = ftsColumns.contains("title") && ftsColumns.contains("search_text")
+        let asked = ftsColumns.contains("title") && ftsColumns.contains("search_text")
+            ? try indexQuery(query, index: "devotional_entries_fts", in: db) : nil
+        if case .nothing = asked { return [] }
+        let usesIndex = asked?.match != nil
         let sharesDatabase = columns.contains("module_id")
         let names = Dictionary(modules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
 
         var conditions: [String] = []
         var arguments = StatementArguments()
-        if usesIndex {
+        if let match = asked?.match {
             conditions.append("devotional_entries_fts MATCH ?")
-            arguments += [query.fts5Query]
+            arguments += [match]
         }
         if sharesDatabase {
             conditions.append("d.module_id IN (\(modules.map { _ in "?" }.joined(separator: ", ")))")
@@ -792,33 +844,37 @@ public enum LampModuleSearch {
         let like = query.sqlLikePredicate(columns: ["theme"], jsonColumns: ["question_json", "answer_json"])
         var arguments = StatementArguments(modules.map(\.id))
         arguments += StatementArguments(like.arguments)
-        arguments += [limit]
-        // Sorted before the limit, so the questions kept are the first in
-        // reading order: a quiz isn't always stored in it.
-        return try Row.fetchAll(db, sql: """
-            SELECT id, quiz_module_id, day, sv, ev, age_group, question_json, answer_json
+        // Sorted, so the questions kept are the first in reading order: a
+        // quiz isn't always stored in it. Found anywhere by LIKE, and kept
+        // where the query's own rule finds the words.
+        let rows = try Row.fetchCursor(db, sql: """
+            SELECT id, quiz_module_id, day, sv, ev, age_group, theme, question_json, answer_json
             FROM quiz_questions
             WHERE quiz_module_id IN (\(modules.map { _ in "?" }.joined(separator: ", "))) AND \(like.condition)
             ORDER BY day, sv, age_group, question_index
-            LIMIT ?
-            """, arguments: arguments).map { row in
-                let moduleID: String = row["quiz_module_id"]
-                let answerJSON: String = row["answer_json"]
-                let question = LampModuleText.plainText(fromJSONString: row["question_json"])
-                let answer = LampModuleText.plainText(fromJSONString: answerJSON)
-                return LampModuleSearchResult(
-                    id: "quiz:\(moduleID):\(row["id"] as Int64)",
-                    kind: .quiz,
-                    moduleID: moduleID,
-                    moduleName: names[moduleID] ?? moduleID,
-                    title: question ?? "Quiz Question",
-                    subtitle: "Day \(row["day"] as Int) • \(row["age_group"] as String)",
-                    snippet: query.markedSnippet(answer ?? answerJSON),
-                    startReference: row["sv"],
-                    endReference: row["ev"],
-                    holdsPhrase: query.holdsPhrase([question, answer].compactMap { $0 }.joined(separator: " "))
-                )
-            }
+            """, arguments: arguments)
+        var found: [LampModuleSearchResult] = []
+        while found.count < limit, let row = try rows.next() {
+            let moduleID: String = row["quiz_module_id"]
+            let answerJSON: String = row["answer_json"]
+            let question = LampModuleText.plainText(fromJSONString: row["question_json"])
+            let answer = LampModuleText.plainText(fromJSONString: answerJSON)
+            guard query.matches([row["theme"] as String?, question, answer].compactMap { $0 }.joined(separator: " "))
+            else { continue }
+            found.append(LampModuleSearchResult(
+                id: "quiz:\(moduleID):\(row["id"] as Int64)",
+                kind: .quiz,
+                moduleID: moduleID,
+                moduleName: names[moduleID] ?? moduleID,
+                title: question ?? "Quiz Question",
+                subtitle: "Day \(row["day"] as Int) • \(row["age_group"] as String)",
+                snippet: query.markedSnippet(answer ?? answerJSON),
+                startReference: row["sv"],
+                endReference: row["ev"],
+                holdsPhrase: query.holdsPhrase([question, answer].compactMap { $0 }.joined(separator: " "))
+            ))
+        }
+        return found
     }
 
     /// Reading plans matching `query` by their name, descriptions and

@@ -197,6 +197,9 @@ public struct LampModuleCompiler: Sendable {
     }
 
     func optimize(_ queue: DatabaseQueue) throws {
+        // Each index's words, for a search for part of a word, once nothing
+        // more is written to it.
+        try queue.write(LampSearchWords.rebuildAll)
         try queue.writeWithoutTransaction { db in
             try db.execute(sql: "ANALYZE")
             try db.execute(sql: "VACUUM")

@@ -281,6 +281,115 @@ struct LampLibrarySearchPerformanceTests {
         #expect(try await search("mercy").isEmpty)
     }
 
+    /// `*faith` finds "unfaithful" in every kind with an index, through the
+    /// list of its words each compiled module keeps, and finds the same by
+    /// reading the text where a module has no list, or one older than its
+    /// index; "faith" finds only words it starts.
+    @Test func aStarFindsPartOfAWordInEveryKind() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"2.2","id":"C","seriesAbbrev":"C","seriesFull":"Commentary","title":"John"},
+             "book":"John","bookNumber":43,
+             "chapters":[{"chapter":1,"pericopae":[
+               {"title":"Steward","sv":43001001,"ev":43001001,"content":[{"type":"commentary","content":{"text":"The unfaithful steward is warned."}}]},
+               {"title":"Works","sv":43001002,"ev":43001002,"content":[{"type":"commentary","content":{"text":"Faith works through love."}}]},
+               {"title":"Rest","sv":43001003,"ev":43001003,"content":[{"type":"commentary","content":{"text":"Hope only."}}]}
+             ]}]}
+            """#, id: "C", in: root, library: library)
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"1.0","id":"B","type":"book","title":"Book","language":"en"},
+             "sections":[
+               {"id":"steward","type":"chapter","title":"First","content":[{"type":"paragraph","content":{"text":"The unfaithful steward."}}]},
+               {"id":"works","type":"chapter","title":"Second","content":[{"type":"paragraph","content":{"text":"Faith works."}}]}
+             ]}
+            """#, id: "B", in: root, library: library)
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"1.1","id":"N","type":"notes","name":"Study Notes"},
+             "book":"John","bookNumber":43,"chapters":[{"chapter":1,"verses":[
+               {"sv":43001001,"title":"One","commentary":{"text":"An unfaithful servant."}},
+               {"sv":43001002,"title":"Two","commentary":{"text":"Faith alone."}}
+             ]}]}
+            """#, id: "N", in: root, library: library)
+        for (id, text) in [("D1", "The unfaithful steward."), ("D2", "Faith alone.")] {
+            _ = try await install(#"""
+                {"meta":{"schemaVersion":"1.0","id":"\#(id)","type":"devotional","title":"\#(id)",
+                         "tags":[],"date":"2026-01-01","category":"Reflection"},
+                 "content":[{"type":"paragraph","content":{"text":"\#(text)"}}]}
+                """#, id: id, in: root, library: library)
+        }
+        let kinds: [LampModuleKind] = [.commentary, .book, .notes, .devotional]
+        func found(_ query: String, _ kind: LampModuleKind) async throws -> Set<String> {
+            Set(try await library.searchModules(query: query, kinds: [kind]).map(\.snippet))
+        }
+        let databases = try FileManager.default.contentsOfDirectory(
+            at: root.appendingPathComponent("Library/Databases"), includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "sqlite" }
+        #expect(databases.count == 5)
+        for database in databases {
+            let listed = try await DatabaseQueue(path: database.path).read { db in
+                try String.fetchAll(db, sql: "SELECT fts FROM search_word_lists")
+                    .allSatisfy { try LampSearchWords.isCurrent(index: $0, in: db) }
+            }
+            #expect(listed, "each compiled module keeps its index's words")
+        }
+
+        var throughTheLists: [LampModuleKind: Set<String>] = [:]
+        for kind in kinds {
+            let within = try await found("*faith", kind)
+            #expect(within.count == 2, "\(kind)")
+            #expect(within.contains { $0.contains("un<mark>faith</mark>ful") }, "\(kind)")
+            #expect(try await found("faith", kind).count == 1, "\(kind): a typed word starts one")
+            #expect(try await found("*faith works", kind).count == (kind == .commentary || kind == .book ? 1 : 0))
+            #expect(try await found("*zzq", kind).isEmpty)
+            throughTheLists[kind] = within
+        }
+
+        // Without a list, or with one older than its index, the text is read.
+        for (offset, database) in databases.enumerated() {
+            try await DatabaseQueue(path: database.path).write { db in
+                if offset.isMultiple(of: 2) {
+                    try db.execute(sql: "DROP TABLE search_word_lists")
+                } else {
+                    try db.execute(sql: "UPDATE search_word_lists SET structure = x'00'")
+                }
+            }
+        }
+        for kind in kinds {
+            #expect(try await found("*faith", kind) == throughTheLists[kind], "\(kind)")
+        }
+    }
+
+    /// My writing's and My Notes' indexes keep their words too, folded as
+    /// they fold them, Greek and accents alike.
+    @Test func aStarFindsPartOfAWordInMyWritingAndNotes() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        for (id, content) in [("word", "Ἐν ἀρχῇ ἦν ὁ λόγος"), ("dispute", "Without ἀντιλογία."), ("study", "An Étude in faith.")] {
+            _ = try await library.savePersonalDevotional(LampDevotional(
+                id: id, moduleID: "personal-devotionals", moduleName: "My Writing", title: id,
+                tags: [], content: content, isEditable: true
+            ))
+        }
+        try await library.saveVerseNote(LampVerseNote(id: "note", reference: 43_001_001, content: "An unfaithful word."))
+        func found(_ query: String, _ kind: LampModuleKind) async throws -> [String] {
+            try await library.searchModules(query: query, kinds: [kind]).map(\.id).sorted()
+        }
+        #expect(try await found("*λογ", .devotional) == ["devotional:personal-devotionals:dispute", "devotional:personal-devotionals:word"])
+        #expect(try await found("*τυδ", .devotional).isEmpty)
+        #expect(try await found("*tud", .devotional) == ["devotional:personal-devotionals:study"])
+        #expect(try await found("*étud", .devotional) == ["devotional:personal-devotionals:study"])
+        #expect(try await found("*faith", .notes) == ["notes:personal-notes:note"])
+
+        let writings = root.appendingPathComponent("Library/Indexes/PersonalDevotionals.sqlite")
+        let words = try await DatabaseQueue(path: writings.path).read { db in
+            try LampSearchWords.words(holding: "λογ", index: "devotional_entries_fts", in: db)
+        }
+        #expect(words?.sorted() == ["λόγοσ", "ἀντιλογία"], "the list answered, the words as the index holds them")
+    }
+
     /// Exercise a newly compiled complete index, a shipped two-column index,
     /// and the oldest JSON-only schema. Mixed body/note queries must survive.
     @Test func commentaryFindsBodyAndFootnoteTermsAcrossAllIndexGenerations() async throws {

@@ -3,24 +3,30 @@ import Foundation
 public struct LampSearchTerm: Equatable, Sendable {
     public let text: String
     public let isExact: Bool
+    /// Typed with a `*` before it, as `*faith`: found anywhere in a word, as
+    /// "unfaithful" holds it, rather than only where a word starts.
+    public let isWithinWord: Bool
 
-    public init(text: String, isExact: Bool) {
+    public init(text: String, isExact: Bool, isWithinWord: Bool = false) {
         self.text = text
         self.isExact = isExact
+        self.isWithinWord = isWithinWord && !isExact
     }
 
-    /// Whether `text` holds this term: anywhere for a typed word, as a whole
-    /// word or phrase when quoted. Case, accents and the form of an
-    /// apostrophe make no difference, so "Lord's" finds "Lord’s" and "λογος"
-    /// finds "λόγος".
+    /// Whether `text` holds this term: where a word starts with it for a
+    /// typed word, as the full-text index finds it, so that "faith" finds
+    /// "faithful" and not "unfaithful"; anywhere in a word for one typed
+    /// `*faith`; as a whole word or phrase when quoted. Case, accents and the
+    /// form of an apostrophe make no difference, so "Lord's" finds "Lord’s"
+    /// and "λογος" finds "λόγος".
     public func matches(_ text: String) -> Bool {
-        !ranges(in: text, wordStartsOnly: false, maximumMatches: 1).isEmpty
+        !ranges(in: text, wordStartsOnly: true, maximumMatches: 1).isEmpty
     }
 
     /// Where this term falls in `text`, as Character offsets. A quoted term
-    /// must stand as a whole word or phrase. A typed word, which the full-text
-    /// index matches at the start of a word, is found there when
-    /// `wordStartsOnly` is set.
+    /// must stand as a whole word or phrase, and one typed `*word` may fall
+    /// anywhere. A typed word, which the full-text index matches at the start
+    /// of a word, is found there when `wordStartsOnly` is set.
     func ranges(in text: String, wordStartsOnly: Bool, maximumMatches: Int? = nil) -> [Range<Int>] {
         let needle = LampSearchQuery.foldingApostrophes(self.text)
         // No text-wide normalization is needed for the usual word query.
@@ -46,7 +52,7 @@ public struct LampSearchTerm: Equatable, Sendable {
             let startsWord = match.lowerBound == folded.startIndex
                 || !isWordCharacter(folded.index(before: match.lowerBound))
             let endsWord = !isWordCharacter(match.upperBound)
-            if isExact ? startsWord && endsWord : (!wordStartsOnly || startsWord) {
+            if isExact ? startsWord && endsWord : (isWithinWord || !wordStartsOnly || startsWord) {
                 found.append(lower..<upper)
                 if let maximumMatches, found.count >= maximumMatches { break }
             }
@@ -75,7 +81,11 @@ public struct LampSearchReference: Equatable, Sendable {
     }
 }
 
-/// iOS's quoted-phrase and prefix-search grammar, shared with Mac search.
+/// The search grammar every search of either app reads a query by: a typed
+/// word is found where a word starts with it (`faith`, or `faith*`, finds
+/// "faithful"); one typed `*faith` anywhere in a word ("unfaithful"); a
+/// quoted word or phrase whole (`"faith"`, `"kingdom of God"`). Every term
+/// must be found.
 public struct LampSearchQuery: Equatable, Sendable {
     public let source: String
     public let terms: [LampSearchTerm]
@@ -93,9 +103,10 @@ public struct LampSearchQuery: Equatable, Sendable {
     /// The query's words in the order typed, as one phrase, when it has more
     /// than one: a text holding "kingdom of God" together answers it better
     /// than one with "kingdom" in one place and "God" pages on. It starts a
-    /// word, and ends one only where the last term was quoted.
+    /// word, and ends one only where the last term was quoted. A query with a
+    /// term found within words has none.
     var phrase: LampSearchTerm? {
-        guard terms.count > 1, let last = terms.last else { return nil }
+        guard terms.count > 1, !hasWithinWordTerms, let last = terms.last else { return nil }
         return LampSearchTerm(text: plainText, isExact: last.isExact)
     }
 
@@ -161,12 +172,22 @@ public struct LampSearchQuery: Equatable, Sendable {
 
     public var isEmpty: Bool { terms.isEmpty }
 
+    /// Whether a term is found within words, which a full-text index, finding
+    /// the words a term starts, can't answer by itself.
+    public var hasWithinWordTerms: Bool { terms.contains(where: \.isWithinWord) }
+
+    /// The query of `term` alone, read as it was.
+    func only(_ term: LampSearchTerm) -> LampSearchQuery {
+        LampSearchQuery(source: term.text, terms: [term])
+    }
+
     public func matches(_ text: String) -> Bool {
         terms.allSatisfy { $0.matches(text) }
     }
 
-    /// Refines a legacy LIKE prefilter to the same word-start boundary used
-    /// by indexed book/commentary searches. A quoted term also ends a word.
+    /// Refines a LIKE prefilter, which finds a term anywhere, to the query's
+    /// own rule for each term, as `matches`: a typed word where a word
+    /// starts, as the indexed searches find it, a quoted one whole.
     func matchesWordPrefixes(_ text: String) -> Bool {
         terms.allSatisfy {
             !$0.ranges(in: text, wordStartsOnly: true, maximumMatches: 1).isEmpty
@@ -193,6 +214,10 @@ public struct LampSearchQuery: Equatable, Sendable {
 
     /// FTS5 MATCH argument. Exact quoted terms stay phrases; unquoted terms
     /// use iOS's prefix match rule. Every term is escaped before interpolation.
+    /// Empty, as for a query of nothing searchable, where a term is found
+    /// within words: an index has no way to ask for that by itself, so the
+    /// text is read instead, or the words holding it are asked for by
+    /// `fts5Query(wordsHolding:)`.
     ///
     /// A hyphen or an apostrophe separates rather than disappears. FTS5
     /// tokenizes "self-control" as `self` and `control`, and "Lord’s" as
@@ -201,7 +226,19 @@ public struct LampSearchQuery: Equatable, Sendable {
     /// nothing at all. Keeping it as a space asks for the tokens together,
     /// which is what was typed.
     public var fts5Query: String {
-        terms.compactMap { term -> String? in
+        hasWithinWordTerms ? "" : fts5Query { _ in [] }
+    }
+
+    /// FTS5 MATCH argument with each term found within words asked as the
+    /// words of the index holding it, from `words`, any one of them. Each
+    /// such term must have one. FTS5 takes words side by side as all of
+    /// them, but not a group of either, so a query with one says AND.
+    func fts5Query(wordsHolding words: (LampSearchTerm) throws -> [String]) rethrows -> String {
+        try terms.compactMap { term -> String? in
+            if term.isWithinWord {
+                let alternatives = try words(term).map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+                return alternatives.count == 1 ? alternatives[0] : "(" + alternatives.joined(separator: " OR ") + ")"
+            }
             var escaped = Self.foldingApostrophes(term.text)
                 .replacingOccurrences(of: "*", with: "")
                 .replacingOccurrences(of: "-", with: " ")
@@ -217,12 +254,13 @@ public struct LampSearchQuery: Equatable, Sendable {
                 .replacingOccurrences(of: "\u{201C}", with: "")
                 .replacingOccurrences(of: "\u{201D}", with: "")
             return "\"\(escaped)\"" + (term.isExact ? "" : "*")
-        }.joined(separator: " ")
+        }.joined(separator: hasWithinWordTerms ? " AND " : " ")
     }
 
     /// Broad Realm prefilter used by the iOS bundled dictionary adapter.
     public var realmPrefilter: String {
         source
+            .replacingOccurrences(of: "*", with: "")
             .replacingOccurrences(of: "\"", with: "")
             .replacingOccurrences(of: "'", with: "")
             .replacingOccurrences(of: "\u{201C}", with: "")
@@ -420,8 +458,12 @@ public struct LampSearchQuery: Equatable, Sendable {
         var current = ""
         var quote: Character?
         func flush(exact: Bool) {
-            let text = current.trimmingCharacters(in: .whitespaces)
-            if !text.isEmpty { terms.append(LampSearchTerm(text: text, isExact: exact)) }
+            var text = current.trimmingCharacters(in: .whitespaces)
+            // `*faith` is found within words. A `*` anywhere else, as in
+            // `faith*`, asks what a typed word already does, and is dropped.
+            let withinWord = !exact && text.hasPrefix("*")
+            text = text.replacingOccurrences(of: "*", with: "")
+            if !text.isEmpty { terms.append(LampSearchTerm(text: text, isExact: exact, isWithinWord: withinWord)) }
             current = ""
         }
         for (index, character) in input.enumerated() {

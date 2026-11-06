@@ -27,7 +27,31 @@ struct LampSearchTests {
         #expect(LampSearchTerm(text: "חסד", isExact: false).matches("חֵסֵד"))
         #expect(LampSearchTerm(text: "love", isExact: true).matches("God is love."))
         #expect(!LampSearchTerm(text: "love", isExact: true).matches("my beloved"))
-        #expect(LampSearchTerm(text: "love", isExact: false).matches("my beloved"))
+        #expect(!LampSearchTerm(text: "love", isExact: false).matches("my beloved"), "a typed word starts one")
+        #expect(LampSearchTerm(text: "love", isExact: false).matches("lovingkindness and loveliness"))
+        #expect(LampSearchTerm(text: "love", isExact: false, isWithinWord: true).matches("my beloved"))
+    }
+
+    /// The grammar every search reads a query by: a typed word starts a word,
+    /// `*word` falls anywhere in one, and a quoted word or phrase is whole.
+    @Test func aStarBeforeAWordFindsItWithinWords() {
+        #expect(LampSearchQuery("*faith").terms == [LampSearchTerm(text: "faith", isExact: false, isWithinWord: true)])
+        #expect(LampSearchQuery("*faith*").terms == [LampSearchTerm(text: "faith", isExact: false, isWithinWord: true)])
+        #expect(LampSearchQuery("faith*").terms == [LampSearchTerm(text: "faith", isExact: false)], "as typed alone")
+        #expect(LampSearchQuery("\"*faith\"").terms == [LampSearchTerm(text: "faith", isExact: true)])
+        #expect(LampSearchQuery("* hope").terms == [LampSearchTerm(text: "hope", isExact: false)])
+        #expect(LampSearchQuery("*").isEmpty)
+
+        let query = LampSearchQuery("*faith hope")
+        #expect(query.matches("unfaithful, yet hopeful"))
+        #expect(!query.matches("unfaithful, yet without it"))
+        #expect(!LampSearchQuery("faith").matches("unfaithful"))
+        #expect(query.fts5Query.isEmpty, "an index can't ask for it by itself")
+        #expect(query.fts5Query { _ in ["faith", "unfaithful"] } == #"("faith" OR "unfaithful") AND "hope"*"#)
+        #expect(LampSearchQuery("*faith").fts5Query { _ in ["unfaithful"] } == #""unfaithful""#)
+        #expect(LampSearchQuery("*faith").markedSnippet("the unfaithful servant") == "the un<mark>faith</mark>ful servant")
+        #expect(!LampSearchQuery("kingdom *god").holdsPhrase("the kingdom god"), "no phrase to hold")
+        #expect(LampSearchQuery("*faith").realmPrefilter == "faith")
     }
 
     @Test func aLikePredicateMatchesTermsAsTyped() {

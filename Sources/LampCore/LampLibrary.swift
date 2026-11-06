@@ -620,10 +620,11 @@ public actor LampLibrary {
 
         let resultLimit = min(max(limit, 1), 500)
         let parsedQuery = LampSearchQuery(query)
-        let ftsQuery = parsedQuery.fts5Query
-        guard !ftsQuery.isEmpty else { return [] }
-        // Without a full-text index every term must still appear, as the
-        // index would ask, rather than the terms as one run of text.
+        guard !parsedQuery.isEmpty, !parsedQuery.plainText.isEmpty else { return [] }
+        // Without a full-text index, or where it can't answer, as for a term
+        // found within words with no list of its words, every term must
+        // still appear, as the index would ask, rather than the terms as one
+        // run of text: found by LIKE and kept by the query's own rule.
         let fallback = parsedQuery.sqlLikePredicate(columns: ["v.text"])
         let firstBook = bookRange?.lowerBound ?? Int.min
         let lastBook = bookRange?.upperBound ?? Int.max
@@ -638,10 +639,26 @@ public actor LampLibrary {
             let moduleResults = try queue.read { db -> [LampTranslationSearchResult] in
                 let tables = try tableNames(in: db)
                 let rows: [Row]
+                func matched(_ sql: String, _ arguments: StatementArguments) throws -> [Row] {
+                    var limited = arguments
+                    limited += [resultLimit]
+                    return try Row.fetchAll(db, sql: sql + "\nLIMIT ?", arguments: limited)
+                }
+                func read(_ sql: String, _ arguments: StatementArguments) throws -> [Row] {
+                    let cursor = try Row.fetchCursor(db, sql: sql, arguments: arguments)
+                    var kept: [Row] = []
+                    while kept.count < resultLimit, let row = try cursor.next() {
+                        if parsedQuery.matches(row["text"]) { kept.append(row.copy()) }
+                    }
+                    return kept
+                }
 
                 if tables.contains("translation_meta") && tables.contains("verses") {
-                    if tables.contains("verses_fts") {
-                        rows = try Row.fetchAll(db, sql: """
+                    let asked = tables.contains("verses_fts")
+                        ? try LampModuleSearch.indexQuery(parsedQuery, index: "verses_fts", in: db) : nil
+                    if case .nothing = asked { return [] }
+                    if let match = asked?.match {
+                        rows = try matched("""
                             SELECT v.ref, v.book, b.name AS book_name,
                                    v.chapter, v.verse, v.text
                             FROM verses_fts
@@ -650,12 +667,11 @@ public actor LampLibrary {
                             WHERE verses_fts MATCH ?
                               AND v.book BETWEEN ? AND ?
                             ORDER BY bm25(verses_fts), v.ref
-                            LIMIT ?
-                            """, arguments: [ftsQuery, firstBook, lastBook, resultLimit])
+                            """, [match, firstBook, lastBook])
                     } else {
                         var arguments = StatementArguments(fallback.arguments)
-                        arguments += [firstBook, lastBook, resultLimit]
-                        rows = try Row.fetchAll(db, sql: """
+                        arguments += [firstBook, lastBook]
+                        rows = try read("""
                             SELECT v.ref, v.book, b.name AS book_name,
                                    v.chapter, v.verse, v.text
                             FROM verses v
@@ -663,12 +679,14 @@ public actor LampLibrary {
                             WHERE \(fallback.condition)
                               AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
-                            LIMIT ?
-                            """, arguments: arguments)
+                            """, arguments)
                     }
                 } else if tables.contains("translation_verses") {
-                    if tables.contains("translation_verses_fts") {
-                        rows = try Row.fetchAll(db, sql: """
+                    let asked = tables.contains("translation_verses_fts")
+                        ? try LampModuleSearch.indexQuery(parsedQuery, index: "translation_verses_fts", in: db) : nil
+                    if case .nothing = asked { return [] }
+                    if let match = asked?.match {
+                        rows = try matched("""
                             SELECT v.ref, v.book, b.name AS book_name,
                                    v.chapter, v.verse, v.text
                             FROM translation_verses_fts
@@ -680,13 +698,12 @@ public actor LampLibrary {
                               AND v.translation_id = ?
                               AND v.book BETWEEN ? AND ?
                             ORDER BY bm25(translation_verses_fts), v.ref
-                            LIMIT ?
-                            """, arguments: [ftsQuery, translation.id, firstBook, lastBook, resultLimit])
+                            """, [match, translation.id, firstBook, lastBook])
                     } else {
                         var arguments: StatementArguments = [translation.id]
                         arguments += StatementArguments(fallback.arguments)
-                        arguments += [firstBook, lastBook, resultLimit]
-                        rows = try Row.fetchAll(db, sql: """
+                        arguments += [firstBook, lastBook]
+                        rows = try read("""
                             SELECT v.ref, v.book, b.name AS book_name,
                                    v.chapter, v.verse, v.text
                             FROM translation_verses v
@@ -697,8 +714,7 @@ public actor LampLibrary {
                               AND \(fallback.condition)
                               AND v.book BETWEEN ? AND ?
                             ORDER BY v.ref
-                            LIMIT ?
-                            """, arguments: arguments)
+                            """, arguments)
                     }
                 } else {
                     // One module of another shape is passed by, as every
@@ -1058,8 +1074,11 @@ public actor LampLibrary {
                 return entry.modified != modified || entry.indexed <= modified
             }.map(\.key), indexed.keys.filter { current[$0] == nil })
         }
-        let (changed, gone) = stale(try queue.read(indexedTimes))
-        guard !changed.isEmpty || !gone.isEmpty else { return queue }
+        let (changed, gone, listed) = try queue.read { db in
+            let (changed, gone) = stale(try indexedTimes(db))
+            return (changed, gone, try LampSearchWords.isCurrent(index: index.fts, in: db))
+        }
+        guard !changed.isEmpty || !gone.isEmpty || !listed else { return queue }
         let items = try read(changed)
         try queue.inTransaction(.immediate) { db in
             // Another process may have brought it up to date meanwhile: only
@@ -1077,6 +1096,8 @@ public actor LampLibrary {
                 try insert(db, item, current[id] ?? 0)
                 try db.execute(sql: "UPDATE \(index.entries) SET indexed_at = ? WHERE id = ?", arguments: [now, id])
             }
+            // Its words, for a search for part of one, as they now are.
+            try LampSearchWords.rebuild(index: index.fts, in: db)
             return .commit
         }
         return queue
@@ -1404,9 +1425,12 @@ public actor LampLibrary {
                         queryArguments += StatementArguments(ids)
                     }
                 }
-                queryArguments += [trimmedQuery, trimmedQuery, resultLimit]
-                let rows = try Row.fetchAll(db, sql: """
-                    SELECT id, key, lemma, transliteration, pronunciation, senses_json
+                queryArguments += [trimmedQuery, trimmedQuery]
+                // Found anywhere by LIKE, and kept where the query's own rule
+                // finds the words, as every other search keeps them.
+                let cursor = try Row.fetchCursor(db, sql: """
+                    SELECT id, key, lemma, transliteration, pronunciation, senses_json,
+                           \(columns.contains("search_text") ? "search_text" : "NULL AS search_text")
                     FROM dictionary_entries
                     WHERE \(moduleCondition) \(condition)
                     ORDER BY
@@ -1416,8 +1440,15 @@ public actor LampLibrary {
                             ELSE 2
                         END,
                         key, lemma
-                    LIMIT ?
                     """, arguments: queryArguments)
+                var rows: [Row] = []
+                while rows.count < resultLimit, let row = try cursor.next() {
+                    let text = [
+                        row["key"], row["lemma"], row["transliteration"], row["search_text"],
+                        LampModuleText.plainText(fromJSONString: row["senses_json"]),
+                    ].compactMap { $0 as String? }.joined(separator: " ")
+                    if parsedQuery.matches(text) { rows.append(row.copy()) }
+                }
 
                 return rows.map { row in
                     let sensesJSON: String? = row["senses_json"]
