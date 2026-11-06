@@ -2868,11 +2868,9 @@ public actor LampLibrary {
         bookRange: ClosedRange<Int>?,
         limit: Int
     ) throws -> [LampModuleSearchResult] {
-        func wanted(_ highlight: LampVerseHighlight) -> Bool {
-            LampHighlightSearch.matchesColor(highlight.color, in: colors)
-                && bookRange.map { $0.contains(highlight.bookNumber) } != false
-        }
-        var matches: [(highlight: LampVerseHighlight, moduleID: String, name: String)] = []
+        // My sets, each newest first, then the highlight modules, searched
+        // as the phone searches its own, by core.
+        var sets: [(id: String, name: String, highlights: [LampVerseHighlight])] = []
         let queue = try openUserDatabase()
         for set in try highlightSets() where moduleIDs == nil || moduleIDs?.contains(set.id) == true {
             let highlights = try queue.read { db in
@@ -2882,10 +2880,9 @@ public actor LampLibrary {
                     FROM highlights h
                     JOIN highlight_sets s ON s.id = h.set_id
                     WHERE h.set_id = ?
-                    ORDER BY h.id DESC
                     """, arguments: [set.id]).map(makeVerseHighlight)
             }
-            matches += highlights.filter(wanted).map { ($0, set.id, set.name) }
+            sets.append((set.id, set.name, highlights))
         }
         let installed = try installedModules()
         for module in installed where module.kind == .highlights
@@ -2894,44 +2891,39 @@ public actor LampLibrary {
             let highlights = try moduleQueue.read { db in
                 try readModuleHighlights(in: db, referenceRange: Int.min...Int.max)
             }
-            matches += highlights.filter(wanted).map { ($0, module.id, module.name) }
+            sets.append((module.id, module.name, highlights))
         }
 
         let abbreviations = Dictionary(
             installed.filter { $0.kind == .translation }.map { ($0.id, $0.abbreviation ?? $0.name) },
             uniquingKeysWith: { first, _ in first }
         )
-        var texts: [String: [Int: String]] = [:]
-        for (translationID, highlights) in Dictionary(grouping: matches, by: \.highlight.translationID) {
+        let names = Dictionary(sets.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let hits = try LampModuleSearch.highlights(
+            in: sets.map { ($0.id, $0.highlights) }, query: query, colors: colors, bookRange: bookRange, limit: limit
+        ) { translationID, references in
             try Task.checkCancellation()
-            texts[translationID] = (try? verseTexts(
-                moduleID: translationID,
-                references: Set(highlights.map(\.highlight.reference))
-            )) ?? [:]
+            return (try? verseTexts(moduleID: translationID, references: references)) ?? [:]
         }
-
-        var results: [LampModuleSearchResult] = []
-        for (highlight, moduleID, name) in matches where results.count < limit {
-            guard let text = texts[highlight.translationID]?[highlight.reference],
-                  query?.matches(text) != false else { continue }
-            results.append(LampModuleSearchResult(
-                id: "highlights:\(moduleID):\(highlight.id)",
+        return hits.map { hit in
+            let highlight = hit.highlight
+            return LampModuleSearchResult(
+                id: "highlights:\(hit.setID):\(highlight.id)",
                 kind: .highlights,
-                moduleID: moduleID,
-                moduleName: name,
+                moduleID: hit.setID,
+                moduleName: names[hit.setID] ?? hit.setID,
                 title: LampBibleReferenceFormatter.describeRange(from: highlight.reference, to: highlight.reference),
                 subtitle: abbreviations[highlight.translationID],
-                snippet: query.map { $0.markedSnippet(text) } ?? LampHighlightSearch.markedSnippet(
-                    text: text,
+                snippet: query.map { $0.markedSnippet(hit.text) } ?? LampHighlightSearch.markedSnippet(
+                    text: hit.text,
                     startOffset: highlight.startOffset,
                     endOffset: highlight.endOffset
                 ),
                 startReference: highlight.reference,
                 highlightColor: LampHighlightSearch.normalizedColor(highlight.color),
-                holdsPhrase: query?.holdsPhrase(text) ?? false
-            ))
+                holdsPhrase: hit.holdsPhrase
+            )
         }
-        return results
     }
 
     /// The text of each verse of a translation in `references`, read a few

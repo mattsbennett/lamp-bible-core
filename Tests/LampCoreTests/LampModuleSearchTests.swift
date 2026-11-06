@@ -695,4 +695,42 @@ struct LampModuleSearchTests {
         #expect(words == ["steadfast"])
         #expect(try queue.writeWithoutTransaction { try LampSearchWords.vocabulary(of: "no_such_fts", in: $0) } == nil)
     }
+
+    // MARK: - Highlights
+
+    /// Each set's highlights newest first, of the colours, books and words
+    /// asked for, the room shared and the sets taking turns.
+    @Test func highlightsAreTakenNewestFirstEachSetInTurn() throws {
+        func highlight(_ id: Int64, _ set: String, _ reference: Int, _ color: String = "FFFF00") -> LampVerseHighlight {
+            LampVerseHighlight(id: id, setID: set, translationID: "KJV", reference: reference,
+                               startOffset: 0, endOffset: 3, style: .highlight, color: color)
+        }
+        let sets: [(id: String, highlights: [LampVerseHighlight])] = [
+            ("mine", [highlight(1, "mine", 40_001_001), highlight(4, "mine", 40_001_002), highlight(5, "mine", 40_001_003),
+                      highlight(6, "mine", 1_001_001), highlight(7, "mine", 40_001_004, "#00ff00")]),
+            ("module", [highlight(2, "inner", 40_001_005)]),
+        ]
+        let texts: [Int: String] = [
+            40_001_001: "Faith first.", 40_001_002: "Faith works.", 40_001_003: "Hope.",
+            1_001_001: "In the beginning, faith.", 40_001_004: "Faith in green.", 40_001_005: "Faith works by love.",
+        ]
+        var asked: [Set<Int>] = []
+        func search(_ query: String?, _ colors: Set<String>? = nil, limit: Int = 10) -> [String] {
+            LampModuleSearch.highlights(
+                in: sets, query: query.map(LampSearchQuery.init), colors: colors, bookRange: 40...40, limit: limit
+            ) { _, references in
+                asked.append(references)
+                return texts.filter { references.contains($0.key) }
+            }.map { "\($0.setID):\($0.highlight.id)" }
+        }
+        #expect(search(nil, ["ffff00"]) == ["mine:5", "module:2", "mine:4", "mine:1"], "newest first, in turn")
+        #expect(!asked.joined().contains(1_001_001), "a book not asked for isn't read")
+        #expect(search("faith", ["FFFF00"]) == ["mine:4", "module:2", "mine:1"])
+        #expect(search("faith works") == ["mine:4", "module:2"])
+        #expect(search(nil, limit: 2) == ["mine:7", "module:2"], "each set heard from")
+        let together = LampModuleSearch.highlights(
+            in: sets, query: LampSearchQuery("faith works"), colors: nil, bookRange: nil, limit: 10
+        ) { _, references in texts.filter { references.contains($0.key) } }
+        #expect(together.count == 2 && together.allSatisfy { $0.holdsPhrase })
+    }
 }

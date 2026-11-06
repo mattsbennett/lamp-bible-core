@@ -143,14 +143,19 @@ extension LampModuleSearch {
     /// across several modules hears from each, however many it names and in
     /// whatever order, rather than filling from the first.
     public static func sharedEvenly<Hit>(_ found: [[Hit]], limit: Int) -> [Hit] {
-        var shares = Array(repeating: 0, count: found.count)
+        zip(found, shares(of: found.map(\.count), limit: limit)).flatMap { $0.prefix($1) }
+    }
+
+    /// How many of each of lists of `counts` `sharedEvenly` keeps.
+    static func shares(of counts: [Int], limit: Int) -> [Int] {
+        var shares = Array(repeating: 0, count: counts.count)
         var room = limit
         // Fewest first, so what a short list leaves is shared by the rest.
-        let fewestFirst = found.indices.sorted { found[$0].count < found[$1].count }
+        let fewestFirst = counts.indices.sorted { counts[$0] < counts[$1] }
         for (position, index) in fewestFirst.enumerated() {
-            shares[index] = min(found[index].count, room / (found.count - position))
+            shares[index] = min(counts[index], room / (counts.count - position))
             room -= shares[index]
         }
-        return zip(found, shares).flatMap { $0.prefix($1) }
+        return shares
     }
 }
