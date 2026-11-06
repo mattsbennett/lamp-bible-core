@@ -606,4 +606,69 @@ struct LampModuleSearchTests {
         #expect(noModules.isEmpty)
         #expect(noQuery.isEmpty)
     }
+
+    // MARK: - Verses
+
+    /// The phone's and the bundle's shape: several translations in one
+    /// table, each ranked within itself and kept to the limit, so that one
+    /// using the words more often can't crowd out another.
+    private func translations(indexed: Bool, listed: Bool = false) throws -> DatabaseQueue {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE translation_verses (
+                    id INTEGER PRIMARY KEY, translation_id TEXT NOT NULL, ref INTEGER NOT NULL,
+                    book INTEGER NOT NULL, chapter INTEGER NOT NULL, verse INTEGER NOT NULL, text TEXT NOT NULL);
+                CREATE TABLE translation_books (translation_id TEXT NOT NULL, book_number INTEGER NOT NULL, name TEXT NOT NULL);
+                INSERT INTO translation_books VALUES ('A', 43, 'John'), ('B', 43, 'Jean');
+                """)
+            let verses: [(String, Int, String)] = [
+                ("A", 43_001_001, "Faith, faith and faith again."),
+                ("A", 43_001_002, "By faith we stand."),
+                ("A", 43_001_003, "Unfaithful servants."),
+                ("A", 43_001_004, "Hope endures."),
+                ("B", 43_001_001, "Faith comes by hearing."),
+                ("B", 43_001_002, "The faithful one."),
+            ]
+            for (index, verse) in verses.enumerated() {
+                try db.execute(sql: "INSERT INTO translation_verses VALUES (?, ?, ?, 43, 1, ?, ?)", arguments: [
+                    index + 1, verse.0, verse.1, verse.1 % 1_000, verse.2,
+                ])
+            }
+            if indexed {
+                try db.execute(sql: """
+                    CREATE VIRTUAL TABLE translation_verses_fts USING fts5(text, content='translation_verses', content_rowid='id');
+                    INSERT INTO translation_verses_fts(translation_verses_fts) VALUES('rebuild');
+                    """)
+                if listed { try LampSearchWords.rebuildAll(in: db) }
+            }
+        }
+        return queue
+    }
+
+    @Test func eachTranslationKeepsItsOwnBestVerses() throws {
+        for (indexed, listed) in [(true, true), (true, false), (false, false)] {
+            let queue = try translations(indexed: indexed, listed: listed)
+            let hits = try queue.read { db in
+                try LampModuleSearch.verses(in: db, translations: nil, query: LampSearchQuery("faith"), limit: 1)
+            }
+            #expect(Set(hits.map(\.translationID)) == ["A", "B"], "each heard from")
+            #expect(hits.count == 2)
+            if indexed { #expect(hits.first { $0.translationID == "A" }?.reference == 43_001_001, "its best ranked") }
+            #expect(hits.first { $0.translationID == "B" }?.bookName == "Jean", "named as it names the book")
+
+            let within = try queue.read { db in
+                try LampModuleSearch.verses(in: db, translations: ["A"], query: LampSearchQuery("*faith"), limit: 10)
+            }
+            #expect(within.map(\.reference).sorted() == [43_001_001, 43_001_002, 43_001_003], "listed \(listed), indexed \(indexed)")
+            let plain = try queue.read { db in
+                try LampModuleSearch.verses(in: db, translations: ["A"], query: LampSearchQuery("faith"), limit: 10)
+            }
+            #expect(plain.map(\.reference).sorted() == [43_001_001, 43_001_002], "a typed word starts one")
+            let together = try queue.read { db in
+                try LampModuleSearch.verses(in: db, translations: ["B"], query: LampSearchQuery("faith comes"), limit: 10)
+            }
+            #expect(together.map(\.holdsPhrase) == [true])
+        }
+    }
 }

@@ -621,125 +621,47 @@ public actor LampLibrary {
         let resultLimit = min(max(limit, 1), 500)
         let parsedQuery = LampSearchQuery(query)
         guard !parsedQuery.isEmpty, !parsedQuery.plainText.isEmpty else { return [] }
-        // Without a full-text index, or where it can't answer, as for a term
-        // found within words with no list of its words, every term must
-        // still appear, as the index would ask, rather than the terms as one
-        // run of text: found by LIKE and kept by the query's own rule.
-        let fallback = parsedQuery.sqlLikePredicate(columns: ["v.text"])
-        let firstBook = bookRange?.lowerBound ?? Int.min
-        let lastBook = bookRange?.upperBound ?? Int.max
         let translations = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
-        var found: [[LampTranslationSearchResult]] = []
-
+        // Searched as the phone searches its own, by core: each database once,
+        // its translations together, as the bundled ones share one.
+        var databases: [(url: URL, translations: [LampInstalledModule])] = []
         for translation in translations {
+            let url = try databaseURL(moduleID: translation.id)
+            if let index = databases.firstIndex(where: { $0.url == url }) {
+                databases[index].translations.append(translation)
+            } else {
+                databases.append((url, [translation]))
+            }
+        }
+        var found: [[LampTranslationSearchResult]] = []
+        for database in databases {
             try Task.checkCancellation()
-            let queue = try openDatabase(moduleID: translation.id)
-            let moduleResults = try queue.read { db -> [LampTranslationSearchResult] in
-                let tables = try tableNames(in: db)
-                let rows: [Row]
-                func matched(_ sql: String, _ arguments: StatementArguments) throws -> [Row] {
-                    var limited = arguments
-                    limited += [resultLimit]
-                    return try Row.fetchAll(db, sql: sql + "\nLIMIT ?", arguments: limited)
-                }
-                func read(_ sql: String, _ arguments: StatementArguments) throws -> [Row] {
-                    let cursor = try Row.fetchCursor(db, sql: sql, arguments: arguments)
-                    var kept: [Row] = []
-                    while kept.count < resultLimit, let row = try cursor.next() {
-                        if parsedQuery.matches(row["text"]) { kept.append(row.copy()) }
-                    }
-                    return kept
-                }
-
-                if tables.contains("translation_meta") && tables.contains("verses") {
-                    let asked = tables.contains("verses_fts")
-                        ? try LampModuleSearch.indexQuery(parsedQuery, index: "verses_fts", in: db) : nil
-                    if case .nothing = asked { return [] }
-                    if let match = asked?.match {
-                        rows = try matched("""
-                            SELECT v.ref, v.book, b.name AS book_name,
-                                   v.chapter, v.verse, v.text
-                            FROM verses_fts
-                            JOIN verses v ON v.id = verses_fts.rowid
-                            JOIN books b ON b.id = v.book
-                            WHERE verses_fts MATCH ?
-                              AND v.book BETWEEN ? AND ?
-                            ORDER BY bm25(verses_fts), v.ref
-                            """, [match, firstBook, lastBook])
-                    } else {
-                        var arguments = StatementArguments(fallback.arguments)
-                        arguments += [firstBook, lastBook]
-                        rows = try read("""
-                            SELECT v.ref, v.book, b.name AS book_name,
-                                   v.chapter, v.verse, v.text
-                            FROM verses v
-                            JOIN books b ON b.id = v.book
-                            WHERE \(fallback.condition)
-                              AND v.book BETWEEN ? AND ?
-                            ORDER BY v.ref
-                            """, arguments)
-                    }
-                } else if tables.contains("translation_verses") {
-                    let asked = tables.contains("translation_verses_fts")
-                        ? try LampModuleSearch.indexQuery(parsedQuery, index: "translation_verses_fts", in: db) : nil
-                    if case .nothing = asked { return [] }
-                    if let match = asked?.match {
-                        rows = try matched("""
-                            SELECT v.ref, v.book, b.name AS book_name,
-                                   v.chapter, v.verse, v.text
-                            FROM translation_verses_fts
-                            JOIN translation_verses v ON v.id = translation_verses_fts.rowid
-                            JOIN translation_books b
-                              ON b.translation_id = v.translation_id
-                             AND b.book_number = v.book
-                            WHERE translation_verses_fts MATCH ?
-                              AND v.translation_id = ?
-                              AND v.book BETWEEN ? AND ?
-                            ORDER BY bm25(translation_verses_fts), v.ref
-                            """, [match, translation.id, firstBook, lastBook])
-                    } else {
-                        var arguments: StatementArguments = [translation.id]
-                        arguments += StatementArguments(fallback.arguments)
-                        arguments += [firstBook, lastBook]
-                        rows = try read("""
-                            SELECT v.ref, v.book, b.name AS book_name,
-                                   v.chapter, v.verse, v.text
-                            FROM translation_verses v
-                            JOIN translation_books b
-                              ON b.translation_id = v.translation_id
-                             AND b.book_number = v.book
-                            WHERE v.translation_id = ?
-                              AND \(fallback.condition)
-                              AND v.book BETWEEN ? AND ?
-                            ORDER BY v.ref
-                            """, arguments)
-                    }
-                } else {
-                    // One module of another shape is passed by, as every
-                    // other search here passes it, rather than ending the
-                    // search for all the rest.
-                    return []
-                }
-
-                return rows.map { row in
+            let hits = try openReadOnlyDatabase(at: database.url).read { db in
+                try LampModuleSearch.verses(
+                    in: db, translations: database.translations.map(\.id), query: parsedQuery,
+                    bookRange: bookRange, limit: resultLimit
+                )
+            }
+            let byTranslation = Dictionary(grouping: hits, by: \.translationID)
+            for translation in database.translations {
+                found.append((byTranslation[translation.id] ?? []).map { hit in
                     LampTranslationSearchResult(
                         translationID: translation.id,
                         translationName: translation.name,
                         translationAbbreviation: translation.abbreviation,
-                        reference: row["ref"],
-                        bookNumber: row["book"],
-                        bookName: row["book_name"],
-                        chapterNumber: row["chapter"],
-                        verseNumber: row["verse"],
-                        text: row["text"]
+                        reference: hit.reference,
+                        bookNumber: hit.book,
+                        bookName: hit.bookName,
+                        chapterNumber: hit.chapter,
+                        verseNumber: hit.verse,
+                        text: hit.text
                     )
-                }
+                })
             }
-            found.append(moduleResults)
         }
-        return Self.sharedEvenly(found, limit: resultLimit)
+        return LampModuleSearch.sharedEvenly(found, limit: resultLimit)
     }
 
     public func searchTranslationsByStrongs(
@@ -848,7 +770,7 @@ public actor LampLibrary {
             }
             found.append(matches)
         }
-        return Self.sharedEvenly(found, limit: resultLimit)
+        return LampModuleSearch.sharedEvenly(found, limit: resultLimit)
     }
 
     private var strongsIndexURL: URL {
@@ -1470,30 +1392,13 @@ public actor LampLibrary {
             }
             found.append(entries)
         }
-        return Self.sharedEvenly(found, limit: resultLimit)
+        return LampModuleSearch.sharedEvenly(found, limit: resultLimit)
     }
 
-    /// A search's results from several modules, at most `limit` of them,
-    /// shared as evenly as the modules allow: each module's best, in its own
-    /// order, and room one module can't fill goes to the others. A search
-    /// across several modules hears from each, however many it names and in
-    /// whatever order, rather than filling from the first.
     /// Greek, including its extended accented letters, or Hebrew.
     static func isGreekOrHebrew(_ scalar: Unicode.Scalar) -> Bool {
         (0x0370...0x03FF).contains(scalar.value) || (0x1F00...0x1FFF).contains(scalar.value)
             || (0x0590...0x05FF).contains(scalar.value)
-    }
-
-    static func sharedEvenly<Hit>(_ found: [[Hit]], limit: Int) -> [Hit] {
-        var shares = Array(repeating: 0, count: found.count)
-        var room = limit
-        // Fewest first, so what a short list leaves is shared by the rest.
-        let fewestFirst = found.indices.sorted { found[$0].count < found[$1].count }
-        for (position, index) in fewestFirst.enumerated() {
-            shares[index] = min(found[index].count, room / (found.count - position))
-            room -= shares[index]
-        }
-        return zip(found, shares).flatMap { $0.prefix($1) }
     }
 
     /// Returns dictionary entries whose keys exactly match the supplied keys.
