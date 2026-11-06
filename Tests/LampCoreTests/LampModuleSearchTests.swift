@@ -671,4 +671,28 @@ struct LampModuleSearchTests {
             #expect(together.map(\.holdsPhrase) == [true])
         }
     }
+
+    /// A shared database's words are read apart from the write that keeps
+    /// them, and kept only if the index is still as they were read from.
+    @Test func wordsReadFromAnIndexWrittenSinceAreNotKept() throws {
+        let queue = try translations(indexed: true)
+        let vocabulary = try #require(try queue.writeWithoutTransaction { db in
+            try LampSearchWords.vocabulary(of: "translation_verses_fts", in: db)
+        })
+        try queue.write { db in
+            try db.execute(sql: "INSERT INTO translation_verses VALUES (7, 'A', 43001005, 43, 1, 5, 'Steadfast.')")
+            try db.execute(sql: "INSERT INTO translation_verses_fts(rowid, text) VALUES (7, 'Steadfast.')")
+        }
+        #expect(try queue.write { try LampSearchWords.write(vocabulary, in: $0) } == false)
+        #expect(try queue.read { try LampSearchWords.isCurrent(index: "translation_verses_fts", in: $0) } == false)
+        let fresh = try #require(try queue.writeWithoutTransaction { db in
+            try LampSearchWords.vocabulary(of: "translation_verses_fts", in: db)
+        })
+        #expect(try queue.write { try LampSearchWords.write(fresh, in: $0) })
+        let words = try queue.read { db in
+            try LampSearchWords.words(holding: "stead", index: "translation_verses_fts", in: db)
+        }
+        #expect(words == ["steadfast"])
+        #expect(try queue.writeWithoutTransaction { try LampSearchWords.vocabulary(of: "no_such_fts", in: $0) } == nil)
+    }
 }

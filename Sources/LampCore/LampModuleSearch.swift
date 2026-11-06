@@ -210,11 +210,11 @@ public enum LampModuleSearch {
     /// How an index is asked a query: by its MATCH argument, or not at all,
     /// where no word of the index holds a term found within words, so that
     /// nothing it covers can match.
-    enum IndexQuery {
+    public enum IndexQuery: Equatable, Sendable {
         case match(String)
         case nothing
 
-        var match: String? {
+        public var match: String? {
             if case .match(let match) = self { match } else { nil }
         }
     }
@@ -224,7 +224,7 @@ public enum LampModuleSearch {
     /// (`LampSearchWords`); nil where it can't answer, as where it has no
     /// list of its words as it is now or too many hold the term, or the query
     /// has nothing it can search by, so that the text is read instead.
-    static func indexQuery(_ query: LampSearchQuery, index: String, in db: Database) throws -> IndexQuery? {
+    public static func indexQuery(_ query: LampSearchQuery, index: String, in db: Database) throws -> IndexQuery? {
         guard query.hasWithinWordTerms else {
             let match = query.fts5Query
             return match.isEmpty ? nil : .match(match)
