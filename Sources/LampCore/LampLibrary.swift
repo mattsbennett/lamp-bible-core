@@ -24,7 +24,8 @@ public actor LampLibrary {
     /// asks for it on every chapter.
     private var versifications: [String: LampVersification] = [:]
     private var strongsIndexQueue: DatabaseQueue?
-    private var personalDevotionalIndexQueue: DatabaseQueue?
+    /// The personal indexes opened, by path.
+    private var personalIndexQueues: [String: DatabaseQueue] = [:]
     /// The UserData file this library last made its tables in, by device
     /// and inode, and its schema as that left it: until either changes, as
     /// when another process or an older version alters it, it isn't done
@@ -850,114 +851,79 @@ public actor LampLibrary {
         return queue
     }
 
-    private var personalDevotionalIndexURL: URL {
-        rootURL.appendingPathComponent("Indexes", isDirectory: true)
-            .appendingPathComponent("PersonalDevotionals.sqlite")
-    }
-
-    /// The shape of my writing's index. A file of any other version, or one
-    /// that can't be opened or read, is built again, being derived.
-    private static let personalDevotionalIndexVersion = 1
-
-    /// My writing indexed as the phone keeps its writings, so that the
-    /// shared search searches them as it searches the phone's.
+    /// A search index derived from rows of UserData and shaped as the phone
+    /// keeps the same rows, so that the shared search searches the Mac's as
+    /// it searches the phone's.
     ///
-    /// Derived, and kept apart from them in Indexes/, which sync and the
-    /// library's own work leave alone: it can be deleted at any time and is
-    /// built again, and so can never become what a writing says. Brought up
-    /// to date before each search by the writings' change times, which also
-    /// catches what sync, another window or lamp-mcp wrote: only a writing
-    /// whose change time moved is read again, and one that's gone is dropped.
-    private func personalDevotionalIndex() throws -> DatabaseQueue {
-        do {
-            return try updatedPersonalDevotionalIndex()
-        } catch let error as DatabaseError
-            where error.resultCode != .SQLITE_BUSY && error.resultCode != .SQLITE_LOCKED
-        {
-            // Damaged or unreadable: it's built again from nothing, once. A
-            // file another process is still writing is waited for, not this.
-            personalDevotionalIndexQueue = nil
-            for suffix in ["", "-journal", "-wal", "-shm"] {
-                try? fileManager.removeItem(atPath: personalDevotionalIndexURL.path + suffix)
-            }
-            return try updatedPersonalDevotionalIndex()
-        }
+    /// Derived, and kept apart in Indexes/, which sync and the library's own
+    /// work leave alone: it can be deleted at any time and is built again,
+    /// and so can never become what a row says. Brought up to date before
+    /// each search by the rows' change times, which also catches what sync,
+    /// another window or lamp-mcp wrote: only a row whose change time moved
+    /// is read again, and one that's gone is dropped. A file of another
+    /// version, or one that can't be opened or read, is built again.
+    private struct PersonalIndex {
+        /// Its file in Indexes/.
+        let file: String
+        /// Its shape: a file stamped with another is made again.
+        let version: Int
+        /// The UserData table it is derived from, by `id` and `last_modified`.
+        let source: String
+        /// Its rows, by `id` and stamped with the `last_modified` they were
+        /// read at and when, `indexed_at`, and their full-text index, which
+        /// shares their rowids, so that a row's entry is found to be
+        /// replaced without a scan.
+        let entries: String
+        let fts: String
+        let schema: String
     }
 
-    private func updatedPersonalDevotionalIndex() throws -> DatabaseQueue {
-        let url = personalDevotionalIndexURL
-        if personalDevotionalIndexQueue != nil, !fileManager.fileExists(atPath: url.path) {
-            personalDevotionalIndexQueue = nil
-        }
-        let queue: DatabaseQueue
-        if let personalDevotionalIndexQueue {
-            queue = personalDevotionalIndexQueue
-        } else {
-            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            queue = try DatabaseQueue(path: url.path, configuration: Self.sharedFileConfiguration)
-            try queue.inTransaction(.immediate) { db in
-                let version = try Int.fetchOne(db, sql: "PRAGMA user_version") ?? 0
-                guard version != Self.personalDevotionalIndexVersion else { return .commit }
-                // A writing's subtitle, author and tags are in its search
-                // text too, as the in-memory search matched them; accents
-                // fold as that search folded them. Its index row shares its
-                // rowid, so that one is found to be replaced without a scan.
-                try db.execute(sql: """
-                    DROP TABLE IF EXISTS devotional_entries;
-                    DROP TABLE IF EXISTS devotional_entries_fts;
-                    CREATE TABLE devotional_entries (
-                        id TEXT PRIMARY KEY, module_id TEXT NOT NULL, title TEXT NOT NULL,
-                        subtitle TEXT, author TEXT, date TEXT, tags TEXT, category TEXT,
-                        series_name TEXT, series_order INTEGER, key_scriptures_json TEXT,
-                        summary_json TEXT, content_json TEXT NOT NULL, search_text TEXT,
-                        last_modified INTEGER NOT NULL);
-                    CREATE VIRTUAL TABLE devotional_entries_fts USING fts5(
-                        id UNINDEXED, title, search_text, tokenize='unicode61 remove_diacritics 2');
-                    PRAGMA user_version = \(Self.personalDevotionalIndexVersion);
-                    """)
-                return .commit
-            }
-            personalDevotionalIndexQueue = queue
-        }
+    /// My writing, as the phone keeps its writings. A writing's subtitle,
+    /// author and tags are in its search text too, as the in-memory search
+    /// matched them; accents fold as that search folded them.
+    private static let writingIndex = PersonalIndex(
+        file: "PersonalDevotionals.sqlite", version: 2, source: "personal_devotionals",
+        entries: "devotional_entries", fts: "devotional_entries_fts", schema: """
+            CREATE TABLE devotional_entries (
+                id TEXT PRIMARY KEY, module_id TEXT NOT NULL, title TEXT NOT NULL,
+                subtitle TEXT, author TEXT, date TEXT, tags TEXT, category TEXT,
+                series_name TEXT, series_order INTEGER, key_scriptures_json TEXT,
+                summary_json TEXT, content_json TEXT NOT NULL, search_text TEXT,
+                last_modified INTEGER NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0);
+            CREATE VIRTUAL TABLE devotional_entries_fts USING fts5(
+                id UNINDEXED, title, search_text, tokenize='unicode61 remove_diacritics 2');
+            """
+    )
 
-        let current = Dictionary(
-            try openUserDatabase().read { db in
-                try Row.fetchAll(db, sql: "SELECT id, last_modified FROM personal_devotionals")
-                    .map { ($0["id"] as String, $0["last_modified"] as Int64) }
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        func indexedTimes(_ db: Database) throws -> [String: Int64] {
-            Dictionary(
-                try Row.fetchAll(db, sql: "SELECT id, last_modified FROM devotional_entries")
-                    .map { ($0["id"] as String, $0["last_modified"] as Int64) },
-                uniquingKeysWith: { first, _ in first }
-            )
-        }
-        func stale(_ indexed: [String: Int64]) -> (changed: [String], gone: [String]) {
-            (current.filter { indexed[$0.key] != $0.value }.map(\.key), indexed.keys.filter { current[$0] == nil })
-        }
-        let (changed, gone) = stale(try queue.read(indexedTimes))
-        guard !changed.isEmpty || !gone.isEmpty else { return queue }
-        let writings = try personalDevotionals(ids: changed)
+    /// My Notes, as the phone keeps its notes: searched by title and by
+    /// search text, which holds a note's text and footnotes.
+    private static let noteIndex = PersonalIndex(
+        file: "PersonalNotes.sqlite", version: 1, source: "personal_notes",
+        entries: "note_entries", fts: "note_fts", schema: """
+            CREATE TABLE note_entries (
+                id TEXT PRIMARY KEY, module_id TEXT NOT NULL, verse_id INTEGER NOT NULL,
+                title TEXT, content TEXT NOT NULL, search_text TEXT,
+                last_modified INTEGER NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0);
+            CREATE VIRTUAL TABLE note_fts USING fts5(
+                title, search_text, tokenize='unicode61 remove_diacritics 2');
+            """
+    )
+
+    private func personalIndexURL(_ index: PersonalIndex) -> URL {
+        rootURL.appendingPathComponent("Indexes", isDirectory: true).appendingPathComponent(index.file)
+    }
+
+    /// My writing's index, up to date.
+    private func personalDevotionalIndex() throws -> DatabaseQueue {
         // Each as JSON its readers parse back to exactly its text: a summary
         // or a text that is itself JSON, "[1]" or "{}", stays as written.
         func json(_ value: Any) throws -> String {
             String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]), as: UTF8.self)
         }
-        try queue.inTransaction(.immediate) { db in
-            // Another process may have brought it up to date meanwhile: only
-            // what is still stale is replaced, by what was read above.
-            let (changedNow, goneNow) = stale(try indexedTimes(db))
-            let replaced = Set(changedNow).intersection(writings.map(\.id))
-            for id in goneNow + Array(replaced) {
-                try db.execute(sql: """
-                    DELETE FROM devotional_entries_fts
-                    WHERE rowid = (SELECT rowid FROM devotional_entries WHERE id = ?)
-                    """, arguments: [id])
-                try db.execute(sql: "DELETE FROM devotional_entries WHERE id = ?", arguments: [id])
-            }
-            for writing in writings where replaced.contains(writing.id) {
+        return try personalIndex(
+            Self.writingIndex,
+            reading: { ids in try personalDevotionals(ids: ids).map { ($0.id, $0) } },
+            inserting: { db, writing, lastModified in
                 let scriptures = try json(writing.keyScriptures.map { link -> [String: Any] in
                     var value: [String: Any] = ["sv": link.startReference]
                     if let end = link.endReference { value["ev"] = end }
@@ -977,11 +943,139 @@ public actor LampLibrary {
                         writing.id, writing.title, writing.subtitle, writing.author, writing.date,
                         writing.tags.joined(separator: ","), writing.category, writing.seriesName,
                         writing.seriesOrder, scriptures, try writing.summary.map { try json([$0]) },
-                        try json([writing.content]), searchText, current[writing.id] ?? 0,
+                        try json([writing.content]), searchText, lastModified,
                     ])
                 try db.execute(sql: """
                     INSERT INTO devotional_entries_fts (rowid, id, title, search_text) VALUES (?, ?, ?, ?)
                     """, arguments: [db.lastInsertedRowID, writing.id, writing.title, searchText])
+            }
+        )
+    }
+
+    /// My Notes' index, up to date.
+    private func personalNoteIndex() throws -> DatabaseQueue {
+        try personalIndex(
+            Self.noteIndex,
+            reading: { ids in
+                try openUserDatabase().read { db in
+                    try stride(from: 0, to: ids.count, by: 500).flatMap { start in
+                        let chunk = Array(ids[start..<min(start + 500, ids.count)])
+                        return try Row.fetchAll(db, sql: """
+                            SELECT id, verse_id, title, content, footnotes_json FROM personal_notes
+                            WHERE id IN (\(chunk.map { _ in "?" }.joined(separator: ", ")))
+                            """, arguments: StatementArguments(chunk)).map { ($0["id"] as String, $0) }
+                    }
+                }
+            },
+            inserting: { db, row, lastModified in
+                // Its text and footnotes, as the phone searches a note.
+                let content: String = row["content"]
+                let searchText = ([content] + verseFootnotes(from: row["footnotes_json"]).map(\.content))
+                    .joined(separator: " ")
+                try db.execute(sql: """
+                    INSERT INTO note_entries (id, module_id, verse_id, title, content, search_text, last_modified)
+                    VALUES (?, 'personal-notes', ?, ?, ?, ?, ?)
+                    """, arguments: [row["id"] as String, row["verse_id"] as Int, row["title"] as String?, content, searchText, lastModified])
+                try db.execute(sql: "INSERT INTO note_fts (rowid, title, search_text) VALUES (?, ?, ?)",
+                               arguments: [db.lastInsertedRowID, row["title"] as String?, searchText])
+            }
+        )
+    }
+
+    /// `index`, opened, made in the shape it should have, and brought up to
+    /// date: the rows of its source whose change times moved are `read` and
+    /// written by `inserting`, which adds a row's entry and its index row.
+    private func personalIndex<Item>(
+        _ index: PersonalIndex,
+        reading read: ([String]) throws -> [(id: String, item: Item)],
+        inserting insert: (Database, Item, Int64) throws -> Void
+    ) throws -> DatabaseQueue {
+        do {
+            return try updatedPersonalIndex(index, reading: read, inserting: insert)
+        } catch let error as DatabaseError
+            where error.resultCode != .SQLITE_BUSY && error.resultCode != .SQLITE_LOCKED
+        {
+            // Damaged or unreadable: it's built again from nothing, once. A
+            // file another process is still writing is waited for, not this.
+            let url = personalIndexURL(index)
+            personalIndexQueues[url.path] = nil
+            for suffix in ["", "-journal", "-wal", "-shm"] {
+                try? fileManager.removeItem(atPath: url.path + suffix)
+            }
+            return try updatedPersonalIndex(index, reading: read, inserting: insert)
+        }
+    }
+
+    private func updatedPersonalIndex<Item>(
+        _ index: PersonalIndex,
+        reading read: ([String]) throws -> [(id: String, item: Item)],
+        inserting insert: (Database, Item, Int64) throws -> Void
+    ) throws -> DatabaseQueue {
+        let url = personalIndexURL(index)
+        if personalIndexQueues[url.path] != nil, !fileManager.fileExists(atPath: url.path) {
+            personalIndexQueues[url.path] = nil
+        }
+        let queue: DatabaseQueue
+        if let cached = personalIndexQueues[url.path] {
+            queue = cached
+        } else {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            queue = try DatabaseQueue(path: url.path, configuration: Self.sharedFileConfiguration)
+            try queue.inTransaction(.immediate) { db in
+                let version = try Int.fetchOne(db, sql: "PRAGMA user_version") ?? 0
+                guard version != index.version else { return .commit }
+                try db.execute(sql: """
+                    DROP TABLE IF EXISTS \(index.entries);
+                    DROP TABLE IF EXISTS \(index.fts);
+                    \(index.schema)
+                    PRAGMA user_version = \(index.version);
+                    """)
+                return .commit
+            }
+            personalIndexQueues[url.path] = queue
+        }
+
+        let current = Dictionary(
+            try openUserDatabase().read { db in
+                try Row.fetchAll(db, sql: "SELECT id, last_modified FROM \(index.source)")
+                    .map { ($0["id"] as String, $0["last_modified"] as Int64) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        func indexedTimes(_ db: Database) throws -> [String: (modified: Int64, indexed: Int64)] {
+            Dictionary(
+                try Row.fetchAll(db, sql: "SELECT id, last_modified, indexed_at FROM \(index.entries)")
+                    .map { ($0["id"] as String, ($0["last_modified"] as Int64, $0["indexed_at"] as Int64)) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+        // Change times are to the second, so a row read in the second it
+        // changed may change again unseen in that second: it is read again
+        // until it was read in a later one.
+        func stale(_ indexed: [String: (modified: Int64, indexed: Int64)]) -> (changed: [String], gone: [String]) {
+            (current.filter { id, modified in
+                guard let entry = indexed[id] else { return true }
+                return entry.modified != modified || entry.indexed <= modified
+            }.map(\.key), indexed.keys.filter { current[$0] == nil })
+        }
+        let (changed, gone) = stale(try queue.read(indexedTimes))
+        guard !changed.isEmpty || !gone.isEmpty else { return queue }
+        let items = try read(changed)
+        try queue.inTransaction(.immediate) { db in
+            // Another process may have brought it up to date meanwhile: only
+            // what is still stale is replaced, by what was read above.
+            let (changedNow, goneNow) = stale(try indexedTimes(db))
+            let replaced = Set(changedNow).intersection(items.map(\.id))
+            for id in goneNow + Array(replaced) {
+                try db.execute(sql: """
+                    DELETE FROM \(index.fts) WHERE rowid = (SELECT rowid FROM \(index.entries) WHERE id = ?)
+                    """, arguments: [id])
+                try db.execute(sql: "DELETE FROM \(index.entries) WHERE id = ?", arguments: [id])
+            }
+            let now = Int64(Date().timeIntervalSince1970)
+            for (id, item) in items where replaced.contains(id) {
+                try insert(db, item, current[id] ?? 0)
+                try db.execute(sql: "UPDATE \(index.entries) SET indexed_at = ? WHERE id = ?", arguments: [now, id])
             }
             return .commit
         }
@@ -2724,40 +2818,17 @@ public actor LampLibrary {
         }
 
         if hasTextQuery && wants(.notes) {
-            // My Notes and each notes database are asked for the whole limit
-            // and the merge makes the cut, as for commentary: asked in turn,
-            // the first answered for every place. My Notes are their most
-            // recent first, so it is those that take its turns.
-            let personalLike = parsedQuery.sqlLikePredicate(columns: ["title", "content"])
+            // My Notes, through their index, and each notes database are asked
+            // for the whole limit and the merge makes the cut, as for
+            // commentary: asked in turn, the first answered for every place.
             if includesModule("personal-notes") {
-                let queue = try openUserDatabase()
-                results += try queue.read { db in
-                    var arguments = StatementArguments(personalLike.arguments)
-                    arguments += [resultLimit]
-                    return try Row.fetchAll(db, sql: """
-                        SELECT id, module_id, verse_id, title, content
-                        FROM personal_notes
-                        WHERE \(personalLike.condition)
-                        ORDER BY last_modified DESC
-                        LIMIT ?
-                        """, arguments: arguments).map { row in
-                            let reference: Int = row["verse_id"]
-                            let title: String? = row["title"]
-                            let content: String = row["content"]
-                            return LampModuleSearchResult(
-                                id: "notes:personal-notes:\(row["id"] as String)",
-                                kind: .notes,
-                                moduleID: "personal-notes",
-                                moduleName: "My Notes",
-                                title: title?.isEmpty == false
-                                    ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                                subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                                snippet: snippet(content),
-                                startReference: reference,
-                                holdsPhrase: parsedQuery.holdsPhrase((title ?? "") + " " + content)
-                            )
-                        }
+                results += try personalNoteIndex().read { db in
+                    try LampModuleSearch.notes(
+                        in: db, modules: [LampSearchedModule(id: "personal-notes", name: "My Notes")],
+                        query: parsedQuery, limit: resultLimit, snippets: false
+                    )
                 }
+                snippetSources[.notes, default: [:]]["personal-notes"] = personalIndexURL(Self.noteIndex)
             }
             for database in try searchedDatabases(of: .notes, in: installed, including: includesModule) {
                 try Task.checkCancellation()
@@ -2783,7 +2854,7 @@ public actor LampLibrary {
                         query: parsedQuery, criteria: devotionalCriteria, limit: resultLimit, snippets: false
                     )
                 }
-                snippetSources[.devotional, default: [:]]["personal-devotionals"] = personalDevotionalIndexURL
+                snippetSources[.devotional, default: [:]]["personal-devotionals"] = personalIndexURL(Self.writingIndex)
             }
             for database in try searchedDatabases(of: .devotional, in: installed, including: includesModule) {
                 try Task.checkCancellation()
@@ -2850,9 +2921,9 @@ public actor LampLibrary {
         }
         for (url, kinds) in waiting {
             try Task.checkCancellation()
-            // My writing's index is this library's own, written as it is read.
-            let queue = url == personalDevotionalIndexURL
-                ? try personalDevotionalIndex() : try openReadOnlyDatabase(at: url)
+            // My writing's and My Notes' indexes are this library's own,
+            // already brought up to date by the search.
+            let queue = try personalIndexQueues[url.path] ?? openReadOnlyDatabase(at: url)
             for (kind, indices) in kinds {
                 let found = indices.map { results[$0] }
                 let snipped = try queue.read { db in

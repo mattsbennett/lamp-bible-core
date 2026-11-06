@@ -220,7 +220,7 @@ struct LampLibrarySearchPerformanceTests {
         let rebuilt = try await other.searchModules(query: "kingdom of god", kinds: [.devotional])
         #expect(rebuilt == kingdom)
         let version = try await DatabaseQueue(path: index.path).read { try Int.fetchOne($0, sql: "PRAGMA user_version") }
-        #expect(version == 1)
+        #expect(version == 2)
         try Data("not a database".utf8).write(to: index)
         let repaired = try await other.searchModules(query: "seek", kinds: [.devotional])
         #expect(repaired == seek)
@@ -232,6 +232,53 @@ struct LampLibrarySearchPerformanceTests {
         #expect(try await search("faith").map(\.id) == ["devotional:personal-devotionals:morning"])
         try await library.deletePersonalDevotional(id: "kingdom")
         #expect(try await search("kingdom").isEmpty)
+    }
+
+    /// My Notes are searched as the phone searches its notes, through an
+    /// index derived from them: by word starts, their footnotes too, best
+    /// first; deleted, it is built again; an edit, even in the second it was
+    /// last read, shows at the next search.
+    @Test func myNotesAreSearchedThroughAnIndexBuiltFromThem() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        func save(_ id: String, title: String? = nil, _ content: String, footnote: String? = nil, at modified: Date = Date()) async throws {
+            try await library.saveVerseNote(LampVerseNote(
+                id: id, reference: 43_013_034, title: title, content: content,
+                footnotes: footnote.map { [LampVerseFootnote(id: "1", content: $0)] } ?? [], lastModified: modified
+            ))
+        }
+        try await save("beloved", "The beloved disciple.")
+        try await save("command", "Love one another, as I have loved you.")
+        try await save("hoping", "Waiting in hope.")
+        try await save("titled", title: "Hope", "Abiding.")
+        try await save("cited", "As the fathers read it.", footnote: "See Augustine, Tractates 65.")
+        func search(_ text: String) async throws -> [LampModuleSearchResult] {
+            try await library.searchModules(query: text, kinds: [.notes])
+        }
+
+        #expect(try await search("love").map(\.id) == ["notes:personal-notes:command"], "not inside beloved")
+        #expect(try await search("hope").map(\.id) == ["notes:personal-notes:titled", "notes:personal-notes:hoping"])
+        let cited = try await search("augustine")
+        #expect(cited.map(\.id) == ["notes:personal-notes:cited"])
+        #expect(cited.first?.snippet.contains("<mark>Augustine</mark>") == true, "cut from its footnote")
+        #expect(try await search("love one another").first?.holdsPhrase == true)
+
+        let index = root.appendingPathComponent("Library/Indexes/PersonalNotes.sqlite")
+        let hope = try await search("hope")
+        try FileManager.default.removeItem(at: index)
+        #expect(try await search("hope") == hope)
+
+        // Read in the second it changed, as a time to come always is, it is
+        // read again until a later one, so a second edit in it isn't missed.
+        let later = Date(timeIntervalSinceNow: 3_600)
+        try await save("quick", "Grace first.", at: later)
+        #expect(try await search("grace").count == 1)
+        try await save("quick", "Mercy now.", at: later)
+        #expect(try await search("mercy").map(\.id) == ["notes:personal-notes:quick"])
+        #expect(try await search("grace").isEmpty)
+        try await library.deleteVerseNote(id: "quick")
+        #expect(try await search("mercy").isEmpty)
     }
 
     /// Exercise a newly compiled complete index, a shipped two-column index,
