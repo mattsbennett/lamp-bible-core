@@ -24,6 +24,7 @@ public actor LampLibrary {
     /// asks for it on every chapter.
     private var versifications: [String: LampVersification] = [:]
     private var strongsIndexQueue: DatabaseQueue?
+    private var personalDevotionalIndexQueue: DatabaseQueue?
     /// Each translation's fingerprint as last read, until a module is written.
     private var strongsFingerprints: [String: (revision: LampDatabaseFileRevision, value: String)] = [:]
     private var strongsIndexesBuilding: Set<String> = []
@@ -841,6 +842,148 @@ public actor LampLibrary {
         let queue = try DatabaseQueue(path: strongsIndexURL.path)
         try queue.write(LampStrongsIndex.createTables)
         strongsIndexQueue = queue
+        return queue
+    }
+
+    private var personalDevotionalIndexURL: URL {
+        rootURL.appendingPathComponent("Indexes", isDirectory: true)
+            .appendingPathComponent("PersonalDevotionals.sqlite")
+    }
+
+    /// The shape of my writing's index. A file of any other version, or one
+    /// that can't be opened or read, is built again, being derived.
+    private static let personalDevotionalIndexVersion = 1
+
+    /// My writing indexed as the phone keeps its writings, so that the
+    /// shared search searches them as it searches the phone's.
+    ///
+    /// Derived, and kept apart from them in Indexes/, which sync and the
+    /// library's own work leave alone: it can be deleted at any time and is
+    /// built again, and so can never become what a writing says. Brought up
+    /// to date before each search by the writings' change times, which also
+    /// catches what sync, another window or lamp-mcp wrote: only a writing
+    /// whose change time moved is read again, and one that's gone is dropped.
+    private func personalDevotionalIndex() throws -> DatabaseQueue {
+        do {
+            return try updatedPersonalDevotionalIndex()
+        } catch let error as DatabaseError
+            where error.resultCode != .SQLITE_BUSY && error.resultCode != .SQLITE_LOCKED
+        {
+            // Damaged or unreadable: it's built again from nothing, once. A
+            // file another process is still writing is waited for, not this.
+            personalDevotionalIndexQueue = nil
+            for suffix in ["", "-journal", "-wal", "-shm"] {
+                try? fileManager.removeItem(atPath: personalDevotionalIndexURL.path + suffix)
+            }
+            return try updatedPersonalDevotionalIndex()
+        }
+    }
+
+    private func updatedPersonalDevotionalIndex() throws -> DatabaseQueue {
+        let url = personalDevotionalIndexURL
+        if personalDevotionalIndexQueue != nil, !fileManager.fileExists(atPath: url.path) {
+            personalDevotionalIndexQueue = nil
+        }
+        let queue: DatabaseQueue
+        if let personalDevotionalIndexQueue {
+            queue = personalDevotionalIndexQueue
+        } else {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            // The app and each lamp-mcp may open it at once: each waits its
+            // turn rather than failing.
+            var configuration = Configuration()
+            configuration.busyMode = .timeout(5)
+            queue = try DatabaseQueue(path: url.path, configuration: configuration)
+            try queue.inTransaction(.immediate) { db in
+                let version = try Int.fetchOne(db, sql: "PRAGMA user_version") ?? 0
+                guard version != Self.personalDevotionalIndexVersion else { return .commit }
+                // A writing's subtitle, author and tags are in its search
+                // text too, as the in-memory search matched them; accents
+                // fold as that search folded them. Its index row shares its
+                // rowid, so that one is found to be replaced without a scan.
+                try db.execute(sql: """
+                    DROP TABLE IF EXISTS devotional_entries;
+                    DROP TABLE IF EXISTS devotional_entries_fts;
+                    CREATE TABLE devotional_entries (
+                        id TEXT PRIMARY KEY, module_id TEXT NOT NULL, title TEXT NOT NULL,
+                        subtitle TEXT, author TEXT, date TEXT, tags TEXT, category TEXT,
+                        series_name TEXT, series_order INTEGER, key_scriptures_json TEXT,
+                        summary_json TEXT, content_json TEXT NOT NULL, search_text TEXT,
+                        last_modified INTEGER NOT NULL);
+                    CREATE VIRTUAL TABLE devotional_entries_fts USING fts5(
+                        id UNINDEXED, title, search_text, tokenize='unicode61 remove_diacritics 2');
+                    PRAGMA user_version = \(Self.personalDevotionalIndexVersion);
+                    """)
+                return .commit
+            }
+            personalDevotionalIndexQueue = queue
+        }
+
+        let current = Dictionary(
+            try openUserDatabase().read { db in
+                try Row.fetchAll(db, sql: "SELECT id, last_modified FROM personal_devotionals")
+                    .map { ($0["id"] as String, $0["last_modified"] as Int64) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        func indexedTimes(_ db: Database) throws -> [String: Int64] {
+            Dictionary(
+                try Row.fetchAll(db, sql: "SELECT id, last_modified FROM devotional_entries")
+                    .map { ($0["id"] as String, $0["last_modified"] as Int64) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+        func stale(_ indexed: [String: Int64]) -> (changed: [String], gone: [String]) {
+            (current.filter { indexed[$0.key] != $0.value }.map(\.key), indexed.keys.filter { current[$0] == nil })
+        }
+        let (changed, gone) = stale(try queue.read(indexedTimes))
+        guard !changed.isEmpty || !gone.isEmpty else { return queue }
+        let writings = try personalDevotionals(ids: changed)
+        // Each as JSON its readers parse back to exactly its text: a summary
+        // or a text that is itself JSON, "[1]" or "{}", stays as written.
+        func json(_ value: Any) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]), as: UTF8.self)
+        }
+        try queue.inTransaction(.immediate) { db in
+            // Another process may have brought it up to date meanwhile: only
+            // what is still stale is replaced, by what was read above.
+            let (changedNow, goneNow) = stale(try indexedTimes(db))
+            let replaced = Set(changedNow).intersection(writings.map(\.id))
+            for id in goneNow + Array(replaced) {
+                try db.execute(sql: """
+                    DELETE FROM devotional_entries_fts
+                    WHERE rowid = (SELECT rowid FROM devotional_entries WHERE id = ?)
+                    """, arguments: [id])
+                try db.execute(sql: "DELETE FROM devotional_entries WHERE id = ?", arguments: [id])
+            }
+            for writing in writings where replaced.contains(writing.id) {
+                let scriptures = try json(writing.keyScriptures.map { link -> [String: Any] in
+                    var value: [String: Any] = ["sv": link.startReference]
+                    if let end = link.endReference { value["ev"] = end }
+                    if let label = link.text { value["label"] = label }
+                    return value
+                })
+                let searchText = [
+                    writing.title, writing.subtitle, writing.author, writing.summary, writing.content,
+                    writing.footnotes, writing.tags.joined(separator: " "),
+                ].compactMap { $0 }.joined(separator: " ")
+                try db.execute(sql: """
+                    INSERT INTO devotional_entries
+                    (id, module_id, title, subtitle, author, date, tags, category, series_name, series_order,
+                     key_scriptures_json, summary_json, content_json, search_text, last_modified)
+                    VALUES (?, 'personal-devotionals', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: [
+                        writing.id, writing.title, writing.subtitle, writing.author, writing.date,
+                        writing.tags.joined(separator: ","), writing.category, writing.seriesName,
+                        writing.seriesOrder, scriptures, try writing.summary.map { try json([$0]) },
+                        try json([writing.content]), searchText, current[writing.id] ?? 0,
+                    ])
+                try db.execute(sql: """
+                    INSERT INTO devotional_entries_fts (rowid, id, title, search_text) VALUES (?, ?, ?, ?)
+                    """, arguments: [db.lastInsertedRowID, writing.id, writing.title, searchText])
+            }
+            return .commit
+        }
         return queue
     }
 
@@ -1709,6 +1852,21 @@ public actor LampLibrary {
         let queue = try openUserDatabase()
         return try queue.read { db in
             Set(try String.fetchAll(db, sql: "SELECT id FROM personal_devotionals"))
+        }
+    }
+
+    /// The writings of these ids, as `personalDevotionals()` reads them.
+    private func personalDevotionals(ids: [String]) throws -> [LampDevotional] {
+        guard !ids.isEmpty else { return [] }
+        let queue = try openUserDatabase()
+        return try stride(from: 0, to: ids.count, by: 500).flatMap { start in
+            let chunk = Array(ids[start..<min(start + 500, ids.count)])
+            return try queue.read { db in
+                try Row.fetchAll(db, sql: """
+                    SELECT * FROM personal_devotionals
+                    WHERE id IN (\(chunk.map { _ in "?" }.joined(separator: ", ")))
+                    """, arguments: StatementArguments(chunk)).map(makePersonalDevotional)
+            }
         }
     }
 
@@ -2614,37 +2772,17 @@ public actor LampLibrary {
 
         if (hasTextQuery || hasDevotionalCriteria) && wants(.devotional) {
             try Task.checkCancellation()
-            // My writing, kept apart from any module's, and each devotional
-            // database are asked for the whole limit and the merge makes the
-            // cut, as for commentary.
+            // My writing, through its index, and each devotional database are
+            // asked for the whole limit and the merge makes the cut, as for
+            // commentary.
             if includesModule("personal-devotionals") {
-                results += try personalDevotionals().sorted(by: devotionalSort).filter {
-                    devotionalCriteria.matches(date: $0.date, tags: $0.tags, category: $0.category)
-                        && parsedQuery.matches([
-                            $0.title, $0.subtitle, $0.author, $0.summary, $0.content,
-                            $0.tags.joined(separator: " "),
-                        ].compactMap { $0 }.joined(separator: " "))
-                }
-                .prefix(resultLimit)
-                .map { devotional in
-                    LampModuleSearchResult(
-                        id: "devotional:\(devotional.moduleID):\(devotional.id)",
-                        kind: .devotional,
-                        moduleID: devotional.moduleID,
-                        moduleName: devotional.moduleName,
-                        title: devotional.title,
-                        subtitle: devotional.subtitle ?? devotional.author,
-                        snippet: snippet(
-                            devotional.summary.flatMap { parsedQuery.matches($0) ? $0 : nil } ?? devotional.content
-                        ),
-                        startReference: devotional.keyScriptures.first?.startReference,
-                        endReference: devotional.keyScriptures.first?.endReference,
-                        holdsPhrase: parsedQuery.holdsPhrase(
-                            [devotional.title, devotional.summary, devotional.content]
-                                .compactMap { $0 }.joined(separator: " ")
-                        )
+                results += try personalDevotionalIndex().read { db in
+                    try LampModuleSearch.devotionals(
+                        in: db, modules: [LampSearchedModule(id: "personal-devotionals", name: "My Writing")],
+                        query: parsedQuery, criteria: devotionalCriteria, limit: resultLimit, snippets: false
                     )
                 }
+                snippetSources[.devotional, default: [:]]["personal-devotionals"] = personalDevotionalIndexURL
             }
             for database in try searchedDatabases(of: .devotional, in: installed, including: includesModule) {
                 try Task.checkCancellation()
@@ -2711,7 +2849,9 @@ public actor LampLibrary {
         }
         for (url, kinds) in waiting {
             try Task.checkCancellation()
-            let queue = try openReadOnlyDatabase(at: url)
+            // My writing's index is this library's own, written as it is read.
+            let queue = url == personalDevotionalIndexURL
+                ? try personalDevotionalIndex() : try openReadOnlyDatabase(at: url)
             for (kind, indices) in kinds {
                 let found = indices.map { results[$0] }
                 let snipped = try queue.read { db in

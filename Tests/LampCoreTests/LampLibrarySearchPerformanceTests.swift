@@ -168,6 +168,72 @@ struct LampLibrarySearchPerformanceTests {
         ).isEmpty)
     }
 
+    /// My writing is searched through an index derived from it: deleted, it
+    /// is built again and finds the same; a writing changed or removed shows
+    /// at the next search; a summary, and text that is itself JSON, read as
+    /// written.
+    @Test func myWritingIsSearchedThroughAnIndexBuiltFromIt() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        func save(
+            _ id: String, title: String, summary: String? = nil, content: String,
+            tags: [String] = [], author: String? = nil, modified: Int
+        ) async throws {
+            _ = try await library.savePersonalDevotional(LampDevotional(
+                id: id, moduleID: "personal-devotionals", moduleName: "My Writing", title: title,
+                author: author, date: "2026-01-01", tags: tags, category: "Study", summary: summary,
+                content: content, lastModified: Date(timeIntervalSince1970: TimeInterval(modified)), isEditable: true
+            ), preserveLastModified: true)
+        }
+        try await save("kingdom", title: "The Kingdom of God", summary: "Seek it first.",
+                       content: "The kingdom is near.", tags: ["Gospels"], modified: 1_000)
+        try await save("brackets", title: "Brackets", content: "[1]", tags: ["odd"], author: "Lydia", modified: 1_000)
+        try await save("braces", title: "Braces", content: "{}", tags: ["odd"], modified: 1_000)
+        try await save("morning", title: "Morning", content: "Waiting in hope for the kingdom of God.", modified: 1_000)
+        func search(_ text: String, _ criteria: LampDevotionalSearchCriteria = .init()) async throws -> [LampModuleSearchResult] {
+            try await library.searchModules(query: text, kinds: [.devotional], devotionalCriteria: criteria)
+        }
+
+        let kingdom = try await search("kingdom of god")
+        #expect(kingdom.first?.id == "devotional:personal-devotionals:kingdom", "titled with the words")
+        #expect(Set(kingdom.map(\.id)) == ["devotional:personal-devotionals:kingdom", "devotional:personal-devotionals:morning"])
+        #expect(kingdom.allSatisfy { $0.holdsPhrase })
+        let seek = try await search("seek")
+        #expect(seek.first?.snippet == "<mark>Seek</mark> it first.", "its summary holds the word")
+        let odd = try await search("", .init(tags: ["odd"]))
+        #expect(Set(odd.map(\.snippet)) == ["[1]", "{}"], "text that is itself JSON, as written")
+        #expect(try await search("gospels").map(\.id) == ["devotional:personal-devotionals:kingdom"], "by its tag")
+        #expect(try await search("lydia").map(\.id) == ["devotional:personal-devotionals:brackets"], "by its author")
+
+        // Deleted, it is built again, and finds the same.
+        let index = root.appendingPathComponent("Library/Indexes/PersonalDevotionals.sqlite")
+        #expect(FileManager.default.fileExists(atPath: index.path))
+        try FileManager.default.removeItem(at: index)
+        #expect(try await search("kingdom of god") == kingdom)
+        #expect(try await search("seek") == seek)
+        #expect(try await search("", .init(tags: ["odd"])) == odd)
+
+        // Of another version, or damaged, it is built again.
+        let other = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        try await DatabaseQueue(path: index.path).writeWithoutTransaction { try $0.execute(sql: "PRAGMA user_version = 99") }
+        let rebuilt = try await other.searchModules(query: "kingdom of god", kinds: [.devotional])
+        #expect(rebuilt == kingdom)
+        let version = try await DatabaseQueue(path: index.path).read { try Int.fetchOne($0, sql: "PRAGMA user_version") }
+        #expect(version == 1)
+        try Data("not a database".utf8).write(to: index)
+        let repaired = try await other.searchModules(query: "seek", kinds: [.devotional])
+        #expect(repaired == seek)
+        #expect(try await search("seek") == seek, "and one opened before sees it built again")
+
+        // Changed and removed, at the next search.
+        try await save("morning", title: "Morning", content: "Waiting in faith.", modified: 2_000)
+        #expect(try await search("hope").isEmpty)
+        #expect(try await search("faith").map(\.id) == ["devotional:personal-devotionals:morning"])
+        try await library.deletePersonalDevotional(id: "kingdom")
+        #expect(try await search("kingdom").isEmpty)
+    }
+
     /// Exercise a newly compiled complete index, a shipped two-column index,
     /// and the oldest JSON-only schema. Mixed body/note queries must survive.
     @Test func commentaryFindsBodyAndFootnoteTermsAcrossAllIndexGenerations() async throws {
