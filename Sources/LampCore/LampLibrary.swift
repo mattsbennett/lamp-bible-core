@@ -635,7 +635,7 @@ public actor LampLibrary {
                 databases.append((url, [translation]))
             }
         }
-        var found: [[LampTranslationSearchResult]] = []
+        var byTranslation: [String: [LampVerseSearchHit]] = [:]
         for database in databases {
             try Task.checkCancellation()
             let hits = try openReadOnlyDatabase(at: database.url).read { db in
@@ -644,21 +644,24 @@ public actor LampLibrary {
                     bookRange: bookRange, limit: resultLimit
                 )
             }
-            let byTranslation = Dictionary(grouping: hits, by: \.translationID)
-            for translation in database.translations {
-                found.append((byTranslation[translation.id] ?? []).map { hit in
-                    LampTranslationSearchResult(
-                        translationID: translation.id,
-                        translationName: translation.name,
-                        translationAbbreviation: translation.abbreviation,
-                        reference: hit.reference,
-                        bookNumber: hit.book,
-                        bookName: hit.bookName,
-                        chapterNumber: hit.chapter,
-                        verseNumber: hit.verse,
-                        text: hit.text
-                    )
-                })
+            for hit in hits { byTranslation[hit.translationID, default: []].append(hit) }
+        }
+        // In the order the library lists them, by name, whatever database
+        // each is in: the room left over goes by that order, and the phone
+        // gives it out by the same.
+        let found = translations.map { translation in
+            (byTranslation[translation.id] ?? []).map { hit in
+                LampTranslationSearchResult(
+                    translationID: translation.id,
+                    translationName: translation.name,
+                    translationAbbreviation: translation.abbreviation,
+                    reference: hit.reference,
+                    bookNumber: hit.book,
+                    bookName: hit.bookName,
+                    chapterNumber: hit.chapter,
+                    verseNumber: hit.verse,
+                    text: hit.text
+                )
             }
         }
         return LampModuleSearch.sharedEvenly(found, limit: resultLimit)

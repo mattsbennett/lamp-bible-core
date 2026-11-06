@@ -21,7 +21,9 @@ extension LampModuleSearch {
     /// searched: the best ranked first where the verses have an index the
     /// query can ask, else in the Bible's order. Each translation answers for
     /// itself, so that one which repeats the words more often can't crowd out
-    /// the rest, and a caller shares the room between them (`sharedEvenly`).
+    /// the rest, and a caller shares the room between them (`sharedEvenly`),
+    /// in an order of its own rather than this one: grouped by translation
+    /// here, by database there.
     ///
     /// A translation's module file keeps its verses in `verses`, and answers
     /// as `translations`' one; a database of several, as the bundled one and
@@ -122,11 +124,15 @@ extension LampModuleSearch {
             """, arguments: arguments)
         var kept: [LampVerseSearchHit] = []
         var counts: [String: Int] = [:]
+        // Done once each translation asked for has its fill, rather than at
+        // the end of every verse LIKE finds.
+        let wanted = ownID.map { [$0] } ?? translations.map(Set.init).map(Array.init)
         while let row = try rows.next() {
             let translationID: String = row["translation_id"]
             guard counts[translationID, default: 0] < limit, query.matches(row["text"]) else { continue }
             counts[translationID, default: 0] += 1
             kept.append(hit(row))
+            if let wanted, wanted.allSatisfy({ counts[$0, default: 0] >= limit }) { break }
         }
         return kept
     }
