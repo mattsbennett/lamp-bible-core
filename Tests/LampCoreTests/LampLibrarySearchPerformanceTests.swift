@@ -70,6 +70,33 @@ struct LampLibrarySearchPerformanceTests {
         }
     }
 
+    /// Each commentary is asked for the whole limit before the merge cuts it,
+    /// so the first by name can't take every place: the second's unit named
+    /// for the word comes first, though there is room for one result.
+    @Test func eachCommentaryIsAskedForTheWholeLimitBeforeTheMerge() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"2.1","id":"A","title":"A Commentary","seriesAbbrev":"A","seriesFull":"A Commentary"},
+             "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,"verses":[
+               {"sv":1001001,"commentary":{"text":"Faith and hope."}},
+               {"sv":1001002,"commentary":{"text":"Hope again."}}
+             ]}]}
+            """#, id: "A", in: root, library: library)
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"2.1","id":"B","title":"B Commentary","seriesAbbrev":"B","seriesFull":"B Commentary"},
+             "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,"pericopae":[
+               {"sv":1001003,"title":"Hope","introduction":{"text":"On what is waited for."}}
+             ]}]}
+            """#, id: "B", in: root, library: library)
+        // Searched in this order, so the first could have taken the place.
+        #expect(try await library.installedModules().filter { $0.kind == .commentary }.map(\.id) == ["A", "B"])
+        let hits = try await library.searchModules(query: "hope", kinds: [.commentary], limit: 1)
+        #expect(hits.map(\.moduleID) == ["B"])
+        #expect(hits.first?.title == "Hope")
+    }
+
     /// Exercise a newly compiled complete index, a shipped two-column index,
     /// and the oldest JSON-only schema. Mixed body/note queries must survive.
     @Test func commentaryFindsBodyAndFootnoteTermsAcrossAllIndexGenerations() async throws {

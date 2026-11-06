@@ -2528,119 +2528,29 @@ public actor LampLibrary {
         }
 
         if hasTextQuery && wants(.commentary) {
+            // Each database is asked for the whole limit and the merge below
+            // makes the cut. A database's units come best first, so giving the
+            // first module by name every place would leave the rest unsearched.
+            // Modules sharing a database, as the bundled ones do, are asked
+            // together, as the phone asks its own.
+            var databases: [(url: URL, modules: [LampSearchedModule])] = []
             for module in installed where module.kind == .commentary && includesModule(module.id) {
-                try Task.checkCancellation()
-                let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - countForKind(.commentary)
-                let matches = try queue.read { db -> [LampModuleSearchResult] in
-                    let tables = try tableNames(in: db)
-                    guard tables.contains("commentary_units") else { return [] }
-                    let columns = try columnNames(in: db, table: "commentary_units")
-                    let hasSearchText = columns.contains("search_text")
-                    let hasFootnotesText = columns.contains("footnotes_text")
-                    let hasFTS = tables.contains("commentary_units_fts") && !parsedQuery.fts5Query.isEmpty
-                    let ftsColumns = hasFTS ? try columnNames(in: db, table: "commentary_units_fts") : []
-                    let fullFTS = hasFootnotesText && ftsColumns.contains("footnotes_text")
-                    var conditions: [String] = []
-                    var arguments = StatementArguments()
-                    if columns.contains("module_id") {
-                        conditions.append("u.module_id = ?")
-                        arguments += [module.id]
-                    }
-                    if fullFTS {
-                        conditions.append("u.rowid IN (SELECT rowid FROM commentary_units_fts WHERE commentary_units_fts MATCH ?)")
-                        arguments += [parsedQuery.fts5Query]
-                    } else if hasFTS {
-                        // Old indexes omit footnotes. Each term can occur in
-                        // either the indexed body or the notes, including mixed
-                        // queries with terms split between the two.
-                        for term in parsedQuery.terms {
-                            let single = LampSearchQuery(term.isExact ? "\"" + term.text + "\"" : term.text)
-                            let notes = single.sqlLikePredicate(columns: [], jsonColumns: ["u.footnotes_json"])
-                            if single.fts5Query.isEmpty {
-                                conditions.append(notes.condition)
-                                arguments += StatementArguments(notes.arguments)
-                            } else {
-                                conditions.append("(u.rowid IN (SELECT rowid FROM commentary_units_fts WHERE commentary_units_fts MATCH ?) OR \(notes.condition))")
-                                arguments += [single.fts5Query]
-                                arguments += StatementArguments(notes.arguments)
-                            }
-                        }
-                    } else {
-                        let like = hasSearchText
-                            ? parsedQuery.sqlLikePredicate(columns: ["u.title", "u.search_text"], jsonColumns: ["u.footnotes_json"])
-                            : parsedQuery.sqlLikePredicate(columns: ["u.title"], jsonColumns: [
-                                "u.introduction_json", "u.translation_json", "u.commentary_json", "u.footnotes_json",
-                            ])
-                        conditions.append(like.condition)
-                        arguments += StatementArguments(like.arguments)
-                    }
-                    let body = hasSearchText ? "u.search_text" : "NULL AS search_text"
-                    let notes = hasFootnotesText ? "u.footnotes_text" : "NULL AS footnotes_text"
-                    let legacyBody = hasSearchText ? "" : ", u.introduction_json, u.translation_json, u.commentary_json"
-                    let legacyNotes = hasFootnotesText ? "" : ", u.footnotes_json"
-                    // The projection keeps legacy-font source spellings. Only
-                    // return/decode body JSON when Unicode replacement spans
-                    // are actually present; ordinary previews stay text-only.
-                    let encodedBody = hasSearchText ? """
-                        , CASE WHEN instr(u.introduction_json, '"sourceEncoding"') > 0
-                                 OR instr(u.translation_json, '"sourceEncoding"') > 0
-                                 OR instr(u.commentary_json, '"sourceEncoding"') > 0
-                          THEN '[' || COALESCE(u.introduction_json, 'null') || ','
-                                   || COALESCE(u.translation_json, 'null') || ','
-                                   || COALESCE(u.commentary_json, 'null') || ']'
-                          END AS encoded_body_json
-                        """ : ", NULL AS encoded_body_json"
-                    let encodedNotes = hasFootnotesText ? """
-                        , CASE WHEN instr(u.footnotes_json, '"sourceEncoding"') > 0
-                          THEN u.footnotes_json END AS encoded_footnotes_json
-                        """ : ", NULL AS encoded_footnotes_json"
-                    let rows = try Row.fetchCursor(db, sql: """
-                        SELECT u.id, u.sv, u.ev, u.title, \(body), \(notes)\(legacyBody)\(legacyNotes)\(encodedBody)\(encodedNotes)
-                        FROM commentary_units u
-                        WHERE \(conditions.joined(separator: " AND "))
-                        ORDER BY u.book, u.chapter, u.order_index, u.rowid
-                        """, arguments: arguments)
-                    var found: [LampModuleSearchResult] = []
-                    while found.count < remaining, let row = try rows.next() {
-                        var text: String
-                        if hasSearchText {
-                            text = row["search_text"] ?? ""
-                        } else {
-                            text = ["introduction_json", "translation_json", "commentary_json"]
-                                .compactMap { plainText(fromJSONString: row[$0], decodingEncodedSpans: true) }
-                                .joined(separator: " ")
-                        }
-                        var displayText = plainText(fromJSONString: row["encoded_body_json"], decodingEncodedSpans: true) ?? text
-                        // No JSON decode on the normal indexed-body path.
-                        if !parsedQuery.matchesWordPrefixes(text) {
-                            let footnotes: String = hasFootnotesText
-                                ? row["footnotes_text"] ?? ""
-                                : plainText(fromJSONString: row["footnotes_json"], decodingEncodedSpans: true) ?? ""
-                            text += "\n\n" + footnotes
-                            displayText += "\n\n" + (plainText(
-                                fromJSONString: row["encoded_footnotes_json"], decodingEncodedSpans: true
-                            ) ?? footnotes)
-                        }
-                        if !fullFTS {
-                            let title: String = row["title"] ?? ""
-                            guard parsedQuery.matchesWordPrefixes(title + " " + text) else { continue }
-                        }
-                        let start: Int = row["sv"]
-                        let end: Int? = row["ev"]
-                        let title: String? = row["title"]
-                        found.append(LampModuleSearchResult(
-                            id: "commentary:\(module.id):\(row["id"] as String)",
-                            kind: .commentary, moduleID: module.id, moduleName: module.name,
-                            title: title?.isEmpty == false ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                            subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                            snippet: snippet(displayText), startReference: start, endReference: end
-                        ))
-                    }
-                    return found
+                let url = try databaseURL(moduleID: module.id)
+                let searched = LampSearchedModule(id: module.id, name: module.name)
+                if let index = databases.firstIndex(where: { $0.url == url }) {
+                    databases[index].modules.append(searched)
+                } else {
+                    databases.append((url, [searched]))
                 }
-                results += matches
-                if countForKind(.commentary) >= resultLimit { break }
+            }
+            for database in databases {
+                try Task.checkCancellation()
+                let queue = try openReadOnlyDatabase(at: database.url)
+                results += try queue.read { db in
+                    try LampModuleSearch.commentary(
+                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit
+                    )
+                }
             }
         }
 
@@ -2862,12 +2772,7 @@ public actor LampLibrary {
             )
         }
 
-        // Preserve each provider's order for equally ranked results.
-        return Array(results.enumerated().sorted { lhs, rhs in
-            let left = parsedQuery.textRank(in: [lhs.element.title, lhs.element.subtitle ?? "", lhs.element.snippet])
-            let right = parsedQuery.textRank(in: [rhs.element.title, rhs.element.subtitle ?? "", rhs.element.snippet])
-            return left == right ? lhs.offset < rhs.offset : left > right
-        }.prefix(resultLimit).map(\.element))
+        return LampModuleSearch.ranked(results, by: parsedQuery, limit: resultLimit)
     }
 
     /// Highlights of `colors`, or of any colour when none are given, whose
@@ -5353,15 +5258,11 @@ public actor LampLibrary {
     }
 
     private func tableNames(in db: Database) throws -> Set<String> {
-        Set(try String.fetchAll(
-            db,
-            sql: "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
-        ))
+        try LampModuleText.tableNames(in: db)
     }
 
     private func columnNames(in db: Database, table: String) throws -> Set<String> {
-        Set(try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
-            .compactMap { $0["name"] as String? })
+        try LampModuleText.columnNames(in: db, table: table)
     }
 
     private func validateIdentifier(_ identifier: String) throws {
@@ -6244,55 +6145,15 @@ public actor LampLibrary {
     }
 
     private func stringValue(_ value: Any?) -> String? {
-        if let string = value as? String { return string }
-        if let number = value as? NSNumber { return number.stringValue }
-        return nil
+        LampModuleText.stringValue(value)
     }
 
     private func integerValue(_ value: Any?) -> Int? {
-        if let number = value as? NSNumber { return number.intValue }
-        if let string = value as? String { return Int(string) }
-        return nil
+        LampModuleText.integerValue(value)
     }
 
     private func plainText(fromJSONString json: String?, decodingEncodedSpans: Bool = false) -> String? {
-        guard let json,
-              let data = json.data(using: .utf8),
-              let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-            return nil
-        }
-        return plainText(from: value, decodingEncodedSpans: decodingEncodedSpans)
-    }
-
-    /// A module keeps text set in a legacy font encoding as its source has it
-    /// ("oJ lo/gos" for ὁ λόγος) and gives each such span its Unicode reading,
-    /// as `data.unicode` beside a `data.sourceEncoding`. The span reads as that
-    /// Unicode. Offsets count Unicode scalars, and a span whose offsets do not
-    /// land on its own `text` is left as written.
-    private func decodingEncodedSpans(in text: String, annotations: [Any]) -> String {
-        let spans = annotations.compactMap { value -> (start: Int, end: Int, source: String, unicode: String)? in
-            guard let annotation = value as? [String: Any],
-                  let data = annotation["data"] as? [String: Any],
-                  data["sourceEncoding"] != nil,
-                  let unicode = stringValue(data["unicode"]), !unicode.isEmpty,
-                  let source = stringValue(annotation["text"]),
-                  let start = integerValue(annotation["start"]),
-                  let end = integerValue(annotation["end"]),
-                  start >= 0, end > start else { return nil }
-            return (start, end, source, unicode)
-        }
-        guard !spans.isEmpty else { return text }
-        var scalars = Array(text.unicodeScalars)
-        // From the end, so the spans before each one keep their offsets.
-        for span in spans.sorted(by: { $0.start > $1.start }) where span.end <= scalars.count {
-            var written = String.UnicodeScalarView()
-            written.append(contentsOf: scalars[span.start..<span.end])
-            guard String(written) == span.source else { continue }
-            scalars.replaceSubrange(span.start..<span.end, with: span.unicode.unicodeScalars)
-        }
-        var decoded = String.UnicodeScalarView()
-        decoded.append(contentsOf: scalars)
-        return String(decoded)
+        LampModuleText.plainText(fromJSONString: json, decodingEncodedSpans: decodingEncodedSpans)
     }
 
     private func annotatedText(
@@ -6449,38 +6310,7 @@ public actor LampLibrary {
     }
 
     private func plainText(from value: Any?, decodingEncodedSpans: Bool = false) -> String? {
-        guard let value, !(value is NSNull) else { return nil }
-        if let string = value as? String {
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        if let values = value as? [Any] {
-            let text = values
-                .compactMap { plainText(from: $0, decodingEncodedSpans: decodingEncodedSpans) }
-                .joined(separator: "\n\n")
-            return text.isEmpty ? nil : text
-        }
-        if let object = value as? [String: Any] {
-            if decodingEncodedSpans,
-               let text = object["text"] as? String,
-               let annotations = object["annotations"] as? [Any],
-               let decoded = plainText(from: self.decodingEncodedSpans(in: text, annotations: annotations)) {
-                return decoded
-            }
-            for key in ["text", "content", "value", "note", "body"] {
-                if let text = plainText(from: object[key], decodingEncodedSpans: decodingEncodedSpans) {
-                    return text
-                }
-            }
-            let ignoredKeys: Set<String> = ["id", "type", "style", "level", "annotations"]
-            let text = object
-                .filter { !ignoredKeys.contains($0.key) }
-                .sorted { $0.key < $1.key }
-                .compactMap { plainText(from: $0.value, decodingEncodedSpans: decodingEncodedSpans) }
-                .joined(separator: "\n\n")
-            return text.isEmpty ? nil : text
-        }
-        return nil
+        LampModuleText.plainText(from: value, decodingEncodedSpans: decodingEncodedSpans)
     }
 }
 
