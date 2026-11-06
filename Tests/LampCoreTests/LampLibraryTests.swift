@@ -1014,6 +1014,38 @@ struct LampLibraryTests {
         #expect(completed.first?.readingIndex == 1, "the columns that held the truth are untouched")
     }
 
+    /// The app, each lamp-mcp and sync open one library at once. Each newly
+    /// opened, as a process is, they make UserData's tables together and read
+    /// and write it together, and none of them fails for the others.
+    @Test func librariesOpenedTogetherWaitForEachOther() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-together-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        for trial in 0..<8 {
+            if trial.isMultiple(of: 2) {
+                try? FileManager.default.removeItem(at: fixtureURL.appendingPathComponent("UserData.sqlite"))
+            }
+            let libraries = (0..<3).map { _ in LampLibrary(rootURL: fixtureURL) }
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for (index, library) in libraries.enumerated() {
+                    group.addTask {
+                        _ = try await library.savePersonalDevotional(LampDevotional(
+                            id: "writing-\(trial)-\(index)", moduleID: "personal-devotionals", moduleName: "My Writing",
+                            title: "Writing \(index)", tags: [], content: "Waiting together.", isEditable: true
+                        ))
+                        _ = try await library.searchModules(query: "together", kinds: [.devotional])
+                        _ = try await library.completedReadings()
+                    }
+                }
+                try await group.waitForAll()
+            }
+        }
+        let library = LampLibrary(rootURL: fixtureURL)
+        #expect(try await library.personalDevotionals().count == 6, "the last two trials' three writings each")
+    }
+
     // MARK: - Plan progress as it travels
 
     private func planLibrary() throws -> (LampLibrary, URL) {

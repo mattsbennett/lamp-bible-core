@@ -25,6 +25,11 @@ public actor LampLibrary {
     private var versifications: [String: LampVersification] = [:]
     private var strongsIndexQueue: DatabaseQueue?
     private var personalDevotionalIndexQueue: DatabaseQueue?
+    /// The UserData file this library last made its tables in, by device
+    /// and inode, and its schema as that left it: until either changes, as
+    /// when another process or an older version alters it, it isn't done
+    /// again on every call.
+    private var preparedUserDatabase: (device: Int64, inode: UInt64, schema: Int)?
     /// Each translation's fingerprint as last read, until a module is written.
     private var strongsFingerprints: [String: (revision: LampDatabaseFileRevision, value: String)] = [:]
     private var strongsIndexesBuilding: Set<String> = []
@@ -839,7 +844,7 @@ public actor LampLibrary {
         try fileManager.createDirectory(
             at: strongsIndexURL.deletingLastPathComponent(), withIntermediateDirectories: true
         )
-        let queue = try DatabaseQueue(path: strongsIndexURL.path)
+        let queue = try DatabaseQueue(path: strongsIndexURL.path, configuration: Self.sharedFileConfiguration)
         try queue.write(LampStrongsIndex.createTables)
         strongsIndexQueue = queue
         return queue
@@ -889,11 +894,7 @@ public actor LampLibrary {
             queue = personalDevotionalIndexQueue
         } else {
             try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // The app and each lamp-mcp may open it at once: each waits its
-            // turn rather than failing.
-            var configuration = Configuration()
-            configuration.busyMode = .timeout(5)
-            queue = try DatabaseQueue(path: url.path, configuration: configuration)
+            queue = try DatabaseQueue(path: url.path, configuration: Self.sharedFileConfiguration)
             try queue.inTransaction(.immediate) { db in
                 let version = try Int.fetchOne(db, sql: "PRAGMA user_version") ?? 0
                 guard version != Self.personalDevotionalIndexVersion else { return .commit }
@@ -4927,9 +4928,28 @@ public actor LampLibrary {
         LampPersonalDeletionLedger.highlightThemeKey(setID: setID, color: color, style: style)
     }
 
+    /// For a file this library writes that others open too: the app, each
+    /// lamp-mcp and sync all use the same library. A call waits up to five
+    /// seconds for another's write rather than failing at once, and a write
+    /// claims the file before it reads, so two writers never each hold what
+    /// the other waits for, a wait SQLite would refuse rather than sit out.
+    private static var sharedFileConfiguration: Configuration {
+        var configuration = Configuration()
+        configuration.busyMode = .timeout(5)
+        configuration.defaultTransactionKind = .immediate
+        return configuration
+    }
+
     private func openUserDatabase() throws -> DatabaseQueue {
         try prepareDirectories()
-        let queue = try DatabaseQueue(path: userDatabaseURL.path)
+        let queue = try DatabaseQueue(path: userDatabaseURL.path, configuration: Self.sharedFileConfiguration)
+        if let preparedUserDatabase,
+           let file = try? LampDatabaseFileRevision.identity(of: userDatabaseURL),
+           file == (preparedUserDatabase.device, preparedUserDatabase.inode),
+           try queue.read({ try Int.fetchOne($0, sql: "PRAGMA schema_version") }) == preparedUserDatabase.schema
+        {
+            return queue
+        }
         try queue.writeWithoutTransaction { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS selected_plans (
@@ -5062,6 +5082,9 @@ public actor LampLibrary {
                 WHERE id = plan_id || '_' || day || '_r' || reading_index || '_' || year
                 """)
         }
+        let schema = try queue.read { try Int.fetchOne($0, sql: "PRAGMA schema_version") ?? 0 }
+        preparedUserDatabase = (try? LampDatabaseFileRevision.identity(of: userDatabaseURL))
+            .map { ($0.device, $0.inode, schema) }
         return queue
     }
 

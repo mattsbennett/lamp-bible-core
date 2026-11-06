@@ -51,6 +51,12 @@ struct LampDatabaseFileRevision: Codable, Equatable, Sendable {
         wal = try? File(url: URL(fileURLWithPath: url.path + "-wal"))
     }
 
+    /// Which file is at `url`, by device and inode, whatever it holds.
+    static func identity(of url: URL) throws -> (device: Int64, inode: UInt64) {
+        let file = try File(url: url)
+        return (file.device, file.inode)
+    }
+
     func serialized() throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
