@@ -155,18 +155,18 @@ public enum LampSearchWords {
         return words.count > limit ? nil : words
     }
 
-    /// Whether `db`, or a database of lists attached to it, has a list of
-    /// `index`'s words as the index is now.
-    public static func isCurrent(index: String, in db: Database) throws -> Bool {
-        try listSchema(for: index, in: db) != nil
+    /// Whether `db`, or unless `ownListsOnly` a database of lists attached
+    /// to it, has a list of `index`'s words as the index is now.
+    public static func isCurrent(index: String, in db: Database, ownListsOnly: Bool = false) throws -> Bool {
+        try listSchema(for: index, in: db, ownListsOnly: ownListsOnly) != nil
     }
 
     /// Where `db` keeps a list of `index`'s words as the index is now: in
     /// itself, or in the database of lists attached to it.
-    private static func listSchema(for index: String, in db: Database) throws -> String? {
+    private static func listSchema(for index: String, in db: Database, ownListsOnly: Bool = false) throws -> String? {
         guard try db.tableExists("\(index)_data", in: "main") else { return nil }
         let attached = Set(try Row.fetchAll(db, sql: "PRAGMA database_list").compactMap { $0["name"] as String? })
-        for lists in ["main", derivedSchema] where attached.contains(lists) {
+        for lists in ownListsOnly ? ["main"] : ["main", derivedSchema] where attached.contains(lists) {
             guard try Bool.fetchOne(db, sql: """
                 SELECT 1 FROM "\(lists)".sqlite_master WHERE type = 'table' AND name = 'search_word_lists'
                 """) == true else { continue }

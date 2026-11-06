@@ -380,6 +380,37 @@ struct LampLibrarySearchPerformanceTests {
         }
     }
 
+    /// A library that opened a module before another listed its words, as
+    /// the app does while a lamp-mcp searches, attaches them at its next
+    /// search rather than reading the text until it is started again.
+    @Test func aModuleListedByAnotherLibraryIsSearchedThroughItsList() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let database = try await install(#"""
+            {"meta":{"schemaVersion":"1.0","id":"B","type":"book","title":"Book","language":"en"},
+             "sections":[
+               {"id":"steward","type":"chapter","title":"First","content":[{"type":"paragraph","content":{"text":"The unfaithful steward."}}]},
+               {"id":"works","type":"chapter","title":"Second","content":[{"type":"paragraph","content":{"text":"Faith works."}}]}
+             ]}
+            """#, id: "B", in: root, library: first)
+        // As a module compiled before lists were.
+        try await DatabaseQueue(path: database.path).write { try $0.execute(sql: "DROP TABLE search_word_lists") }
+        #expect(try await first.searchModules(query: "faith", kinds: [.book]).count == 1)
+        #expect(await !first.hasWordListsAttached(moduleID: "B"))
+
+        let second = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        #expect(try await second.searchModules(query: "*faith", kinds: [.book]).count == 2)
+        await second.wordListsListed()
+
+        #expect(try await first.searchModules(query: "*faith", kinds: [.book]).count == 2)
+        #expect(await first.hasWordListsAttached(moduleID: "B"), "the list the other made, attached")
+        await first.wordListsListed()
+        let derived = root.appendingPathComponent("Library/Indexes/Words/\(database.lastPathComponent)")
+        let lists = try await DatabaseQueue(path: derived.path).read { try String.fetchAll($0, sql: "SELECT fts FROM search_word_lists") }
+        #expect(lists == ["book_sections_fts"], "and kept, not listed again over it")
+    }
+
     /// My writing's and My Notes' indexes keep their words too, folded as
     /// they fold them, Greek and accents alike.
     @Test func aStarFindsPartOfAWordInMyWritingAndNotes() async throws {

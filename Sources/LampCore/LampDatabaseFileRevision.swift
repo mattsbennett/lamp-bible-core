@@ -63,3 +63,14 @@ struct LampDatabaseFileRevision: Codable, Equatable, Sendable {
         return String(decoding: try encoder.encode(self), as: UTF8.self)
     }
 }
+
+/// Which file is at a path, by device and inode, whatever it holds.
+struct LampDatabaseFileIdentity: Equatable {
+    let device: Int64
+    let inode: UInt64
+
+    init(_ identity: (device: Int64, inode: UInt64)) {
+        device = identity.device
+        inode = identity.inode
+    }
+}

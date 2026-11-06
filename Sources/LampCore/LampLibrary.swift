@@ -16,7 +16,11 @@ public actor LampLibrary {
     private var cachedBundledDatabaseURL: URL?
     private var cachedBundledModules: [LampInstalledModule]?
     private var cachedBundledModulesRevision: LampDatabaseFileRevision?
-    private var openDatabases: [String: (revision: LampDatabaseFileRevision, queue: DatabaseQueue)] = [:]
+    /// Each read-only connection by path, with the revision of its file and
+    /// which file of word lists, if any, it has attached.
+    private var openDatabases: [String: (
+        revision: LampDatabaseFileRevision, words: LampDatabaseFileIdentity?, queue: DatabaseQueue
+    )] = [:]
     private var installedMetadata: [String: (
         revision: LampDatabaseFileRevision, byteCount: Int, module: LampInstalledModule
     )] = [:]
@@ -4554,8 +4558,14 @@ public actor LampLibrary {
     /// rewritten or removed, so nothing can read through a stale handle.
     private func openReadOnlyDatabase(at url: URL) throws -> DatabaseQueue {
         let revision = try LampDatabaseFileRevision(url: url)
-        if let existing = openDatabases[url.path], existing.revision == revision { return existing.queue }
-        if openDatabases[url.path] != nil {
+        // Its word lists, made by this process or another since it was
+        // opened, or made again, are attached by opening it afresh.
+        let words = derivedWordListsURL(for: url)
+        let wordsIdentity = (try? LampDatabaseFileRevision.identity(of: words)).map(LampDatabaseFileIdentity.init)
+        if let existing = openDatabases[url.path], existing.revision == revision, existing.words == wordsIdentity {
+            return existing.queue
+        }
+        if let existing = openDatabases[url.path], existing.revision != revision {
             // Another process may have reinstalled the module. A live reader
             // must not keep using the old inode or its derived verse numbering.
             versifications.removeAll()
@@ -4566,14 +4576,13 @@ public actor LampLibrary {
         // The words of its indexes, where this library has listed them in a
         // file of its own. One it can't read is passed over, and a search
         // for part of a word reads the text, as it would without it.
-        let words = derivedWordListsURL(for: url)
-        if fileManager.fileExists(atPath: words.path) {
+        if wordsIdentity != nil {
             configuration.prepareDatabase { db in
                 try? db.execute(sql: "ATTACH DATABASE ? AS \(LampSearchWords.derivedSchema)", arguments: [words.path])
             }
         }
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
-        openDatabases[url.path] = (revision, queue)
+        openDatabases[url.path] = (revision, wordsIdentity, queue)
         return queue
     }
 
@@ -4598,22 +4607,27 @@ public actor LampLibrary {
                   wordListsChecked[database.path] != revision else { continue }
             let derived = derivedWordListsURL(for: database)
             wordListTasks[database.path] = Task.detached(priority: .utility) { [weak self] in
-                let made = (try? Self.listWords(of: database, into: derived)) ?? false
-                await self?.finishListingWords(of: database, revision: revision, made: made)
+                _ = try? Self.listWords(of: database, into: derived)
+                await self?.finishListingWords(of: database, revision: revision)
             }
         }
     }
 
-    private func finishListingWords(of database: URL, revision: LampDatabaseFileRevision, made: Bool) {
+    private func finishListingWords(of database: URL, revision: LampDatabaseFileRevision) {
         wordListTasks[database.path] = nil
         wordListsChecked[database.path] = revision
-        // The next read opens it with them attached.
-        if made { openDatabases[database.path] = nil }
     }
 
     /// Waits for the words being listed. For tests.
     func wordListsListed() async {
         while let task = wordListTasks.values.first { await task.value }
+    }
+
+    /// Whether this library's connection to a module's database has its
+    /// word lists attached. For tests.
+    func hasWordListsAttached(moduleID: String) -> Bool {
+        guard let url = try? databaseURL(moduleID: moduleID) else { return false }
+        return openDatabases[url.path]?.words != nil
     }
 
     /// Lists the words of each of `database`'s indexes without a list as it
@@ -4629,13 +4643,18 @@ public actor LampLibrary {
         defer { try? queue.close() }
         let fileManager = FileManager.default
         let schema = LampSearchWords.derivedSchema
-        let unlisted = try queue.writeWithoutTransaction { db -> [String] in
+        // Nothing to do where every index is listed, in it or by this
+        // library; otherwise each not listed in it is listed afresh, so that
+        // the new file holds them all, as the one it replaces did.
+        let unlisted = try queue.writeWithoutTransaction { db -> [String]? in
             let attached = fileManager.fileExists(atPath: derived.path)
                 && (try? db.execute(sql: "ATTACH DATABASE ? AS \(schema)", arguments: [derived.path])) != nil
             defer { if attached { try? db.execute(sql: "DETACH DATABASE \(schema)") } }
-            return try LampSearchWords.indexes(in: db).filter { try !LampSearchWords.isCurrent(index: $0, in: db) }
+            let indexes = try LampSearchWords.indexes(in: db)
+            guard try indexes.contains(where: { try !LampSearchWords.isCurrent(index: $0, in: db) }) else { return nil }
+            return try indexes.filter { try !LampSearchWords.isCurrent(index: $0, in: db, ownListsOnly: true) }
         }
-        guard !unlisted.isEmpty else { return false }
+        guard let unlisted, !unlisted.isEmpty else { return false }
         let folder = derived.deletingLastPathComponent()
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         // What a listing stopped part way left, as by the app quitting: one
