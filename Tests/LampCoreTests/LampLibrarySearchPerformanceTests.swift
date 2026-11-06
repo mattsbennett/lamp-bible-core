@@ -359,6 +359,25 @@ struct LampLibrarySearchPerformanceTests {
         for kind in kinds {
             #expect(try await found("*faith", kind) == throughTheLists[kind], "\(kind)")
         }
+
+        // Having read them, the library lists their words in files of its
+        // own, the modules' own left as they were, and asks the index again.
+        func contents() throws -> [Data] { try databases.map { try Data(contentsOf: $0) } }
+        let before = try contents()
+        await library.wordListsListed()
+        #expect(try contents() == before, "the modules' files untouched")
+        for database in databases {
+            let derived = root.appendingPathComponent("Library/Indexes/Words/\(database.lastPathComponent)")
+            #expect(FileManager.default.fileExists(atPath: derived.path), "\(database.lastPathComponent)")
+            let listed = try await DatabaseQueue(path: database.path).writeWithoutTransaction { db in
+                try db.execute(sql: "ATTACH DATABASE ? AS \(LampSearchWords.derivedSchema)", arguments: [derived.path])
+                return try LampSearchWords.indexes(in: db).allSatisfy { try LampSearchWords.isCurrent(index: $0, in: db) }
+            }
+            #expect(listed)
+        }
+        for kind in kinds {
+            #expect(try await found("*faith", kind) == throughTheLists[kind], "\(kind), through the library's lists")
+        }
     }
 
     /// My writing's and My Notes' indexes keep their words too, folded as

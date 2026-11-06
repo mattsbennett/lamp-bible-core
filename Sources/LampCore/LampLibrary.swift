@@ -26,6 +26,11 @@ public actor LampLibrary {
     private var strongsIndexQueue: DatabaseQueue?
     /// The personal indexes opened, by path.
     private var personalIndexQueues: [String: DatabaseQueue] = [:]
+    /// The module databases whose words are being listed, by path, and the
+    /// revision each was last looked at in, so it is looked at again only
+    /// once it changes.
+    private var wordListTasks: [String: Task<Void, Never>] = [:]
+    private var wordListsChecked: [String: LampDatabaseFileRevision] = [:]
     /// The UserData file this library last made its tables in, by device
     /// and inode, and its schema as that left it: until either changes, as
     /// when another process or an older version alters it, it isn't done
@@ -323,6 +328,7 @@ public actor LampLibrary {
         if fileManager.fileExists(atPath: moduleURL.path) {
             try fileManager.removeItem(at: moduleURL)
         }
+        try? fileManager.removeItem(at: derivedWordListsURL(for: databaseURL))
         // An installed plan can shadow a bundled one of the same ID, and
         // removing it uncovers the bundled plan rather than taking the plan
         // away: it is still there to be read tomorrow, so following it and
@@ -646,6 +652,7 @@ public actor LampLibrary {
             }
             for hit in hits { byTranslation[hit.translationID, default: []].append(hit) }
         }
+        if parsedQuery.hasWithinWordTerms { listWordsInBackground(of: databases.map(\.url)) }
         // In the order the library lists them, by name, whatever database
         // each is in: the room left over goes by that order, and the phone
         // gives it out by the same.
@@ -2842,6 +2849,9 @@ public actor LampLibrary {
         }
 
         let merged = LampModuleSearch.ranked(results, by: parsedQuery, limit: resultLimit)
+        if parsedQuery.hasWithinWordTerms {
+            listWordsInBackground(of: Set(snippetSources.values.flatMap(\.values)))
+        }
         return try addingSnippets(to: merged, from: snippetSources, query: parsedQuery)
     }
 
@@ -4614,9 +4624,108 @@ public actor LampLibrary {
         }
         var configuration = Configuration()
         configuration.readonly = true
+        // The words of its indexes, where this library has listed them in a
+        // file of its own. One it can't read is passed over, and a search
+        // for part of a word reads the text, as it would without it.
+        let words = derivedWordListsURL(for: url)
+        if fileManager.fileExists(atPath: words.path) {
+            configuration.prepareDatabase { db in
+                try? db.execute(sql: "ATTACH DATABASE ? AS \(LampSearchWords.derivedSchema)", arguments: [words.path])
+            }
+        }
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         openDatabases[url.path] = (revision, queue)
         return queue
+    }
+
+    /// Where this library lists the words of `database`'s indexes, for a
+    /// module database it mustn't write: an installed module's file syncs
+    /// between devices, and the bundle is replaced with each install.
+    private func derivedWordListsURL(for database: URL) -> URL {
+        rootURL.appendingPathComponent("Indexes", isDirectory: true)
+            .appendingPathComponent("Words", isDirectory: true)
+            .appendingPathComponent(database.lastPathComponent)
+    }
+
+    /// Lists, in the background, the words of each index of `databases`
+    /// that has no list as it now is, for a search for part of a word to
+    /// ask its index rather than read every text: a module compiled before
+    /// lists were, or the bundle. Asked after such a search read one, so the
+    /// next finds it listed; looked at again only once its file changes.
+    private func listWordsInBackground<Databases: Sequence<URL>>(of databases: Databases) {
+        // My writing's and My Notes' indexes list their own.
+        for database in databases where wordListTasks[database.path] == nil && personalIndexQueues[database.path] == nil {
+            guard let revision = try? LampDatabaseFileRevision(url: database),
+                  wordListsChecked[database.path] != revision else { continue }
+            let derived = derivedWordListsURL(for: database)
+            wordListTasks[database.path] = Task.detached(priority: .utility) { [weak self] in
+                let made = (try? Self.listWords(of: database, into: derived)) ?? false
+                await self?.finishListingWords(of: database, revision: revision, made: made)
+            }
+        }
+    }
+
+    private func finishListingWords(of database: URL, revision: LampDatabaseFileRevision, made: Bool) {
+        wordListTasks[database.path] = nil
+        wordListsChecked[database.path] = revision
+        // The next read opens it with them attached.
+        if made { openDatabases[database.path] = nil }
+    }
+
+    /// Waits for the words being listed. For tests.
+    func wordListsListed() async {
+        while let task = wordListTasks.values.first { await task.value }
+    }
+
+    /// Lists the words of each of `database`'s indexes without a list as it
+    /// now is, in it or in `derived`, into a new file put in `derived`'s
+    /// place, so that a search reading the old one reads it to the end, and
+    /// `database` itself is only read; whether one was put there.
+    nonisolated private static func listWords(of database: URL, into derived: URL) throws -> Bool {
+        // A connection that writes only its temporary tables and the file
+        // of lists attached to it.
+        var configuration = Configuration()
+        configuration.busyMode = .timeout(5)
+        let queue = try DatabaseQueue(path: database.path, configuration: configuration)
+        defer { try? queue.close() }
+        let fileManager = FileManager.default
+        let schema = LampSearchWords.derivedSchema
+        let unlisted = try queue.writeWithoutTransaction { db -> [String] in
+            let attached = fileManager.fileExists(atPath: derived.path)
+                && (try? db.execute(sql: "ATTACH DATABASE ? AS \(schema)", arguments: [derived.path])) != nil
+            defer { if attached { try? db.execute(sql: "DETACH DATABASE \(schema)") } }
+            return try LampSearchWords.indexes(in: db).filter { try !LampSearchWords.isCurrent(index: $0, in: db) }
+        }
+        guard !unlisted.isEmpty else { return false }
+        let folder = derived.deletingLastPathComponent()
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        // What a listing stopped part way left, as by the app quitting: one
+        // of another process still going is younger than this.
+        let prefix = ".\(derived.lastPathComponent)-"
+        for leftover in (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            where leftover.lastPathComponent.hasPrefix(prefix) {
+            let modified = (try? leftover.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < Date(timeIntervalSinceNow: -600) { try? fileManager.removeItem(at: leftover) }
+        }
+        let building = folder.appendingPathComponent(prefix + UUID().uuidString)
+        defer { try? fileManager.removeItem(at: building) }
+        try queue.writeWithoutTransaction { db in
+            try db.execute(sql: "ATTACH DATABASE ? AS \(schema)", arguments: [building.path])
+            defer { try? db.execute(sql: "DETACH DATABASE \(schema)") }
+            for index in unlisted {
+                guard let vocabulary = try LampSearchWords.vocabulary(of: index, in: db) else { continue }
+                // Into the list's file alone, every write naming it: the
+                // module's is never written, or its revision would move.
+                try db.inTransaction {
+                    try LampSearchWords.write(vocabulary, in: db, into: schema)
+                    return .commit
+                }
+            }
+        }
+        guard rename(building.path, derived.path) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSFilePathErrorKey: derived.path])
+        }
+        return true
     }
 
     /// Drops every cached connection. Called after any write that could replace a
