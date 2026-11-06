@@ -329,6 +329,71 @@ struct LampModuleSearchTests {
             == ["commentary:X:together", "book:B:together"])
     }
 
+    /// Notes in a database of several modules, as the phone keeps them, with
+    /// and without their index.
+    private func notesDatabase(indexed: Bool) throws -> DatabaseQueue {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE note_entries (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, verse_id INTEGER NOT NULL,
+                    book INTEGER NOT NULL DEFAULT 1, chapter INTEGER NOT NULL DEFAULT 1, verse INTEGER NOT NULL DEFAULT 1,
+                    title TEXT, content TEXT NOT NULL, search_text TEXT);
+                INSERT INTO note_entries (id, module_id, verse_id, title, content, search_text) VALUES
+                    ('content', 'M', 1001001, NULL, 'We wait in hope here.', 'We wait in hope here.'),
+                    ('footnote', 'M', 1001002, NULL, 'Waiting here.', 'Waiting here. See Zuntz on hope.'),
+                    ('title', 'M', 1001003, 'Hope', 'Waiting here.', 'Waiting here.'),
+                    ('together', 'M', 1001004, 'The Kingdom of God', 'Patience.', 'Patience.'),
+                    ('other', 'O', 1001001, NULL, 'Hope elsewhere.', 'Hope elsewhere.');
+                """)
+            if indexed {
+                try db.execute(sql: """
+                    CREATE VIRTUAL TABLE note_fts USING fts5(
+                        title, search_text, content='note_entries', content_rowid='rowid');
+                    INSERT INTO note_fts(note_fts) VALUES('rebuild');
+                    """)
+            }
+        }
+        return queue
+    }
+
+    @Test func notesAreFoundInTheirTitleTextAndFootnotes() throws {
+        for indexed in [true, false] {
+            let queue = try notesDatabase(indexed: indexed)
+            let modules = [LampSearchedModule(id: "M", name: "My Study")]
+            let (hope, zuntz, kingdom) = try queue.read { db in
+                (
+                    try LampModuleSearch.notes(in: db, modules: modules, query: LampSearchQuery("hope"), limit: 10),
+                    try LampModuleSearch.notes(in: db, modules: modules, query: LampSearchQuery("zuntz"), limit: 10),
+                    try LampModuleSearch.notes(in: db, modules: modules, query: LampSearchQuery("kingdom of god"), limit: 10)
+                )
+            }
+            // The other module's isn't asked; a note found by its footnote
+            // shows the footnote.
+            #expect(Set(hope.map(\.id)) == ["notes:M:content", "notes:M:footnote", "notes:M:title"], "indexed \(indexed)")
+            #expect(zuntz.map(\.id) == ["notes:M:footnote"], "indexed \(indexed)")
+            #expect(zuntz.first?.snippet.contains("<mark>Zuntz</mark>") == true, "indexed \(indexed)")
+            #expect(hope.first { $0.id == "notes:M:title" }?.title == "Hope")
+            #expect(hope.first { $0.id == "notes:M:content" }?.title == "Genesis 1:1")
+            #expect(hope.allSatisfy { $0.moduleName == "My Study" })
+            // A note titled with the words holds them together.
+            #expect(kingdom.map(\.id) == ["notes:M:together"], "indexed \(indexed)")
+            #expect(kingdom.first?.holdsPhrase == true, "indexed \(indexed)")
+            if indexed {
+                #expect(hope.first?.id == "notes:M:title", "titled with the word, so first")
+            } else {
+                #expect(hope.map(\.id) == ["notes:M:content", "notes:M:footnote", "notes:M:title"], "verse order")
+            }
+            let deferred = try queue.read { db in
+                let bare = try LampModuleSearch.notes(
+                    in: db, modules: modules, query: LampSearchQuery("hope"), limit: 10, snippets: false
+                )
+                return try LampModuleSearch.noteSnippets(for: bare, in: db, query: LampSearchQuery("hope"))
+            }
+            #expect(deferred == hope, "indexed \(indexed)")
+        }
+    }
+
     @Test func noModulesOrNoQueryFindNothing() throws {
         let queue = try database([Unit(id: "x1", module: "X", sv: 1_001_001, text: "Hope.")])
         let noModules = try queue.read { db in

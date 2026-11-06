@@ -120,6 +120,27 @@ struct LampLibrarySearchPerformanceTests {
         #expect(Set(hits.map(\.moduleID)) == ["A", "B"])
     }
 
+    /// My Notes and a notes module are each asked for the whole limit: my own
+    /// notes holding the word can't keep out the module's note titled with it.
+    @Test func myNotesAndANotesModuleEachGetTheWholeLimit() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        for verse in 1...3 {
+            try await library.saveVerseNote(LampVerseNote(reference: 1_001_000 + verse, content: "I hope so, verse \(verse)."))
+        }
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"1.1","id":"N","type":"notes","name":"Study Notes"},
+             "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,"verses":[
+               {"sv":1001004,"title":"Hope","commentary":{"text":"Waiting with patience."}}
+             ]}]}
+            """#, id: "N", in: root, library: library)
+        #expect(try await library.searchModules(query: "hope", kinds: [.notes], limit: 10).count == 4)
+        let hits = try await library.searchModules(query: "hope", kinds: [.notes], limit: 1)
+        #expect(hits.map(\.moduleID) == ["N"])
+        #expect(hits.first?.snippet.contains("Waiting with patience") == true, "its snippet cut once kept")
+    }
+
     /// Exercise a newly compiled complete index, a shipped two-column index,
     /// and the oldest JSON-only schema. Mixed body/note queries must survive.
     @Test func commentaryFindsBodyAndFootnoteTermsAcrossAllIndexGenerations() async throws {

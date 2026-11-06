@@ -391,6 +391,156 @@ public enum LampModuleSearch {
         }
     }
 
+    /// How much a match counts toward a note's rank by the column it falls
+    /// in: a note titled with the words before one whose text uses them.
+    static let noteColumnWeights: [String: Double] = [
+        "title": 5,
+        "search_text": 1,
+    ]
+
+    /// Notes matching `query` in `db`, at most `limit` of them: the
+    /// best-ranked where the notes have an index of title and text with its
+    /// footnotes, else in the order of the verses they're on. Without
+    /// `snippets`, as `commentary`, for `noteSnippets` to replace.
+    ///
+    /// Without the index, a note is matched in its title, its text and, where
+    /// it has one, the text it is searched by, its footnotes included, as the
+    /// index matches it; once only its title and text were.
+    public static func notes(
+        in db: Database,
+        modules: [LampSearchedModule],
+        query: LampSearchQuery,
+        limit: Int,
+        snippets: Bool = true
+    ) throws -> [LampModuleSearchResult] {
+        guard limit > 0, !modules.isEmpty, !query.isEmpty, !query.plainText.isEmpty else { return [] }
+        let tables = try LampModuleText.tableNames(in: db)
+        guard tables.contains("note_entries") else { return [] }
+        let columns = try LampModuleText.columnNames(in: db, table: "note_entries")
+        let hasTitle = columns.contains("title")
+        let hasSearchText = columns.contains("search_text")
+        let ftsColumns = tables.contains("note_fts") && !query.fts5Query.isEmpty
+            ? try LampModuleText.orderedColumnNames(in: db, table: "note_fts") : []
+        let hasFTS = hasTitle && hasSearchText && ftsColumns.contains("title") && ftsColumns.contains("search_text")
+        // A database holding several modules answers for the ones asked
+        // about. A module's own file holds only it.
+        let sharesDatabase = columns.contains("module_id")
+        let names = Dictionary(modules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+
+        var conditions: [String] = []
+        var arguments = StatementArguments()
+        if hasFTS {
+            conditions.append("note_fts MATCH ?")
+            arguments += [query.fts5Query]
+        }
+        if sharesDatabase {
+            conditions.append("n.module_id IN (\(modules.map { _ in "?" }.joined(separator: ", ")))")
+            arguments += StatementArguments(modules.map(\.id))
+        }
+        let source: String
+        let order: String
+        var limitClause = ""
+        if hasFTS {
+            let weights = ftsColumns
+                .map { LampModuleText.number(noteColumnWeights[$0] ?? 1) }
+                .joined(separator: ", ")
+            source = "note_fts JOIN note_entries n ON n.rowid = note_fts.rowid"
+            order = "bm25(note_fts, \(weights)), n.rowid"
+            limitClause = "LIMIT ?"
+            arguments += [limit]
+        } else {
+            let like = query.sqlLikePredicate(
+                columns: (hasTitle ? ["n.title"] : []) + ["n.content"] + (hasSearchText ? ["n.search_text"] : [])
+            )
+            conditions.append(like.condition)
+            arguments += StatementArguments(like.arguments)
+            source = "note_entries n"
+            order = "n.verse_id, n.id"
+        }
+        // A note's text, where it is needed now: to tell whether one found
+        // without the index holds the words together, or to cut snippets.
+        let readsText = snippets || !hasFTS
+        let standIn = snippets ? "" : rankingSnippet(for: query)
+        let text = readsText ? ", n.content" + (hasSearchText ? ", n.search_text" : ", NULL AS search_text") : ""
+        let rows = try Row.fetchCursor(db, sql: """
+            SELECT n.rowid AS note_rowid, n.id, \(sharesDatabase ? "n.module_id" : "NULL AS module_id"),
+                   n.verse_id, \(hasTitle ? "n.title" : "NULL AS title")\(text)
+            FROM \(source)
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY \(order)
+            \(limitClause)
+            """, arguments: arguments)
+
+        // Snippets are cut once it is known which notes hold the words
+        // together, as for commentary.
+        var found: [(rowid: Int64, result: LampModuleSearchResult, shown: String?)] = []
+        while found.count < limit, let row = try rows.next() {
+            let title: String? = row["title"]
+            var holdsPhrase = false
+            var shown: String?
+            if readsText {
+                let texts = noteTexts(of: row, query: query)
+                if !hasFTS { holdsPhrase = query.holdsPhrase(texts.searched) }
+                if snippets { shown = texts.shown }
+            }
+            let moduleID: String = sharesDatabase ? row["module_id"] : modules[0].id
+            let reference: Int = row["verse_id"]
+            found.append((row["note_rowid"], LampModuleSearchResult(
+                id: "notes:\(moduleID):\(row["id"] as String)",
+                kind: .notes, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
+                title: title?.isEmpty == false
+                    ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
+                subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
+                snippet: standIn, startReference: reference, holdsPhrase: holdsPhrase
+            ), shown))
+        }
+        let together = hasFTS
+            ? try rowidsHoldingPhrase(found.map(\.rowid), index: "note_fts", query: query, in: db)
+            : []
+        return found.map { item in
+            let result = together.contains(item.rowid) ? item.result.withPhrase() : item.result
+            guard let shown = item.shown else { return result }
+            return result.withSnippet(query.markedSnippet(shown, findingPhrase: result.holdsPhrase))
+        }
+    }
+
+    /// The snippets of note results found without them, read again from the
+    /// database they were found in.
+    public static func noteSnippets(
+        for results: [LampModuleSearchResult],
+        in db: Database,
+        query: LampSearchQuery
+    ) throws -> [LampModuleSearchResult] {
+        guard !results.isEmpty else { return results }
+        let columns = try LampModuleText.columnNames(in: db, table: "note_entries")
+        let sql = """
+            SELECT \(columns.contains("title") ? "title" : "NULL AS title"), content,
+                   \(columns.contains("search_text") ? "search_text" : "NULL AS search_text")
+            FROM note_entries
+            WHERE id = ?\(columns.contains("module_id") ? " AND module_id = ?" : "")
+            """
+        return try results.map { result in
+            let note = String(result.id.dropFirst("notes:\(result.moduleID):".count))
+            let arguments: StatementArguments = columns.contains("module_id") ? [note, result.moduleID] : [note]
+            guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments) else { return result }
+            return result.withSnippet(
+                query.markedSnippet(noteTexts(of: row, query: query).shown, findingPhrase: result.holdsPhrase)
+            )
+        }
+    }
+
+    /// A note's text as searched, its title, text and footnotes, and as
+    /// shown: its text, or the text it is searched by where only that holds
+    /// the words, a footnote's.
+    private static func noteTexts(of row: Row, query: LampSearchQuery) -> (searched: String, shown: String) {
+        let title: String = row["title"] ?? ""
+        let content: String = row["content"] ?? ""
+        let searchText: String? = row["search_text"]
+        let shown = !query.matchesWordPrefixes(content) && searchText.map(query.matchesWordPrefixes) == true
+            ? searchText! : content
+        return ([title, content, searchText ?? ""].joined(separator: " "), shown)
+    }
+
     /// What a result found without its snippet carries in its place: the
     /// query's own words, marked as a snippet cut around them would mark
     /// them, so that it ranks in a merge as its snippet will. One word scores

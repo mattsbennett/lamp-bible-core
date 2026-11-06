@@ -2459,7 +2459,7 @@ public actor LampLibrary {
         }
         let includesModule: (String) -> Bool = { moduleIDs == nil || moduleIDs?.contains($0) == true }
         var results: [LampModuleSearchResult] = []
-        // Where each commentary and book result was found, to cut its
+        // Where each commentary, book and note result was found, to cut its
         // snippet from once the merge has kept it.
         var snippetSources: [LampModuleKind: [String: URL]] = [:]
         let countForKind: (LampModuleKind) -> Int = { kind in
@@ -2565,13 +2565,16 @@ public actor LampLibrary {
         }
 
         if hasTextQuery && wants(.notes) {
+            // My Notes and each notes database are asked for the whole limit
+            // and the merge makes the cut, as for commentary: asked in turn,
+            // the first answered for every place. My Notes are their most
+            // recent first, so it is those that take its turns.
             let personalLike = parsedQuery.sqlLikePredicate(columns: ["title", "content"])
             if includesModule("personal-notes") {
                 let queue = try openUserDatabase()
-                let remaining = resultLimit - countForKind(.notes)
                 results += try queue.read { db in
                     var arguments = StatementArguments(personalLike.arguments)
-                    arguments += [remaining]
+                    arguments += [resultLimit]
                     return try Row.fetchAll(db, sql: """
                         SELECT id, module_id, verse_id, title, content
                         FROM personal_notes
@@ -2581,6 +2584,7 @@ public actor LampLibrary {
                         """, arguments: arguments).map { row in
                             let reference: Int = row["verse_id"]
                             let title: String? = row["title"]
+                            let content: String = row["content"]
                             return LampModuleSearchResult(
                                 id: "notes:personal-notes:\(row["id"] as String)",
                                 kind: .notes,
@@ -2589,57 +2593,22 @@ public actor LampLibrary {
                                 title: title?.isEmpty == false
                                     ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                                 subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                                snippet: snippet(row["content"] as String),
+                                snippet: snippet(content),
                                 startReference: reference,
-                                holdsPhrase: parsedQuery.holdsPhrase(row["content"] as String)
+                                holdsPhrase: parsedQuery.holdsPhrase((title ?? "") + " " + content)
                             )
                         }
                 }
             }
-            for module in installed where module.kind == .notes && includesModule(module.id) && countForKind(.notes) < resultLimit {
+            for database in try searchedDatabases(of: .notes, in: installed, including: includesModule) {
                 try Task.checkCancellation()
-                let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - countForKind(.notes)
+                let queue = try openReadOnlyDatabase(at: database.url)
                 results += try queue.read { db in
-                    guard try tableNames(in: db).contains("note_entries") else { return [] }
-                    let columns = try columnNames(in: db, table: "note_entries")
-                    let titleColumn = columns.contains("title") ? "title" : "NULL AS title"
-                    let like = parsedQuery.sqlLikePredicate(
-                        columns: columns.contains("title") ? ["title", "content"] : ["content"]
+                    try LampModuleSearch.notes(
+                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit, snippets: false
                     )
-                    // A database holding several modules' notes answers for
-                    // this one only.
-                    var searchCondition = like.condition
-                    var arguments = StatementArguments()
-                    if columns.contains("module_id") {
-                        searchCondition = "module_id = ? AND (\(searchCondition))"
-                        arguments += [module.id]
-                    }
-                    arguments += StatementArguments(like.arguments)
-                    arguments += [remaining]
-                    return try Row.fetchAll(db, sql: """
-                        SELECT id, verse_id, \(titleColumn), content
-                        FROM note_entries
-                        WHERE \(searchCondition)
-                        ORDER BY verse_id, id
-                        LIMIT ?
-                        """, arguments: arguments).map { row in
-                            let reference: Int = row["verse_id"]
-                            let title: String? = row["title"]
-                            return LampModuleSearchResult(
-                                id: "notes:\(module.id):\(row["id"] as String)",
-                                kind: .notes,
-                                moduleID: module.id,
-                                moduleName: module.name,
-                                title: title?.isEmpty == false
-                                    ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                                subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
-                                snippet: snippet(row["content"] as String),
-                                startReference: reference,
-                                holdsPhrase: parsedQuery.holdsPhrase(row["content"] as String)
-                            )
-                        }
                 }
+                for module in database.modules { snippetSources[.notes, default: [:]][module.id] = database.url }
             }
         }
 
@@ -2753,8 +2722,8 @@ public actor LampLibrary {
         return try addingSnippets(to: merged, from: snippetSources, query: parsedQuery)
     }
 
-    /// The commentary and book results the merge kept, with their snippets
-    /// cut from the databases they were found in.
+    /// The commentary, book and note results the merge kept, with their
+    /// snippets cut from the databases they were found in.
     private func addingSnippets(
         to results: [LampModuleSearchResult],
         from sources: [LampModuleKind: [String: URL]],
@@ -2772,9 +2741,11 @@ public actor LampLibrary {
             for (kind, indices) in kinds {
                 let found = indices.map { results[$0] }
                 let snipped = try queue.read { db in
-                    kind == .commentary
-                        ? try LampModuleSearch.commentarySnippets(for: found, in: db, query: query)
-                        : try LampModuleSearch.bookSnippets(for: found, in: db, query: query)
+                    switch kind {
+                    case .commentary: try LampModuleSearch.commentarySnippets(for: found, in: db, query: query)
+                    case .notes: try LampModuleSearch.noteSnippets(for: found, in: db, query: query)
+                    default: try LampModuleSearch.bookSnippets(for: found, in: db, query: query)
+                    }
                 }
                 for (index, result) in zip(indices, snipped) { filled[index] = result }
             }
