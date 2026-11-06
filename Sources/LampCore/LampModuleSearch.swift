@@ -133,10 +133,12 @@ public enum LampModuleSearch {
             \(limitClause)
             """, arguments: arguments)
 
-        var found: [(rowid: Int64, result: LampModuleSearchResult)] = []
+        // Snippets are cut once it is known which units hold the words
+        // together, so that the rest aren't read again looking for them.
+        var found: [(rowid: Int64, result: LampModuleSearchResult, shown: String?)] = []
         while found.count < limit, let row = try rows.next() {
-            var snippet = standIn
             var holdsPhrase = false
+            var shown: String?
             let title: String? = row["title"]
             if readsText {
                 let texts = commentaryTexts(
@@ -146,7 +148,7 @@ public enum LampModuleSearch {
                     guard query.matchesWordPrefixes((title ?? "") + " " + texts.searched) else { continue }
                     holdsPhrase = query.holdsPhrase((title ?? "") + " " + texts.searched)
                 }
-                if snippets { snippet = query.markedSnippet(texts.shown) }
+                if snippets { shown = texts.shown }
             }
             let moduleID: String = sharesDatabase ? row["module_id"] : modules[0].id
             let start: Int = row["sv"]
@@ -156,14 +158,19 @@ public enum LampModuleSearch {
                 kind: .commentary, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
                 title: title?.isEmpty == false ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
                 subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                snippet: snippet, startReference: start, endReference: end, holdsPhrase: holdsPhrase
-            )))
+                snippet: standIn, startReference: start, endReference: end, holdsPhrase: holdsPhrase
+            ), shown))
         }
-        guard fullFTS else { return found.map(\.result) }
         // The index answers whether a unit holds the words together, its
         // notes included, without reading its text.
-        let together = try rowidsHoldingPhrase(found.map(\.rowid), index: "commentary_units_fts", query: query, in: db)
-        return found.map { together.contains($0.rowid) ? $0.result.withPhrase() : $0.result }
+        let together = fullFTS
+            ? try rowidsHoldingPhrase(found.map(\.rowid), index: "commentary_units_fts", query: query, in: db)
+            : []
+        return found.map { item in
+            let result = together.contains(item.rowid) ? item.result.withPhrase() : item.result
+            guard let shown = item.shown else { return result }
+            return result.withSnippet(query.markedSnippet(shown, findingPhrase: result.holdsPhrase))
+        }
     }
 
     /// Which of `rowids` an index finds the query's words in together.
@@ -206,7 +213,7 @@ public enum LampModuleSearch {
             let texts = commentaryTexts(
                 of: row, hasSearchText: hasSearchText, hasFootnotesText: hasFootnotesText, query: query
             )
-            return result.withSnippet(query.markedSnippet(texts.shown))
+            return result.withSnippet(query.markedSnippet(texts.shown, findingPhrase: result.holdsPhrase))
         }
     }
 
@@ -330,10 +337,12 @@ public enum LampModuleSearch {
             \(limitClause)
             """, arguments: arguments)
 
-        var found: [(rowid: Int64, result: LampModuleSearchResult)] = []
+        // Snippets are cut once it is known which sections hold the words
+        // together, as for commentary.
+        var found: [(rowid: Int64, result: LampModuleSearchResult, shown: String?)] = []
         while found.count < limit, let row = try rows.next() {
-            var snippet = standIn
             var holdsPhrase = false
+            var shown: String?
             let title: String = row["title"]
             let subtitle: String? = row["subtitle"]
             if readsText {
@@ -342,7 +351,7 @@ public enum LampModuleSearch {
                     guard query.matchesWordPrefixes(text) else { continue }
                     holdsPhrase = query.holdsPhrase([title, subtitle ?? "", text].joined(separator: " "))
                 }
-                if snippets { snippet = query.markedSnippet(text) }
+                if snippets { shown = text }
             }
             let moduleID: String = row["module_id"]
             let scriptures = LampModuleText.scriptureLinks(fromJSONString: row["key_scriptures_json"])
@@ -350,15 +359,20 @@ public enum LampModuleSearch {
                 id: "book:\(moduleID):\(row["id"] as String)",
                 kind: .book, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
                 title: title, subtitle: subtitle,
-                snippet: snippet,
+                snippet: standIn,
                 startReference: scriptures.first?.startReference,
                 endReference: scriptures.first?.endReference,
                 holdsPhrase: holdsPhrase
-            )))
+            ), shown))
         }
-        guard hasFTS else { return found.map(\.result) }
-        let together = try rowidsHoldingPhrase(found.map(\.rowid), index: "book_sections_fts", query: query, in: db)
-        return found.map { together.contains($0.rowid) ? $0.result.withPhrase() : $0.result }
+        let together = hasFTS
+            ? try rowidsHoldingPhrase(found.map(\.rowid), index: "book_sections_fts", query: query, in: db)
+            : []
+        return found.map { item in
+            let result = together.contains(item.rowid) ? item.result.withPhrase() : item.result
+            guard let shown = item.shown else { return result }
+            return result.withSnippet(query.markedSnippet(shown, findingPhrase: result.holdsPhrase))
+        }
     }
 
     /// The snippets of book results found without them, read again from the
@@ -373,7 +387,7 @@ public enum LampModuleSearch {
             guard let text = try String.fetchOne(db, sql: """
                 SELECT search_text FROM book_sections WHERE id = ? AND module_id = ?
                 """, arguments: [section, result.moduleID]) else { return result }
-            return result.withSnippet(query.markedSnippet(text))
+            return result.withSnippet(query.markedSnippet(text, findingPhrase: result.holdsPhrase))
         }
     }
 
@@ -402,8 +416,10 @@ public enum LampModuleSearch {
     ) -> [LampModuleSearchResult] {
         ranked(
             results, by: query, limit: limit,
-            named: { [$0.title, $0.subtitle ?? ""] },
-            snippet: \.snippet,
+            // A quiz result's title is its question, a sentence rather than a
+            // name: it counts as what the result shows.
+            named: { $0.kind == .quiz ? [$0.subtitle ?? ""] : [$0.title, $0.subtitle ?? ""] },
+            shown: { $0.kind == .quiz ? [$0.title, $0.snippet] : [$0.snippet] },
             holdingPhrase: \.holdsPhrase,
             from: { ($0.kind.rawValue, $0.moduleID) }
         )
@@ -411,32 +427,33 @@ public enum LampModuleSearch {
 
     /// How well a result answers the query. Named for it outright, or
     /// starting with it, first, and shown with it, as `textRank` has it over
-    /// the result's names and snippet; then, for a query of several words,
-    /// named with every one of them, in any order; then holding them together
-    /// somewhere in its text. "The Kingdom of God" comes before "Kingdoms and
-    /// the God of Daniel", and both before a section with "kingdom" on one
-    /// page and "God" on another.
+    /// the texts that name and show the result; then, for a query of several
+    /// words, named with every one of them, in any order, a heading's words
+    /// rather than a sentence's; then holding them together somewhere in its
+    /// text. "The Kingdom of God" comes before "Kingdoms and the God of
+    /// Daniel", and both before a section with "kingdom" on one page and
+    /// "God" on another.
     public static func mergeRank(
         names: [String],
-        snippet: String,
+        shown: [String],
         holdsPhrase: Bool,
         query: LampSearchQuery
     ) -> Double {
-        var rank = query.textRank(in: names + [snippet])
+        var rank = query.textRank(in: names + shown)
         if query.terms.count > 1, query.matchesWordPrefixes(names.joined(separator: " ")) { rank += 0.5 }
         if holdsPhrase { rank += 0.25 }
         return rank
     }
 
     /// The same merge for an app's own kind of result, by the texts that name
-    /// it, its snippet, whether its text holds the query's words together,
-    /// and the kind and module it came from.
+    /// it, the texts that show it, whether its text holds the query's words
+    /// together, and the kind and module it came from.
     public static func ranked<Result>(
         _ results: [Result],
         by query: LampSearchQuery,
         limit: Int,
         named names: (Result) -> [String],
-        snippet: (Result) -> String,
+        shown: (Result) -> [String],
         holdingPhrase holdsPhrase: (Result) -> Bool = { _ in false },
         from source: (Result) -> (kind: String, module: String)
     ) -> [Result] {
@@ -449,7 +466,7 @@ public enum LampModuleSearch {
             let turn = taken[kind, default: [:]][module, default: 0]
             taken[kind, default: [:]][module] = turn + 1
             let rank = mergeRank(
-                names: names(result), snippet: snippet(result), holdsPhrase: holdsPhrase(result), query: query
+                names: names(result), shown: shown(result), holdsPhrase: holdsPhrase(result), query: query
             )
             return (rank, kindOrder, turn)
         }

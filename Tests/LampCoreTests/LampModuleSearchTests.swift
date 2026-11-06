@@ -242,6 +242,40 @@ struct LampModuleSearchTests {
         #expect(LampSearchQuery("prophets").markedSnippet(text, limit: 120).hasPrefix("Of old the <mark>prophets</mark>"))
     }
 
+    /// Found in the text as it is, across any whitespace, without
+    /// single-spacing it first.
+    @Test func theWordsAreFoundTogetherAcrossAnyWhitespace() {
+        let query = LampSearchQuery("kingdom of god")
+        let text = "Of old the prophets spoke and waited.\n\nThe kingdom\t of\n\n   God is near."
+        #expect(query.phraseOffset(in: text) == 43)
+        #expect(LampSearchQuery("kingdom \"of god\"").holdsPhrase("the kingdom of God."))
+        #expect(!LampSearchQuery("kingdom \"of god\"").holdsPhrase("the kingdom of Godliness"), "a quoted last word ends a word")
+        #expect(LampSearchQuery("lord's prayer").holdsPhrase("The Lord’s  prayer"), "either apostrophe")
+        let snippet = query.markedSnippet(text, limit: 40)
+        #expect(snippet.hasPrefix("…"), "cut where the words stand together: \(snippet)")
+        #expect(snippet.contains("<mark>kingdom</mark> <mark>of</mark> <mark>God</mark>"), "\(snippet)")
+        // Told the words aren't together, it doesn't look: the first of them.
+        #expect(query.markedSnippet(text, limit: 40, findingPhrase: false).hasPrefix("<mark>Of</mark> old"))
+    }
+
+    /// A quiz's title is its question: a sentence holding every word isn't a
+    /// heading named for them.
+    @Test func aQuizQuestionHoldingEveryWordIsNoHeading() {
+        let quiz = LampModuleSearchResult(
+            id: "quiz", kind: .quiz, moduleID: "Q", moduleName: "Q",
+            title: "How does Daniel outline God's kingdom purpose from creation?", subtitle: "Day 3 • Adult",
+            snippet: "From creation to consummation."
+        )
+        // Its words marked apart, so its snippet alone doesn't rank it.
+        let verse = LampModuleSearchResult(
+            id: "verse", kind: .translation, moduleID: "T", moduleName: "T",
+            title: "Luke 17:20", snippet: "The <mark>kingdom</mark> <mark>of</mark> <mark>God</mark> cometh",
+            holdsPhrase: true
+        )
+        #expect(LampModuleSearch.ranked([quiz, verse], by: LampSearchQuery("kingdom of god"), limit: 2).map(\.id)
+            == ["verse", "quiz"])
+    }
+
     @Test func theMergeRanksNamesThenWordsTogether() {
         func result(_ id: String, title: String, together: Bool = false) -> LampModuleSearchResult {
             LampModuleSearchResult(

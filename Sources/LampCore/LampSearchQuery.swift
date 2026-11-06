@@ -102,8 +102,53 @@ public struct LampSearchQuery: Equatable, Sendable {
     /// Whether `text` holds the query's words together, in order, however
     /// its lines break. A query of one term has no phrase to hold.
     public func holdsPhrase(_ text: String) -> Bool {
-        guard let phrase else { return false }
-        return !phrase.ranges(in: Self.singleSpaced(text), wordStartsOnly: true, maximumMatches: 1).isEmpty
+        phraseOffset(in: text) != nil
+    }
+
+    /// Where the query's words first stand together in `text`, as a
+    /// Character offset: the first starting a word, each after the one
+    /// before with only whitespace between, however much, and the last a
+    /// word's start unless it was quoted. Found in one pass over the text as
+    /// it is: rebuilding a long chapter to single-space it, for every result
+    /// kept, made a search of several words seconds long.
+    func phraseOffset(in text: String) -> Int? {
+        guard phrase != nil, let last = terms.last else { return nil }
+        let words = terms.flatMap { $0.text.split(whereSeparator: \.isWhitespace) }
+            .map { Self.foldingApostrophes(String($0)) }
+        guard let head = words.first, !head.isEmpty else { return nil }
+        // Folding keeps every Character in place, so offsets into it are
+        // offsets into the text.
+        let folded = words.contains { $0.contains("'") } ? Self.foldingApostrophes(text) : text
+        func isWordCharacter(_ index: String.Index) -> Bool {
+            index < folded.endIndex && (folded[index].isLetter || folded[index].isNumber)
+        }
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        var searchStart = folded.startIndex
+        while searchStart < folded.endIndex,
+              let match = folded.range(of: head, options: options, range: searchStart..<folded.endIndex) {
+            searchStart = folded.index(after: match.lowerBound)
+            if match.lowerBound > folded.startIndex, isWordCharacter(folded.index(before: match.lowerBound)) {
+                continue
+            }
+            var cursor = match.upperBound
+            var together = true
+            for word in words.dropFirst() {
+                var next = cursor
+                while next < folded.endIndex, folded[next].isWhitespace { next = folded.index(after: next) }
+                guard next > cursor,
+                      let following = folded.range(
+                        of: word, options: options.union(.anchored), range: next..<folded.endIndex
+                      ) else {
+                    together = false
+                    break
+                }
+                cursor = following.upperBound
+            }
+            if together, !last.isExact || !isWordCharacter(cursor) {
+                return folded.distance(from: folded.startIndex, to: match.lowerBound)
+            }
+        }
+        return nil
     }
 
     /// FTS5 MATCH argument for the phrase, as `fts5Query` writes a quoted
@@ -112,13 +157,6 @@ public struct LampSearchQuery: Equatable, Sendable {
         guard let phrase else { return nil }
         let query = LampSearchQuery(source: phrase.text, terms: [phrase]).fts5Query
         return query.isEmpty ? nil : query
-    }
-
-    /// Runs of whitespace as one space, so that a phrase is found across a
-    /// line break; text without such a run is returned as it is.
-    static func singleSpaced(_ text: String) -> String {
-        guard text.contains("  ") || text.contains(where: { $0.isWhitespace && $0 != " " }) else { return text }
-        return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     public var isEmpty: Bool { terms.isEmpty }
@@ -260,13 +298,20 @@ public struct LampSearchQuery: Equatable, Sendable {
     /// it matched them. A typed word is marked where a word starts with it, as
     /// the full-text index finds it, or anywhere when it starts no word, as a
     /// substring search finds it. Text without a match is cut from its start.
-    public func markedSnippet(_ text: String, limit: Int = 280) -> String {
+    ///
+    /// Where the query's words stand together the window is cut there, unless
+    /// `findingPhrase` is false: a caller that already knows they don't need
+    /// not have the text read for them again.
+    public func markedSnippet(_ text: String, limit: Int = 280, findingPhrase: Bool = true) -> String {
         guard limit > 0, !text.isEmpty else { return "" }
         // A phrase may cross a paragraph break. Normalize that exceptional
         // case before locating it; ordinary word snippets need no full copy.
-        if phrase != nil || terms.contains(where: { $0.text.contains(where: \.isWhitespace) }) {
-            let spaced = Self.singleSpaced(text)
-            if spaced != text { return markedSnippet(spaced, limit: limit) }
+        if terms.contains(where: { $0.text.contains(where: \.isWhitespace) }),
+           text.contains("  ") || text.contains(where: { $0.isWhitespace && $0 != " " }) {
+            return markedSnippet(
+                text.split(whereSeparator: \.isWhitespace).joined(separator: " "),
+                limit: limit, findingPhrase: findingPhrase
+            )
         }
         // Locate only the first useful occurrence of each term. Once a window
         // is chosen, find/highlight matches only inside that bounded window.
@@ -278,7 +323,7 @@ public struct LampSearchQuery: Equatable, Sendable {
         }
         // Where the words stand together, if they do, rather than wherever
         // the first of them turns up: "of" is everywhere.
-        let together = phrase?.ranges(in: text, wordStartsOnly: true, maximumMatches: 1).first?.lowerBound
+        let together = findingPhrase ? phraseOffset(in: text) : nil
         let first = together ?? matches.compactMap(\.first).min() ?? 0
         var start = text.index(text.startIndex, offsetBy: max(0, first - limit / 3))
         var rewind = 0
