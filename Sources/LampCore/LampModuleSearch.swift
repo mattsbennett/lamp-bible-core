@@ -13,6 +13,32 @@ public struct LampSearchedModule: Hashable, Sendable {
     }
 }
 
+/// A reading plan a search covers, as each app keeps its plans its own way.
+public struct LampSearchedPlan: Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let fullDescription: String?
+    public let author: String?
+    public let duration: Int?
+
+    public init(
+        id: String,
+        name: String,
+        description: String? = nil,
+        fullDescription: String? = nil,
+        author: String? = nil,
+        duration: Int? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.fullDescription = fullDescription
+        self.author = author
+        self.duration = duration
+    }
+}
+
 /// Searches over module databases, whichever app holds them and however. The
 /// Mac's library keeps each module in a file of its own, and the bundled ones
 /// together; the phone keeps every module it installs in one database, with a
@@ -449,8 +475,10 @@ public enum LampModuleSearch {
             limitClause = "LIMIT ?"
             arguments += [limit]
         } else {
+            // A note's search text holds its text and footnotes both, so
+            // where it has one the text isn't read twice.
             let like = query.sqlLikePredicate(
-                columns: (hasTitle ? ["n.title"] : []) + ["n.content"] + (hasSearchText ? ["n.search_text"] : [])
+                columns: (hasTitle ? ["n.title"] : []) + [hasSearchText ? "COALESCE(NULLIF(n.search_text, ''), n.content)" : "n.content"]
             )
             conditions.append(like.condition)
             arguments += StatementArguments(like.arguments)
@@ -529,16 +557,98 @@ public enum LampModuleSearch {
         }
     }
 
-    /// A note's text as searched, its title, text and footnotes, and as
+    /// A note's text as searched, its title and the text and footnotes it is
+    /// searched by, and as
     /// shown: its text, or the text it is searched by where only that holds
     /// the words, a footnote's.
     private static func noteTexts(of row: Row, query: LampSearchQuery) -> (searched: String, shown: String) {
         let title: String = row["title"] ?? ""
         let content: String = row["content"] ?? ""
-        let searchText: String? = row["search_text"]
+        let searchText = (row["search_text"] as String?).flatMap { $0.isEmpty ? nil : $0 }
         let shown = !query.matchesWordPrefixes(content) && searchText.map(query.matchesWordPrefixes) == true
             ? searchText! : content
-        return ([title, content, searchText ?? ""].joined(separator: " "), shown)
+        // The search text holds the note's text and footnotes both.
+        return (title + " " + (searchText ?? content), shown)
+    }
+
+    /// Quiz questions matching `query` in `db`, at most `limit` of them, in
+    /// reading order: by day, passage, age group and place. Matched in their
+    /// theme and the words of their question and answer, never their JSON's
+    /// field names. A database may hold several quizzes, as the phone's
+    /// bundled one does.
+    public static func quizzes(
+        in db: Database,
+        modules: [LampSearchedModule],
+        query: LampSearchQuery,
+        limit: Int
+    ) throws -> [LampModuleSearchResult] {
+        guard limit > 0, !modules.isEmpty, !query.isEmpty, !query.plainText.isEmpty,
+              try LampModuleText.tableNames(in: db).contains("quiz_questions") else { return [] }
+        let names = Dictionary(modules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let like = query.sqlLikePredicate(columns: ["theme"], jsonColumns: ["question_json", "answer_json"])
+        var arguments = StatementArguments(modules.map(\.id))
+        arguments += StatementArguments(like.arguments)
+        arguments += [limit]
+        // Sorted before the limit, so the questions kept are the first in
+        // reading order: a quiz isn't always stored in it.
+        return try Row.fetchAll(db, sql: """
+            SELECT id, quiz_module_id, day, sv, ev, age_group, question_json, answer_json
+            FROM quiz_questions
+            WHERE quiz_module_id IN (\(modules.map { _ in "?" }.joined(separator: ", "))) AND \(like.condition)
+            ORDER BY day, sv, age_group, question_index
+            LIMIT ?
+            """, arguments: arguments).map { row in
+                let moduleID: String = row["quiz_module_id"]
+                let answerJSON: String = row["answer_json"]
+                let question = LampModuleText.plainText(fromJSONString: row["question_json"])
+                let answer = LampModuleText.plainText(fromJSONString: answerJSON)
+                return LampModuleSearchResult(
+                    id: "quiz:\(moduleID):\(row["id"] as Int64)",
+                    kind: .quiz,
+                    moduleID: moduleID,
+                    moduleName: names[moduleID] ?? moduleID,
+                    title: question ?? "Quiz Question",
+                    subtitle: "Day \(row["day"] as Int) • \(row["age_group"] as String)",
+                    snippet: query.markedSnippet(answer ?? answerJSON),
+                    startReference: row["sv"],
+                    endReference: row["ev"],
+                    holdsPhrase: query.holdsPhrase([question, answer].compactMap { $0 }.joined(separator: " "))
+                )
+            }
+    }
+
+    /// Reading plans matching `query` by their name, descriptions and
+    /// author, at most `limit` of them, in the order given.
+    public static func plans(
+        _ plans: [LampSearchedPlan],
+        query: LampSearchQuery,
+        limit: Int
+    ) -> [LampModuleSearchResult] {
+        guard limit > 0, !query.isEmpty, !query.plainText.isEmpty else { return [] }
+        return plans
+            .filter { plan in
+                query.matches(
+                    [plan.name, plan.description, plan.fullDescription, plan.author]
+                        .compactMap { $0 }.joined(separator: " ")
+                )
+            }
+            .prefix(limit)
+            .map { plan in
+                LampModuleSearchResult(
+                    id: "plan:\(plan.id)",
+                    kind: .plan,
+                    moduleID: plan.id,
+                    moduleName: plan.name,
+                    title: plan.name,
+                    subtitle: plan.author,
+                    snippet: query.markedSnippet(
+                        plan.fullDescription ?? plan.description ?? plan.duration.map { "\($0) days" } ?? ""
+                    ),
+                    holdsPhrase: query.holdsPhrase(
+                        [plan.description, plan.fullDescription].compactMap { $0 }.joined(separator: " ")
+                    )
+                )
+            }
     }
 
     /// What a result found without its snippet carries in its place: the

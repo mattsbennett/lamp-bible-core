@@ -394,6 +394,59 @@ struct LampModuleSearchTests {
         }
     }
 
+    /// Questions of the quizzes asked about, the first in reading order
+    /// though not stored in it, by their words rather than their JSON.
+    @Test func quizQuestionsComeInReadingOrderFromTheQuizzesAskedAbout() throws {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE quiz_questions (
+                    id INTEGER PRIMARY KEY, quiz_module_id TEXT NOT NULL, day INTEGER NOT NULL, sv INTEGER NOT NULL,
+                    ev INTEGER NOT NULL, age_group TEXT NOT NULL, question_index INTEGER NOT NULL,
+                    question_json TEXT NOT NULL, answer_json TEXT NOT NULL, theme TEXT);
+                INSERT INTO quiz_questions (id, quiz_module_id, day, sv, ev, age_group, question_index, question_json, answer_json) VALUES
+                    (1, 'Q', 2, 1001003, 1001004, 'adult', 0, '{"text":"Who walked with God?"}', '{"text":"Enoch, in hope."}'),
+                    (2, 'Q', 1, 1002001, 1002003, 'adult', 0, '{"text":"What was finished?"}', '{"text":"The heavens and the earth, and hope."}'),
+                    (3, 'Q', 1, 1001001, 1001002, 'child', 0, '{"text":"Who made the world?"}', '{"text":"God, our hope."}'),
+                    (4, 'Q', 1, 1001001, 1001002, 'adult', 1, '{"text":"What came first?"}', '{"text":"Light, and hope with it."}'),
+                    (5, 'R', 1, 1001001, 1001002, 'adult', 0, '{"text":"Another quiz"}', '{"text":"hope"}'),
+                    (6, 'Q', 3, 1003001, 1003001, 'adult', 0, '{"text":"Who spoke?"}', '{"text":"The serpent."}');
+                """)
+        }
+        let quiz = [LampSearchedModule(id: "Q", name: "Daily Quiz")]
+        let (all, first, field) = try queue.read { db in
+            (
+                try LampModuleSearch.quizzes(in: db, modules: quiz, query: LampSearchQuery("hope"), limit: 10),
+                try LampModuleSearch.quizzes(in: db, modules: quiz, query: LampSearchQuery("hope"), limit: 2),
+                try LampModuleSearch.quizzes(in: db, modules: quiz, query: LampSearchQuery("text"), limit: 10)
+            )
+        }
+        #expect(all.map(\.id) == ["quiz:Q:4", "quiz:Q:3", "quiz:Q:2", "quiz:Q:1"], "day, passage, age group, place")
+        #expect(first.map(\.id) == ["quiz:Q:4", "quiz:Q:3"], "the first in reading order, not in the table")
+        #expect(all.first?.title == "What came first?")
+        #expect(all.first?.subtitle == "Day 1 • adult")
+        #expect(all.first?.snippet == "Light, and <mark>hope</mark> with it.")
+        #expect(all.first?.startReference == 1_001_001)
+        #expect(all.first?.endReference == 1_001_002)
+        #expect(all.first?.moduleName == "Daily Quiz")
+        #expect(field.isEmpty, "a JSON field's name isn't a word in it")
+    }
+
+    @Test func plansAreFoundByTheirWordsInTheOrderGiven() {
+        let plans = [
+            LampSearchedPlan(id: "b", name: "Bible in a Year", description: "Every book in hope", author: "Someone", duration: 365),
+            LampSearchedPlan(id: "a", name: "Psalms of Hope", duration: 30),
+            LampSearchedPlan(id: "c", name: "Gospels", description: "The four accounts"),
+        ]
+        let found = LampModuleSearch.plans(plans, query: LampSearchQuery("hope"), limit: 10)
+        #expect(found.map(\.id) == ["plan:b", "plan:a"])
+        #expect(found[0].subtitle == "Someone")
+        #expect(found[0].snippet == "Every book in <mark>hope</mark>")
+        #expect(found[1].snippet == "30 days", "no description: its length")
+        #expect(LampModuleSearch.plans(plans, query: LampSearchQuery("someone"), limit: 10).map(\.id) == ["plan:b"])
+        #expect(LampModuleSearch.plans(plans, query: LampSearchQuery("hope"), limit: 1).map(\.id) == ["plan:b"])
+    }
+
     @Test func noModulesOrNoQueryFindNothing() throws {
         let queue = try database([Unit(id: "x1", module: "X", sv: 1_001_001, text: "Hope.")])
         let noModules = try queue.read { db in

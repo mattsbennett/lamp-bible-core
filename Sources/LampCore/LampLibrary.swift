@@ -2642,69 +2642,25 @@ public actor LampLibrary {
         }
 
         if hasTextQuery && wants(.plan) {
-            results += try readingPlans().filter { plan in
-                let text = [plan.name, plan.description, plan.fullDescription, plan.author]
-                    .compactMap { $0 }
-                    .joined(separator: " ")
-                return includesModule(plan.id) && parsedQuery.matches(text)
-            }
-            .prefix(resultLimit - countForKind(.plan))
-            .map { plan in
-                LampModuleSearchResult(
-                    id: "plan:\(plan.id)",
-                    kind: .plan,
-                    moduleID: plan.id,
-                    moduleName: plan.name,
-                    title: plan.name,
-                    subtitle: plan.author,
-                    snippet: snippet(plan.fullDescription ?? plan.description ?? "\(plan.duration) days"),
-                    holdsPhrase: parsedQuery.holdsPhrase(
-                        [plan.description, plan.fullDescription].compactMap { $0 }.joined(separator: " ")
+            results += LampModuleSearch.plans(
+                try readingPlans().filter { includesModule($0.id) }.map { plan in
+                    LampSearchedPlan(
+                        id: plan.id, name: plan.name, description: plan.description,
+                        fullDescription: plan.fullDescription, author: plan.author, duration: plan.duration
                     )
-                )
-            }
+                },
+                query: parsedQuery, limit: resultLimit
+            )
         }
 
         if hasTextQuery && wants(.quiz) {
-            let like = parsedQuery.sqlLikePredicate(columns: ["theme"], jsonColumns: ["question_json", "answer_json"])
-            for module in installed where module.kind == .quiz && includesModule(module.id) {
+            // As for commentary: each database asked for the whole limit.
+            for database in try searchedDatabases(of: .quiz, in: installed, including: includesModule) {
                 try Task.checkCancellation()
-                let queue = try openDatabase(moduleID: module.id)
-                let remaining = resultLimit - countForKind(.quiz)
+                let queue = try openReadOnlyDatabase(at: database.url)
                 results += try queue.read { db in
-                    guard try tableNames(in: db).contains("quiz_questions") else { return [] }
-                    var arguments = StatementArguments([module.id] + like.arguments)
-                    arguments += [remaining]
-                    return try Row.fetchAll(db, sql: """
-                        SELECT id, day, sv, ev, age_group, question_json, answer_json, theme
-                        FROM quiz_questions
-                        WHERE quiz_module_id = ?
-                          AND \(like.condition)
-                        ORDER BY day, sv, age_group, question_index
-                        LIMIT ?
-                        """, arguments: arguments).map { row in
-                            let start: Int = row["sv"]
-                            let end: Int = row["ev"]
-                            let questionJSON: String = row["question_json"]
-                            let answerJSON: String = row["answer_json"]
-                            return LampModuleSearchResult(
-                                id: "quiz:\(module.id):\(row["id"] as Int64)",
-                                kind: .quiz,
-                                moduleID: module.id,
-                                moduleName: module.name,
-                                title: plainText(fromJSONString: questionJSON) ?? "Quiz Question",
-                                subtitle: "Day \(row["day"] as Int) • \(row["age_group"] as String)",
-                                snippet: snippet(plainText(fromJSONString: answerJSON) ?? answerJSON),
-                                startReference: start,
-                                endReference: end,
-                                holdsPhrase: parsedQuery.holdsPhrase(
-                                    [questionJSON, answerJSON].compactMap { plainText(fromJSONString: $0) }
-                                        .joined(separator: " ")
-                                )
-                            )
-                        }
+                    try LampModuleSearch.quizzes(in: db, modules: database.modules, query: parsedQuery, limit: resultLimit)
                 }
-                if countForKind(.quiz) >= resultLimit { break }
             }
         }
 
