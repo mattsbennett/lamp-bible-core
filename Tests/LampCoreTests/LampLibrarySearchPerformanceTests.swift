@@ -97,6 +97,26 @@ struct LampLibrarySearchPerformanceTests {
         #expect(hits.first?.title == "Hope")
     }
 
+    /// Results that tie in the merge take turns by commentary, so the first
+    /// searched can't fill a limit that has room for both.
+    @Test func tiedCommentariesTakeTurnsInTheMerge() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        for id in ["A", "B"] {
+            _ = try await install(#"""
+                {"meta":{"schemaVersion":"2.1","id":"\#(id)","title":"\#(id) Commentary","seriesAbbrev":"\#(id)","seriesFull":"\#(id) Commentary"},
+                 "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,"verses":[
+                   {"sv":1001001,"commentary":{"text":"Faith and hope."}},
+                   {"sv":1001002,"commentary":{"text":"Hope again."}},
+                   {"sv":1001003,"commentary":{"text":"Hope at last."}}
+                 ]}]}
+                """#, id: id, in: root, library: library)
+        }
+        let hits = try await library.searchModules(query: "hope", kinds: [.commentary], limit: 2)
+        #expect(Set(hits.map(\.moduleID)) == ["A", "B"])
+    }
+
     /// Exercise a newly compiled complete index, a shipped two-column index,
     /// and the oldest JSON-only schema. Mixed body/note queries must survive.
     @Test func commentaryFindsBodyAndFootnoteTermsAcrossAllIndexGenerations() async throws {

@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import LampModuleKit
 import Testing
 @testable import LampCore
 
@@ -100,6 +101,20 @@ struct LampModuleSearchTests {
             by: LampSearchQuery("hope"), limit: 2
         )
         #expect(merged.map(\.id) == ["c", "a"])
+    }
+
+    /// Equals within a kind take turns by module, each in its own order; the
+    /// kinds keep the order they were found in, and a better match goes first.
+    @Test func tiedResultsTakeTurnsByModuleWithinEachKind() {
+        func result(_ id: String, _ kind: LampModuleKind, _ module: String, title: String = "Genesis 1:1") -> LampModuleSearchResult {
+            LampModuleSearchResult(id: id, kind: kind, moduleID: module, moduleName: module, title: title, snippet: "of hope")
+        }
+        let merged = LampModuleSearch.ranked([
+            result("a1", .commentary, "A"), result("a2", .commentary, "A"), result("a3", .commentary, "A"),
+            result("b1", .commentary, "B"), result("b2", .commentary, "B"),
+            result("c1", .book, "C"), result("b3", .commentary, "B", title: "Hope"),
+        ], by: LampSearchQuery("hope"), limit: 10)
+        #expect(merged.map(\.id) == ["b3", "a1", "b1", "a2", "b2", "a3", "c1"])
     }
 
     @Test func noModulesOrNoQueryFindNothing() throws {

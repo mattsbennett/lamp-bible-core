@@ -183,27 +183,53 @@ public enum LampModuleSearch {
     }
 
     /// Results from every kind and database as one list, the best matches
-    /// first by their title, subtitle and snippet, and the rest in the order
-    /// each was found: a rank that means the same whichever database a result
-    /// came from, as an index's own does not.
+    /// first by their title, subtitle and snippet: a rank that means the same
+    /// whichever database a result came from, as an index's own does not.
+    ///
+    /// Most results tie on it, a snippet holding the words it was cut around.
+    /// Among equals the kinds keep the order they were found in, and within a
+    /// kind the modules take turns, each in its own order, best first where it
+    /// ranks its rows: taking them a database at a time gave every place in a
+    /// common word's results to whichever was searched first.
     public static func ranked(
         _ results: [LampModuleSearchResult],
         by query: LampSearchQuery,
         limit: Int
     ) -> [LampModuleSearchResult] {
-        ranked(results, by: query, limit: limit) { [$0.title, $0.subtitle ?? "", $0.snippet] }
+        ranked(
+            results, by: query, limit: limit,
+            showing: { [$0.title, $0.subtitle ?? "", $0.snippet] },
+            from: { ($0.kind.rawValue, $0.moduleID) }
+        )
     }
 
-    /// The same merge for an app's own kind of result, by the texts it shows.
+    /// The same merge for an app's own kind of result, by the texts it shows
+    /// and the kind and module it came from.
     public static func ranked<Result>(
         _ results: [Result],
         by query: LampSearchQuery,
         limit: Int,
-        showing texts: (Result) -> [String]
+        showing texts: (Result) -> [String],
+        from source: (Result) -> (kind: String, module: String)
     ) -> [Result] {
-        let ranks = results.map { query.textRank(in: texts($0)) }
+        var kinds: [String: Int] = [:]
+        var taken: [String: [String: Int]] = [:]
+        let keys = results.map { result -> (rank: Double, kind: Int, turn: Int) in
+            let (kind, module) = source(result)
+            let kindOrder = kinds[kind] ?? kinds.count
+            kinds[kind] = kindOrder
+            let turn = taken[kind, default: [:]][module, default: 0]
+            taken[kind, default: [:]][module] = turn + 1
+            return (query.textRank(in: texts(result)), kindOrder, turn)
+        }
         return results.indices
-            .sorted { ranks[$0] == ranks[$1] ? $0 < $1 : ranks[$0] > ranks[$1] }
+            .sorted { lhs, rhs in
+                let left = keys[lhs], right = keys[rhs]
+                if left.rank != right.rank { return left.rank > right.rank }
+                if left.kind != right.kind { return left.kind < right.kind }
+                if left.turn != right.turn { return left.turn < right.turn }
+                return lhs < rhs
+            }
             .prefix(max(limit, 0))
             .map { results[$0] }
     }
