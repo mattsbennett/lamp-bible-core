@@ -20,6 +20,8 @@ enum LampModuleCLI {
             succeeded = build(sourcePath: arguments[1], outputPath: arguments.count == 3 ? arguments[2] : nil)
         case "verify" where arguments.count == 2:
             succeeded = await verify(path: arguments[1])
+        case "search-words" where arguments.count == 2:
+            succeeded = searchWords(path: arguments[1])
         case "import" where arguments.count >= 3:
             guard let options = importOptions(Array(arguments.dropFirst(3))) else {
                 printUsage()
@@ -175,6 +177,18 @@ enum LampModuleCLI {
             print("  module: \(module.id)")
             print("  name: \(module.name)")
             print("  size: \(module.compressedByteCount) bytes")
+            // Unlisted words still search, `*word` reading the text, so this
+            // only warns.
+            let databases = (try? FileManager.default.contentsOfDirectory(
+                at: temporaryLibraryURL.appendingPathComponent("Databases"), includingPropertiesForKeys: nil
+            ))?.filter { $0.pathExtension == "sqlite" } ?? []
+            for database in databases {
+                for list in try LampSearchWords.lists(inDatabaseAt: database) {
+                    print(list.isCurrent
+                        ? "  word list: \(list.index)"
+                        : "  warning: \(list.index) has no list of its words as it now is; a search for part of a word reads its text")
+                }
+            }
 
             if module.kind == .translation {
                 let books = try await library.translationBooks(moduleID: module.id)
@@ -266,6 +280,23 @@ enum LampModuleCLI {
         }
     }
 
+    /// Lists the words of every full-text index of an SQLite database put
+    /// together outside `build`, as the bundle is, for a search for part of a
+    /// word, as `build` lists a module's.
+    private static func searchWords(path: String) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        do {
+            let lists = try LampSearchWords.listWords(inDatabaseAt: url)
+            print("Listed the words of \(url.path)")
+            if lists.isEmpty { print("  no full-text indexes") }
+            for list in lists { print("  \(list.index): \(list.words) words") }
+            return true
+        } catch {
+            writeError("\(url.lastPathComponent): \(error.localizedDescription)")
+            return false
+        }
+    }
+
     private static func writeError(_ message: String) {
         FileHandle.standardError.write(Data("\(message)\n".utf8))
     }
@@ -276,6 +307,7 @@ enum LampModuleCLI {
               lamp-module inspect <module.json> [module.json ...]
               lamp-module build <module.json> [output.lamp]
               lamp-module verify <module.lamp>
+              lamp-module search-words <database.sqlite>
               lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY] [--septuagint]
               lamp-module convert <bible file, folder or zip> <output.json> --id ID [--name NAME] [--abbreviation ABBR] [--language CODE] [--license TEXT] [--key UNLOCK-KEY] [--septuagint]
               lamp-module parse < lines of "morphology-code<tab>strongs-key"

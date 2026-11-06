@@ -98,6 +98,34 @@ public enum LampSearchWords {
         for index in try indexes(in: db) { try rebuild(index: index, in: db) }
     }
 
+    /// Lists the words of every full-text index of the SQLite database at
+    /// `url`, as the compiler does for each module it builds, for one put
+    /// together another way, as the bundle is: after the last write to any of
+    /// its indexes, since each list answers only for its index as it was
+    /// then. Each index, and how many words it holds.
+    public static func listWords(inDatabaseAt url: URL) throws -> [(index: String, words: Int)] {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        return try DatabaseQueue(path: url.path).write { db in
+            try rebuildAll(in: db)
+            return try indexes(in: db).map { index in
+                (index, try Int.fetchOne(db, sql: "SELECT count(*) FROM search_words WHERE fts = ?", arguments: [index]) ?? 0)
+            }
+        }
+    }
+
+    /// Each full-text index of the SQLite database at `url`, and whether it
+    /// has a list of its words as it now is. One without is still searched,
+    /// a search for part of a word reading its text.
+    public static func lists(inDatabaseAt url: URL) throws -> [(index: String, isCurrent: Bool)] {
+        var configuration = Configuration()
+        configuration.readonly = true
+        return try DatabaseQueue(path: url.path, configuration: configuration).read { db in
+            try indexes(in: db).map { ($0, try isCurrent(index: $0, in: db)) }
+        }
+    }
+
     /// The words of `index` holding `fragment`, case and accents aside, as
     /// the index holds them, or nil where they can't be had from it: there
     /// is no list of the index as it is now, `fragment` would be more than
