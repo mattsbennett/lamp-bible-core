@@ -147,6 +147,56 @@ struct LampModuleSearchTests {
         #expect(hits.first?.moduleName == "Ex")
     }
 
+    /// Results found without snippets and given them afterwards are the
+    /// results found with them, for commentary and books alike.
+    @Test func snippetsCutAfterTheMergeAreTheSnippetsCutAtOnce() throws {
+        let queue = try database([
+            Unit(id: "notes", module: "X", sv: 1_001_001, text: "Waiting here.", notes: "Hope here."),
+            Unit(id: "text", module: "Y", sv: 1_001_002, text: "A long wait, and then hope here."),
+            Unit(id: "title", module: "X", sv: 1_001_003, title: "Hope", text: "Waiting here."),
+        ])
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE book_sections (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT,
+                    key_scriptures_json TEXT, search_text TEXT NOT NULL DEFAULT '');
+                CREATE VIRTUAL TABLE book_sections_fts USING fts5(
+                    title, search_text, content='book_sections', content_rowid='rowid');
+                INSERT INTO book_sections (id, module_id, title, search_text) VALUES
+                    ('b1', 'B', 'One', 'They waited in hope a long while.'),
+                    ('b2', 'B', 'Hope', 'Patience.');
+                INSERT INTO book_sections_fts(book_sections_fts) VALUES('rebuild');
+                """)
+        }
+        let commentaries = [LampSearchedModule(id: "X", name: "Ex"), LampSearchedModule(id: "Y", name: "Why")]
+        let books = [LampSearchedModule(id: "B", name: "Bee")]
+        let query = LampSearchQuery("hope")
+        let (commentary, bare, filled) = try queue.read { db in
+            let bare = try LampModuleSearch.commentary(in: db, modules: commentaries, query: query, limit: 5, snippets: false)
+            return (
+                try LampModuleSearch.commentary(in: db, modules: commentaries, query: query, limit: 5),
+                bare,
+                try LampModuleSearch.commentarySnippets(for: bare, in: db, query: query)
+            )
+        }
+        #expect(commentary.count == 3)
+        #expect(bare.allSatisfy { $0.snippet.isEmpty })
+        #expect(filled == commentary)
+        #expect(commentary.allSatisfy { $0.snippet.contains("<mark>") || $0.title == "Hope" })
+
+        let (sections, bareSections, filledSections) = try queue.read { db in
+            let bare = try LampModuleSearch.books(in: db, modules: books, query: query, limit: 5, snippets: false)
+            return (
+                try LampModuleSearch.books(in: db, modules: books, query: query, limit: 5),
+                bare,
+                try LampModuleSearch.bookSnippets(for: bare, in: db, query: query)
+            )
+        }
+        #expect(bareSections.allSatisfy { $0.snippet.isEmpty })
+        #expect(filledSections == sections)
+        #expect(sections.map(\.id) == ["book:B:b2", "book:B:b1"])
+    }
+
     @Test func noModulesOrNoQueryFindNothing() throws {
         let queue = try database([Unit(id: "x1", module: "X", sv: 1_001_001, text: "Hope.")])
         let noModules = try queue.read { db in

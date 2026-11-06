@@ -2459,6 +2459,9 @@ public actor LampLibrary {
         }
         let includesModule: (String) -> Bool = { moduleIDs == nil || moduleIDs?.contains($0) == true }
         var results: [LampModuleSearchResult] = []
+        // Where each commentary and book result was found, to cut its
+        // snippet from once the merge has kept it.
+        var snippetSources: [LampModuleKind: [String: URL]] = [:]
         let countForKind: (LampModuleKind) -> Int = { kind in
             results.count { $0.kind == kind }
         }
@@ -2531,27 +2534,31 @@ public actor LampLibrary {
             // Each database is asked for the whole limit and the merge below
             // makes the cut. A database's units come best first, so giving the
             // first module by name every place would leave the rest unsearched.
+            // Snippets wait for the cut: most of the units offered are dropped.
             for database in try searchedDatabases(of: .commentary, in: installed, including: includesModule) {
                 try Task.checkCancellation()
                 let queue = try openReadOnlyDatabase(at: database.url)
                 results += try queue.read { db in
                     try LampModuleSearch.commentary(
-                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit
+                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit, snippets: false
                     )
                 }
+                for module in database.modules { snippetSources[.commentary, default: [:]][module.id] = database.url }
             }
         }
 
         if hasTextQuery && wants(.book) {
-            // As commentaries are: each database asked for the whole limit.
+            // As commentaries are: each database asked for the whole limit,
+            // its snippets cut once the merge has chosen.
             for database in try searchedDatabases(of: .book, in: installed, including: includesModule) {
                 try Task.checkCancellation()
                 let queue = try openReadOnlyDatabase(at: database.url)
                 results += try queue.read { db in
                     try LampModuleSearch.books(
-                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit
+                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit, snippets: false
                     )
                 }
+                for module in database.modules { snippetSources[.book, default: [:]][module.id] = database.url }
             }
         }
 
@@ -2728,7 +2735,37 @@ public actor LampLibrary {
             )
         }
 
-        return LampModuleSearch.ranked(results, by: parsedQuery, limit: resultLimit)
+        let merged = LampModuleSearch.ranked(results, by: parsedQuery, limit: resultLimit)
+        return try addingSnippets(to: merged, from: snippetSources, query: parsedQuery)
+    }
+
+    /// The commentary and book results the merge kept, with their snippets
+    /// cut from the databases they were found in.
+    private func addingSnippets(
+        to results: [LampModuleSearchResult],
+        from sources: [LampModuleKind: [String: URL]],
+        query: LampSearchQuery
+    ) throws -> [LampModuleSearchResult] {
+        var filled = results
+        var waiting: [URL: [LampModuleKind: [Int]]] = [:]
+        for (index, result) in results.enumerated() {
+            guard let url = sources[result.kind]?[result.moduleID] else { continue }
+            waiting[url, default: [:]][result.kind, default: []].append(index)
+        }
+        for (url, kinds) in waiting {
+            try Task.checkCancellation()
+            let queue = try openReadOnlyDatabase(at: url)
+            for (kind, indices) in kinds {
+                let found = indices.map { results[$0] }
+                let snipped = try queue.read { db in
+                    kind == .commentary
+                        ? try LampModuleSearch.commentarySnippets(for: found, in: db, query: query)
+                        : try LampModuleSearch.bookSnippets(for: found, in: db, query: query)
+                }
+                for (index, result) in zip(indices, snipped) { filled[index] = result }
+            }
+        }
+        return filled
     }
 
     /// The installed modules of `kind` a search covers, by the database each

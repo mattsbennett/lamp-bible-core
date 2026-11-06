@@ -36,11 +36,17 @@ public enum LampModuleSearch {
     /// the ones taken. An older module's index, without its footnotes, or a
     /// module without an index, gives its units in reading order: a match
     /// found by `LIKE` has no rank.
+    ///
+    /// Without `snippets`, each result's snippet is left empty, for
+    /// `commentarySnippets` to cut once a merge has chosen the results kept:
+    /// cutting one for every unit each database offers, most of them then
+    /// dropped, was most of a search's time.
     public static func commentary(
         in db: Database,
         modules: [LampSearchedModule],
         query: LampSearchQuery,
-        limit: Int
+        limit: Int,
+        snippets: Bool = true
     ) throws -> [LampModuleSearchResult] {
         guard limit > 0, !modules.isEmpty, !query.isEmpty, !query.plainText.isEmpty else { return [] }
         let tables = try LampModuleText.tableNames(in: db)
@@ -96,6 +102,95 @@ public enum LampModuleSearch {
         }
 
         let module = sharesDatabase ? "u.module_id" : "NULL AS module_id"
+        // The units' text, where it is needed now: to check a match found
+        // without the index, or to cut snippets.
+        let readsText = snippets || !fullFTS
+        let text = readsText
+            ? ", " + commentaryTextColumns(hasSearchText: hasSearchText, hasFootnotesText: hasFootnotesText)
+            : ""
+        let source: String
+        let order: String
+        var limitClause = ""
+        if fullFTS {
+            let weights = ftsColumns
+                .map { LampModuleText.number(commentaryColumnWeights[$0] ?? 1) }
+                .joined(separator: ", ")
+            source = "commentary_units_fts JOIN commentary_units u ON u.rowid = commentary_units_fts.rowid"
+            order = "bm25(commentary_units_fts, \(weights)), u.rowid"
+            // Every condition is in the SQL, so the limit can be too.
+            limitClause = "LIMIT ?"
+            arguments += [limit]
+        } else {
+            source = "commentary_units u"
+            order = "u.book, u.chapter, u.order_index, u.rowid"
+        }
+        let rows = try Row.fetchCursor(db, sql: """
+            SELECT u.id, \(module), u.sv, u.ev, u.title\(text)
+            FROM \(source)
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY \(order)
+            \(limitClause)
+            """, arguments: arguments)
+
+        var found: [LampModuleSearchResult] = []
+        while found.count < limit, let row = try rows.next() {
+            var snippet = ""
+            if readsText {
+                let texts = commentaryTexts(
+                    of: row, hasSearchText: hasSearchText, hasFootnotesText: hasFootnotesText, query: query
+                )
+                if !fullFTS {
+                    let title: String = row["title"] ?? ""
+                    guard query.matchesWordPrefixes(title + " " + texts.searched) else { continue }
+                }
+                if snippets { snippet = query.markedSnippet(texts.shown) }
+            }
+            let moduleID: String = sharesDatabase ? row["module_id"] : modules[0].id
+            let start: Int = row["sv"]
+            let end: Int? = row["ev"]
+            let title: String? = row["title"]
+            found.append(LampModuleSearchResult(
+                id: "commentary:\(moduleID):\(row["id"] as String)",
+                kind: .commentary, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
+                title: title?.isEmpty == false ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
+                subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
+                snippet: snippet, startReference: start, endReference: end
+            ))
+        }
+        return found
+    }
+
+    /// The snippets of commentary results found without them, read again
+    /// from the database they were found in.
+    public static func commentarySnippets(
+        for results: [LampModuleSearchResult],
+        in db: Database,
+        query: LampSearchQuery
+    ) throws -> [LampModuleSearchResult] {
+        guard !results.isEmpty else { return results }
+        let columns = try LampModuleText.columnNames(in: db, table: "commentary_units")
+        let hasSearchText = columns.contains("search_text")
+        let hasFootnotesText = columns.contains("footnotes_text")
+        let byModule = columns.contains("module_id") ? " AND u.module_id = ?" : ""
+        let sql = """
+            SELECT \(commentaryTextColumns(hasSearchText: hasSearchText, hasFootnotesText: hasFootnotesText))
+            FROM commentary_units u
+            WHERE u.id = ?\(byModule)
+            """
+        return try results.map { result in
+            let unit = String(result.id.dropFirst("commentary:\(result.moduleID):".count))
+            let arguments: StatementArguments = byModule.isEmpty ? [unit] : [unit, result.moduleID]
+            guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments) else { return result }
+            let texts = commentaryTexts(
+                of: row, hasSearchText: hasSearchText, hasFootnotesText: hasFootnotesText, query: query
+            )
+            return result.withSnippet(query.markedSnippet(texts.shown))
+        }
+    }
+
+    /// The columns a unit's text is read from: its search projection where it
+    /// has one, else its JSON.
+    private static func commentaryTextColumns(hasSearchText: Bool, hasFootnotesText: Bool) -> String {
         let body = hasSearchText ? "u.search_text" : "NULL AS search_text"
         let notes = hasFootnotesText ? "u.footnotes_text" : "NULL AS footnotes_text"
         let legacyBody = hasSearchText ? "" : ", u.introduction_json, u.translation_json, u.commentary_json"
@@ -116,70 +211,39 @@ public enum LampModuleSearch {
             , CASE WHEN instr(u.footnotes_json, '"sourceEncoding"') > 0
               THEN u.footnotes_json END AS encoded_footnotes_json
             """ : ", NULL AS encoded_footnotes_json"
-        let source: String
-        let order: String
-        var limitClause = ""
-        if fullFTS {
-            let weights = ftsColumns
-                .map { LampModuleText.number(commentaryColumnWeights[$0] ?? 1) }
-                .joined(separator: ", ")
-            source = "commentary_units_fts JOIN commentary_units u ON u.rowid = commentary_units_fts.rowid"
-            order = "bm25(commentary_units_fts, \(weights)), u.rowid"
-            // Every condition is in the SQL, so the limit can be too.
-            limitClause = "LIMIT ?"
-            arguments += [limit]
-        } else {
-            source = "commentary_units u"
-            order = "u.book, u.chapter, u.order_index, u.rowid"
-        }
-        let rows = try Row.fetchCursor(db, sql: """
-            SELECT u.id, \(module), u.sv, u.ev, u.title, \(body), \(notes)\(legacyBody)\(legacyNotes)\(encodedBody)\(encodedNotes)
-            FROM \(source)
-            WHERE \(conditions.joined(separator: " AND "))
-            ORDER BY \(order)
-            \(limitClause)
-            """, arguments: arguments)
+        return "\(body), \(notes)\(legacyBody)\(legacyNotes)\(encodedBody)\(encodedNotes)"
+    }
 
-        var found: [LampModuleSearchResult] = []
-        while found.count < limit, let row = try rows.next() {
-            var text: String
-            if hasSearchText {
-                text = row["search_text"] ?? ""
-            } else {
-                text = ["introduction_json", "translation_json", "commentary_json"]
-                    .compactMap { LampModuleText.plainText(fromJSONString: row[$0], decodingEncodedSpans: true) }
-                    .joined(separator: " ")
-            }
-            var displayText = LampModuleText.plainText(
-                fromJSONString: row["encoded_body_json"], decodingEncodedSpans: true
-            ) ?? text
-            // No JSON decode on the normal indexed-body path.
-            if !query.matchesWordPrefixes(text) {
-                let footnotes: String = hasFootnotesText
-                    ? row["footnotes_text"] ?? ""
-                    : LampModuleText.plainText(fromJSONString: row["footnotes_json"], decodingEncodedSpans: true) ?? ""
-                text += "\n\n" + footnotes
-                displayText += "\n\n" + (LampModuleText.plainText(
-                    fromJSONString: row["encoded_footnotes_json"], decodingEncodedSpans: true
-                ) ?? footnotes)
-            }
-            if !fullFTS {
-                let title: String = row["title"] ?? ""
-                guard query.matchesWordPrefixes(title + " " + text) else { continue }
-            }
-            let moduleID: String = sharesDatabase ? row["module_id"] : modules[0].id
-            let start: Int = row["sv"]
-            let end: Int? = row["ev"]
-            let title: String? = row["title"]
-            found.append(LampModuleSearchResult(
-                id: "commentary:\(moduleID):\(row["id"] as String)",
-                kind: .commentary, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
-                title: title?.isEmpty == false ? title! : LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                subtitle: LampBibleReferenceFormatter.describeRange(from: start, to: end ?? start),
-                snippet: query.markedSnippet(displayText), startReference: start, endReference: end
-            ))
+    /// A unit's text as searched, and as shown with its Greek and Hebrew
+    /// read: its body, and its notes too where the body lacks the words.
+    private static func commentaryTexts(
+        of row: Row,
+        hasSearchText: Bool,
+        hasFootnotesText: Bool,
+        query: LampSearchQuery
+    ) -> (searched: String, shown: String) {
+        var text: String
+        if hasSearchText {
+            text = row["search_text"] ?? ""
+        } else {
+            text = ["introduction_json", "translation_json", "commentary_json"]
+                .compactMap { LampModuleText.plainText(fromJSONString: row[$0], decodingEncodedSpans: true) }
+                .joined(separator: " ")
         }
-        return found
+        var displayText = LampModuleText.plainText(
+            fromJSONString: row["encoded_body_json"], decodingEncodedSpans: true
+        ) ?? text
+        // No JSON decode on the normal indexed-body path.
+        if !query.matchesWordPrefixes(text) {
+            let footnotes: String = hasFootnotesText
+                ? row["footnotes_text"] ?? ""
+                : LampModuleText.plainText(fromJSONString: row["footnotes_json"], decodingEncodedSpans: true) ?? ""
+            text += "\n\n" + footnotes
+            displayText += "\n\n" + (LampModuleText.plainText(
+                fromJSONString: row["encoded_footnotes_json"], decodingEncodedSpans: true
+            ) ?? footnotes)
+        }
+        return (text, displayText)
     }
 
     /// How much a match counts toward a book section's rank by the column it
@@ -192,11 +256,13 @@ public enum LampModuleSearch {
 
     /// Book sections matching `query` in `db`, at most `limit` of them: the
     /// best-ranked where the books have an index, else in reading order.
+    /// Without `snippets`, as `commentary`, for `bookSnippets` to cut later.
     public static func books(
         in db: Database,
         modules: [LampSearchedModule],
         query: LampSearchQuery,
-        limit: Int
+        limit: Int,
+        snippets: Bool = true
     ) throws -> [LampModuleSearchResult] {
         guard limit > 0, !modules.isEmpty, !query.isEmpty, !query.plainText.isEmpty else { return [] }
         let tables = try LampModuleText.tableNames(in: db)
@@ -231,8 +297,10 @@ public enum LampModuleSearch {
             source = "book_sections s"
             order = "s.rowid"
         }
+        // A section's text, where it is needed now, as for commentary.
+        let readsText = snippets || !hasFTS
         let rows = try Row.fetchCursor(db, sql: """
-            SELECT s.id, s.module_id, s.title, s.subtitle, s.key_scriptures_json, s.search_text
+            SELECT s.id, s.module_id, s.title, s.subtitle, s.key_scriptures_json\(readsText ? ", s.search_text" : "")
             FROM \(source)
             WHERE \(conditions.joined(separator: " AND "))
             ORDER BY \(order)
@@ -241,15 +309,19 @@ public enum LampModuleSearch {
 
         var found: [LampModuleSearchResult] = []
         while found.count < limit, let row = try rows.next() {
-            let text: String = row["search_text"]
-            if !hasFTS, !query.matchesWordPrefixes(text) { continue }
+            var snippet = ""
+            if readsText {
+                let text: String = row["search_text"]
+                if !hasFTS, !query.matchesWordPrefixes(text) { continue }
+                if snippets { snippet = query.markedSnippet(text) }
+            }
             let moduleID: String = row["module_id"]
             let scriptures = LampModuleText.scriptureLinks(fromJSONString: row["key_scriptures_json"])
             found.append(LampModuleSearchResult(
                 id: "book:\(moduleID):\(row["id"] as String)",
                 kind: .book, moduleID: moduleID, moduleName: names[moduleID] ?? moduleID,
                 title: row["title"], subtitle: row["subtitle"],
-                snippet: query.markedSnippet(text),
+                snippet: snippet,
                 startReference: scriptures.first?.startReference,
                 endReference: scriptures.first?.endReference
             ))
@@ -257,15 +329,33 @@ public enum LampModuleSearch {
         return found
     }
 
-    /// Results from every kind and database as one list, the best matches
-    /// first by their title, subtitle and snippet: a rank that means the same
-    /// whichever database a result came from, as an index's own does not.
+    /// The snippets of book results found without them, read again from the
+    /// database they were found in.
+    public static func bookSnippets(
+        for results: [LampModuleSearchResult],
+        in db: Database,
+        query: LampSearchQuery
+    ) throws -> [LampModuleSearchResult] {
+        try results.map { result in
+            let section = String(result.id.dropFirst("book:\(result.moduleID):".count))
+            guard let text = try String.fetchOne(db, sql: """
+                SELECT search_text FROM book_sections WHERE id = ? AND module_id = ?
+                """, arguments: [section, result.moduleID]) else { return result }
+            return result.withSnippet(query.markedSnippet(text))
+        }
+    }
+
+    /// Results from every kind and database as one list, the ones named for
+    /// the words first, by their title and subtitle: a rank that means the
+    /// same whichever database a result came from, as an index's own does
+    /// not. Not by snippet, which nearly every result's holds the words of,
+    /// so that results can be ranked before their snippets are cut.
     ///
-    /// Most results tie on it, a snippet holding the words it was cut around.
-    /// Among equals the kinds keep the order they were found in, and within a
-    /// kind the modules take turns, each in its own order, best first where it
-    /// ranks its rows: taking them a database at a time gave every place in a
-    /// common word's results to whichever was searched first.
+    /// Most results tie on it. Among equals the kinds keep the order they were
+    /// found in, and within a kind the modules take turns, each in its own
+    /// order, best first where it ranks its rows: taking them a database at a
+    /// time gave every place in a common word's results to whichever was
+    /// searched first.
     public static func ranked(
         _ results: [LampModuleSearchResult],
         by query: LampSearchQuery,
@@ -273,13 +363,13 @@ public enum LampModuleSearch {
     ) -> [LampModuleSearchResult] {
         ranked(
             results, by: query, limit: limit,
-            showing: { [$0.title, $0.subtitle ?? "", $0.snippet] },
+            showing: { [$0.title, $0.subtitle ?? ""] },
             from: { ($0.kind.rawValue, $0.moduleID) }
         )
     }
 
-    /// The same merge for an app's own kind of result, by the texts it shows
-    /// and the kind and module it came from.
+    /// The same merge for an app's own kind of result, by the texts that name
+    /// it and the kind and module it came from.
     public static func ranked<Result>(
         _ results: [Result],
         by query: LampSearchQuery,
@@ -437,5 +527,17 @@ enum LampModuleText {
             return text.isEmpty ? nil : text
         }
         return nil
+    }
+}
+
+extension LampModuleSearchResult {
+    /// The same result with its snippet cut.
+    func withSnippet(_ snippet: String) -> LampModuleSearchResult {
+        LampModuleSearchResult(
+            id: id, kind: kind, moduleID: moduleID, moduleName: moduleName,
+            title: title, subtitle: subtitle, snippet: snippet,
+            startReference: startReference, endReference: endReference,
+            highlightColor: highlightColor
+        )
     }
 }
