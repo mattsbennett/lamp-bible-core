@@ -85,6 +85,42 @@ public struct LampSearchQuery: Equatable, Sendable {
         self.terms = Self.parse(source)
     }
 
+    private init(source: String, terms: [LampSearchTerm]) {
+        self.source = source
+        self.terms = terms
+    }
+
+    /// The query's words in the order typed, as one phrase, when it has more
+    /// than one: a text holding "kingdom of God" together answers it better
+    /// than one with "kingdom" in one place and "God" pages on. It starts a
+    /// word, and ends one only where the last term was quoted.
+    var phrase: LampSearchTerm? {
+        guard terms.count > 1, let last = terms.last else { return nil }
+        return LampSearchTerm(text: plainText, isExact: last.isExact)
+    }
+
+    /// Whether `text` holds the query's words together, in order, however
+    /// its lines break. A query of one term has no phrase to hold.
+    public func holdsPhrase(_ text: String) -> Bool {
+        guard let phrase else { return false }
+        return !phrase.ranges(in: Self.singleSpaced(text), wordStartsOnly: true, maximumMatches: 1).isEmpty
+    }
+
+    /// FTS5 MATCH argument for the phrase, as `fts5Query` writes a quoted
+    /// one, prefix-matching its last word unless that was quoted.
+    public var phraseFTS5Query: String? {
+        guard let phrase else { return nil }
+        let query = LampSearchQuery(source: phrase.text, terms: [phrase]).fts5Query
+        return query.isEmpty ? nil : query
+    }
+
+    /// Runs of whitespace as one space, so that a phrase is found across a
+    /// line break; text without such a run is returned as it is.
+    static func singleSpaced(_ text: String) -> String {
+        guard text.contains("  ") || text.contains(where: { $0.isWhitespace && $0 != " " }) else { return text }
+        return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
     public var isEmpty: Bool { terms.isEmpty }
 
     public func matches(_ text: String) -> Bool {
@@ -228,9 +264,9 @@ public struct LampSearchQuery: Equatable, Sendable {
         guard limit > 0, !text.isEmpty else { return "" }
         // A phrase may cross a paragraph break. Normalize that exceptional
         // case before locating it; ordinary word snippets need no full copy.
-        if terms.contains(where: { $0.text.contains(where: \.isWhitespace) }),
-           text.contains("  ") || text.contains(where: { $0.isWhitespace && $0 != " " }) {
-            return markedSnippet(text.split(whereSeparator: \.isWhitespace).joined(separator: " "), limit: limit)
+        if phrase != nil || terms.contains(where: { $0.text.contains(where: \.isWhitespace) }) {
+            let spaced = Self.singleSpaced(text)
+            if spaced != text { return markedSnippet(spaced, limit: limit) }
         }
         // Locate only the first useful occurrence of each term. Once a window
         // is chosen, find/highlight matches only inside that bounded window.
@@ -240,7 +276,10 @@ public struct LampSearchQuery: Equatable, Sendable {
             }
             return (term, false, term.ranges(in: text, wordStartsOnly: false, maximumMatches: 1).first?.lowerBound)
         }
-        let first = matches.compactMap(\.first).min() ?? 0
+        // Where the words stand together, if they do, rather than wherever
+        // the first of them turns up: "of" is everywhere.
+        let together = phrase?.ranges(in: text, wordStartsOnly: true, maximumMatches: 1).first?.lowerBound
+        let first = together ?? matches.compactMap(\.first).min() ?? 0
         var start = text.index(text.startIndex, offsetBy: max(0, first - limit / 3))
         var rewind = 0
         while start > text.startIndex, rewind < limit {

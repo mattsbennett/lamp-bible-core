@@ -2490,7 +2490,8 @@ public actor LampLibrary {
                         title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
                         subtitle: match.translationAbbreviation,
                         snippet: marked,
-                        startReference: match.reference
+                        startReference: match.reference,
+                        holdsPhrase: parsedQuery.holdsPhrase(match.text)
                     )
                 }
             }
@@ -2524,7 +2525,8 @@ public actor LampLibrary {
                         moduleName: match.moduleName,
                         title: match.lemma,
                         subtitle: match.transliteration,
-                        snippet: snippet(definition.isEmpty ? match.key : definition)
+                        snippet: snippet(definition.isEmpty ? match.key : definition),
+                        holdsPhrase: parsedQuery.holdsPhrase(definition)
                     )
                 }
             }
@@ -2588,7 +2590,8 @@ public actor LampLibrary {
                                     ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                                 subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                                 snippet: snippet(row["content"] as String),
-                                startReference: reference
+                                startReference: reference,
+                                holdsPhrase: parsedQuery.holdsPhrase(row["content"] as String)
                             )
                         }
                 }
@@ -2632,7 +2635,8 @@ public actor LampLibrary {
                                     ? title! : LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                                 subtitle: LampBibleReferenceFormatter.describeRange(from: reference, to: reference),
                                 snippet: snippet(row["content"] as String),
-                                startReference: reference
+                                startReference: reference,
+                                holdsPhrase: parsedQuery.holdsPhrase(row["content"] as String)
                             )
                         }
                 }
@@ -2660,7 +2664,10 @@ public actor LampLibrary {
                         devotional.summary.flatMap { parsedQuery.matches($0) ? $0 : nil } ?? devotional.content
                     ),
                     startReference: devotional.keyScriptures.first?.startReference,
-                    endReference: devotional.keyScriptures.first?.endReference
+                    endReference: devotional.keyScriptures.first?.endReference,
+                    holdsPhrase: parsedQuery.holdsPhrase(
+                        [devotional.summary, devotional.content].compactMap { $0 }.joined(separator: " ")
+                    )
                 )
             }
         }
@@ -2681,7 +2688,10 @@ public actor LampLibrary {
                     moduleName: plan.name,
                     title: plan.name,
                     subtitle: plan.author,
-                    snippet: snippet(plan.fullDescription ?? plan.description ?? "\(plan.duration) days")
+                    snippet: snippet(plan.fullDescription ?? plan.description ?? "\(plan.duration) days"),
+                    holdsPhrase: parsedQuery.holdsPhrase(
+                        [plan.description, plan.fullDescription].compactMap { $0 }.joined(separator: " ")
+                    )
                 )
             }
         }
@@ -2717,7 +2727,11 @@ public actor LampLibrary {
                                 subtitle: "Day \(row["day"] as Int) • \(row["age_group"] as String)",
                                 snippet: snippet(plainText(fromJSONString: answerJSON) ?? answerJSON),
                                 startReference: start,
-                                endReference: end
+                                endReference: end,
+                                holdsPhrase: parsedQuery.holdsPhrase(
+                                    [questionJSON, answerJSON].compactMap { plainText(fromJSONString: $0) }
+                                        .joined(separator: " ")
+                                )
                             )
                         }
                 }
@@ -2863,7 +2877,8 @@ public actor LampLibrary {
                     endOffset: highlight.endOffset
                 ),
                 startReference: highlight.reference,
-                highlightColor: LampHighlightSearch.normalizedColor(highlight.color)
+                highlightColor: LampHighlightSearch.normalizedColor(highlight.color),
+                holdsPhrase: query?.holdsPhrase(text) ?? false
             ))
         }
         return results

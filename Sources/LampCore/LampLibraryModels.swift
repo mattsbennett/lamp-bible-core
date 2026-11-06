@@ -230,6 +230,9 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
     public let startReference: Int?
     public let endReference: Int?
     public let highlightColor: String?
+    /// Whether the result's text holds the query's words together, in order:
+    /// what the merge ranks it by after its title (`LampModuleSearch.ranked`).
+    public let holdsPhrase: Bool
 
     public init(
         id: String,
@@ -241,7 +244,8 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         snippet: String,
         startReference: Int? = nil,
         endReference: Int? = nil,
-        highlightColor: String? = nil
+        highlightColor: String? = nil,
+        holdsPhrase: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -253,6 +257,7 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         self.startReference = startReference
         self.endReference = endReference
         self.highlightColor = highlightColor
+        self.holdsPhrase = holdsPhrase
     }
 
     public var referenceDescription: String? {

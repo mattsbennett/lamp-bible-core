@@ -180,7 +180,7 @@ struct LampModuleSearchTests {
             )
         }
         #expect(commentary.count == 3)
-        #expect(bare.allSatisfy { $0.snippet.isEmpty })
+        #expect(bare.allSatisfy { $0.snippet == LampModuleSearch.rankingSnippet(for: query) })
         #expect(filled == commentary)
         #expect(commentary.allSatisfy { $0.snippet.contains("<mark>") || $0.title == "Hope" })
 
@@ -192,9 +192,107 @@ struct LampModuleSearchTests {
                 try LampModuleSearch.bookSnippets(for: bare, in: db, query: query)
             )
         }
-        #expect(bareSections.allSatisfy { $0.snippet.isEmpty })
+        #expect(bareSections.allSatisfy { $0.snippet == LampModuleSearch.rankingSnippet(for: query) })
         #expect(filledSections == sections)
         #expect(sections.map(\.id) == ["book:B:b2", "book:B:b1"])
+    }
+
+    /// A result found without its snippet ranks in the merge as it will
+    /// with it, so that kinds whose snippets are cut at once and kinds whose
+    /// snippets wait are ranked alike.
+    @Test func aStandInRanksAsTheSnippetWill() throws {
+        let queue = try database([
+            Unit(id: "a", module: "X", sv: 1_001_001, text: "We wait in hope for the kingdom of God."),
+            Unit(id: "b", module: "X", sv: 1_001_002, text: "Hope again, and the kingdom of our God."),
+        ])
+        for text in ["hope", "kingdom of god", "\"kingdom of\" god", "lov"] {
+            let query = LampSearchQuery(text)
+            let found = try queue.read { db in
+                try LampModuleSearch.commentary(
+                    in: db, modules: [LampSearchedModule(id: "X", name: "Ex")], query: query, limit: 5
+                )
+            }
+            let standIn = query.textRank(in: [LampModuleSearch.rankingSnippet(for: query)])
+            #expect(found.allSatisfy { query.textRank(in: [$0.snippet]) == standIn }, "\(text)")
+        }
+    }
+
+    @Test func aQueryOfSeveralWordsHoldsThemTogetherOrNot() {
+        let query = LampSearchQuery("kingdom of god")
+        #expect(query.holdsPhrase("Seek first the Kingdom of God."))
+        #expect(query.holdsPhrase("the kingdom\n of   God"), "across a line break")
+        #expect(query.holdsPhrase("the kingdom of godliness"), "the last word typed, as a word's start")
+        #expect(!query.holdsPhrase("a kingdom, and of God"))
+        #expect(!query.holdsPhrase("the subkingdom of God"), "the first word starts a word")
+        #expect(!LampSearchQuery("kingdom").holdsPhrase("kingdom"), "one word is no phrase")
+        #expect(query.phraseFTS5Query == "\"kingdom of god\"*")
+        #expect(LampSearchQuery("kingdom \"God\"").phraseFTS5Query == "\"kingdom God\"")
+        #expect(LampSearchQuery("kingdom").phraseFTS5Query == nil)
+    }
+
+    /// A snippet stands where the words stand together, not where the first
+    /// of them turns up.
+    @Test func aSnippetIsCutWhereTheWordsStandTogether() {
+        let text = "Of old the prophets spoke. " + String(repeating: "They waited long. ", count: 40)
+            + "Then the kingdom of God came near."
+        let snippet = LampSearchQuery("kingdom of god").markedSnippet(text, limit: 120)
+        #expect(snippet.contains("<mark>kingdom</mark> <mark>of</mark> <mark>God</mark>"), "\(snippet)")
+        #expect(!snippet.contains("Of old"))
+        // One word: as before, its first place.
+        #expect(LampSearchQuery("prophets").markedSnippet(text, limit: 120).hasPrefix("Of old the <mark>prophets</mark>"))
+    }
+
+    @Test func theMergeRanksNamesThenWordsTogether() {
+        func result(_ id: String, title: String, together: Bool = false) -> LampModuleSearchResult {
+            LampModuleSearchResult(
+                id: id, kind: .book, moduleID: id, moduleName: id, title: title, snippet: "",
+                holdsPhrase: together
+            )
+        }
+        let merged = LampModuleSearch.ranked([
+            result("queen", title: "The Queen of Sheba"),
+            result("chapter", title: "Chapter 3", together: true),
+            result("daniel", title: "Kingdoms and the God of Daniel"),
+            result("kingdom", title: "The Kingdom of God", together: true),
+        ], by: LampSearchQuery("kingdom of god"), limit: 10)
+        #expect(merged.map(\.id) == ["kingdom", "daniel", "chapter", "queen"])
+    }
+
+    /// The index tells a unit or section holding the words together from one
+    /// with them apart, and the merge puts it first.
+    @Test func theIndexFindsTheWordsTogether() throws {
+        let queue = try database([
+            Unit(id: "apart", module: "X", sv: 1_001_001, text: "The kingdom is near, and of all things God knows."),
+            Unit(id: "together", module: "X", sv: 1_001_002, text: "Seek the kingdom of God."),
+        ])
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE book_sections (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT,
+                    key_scriptures_json TEXT, search_text TEXT NOT NULL DEFAULT '');
+                CREATE VIRTUAL TABLE book_sections_fts USING fts5(
+                    title, search_text, content='book_sections', content_rowid='rowid');
+                INSERT INTO book_sections (id, module_id, title, search_text) VALUES
+                    ('apart', 'B', 'One', 'A kingdom stood, and of its kings God took no note.'),
+                    ('together', 'B', 'Two', 'The kingdom of God is like a seed.');
+                INSERT INTO book_sections_fts(book_sections_fts) VALUES('rebuild');
+                """)
+        }
+        let query = LampSearchQuery("kingdom of god")
+        let (units, sections) = try queue.read { db in
+            (
+                try LampModuleSearch.commentary(
+                    in: db, modules: [LampSearchedModule(id: "X", name: "Ex")], query: query, limit: 5, snippets: false
+                ),
+                try LampModuleSearch.books(
+                    in: db, modules: [LampSearchedModule(id: "B", name: "Bee")], query: query, limit: 5, snippets: false
+                )
+            )
+        }
+        #expect(Set(units.filter(\.holdsPhrase).map(\.id)) == ["commentary:X:together"])
+        #expect(Set(sections.filter(\.holdsPhrase).map(\.id)) == ["book:B:together"])
+        #expect(LampModuleSearch.ranked(units + sections, by: query, limit: 2).map(\.id)
+            == ["commentary:X:together", "book:B:together"])
     }
 
     @Test func noModulesOrNoQueryFindNothing() throws {
