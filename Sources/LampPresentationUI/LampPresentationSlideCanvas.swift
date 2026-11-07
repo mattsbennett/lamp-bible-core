@@ -222,11 +222,11 @@ public struct LampPresentationSlideCanvas: View {
 
     /// The picture blurred and then darkened or lightened behind the words,
     /// in fades the width of the slide that run out above and below each
-    /// block. The rest of the picture is left as it is.
+    /// passage. The rest of the picture is left as it is.
     ///
     /// Each block's words are covered as much as they need, which the
-    /// treatment gives block by block; where two blocks' fades meet, the
-    /// stronger holds. `softening` is the picture itself, blurred by
+    /// treatment gives block by block; blocks whose fades would meet are one
+    /// band at the strongest of them (`bands(joining:strengths:within:)`). `softening` is the picture itself, blurred by
     /// `LampPresentationBackdrop.softening` behind every block whether or not
     /// it needs a scrim: fine detail behind a letter hinders reading at any
     /// contrast.
@@ -241,16 +241,21 @@ public struct LampPresentationSlideCanvas: View {
         let strengths = treatment.scrimOpacities.count == frames.count
             ? treatment.scrimOpacities
             : Array(repeating: treatment.scrimOpacity, count: frames.count)
-        let shade = Self.profile(
-            around: frames,
+        let joined = Self.bands(
+            joining: frames,
             strengths: strengths,
+            within: 2 * 36 * unit + 90 * unit
+        )
+        let shade = Self.profile(
+            around: joined.frames,
+            strengths: joined.strengths.map(Self.drawnStrength),
             pad: 36 * unit,
             feather: 90 * unit,
             height: size.height
         )
         let reach = Self.profile(
-            around: frames,
-            strengths: frames.map { _ in 1 },
+            around: joined.frames,
+            strengths: joined.frames.map { _ in 1 },
             pad: 36 * unit,
             feather: 90 * unit,
             height: size.height
@@ -280,6 +285,56 @@ public struct LampPresentationSlideCanvas: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    /// The scrim drawn for a block that the sampler says needs `least`.
+    ///
+    /// The sampler finds the least scrim that brings the words to 4.5:1 over
+    /// 95% of what lies behind them. Drawn at exactly that, words over a busy
+    /// painting were legible but no more: the eye still had the picture's
+    /// detail to read through, and small lines such as a citation were the
+    /// first to suffer. A margin over the least makes the passage
+    /// comfortable to read, and only ever raises the contrast the sampler
+    /// chose the colours for. A block that needs none is left with none, so
+    /// a picture the words read over as it is stays untouched.
+    static func drawnStrength(_ least: Double) -> Double {
+        guard least > 0 else { return 0 }
+        return min(1, least + scrimMargin)
+    }
+
+    /// How far above the least the scrim is drawn.
+    static let scrimMargin = 0.14
+
+    /// Blocks close enough that their fades would meet, joined into one band
+    /// at the strongest of their strengths.
+    ///
+    /// A title, its rule, a quotation and its citation are read as one
+    /// passage. Covered block by block, the picture showed through in
+    /// stripes between them, each line at a different depth of shade, and
+    /// the small citation lines, which needed the least by their own
+    /// measure, were the hardest to read against what showed through. A
+    /// block far from the rest, such as a credit at the foot, keeps a band of
+    /// its own, and the picture between is still left alone.
+    static func bands(
+        joining frames: [CGRect],
+        strengths: [Double],
+        within gap: CGFloat
+    ) -> (frames: [CGRect], strengths: [Double]) {
+        let blocks = zip(frames, strengths)
+            .filter { !$0.0.isNull && !$0.0.isEmpty && $0.1 > 0 }
+            .sorted { $0.0.minY < $1.0.minY }
+        var joinedFrames: [CGRect] = []
+        var joinedStrengths: [Double] = []
+        for (frame, strength) in blocks {
+            if let last = joinedFrames.last, frame.minY - last.maxY <= gap {
+                joinedFrames[joinedFrames.count - 1] = last.union(frame)
+                joinedStrengths[joinedStrengths.count - 1] = max(joinedStrengths[joinedStrengths.count - 1], strength)
+            } else {
+                joinedFrames.append(frame)
+                joinedStrengths.append(strength)
+            }
+        }
+        return (joinedFrames, joinedStrengths)
     }
 
     /// How strongly the scrim lies at each point down a slide `height` tall:

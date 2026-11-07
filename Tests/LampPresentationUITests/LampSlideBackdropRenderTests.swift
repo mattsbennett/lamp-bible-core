@@ -315,6 +315,43 @@ struct LampSlideBackdropRenderTests {
         #expect(none.allSatisfy { $0.strength == 0 })
     }
 
+    @Test("Blocks close together are one band at the strongest, and a distant one keeps its own")
+    func nearbyBlocksShareOneBand() {
+        let title = CGRect(x: 0, y: 100, width: 10, height: 50)
+        let quote = CGRect(x: 0, y: 200, width: 10, height: 60)
+        let citation = CGRect(x: 0, y: 280, width: 10, height: 12)
+        let credit = CGRect(x: 0, y: 800, width: 10, height: 20)
+        let joined = LampPresentationSlideCanvas.bands(
+            joining: [credit, citation, title, quote],
+            strengths: [0.6, 0.1, 0.3, 0.45],
+            within: 162
+        )
+        #expect(joined.frames == [CGRect(x: 0, y: 100, width: 10, height: 192), credit])
+        #expect(joined.strengths == [0.45, 0.6])
+
+        // Seen through the profile: no dip between the title and the citation.
+        let stops = LampPresentationSlideCanvas.profile(
+            around: joined.frames,
+            strengths: joined.strengths,
+            pad: 36,
+            feather: 90,
+            height: 900
+        )
+        let band = stops.filter { $0.location * 900 >= 100 && $0.location * 900 <= 292 }
+        #expect(!band.isEmpty && band.allSatisfy { abs($0.strength - 0.45) < 0.001 })
+
+        // A block that needs nothing is not joined in, and adds nothing.
+        let none = LampPresentationSlideCanvas.bands(joining: [title], strengths: [0], within: 162)
+        #expect(none.frames.isEmpty)
+    }
+
+    @Test("The scrim is drawn with a margin over the least, and none where none is needed")
+    func scrimKeepsAMargin() {
+        #expect(LampPresentationSlideCanvas.drawnStrength(0) == 0)
+        #expect(abs(LampPresentationSlideCanvas.drawnStrength(0.3) - (0.3 + LampPresentationSlideCanvas.scrimMargin)) < 0.0001)
+        #expect(LampPresentationSlideCanvas.drawnStrength(0.95) == 1)
+    }
+
     // MARK: Emphasis
 
     private func emphasisSlide(_ emphasis: [LampPresentationEmphasis]?) -> LampPresentationSlide {
