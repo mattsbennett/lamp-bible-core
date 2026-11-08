@@ -6129,7 +6129,8 @@ public actor LampLibrary {
                 derivation: plainText(from: object["derivation"]),
                 usage: plainText(from: object["usage"]),
                 scriptureLinks: dictionaryScriptureLinks(from: object),
-                dictionaryLinks: dictionaryEntryLinks(from: object)
+                dictionaryLinks: dictionaryEntryLinks(from: object),
+                styles: LampDictionaryStyles.styles(in: object)
             )
         }
     }

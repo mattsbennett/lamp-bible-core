@@ -390,6 +390,8 @@ public struct LampDictionarySense: Equatable, Sendable {
     public let usage: String?
     public let scriptureLinks: [LampScriptureLink]
     public let dictionaryLinks: [LampDictionaryLink]
+    /// Bold, italic, Greek and Hebrew stretches in the fields above.
+    public let styles: [LampDictionaryStyle]
 
     public init(
         partOfSpeech: String? = nil,
@@ -399,7 +401,8 @@ public struct LampDictionarySense: Equatable, Sendable {
         derivation: String? = nil,
         usage: String? = nil,
         scriptureLinks: [LampScriptureLink] = [],
-        dictionaryLinks: [LampDictionaryLink] = []
+        dictionaryLinks: [LampDictionaryLink] = [],
+        styles: [LampDictionaryStyle] = []
     ) {
         self.partOfSpeech = partOfSpeech
         self.gloss = gloss
@@ -409,6 +412,7 @@ public struct LampDictionarySense: Equatable, Sendable {
         self.usage = usage
         self.scriptureLinks = scriptureLinks
         self.dictionaryLinks = dictionaryLinks
+        self.styles = styles
     }
 }
 
