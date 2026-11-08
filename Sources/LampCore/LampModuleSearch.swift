@@ -1150,7 +1150,7 @@ extension LampModuleSearchResult {
             id: id, kind: kind, moduleID: moduleID, moduleName: moduleName,
             title: title, subtitle: subtitle, snippet: snippet,
             startReference: startReference, endReference: endReference,
-            highlightColor: highlightColor, holdsPhrase: holdsPhrase
+            highlightColor: highlightColor, holdsPhrase: holdsPhrase, entryKey: entryKey
         )
     }
 
@@ -1160,7 +1160,7 @@ extension LampModuleSearchResult {
             id: id, kind: kind, moduleID: moduleID, moduleName: moduleName,
             title: title, subtitle: subtitle, snippet: snippet,
             startReference: startReference, endReference: endReference,
-            highlightColor: highlightColor, holdsPhrase: true
+            highlightColor: highlightColor, holdsPhrase: true, entryKey: entryKey
         )
     }
 }

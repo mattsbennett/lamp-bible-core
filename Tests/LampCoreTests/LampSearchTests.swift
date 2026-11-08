@@ -218,6 +218,13 @@ struct LampSearchTests {
         #expect(try await library.searchModules(query: "πιστις", kinds: [.dictionary]).map(\.title) == ["πίστις"])
         #expect(try await library.dictionaryEntries(keys: ["g0026"]).map(\.key) == ["G26"])
         #expect(try await library.searchModules(query: "\"love, goodwill\"", kinds: [.dictionary]).count == 1)
+
+        // A hit names its entry by key, which its id does not: the id's
+        // entry part is the row's id, a number for a bundled dictionary.
+        #expect(try await library.searchModules(query: "πιστις", kinds: [.dictionary]).map(\.entryKey)
+            == ["G4102"])
+        #expect(try await library.searchModules(query: "\"love, goodwill\"", kinds: [.dictionary]).map(\.entryKey)
+            == ["G26"])
     }
 
     @Test func aStrongsSearchFindsAKeyListedWithOthers() async throws {

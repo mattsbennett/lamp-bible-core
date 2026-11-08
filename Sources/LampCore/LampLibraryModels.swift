@@ -233,6 +233,10 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
     /// Whether the result's text holds the query's words together, in order:
     /// what the merge ranks it by after its title (`LampModuleSearch.ranked`).
     public let holdsPhrase: Bool
+    /// A dictionary hit's entry key, such as G2434: what looks the entry up
+    /// again, or analyses it. Not in `id`, whose entry part is the row's own
+    /// id and, for a bundled dictionary, a row number.
+    public let entryKey: String?
 
     public init(
         id: String,
@@ -245,7 +249,8 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         startReference: Int? = nil,
         endReference: Int? = nil,
         highlightColor: String? = nil,
-        holdsPhrase: Bool = false
+        holdsPhrase: Bool = false,
+        entryKey: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -258,6 +263,7 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         self.endReference = endReference
         self.highlightColor = highlightColor
         self.holdsPhrase = holdsPhrase
+        self.entryKey = entryKey
     }
 
     public var referenceDescription: String? {

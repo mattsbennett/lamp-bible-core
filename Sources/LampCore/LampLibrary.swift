@@ -2668,7 +2668,8 @@ public actor LampLibrary {
                         title: match.lemma,
                         subtitle: match.transliteration,
                         snippet: snippet(definition.isEmpty ? match.key : definition),
-                        holdsPhrase: parsedQuery.holdsPhrase(definition)
+                        holdsPhrase: parsedQuery.holdsPhrase(definition),
+                        entryKey: match.key
                     )
                 }
             }
