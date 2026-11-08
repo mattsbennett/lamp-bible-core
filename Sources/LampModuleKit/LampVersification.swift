@@ -104,6 +104,21 @@ public struct LampVersification: Sendable {
         target.reference(forOriginal: original(of: reference))
     }
 
+    /// Whether this scheme has `reference` as a verse: its book's chapter, and
+    /// a verse from 1 to that chapter's last. A source that cites a verse past
+    /// a chapter's end has miscited it.
+    public func numbers(_ reference: Int) -> Bool {
+        let verse = reference % 1_000
+        guard verse >= 1, let last = lastVerse(ofChapterOf: reference) else { return false }
+        return verse <= last
+    }
+
+    /// The last verse of `reference`'s chapter in this scheme, or nil where the
+    /// scheme has no such chapter.
+    public func lastVerse(ofChapterOf reference: Int) -> Int? {
+        verseCounts[reference / 1_000_000]?[reference / 1_000 % 1_000]
+    }
+
     /// The standard scheme whose chapter lengths best match a translation's,
     /// for a translation that doesn't say which it follows. English wins a tie:
     /// it is what Lamp has always assumed.

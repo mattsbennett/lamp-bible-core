@@ -54,6 +54,21 @@ struct LampVersificationTests {
         #expect(web.convert(ref(45, 14, 23), to: english) == ref(45, 14, 23))
     }
 
+    /// A lexicon keyed to the Hebrew's numbering cites verses English numbers
+    /// differently, and some it miscites outright; a builder mapping them in
+    /// has to tell the two apart and find a whole chapter's end.
+    @Test func tellsAVerseASchemeNumbersFromOneItDoesNot() {
+        #expect(original.numbers(ref(4, 17, 27)))
+        #expect(!english.numbers(ref(4, 17, 27)))
+        #expect(original.convert(ref(4, 17, 27), to: english) == ref(4, 17, 12))
+        #expect(!original.numbers(ref(5, 42, 1)), "Deuteronomy has 34 chapters")
+        #expect(!original.numbers(ref(5, 20, 22)), "Deuteronomy 20 has 20 verses")
+        #expect(!original.numbers(ref(19, 3, 0)))
+        #expect(original.lastVerse(ofChapterOf: ref(19, 119, 1)) == 176)
+        #expect(original.lastVerse(ofChapterOf: ref(29, 4, 1)) == 21)
+        #expect(english.lastVerse(ofChapterOf: ref(29, 4, 1)) == nil)
+    }
+
     @Test func readsEverySchemeSILPublishes() {
         for scheme in LampVersification.Scheme.allCases {
             let counts = LampVersification.standard(scheme).verseCounts

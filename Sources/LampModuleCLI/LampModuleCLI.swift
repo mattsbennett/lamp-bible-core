@@ -28,6 +28,13 @@ enum LampModuleCLI {
                 exit(EXIT_FAILURE)
             }
             succeeded = importTranslation(sourcePath: arguments[1], outputDirectory: arguments[2], options: options)
+        case "versify" where arguments.count == 3:
+            guard let from = LampVersification.Scheme(moduleValue: arguments[1]),
+                  let to = LampVersification.Scheme(moduleValue: arguments[2]) else {
+                printUsage()
+                exit(EXIT_FAILURE)
+            }
+            succeeded = versify(from: .standard(from), to: .standard(to))
         case "parse" where arguments.count == 1:
             succeeded = parse()
         case "convert" where arguments.count >= 3:
@@ -257,6 +264,25 @@ enum LampModuleCLI {
         return true
     }
 
+    /// Each BBCCCVVV reference read, as `target` numbers it, with that
+    /// chapter's last verse there: "<reference> <last verse>". A reference the
+    /// source doesn't number, or one the target has no verse for, is "-".
+    /// Module builders map a source's own numbering into Lamp's with this,
+    /// rather than keeping a second copy of the schemes.
+    private static func versify(from source: LampVersification, to target: LampVersification) -> Bool {
+        while let line = readLine(strippingNewline: true) {
+            guard let reference = Int(line.trimmingCharacters(in: .whitespaces)),
+                  source.numbers(reference),
+                  let converted = source.convert(reference, to: target),
+                  let last = target.lastVerse(ofChapterOf: converted) else {
+                print("-")
+                continue
+            }
+            print("\(converted) \(last)")
+        }
+        return true
+    }
+
     private static func printInspection(_ inspection: ModuleInspection, url: URL) {
         let kind = inspection.kind?.rawValue ?? "unknown"
         let status = inspection.canCompile ? "valid" : "invalid"
@@ -310,6 +336,7 @@ enum LampModuleCLI {
               lamp-module search-words <database.sqlite>
               lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY] [--septuagint]
               lamp-module convert <bible file, folder or zip> <output.json> --id ID [--name NAME] [--abbreviation ABBR] [--language CODE] [--license TEXT] [--key UNLOCK-KEY] [--septuagint]
+              lamp-module versify <from scheme> <to scheme> < lines of BBCCCVVV
               lamp-module parse < lines of "morphology-code<tab>strongs-key"
             """)
     }
