@@ -1072,11 +1072,11 @@ struct SeptuagintEnglishTests {
         )
         let line = try #require(found[hebrewReference])
         #expect(line.reference == englishReference)
-        #expect(line.snippet.word == "iniquity")
+        #expect(line.snippet?.word == "iniquity")
     }
 
-    /// A verse the English does not tag with this word is left out, never
-    /// marked at a likely word.
+    /// A verse the English does not tag with this word is never marked at a
+    /// likely word.
     @Test func aVerseTheTranslationDoesNotTagIsLeftOut() {
         let numbering = LampVersification.standard(.english)
         let found = LampSeptuagintSection.english(
@@ -1088,8 +1088,28 @@ struct SeptuagintEnglishTests {
                 verseTexts: [1_029_020: "his love for her", 1_029_021: "love unmarked"]
             )
         )
-        #expect(found[1_029_020]?.snippet.word == "love")
-        #expect(found[1_029_021] == nil)
+        #expect(found[1_029_020]?.snippet?.word == "love")
+        #expect(found[1_029_021]?.reference == 1_029_021)
+        #expect(found[1_029_021]?.snippet == nil, "not marked at a likely word")
+    }
+
+    /// A verse the English does not tag still has its English number, so one
+    /// list never shows the Hebrew numbering beside the English: in the
+    /// Psalms the two differ by the title.
+    @Test func anUnmarkedVerseKeepsItsEnglishNumber() throws {
+        let hebrew = LampVersification.standard(.original)
+        let english = LampVersification.standard(.english)
+        let hebrewReference = 19_051_007
+        let found = LampSeptuagintSection.english(
+            for: [hebrewReference],
+            hebrewNumbering: hebrew,
+            englishNumbering: english,
+            analysis: Self.analysis(occurrences: [], verseTexts: [:])
+        )
+        let line = try #require(found[hebrewReference])
+        #expect(line.reference == hebrew.convert(hebrewReference, to: english))
+        #expect(line.reference != hebrewReference)
+        #expect(line.snippet == nil)
     }
 
     @Test func aHebrewWordIsNamedForSomeoneWithNoHebrew() {

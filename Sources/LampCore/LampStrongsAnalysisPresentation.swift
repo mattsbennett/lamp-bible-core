@@ -797,14 +797,18 @@ public enum LampSeptuagintSection {
         analysis.renderings.first { !$0.text.isEmpty }?.text
     }
 
-    /// One verse of a Hebrew word's list in English, with the English the
-    /// word is rendered by marked.
+    /// One verse of a Hebrew word's list in English: its number there, and
+    /// the verse with the English the word is rendered by marked.
     public struct English: Equatable, Sendable {
-        /// In the English translation's own numbering.
+        /// In the English translation's own numbering, which is the number a
+        /// reader of it looks the verse up by — kept whether or not the verse
+        /// is marked, so one list never mixes two numberings.
         public let reference: Int
-        public let snippet: LampStrongsContext.Snippet
+        /// Nil where the translation has the verse but does not tag the word
+        /// in it: shown unmarked would be a guess at which English it is.
+        public let snippet: LampStrongsContext.Snippet?
 
-        public init(reference: Int, snippet: LampStrongsContext.Snippet) {
+        public init(reference: Int, snippet: LampStrongsContext.Snippet?) {
             self.reference = reference
             self.snippet = snippet
         }
@@ -815,9 +819,11 @@ public enum LampSeptuagintSection {
     /// read with its verse text.
     ///
     /// The mark is the translation's own tag, at the offsets it records,
-    /// and nothing is guessed: a verse whose English the translation does
-    /// not tag with this word, or which its numbering has no counterpart for,
-    /// is left out.
+    /// and nothing is guessed: a verse the translation does not tag with
+    /// this word has its English number and no snippet. Only a verse its
+    /// numbering has no counterpart for is left out, which is a different
+    /// fact — the translation has no such verse, not that it doesn't use the
+    /// word there.
     public static func english(
         for references: [Int],
         hebrewNumbering: LampVersification,
@@ -831,19 +837,18 @@ public enum LampSeptuagintSection {
         }
         var english: [Int: English] = [:]
         for reference in references {
-            guard let mapped = hebrewNumbering.convert(reference, to: englishNumbering),
-                  let occurrence = first[mapped],
-                  let text = analysis.verseTexts[mapped]
+            guard let mapped = hebrewNumbering.convert(reference, to: englishNumbering)
             else { continue }
-            english[reference] = English(
-                reference: mapped,
-                snippet: LampStrongsContext.snippet(
+            var snippet: LampStrongsContext.Snippet?
+            if let occurrence = first[mapped], let text = analysis.verseTexts[mapped] {
+                snippet = LampStrongsContext.snippet(
                     of: text,
                     from: occurrence.startOffset,
                     to: occurrence.endOffset,
                     window: window
                 )
-            )
+            }
+            english[reference] = English(reference: mapped, snippet: snippet)
         }
         return english
     }
