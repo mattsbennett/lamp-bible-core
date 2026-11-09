@@ -673,22 +673,33 @@ public enum LampSeptuagintSection {
     /// hold, is left out; `missingVerse(in:)` says so for it. Each chapter is
     /// read once however many references fall in it, and a chapter that
     /// cannot be read leaves its verses out rather than ending the rest.
+    ///
+    /// Cancelled, it throws rather than return what it has: a verse it never
+    /// reached would be absent too, and absence here is read as the text not
+    /// having the verse, which for an unread verse is false.
     public static func greek(
         for references: [Int],
         hebrewNumbering: LampVersification,
         septuagintNumbering: LampVersification,
         readChapter: (_ book: Int, _ chapter: Int) async throws -> [Int: String]
-    ) async -> [Int: String] {
+    ) async throws -> [Int: String] {
         var chapters: [Int: [Int: String]] = [:]
         var greek: [Int: String] = [:]
         for reference in references {
-            if Task.isCancelled { break }
+            try Task.checkCancellation()
             guard let mapped = hebrewNumbering.convert(reference, to: septuagintNumbering)
             else { continue }
             let parts = LampBibleReferenceFormatter.components(of: mapped)
             let chapterKey = parts.book * 1_000 + parts.chapter
             if chapters[chapterKey] == nil {
-                chapters[chapterKey] = (try? await readChapter(parts.book, parts.chapter)) ?? [:]
+                do {
+                    chapters[chapterKey] = try await readChapter(parts.book, parts.chapter)
+                } catch {
+                    // A read cut short by cancellation is not a chapter that
+                    // could not be read.
+                    try Task.checkCancellation()
+                    chapters[chapterKey] = [:]
+                }
             }
             if let text = chapters[chapterKey]?[parts.verse] {
                 greek[reference] = text
@@ -745,5 +756,14 @@ public struct LampStrongsHeadword: Equatable, Sendable {
             )
         }
         return headwords
+    }
+}
+
+extension LampStrongsAnalysis {
+    /// How many of `books` the key occurs in. `books` is every book in range
+    /// that tags the key's language, zeros included, so "22 of 27 books"
+    /// counts a Greek word against the New Testament rather than the canon.
+    public var booksWithOccurrences: Int {
+        books.filter { $0.occurrenceCount > 0 }.count
     }
 }

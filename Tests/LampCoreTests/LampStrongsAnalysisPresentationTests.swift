@@ -34,7 +34,8 @@ struct StrongsAnalysisSupportTests {
 
     private static func analysis(
         translationID: String,
-        occurrences: [LampStrongsAnalysis.Occurrence] = []
+        occurrences: [LampStrongsAnalysis.Occurrence] = [],
+        books: [LampStrongsAnalysis.Division] = []
     ) -> LampStrongsAnalysis {
         LampStrongsAnalysis(
             key: "G3056",
@@ -49,7 +50,7 @@ struct StrongsAnalysisSupportTests {
             forms: [],
             parsings: [],
             grammar: [],
-            books: [],
+            books: books,
             sections: [],
             companions: []
         )
@@ -73,6 +74,18 @@ struct StrongsAnalysisSupportTests {
             keyness: keyness,
             chapters: []
         )
+    }
+
+    /// Books the key is in, out of the books in range that tag its language —
+    /// a zero is a book that could have had it and does not.
+    @Test func booksWithOccurrencesCountsOnlyBooksTheKeyIsIn() {
+        let analysis = Self.analysis(translationID: "BSBs", books: [
+            Self.division(id: 43, name: "John", occurrenceCount: 7, wordCount: 100),
+            Self.division(id: 44, name: "Acts", occurrenceCount: 0, wordCount: 100),
+            Self.division(id: 45, name: "Romans", occurrenceCount: 9, wordCount: 100),
+        ])
+        #expect(analysis.booksWithOccurrences == 2)
+        #expect(analysis.books.count == 3)
     }
 
     // MARK: - Filtering
@@ -924,7 +937,7 @@ struct SeptuagintGreekTests {
         #expect((mappedFirst / 1_000) % 1_000 == 50, "the Septuagint numbers this psalm 50")
 
         var reads: [String] = []
-        let greek = await LampSeptuagintSection.greek(
+        let greek = try await LampSeptuagintSection.greek(
             for: [first, second],
             hebrewNumbering: hebrew,
             septuagintNumbering: septuagint
@@ -939,10 +952,10 @@ struct SeptuagintGreekTests {
     }
 
     /// A chapter that cannot be read leaves its verses out, not the rest.
-    @Test func achapterThatCannotBeReadCostsOnlyItsVerses() async {
+    @Test func achapterThatCannotBeReadCostsOnlyItsVerses() async throws {
         struct Unreadable: Error {}
         let english = LampVersification.standard(.english)
-        let greek = await LampSeptuagintSection.greek(
+        let greek = try await LampSeptuagintSection.greek(
             for: [1_001_001, 1_002_001],
             hebrewNumbering: english,
             septuagintNumbering: english
@@ -951,5 +964,23 @@ struct SeptuagintGreekTests {
             return [1: "οὕτως"]
         }
         #expect(greek == [1_002_001: "οὕτως"])
+    }
+
+    /// Cancelled part way, it says nothing rather than something partial:
+    /// a verse it did not reach would otherwise read as one the text lacks.
+    @Test func cancelledPartWayItReturnsNothing() async {
+        let english = LampVersification.standard(.english)
+        let task = Task {
+            try await LampSeptuagintSection.greek(
+                for: [1_001_001, 1_002_001],
+                hebrewNumbering: english,
+                septuagintNumbering: english
+            ) { _, chapter in
+                if chapter == 1 { withUnsafeCurrentTask { $0?.cancel() } }
+                return [1: "ἐν ἀρχῇ"]
+            }
+        }
+        let result = await task.result
+        #expect(throws: CancellationError.self) { try result.get() }
     }
 }
