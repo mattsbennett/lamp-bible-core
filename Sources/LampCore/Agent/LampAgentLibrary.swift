@@ -569,19 +569,15 @@ public actor LampAgentLibrary {
         let found = dictionaryIDs.isEmpty
             ? []
             : (try? await library.dictionaryEntries(keys: keys, moduleIDs: dictionaryIDs)) ?? []
-        var entries: [String: LampAgentStrongsAnalysis.Entry] = [:]
-        for result in found {
-            let normalized = LampStrongsKey.normalized(result.key)
-            let known = entries[normalized]
-            entries[normalized] = LampAgentStrongsAnalysis.Entry(
-                key: normalized,
-                lemma: known?.lemma ?? result.lemma,
-                transliteration: known?.transliteration ?? result.transliteration,
-                gloss: known?.gloss ?? result.senses.lazy.compactMap { $0.gloss ?? $0.shortDefinition }.first
-            )
-        }
+        let headwords = LampStrongsHeadword.merging(found)
         func entry(_ key: String) -> LampAgentStrongsAnalysis.Entry {
-            entries[key] ?? .init(key: key, lemma: nil, transliteration: nil, gloss: nil)
+            let headword = headwords[key]
+            return .init(
+                key: key,
+                lemma: headword?.lemma,
+                transliteration: headword?.transliteration,
+                gloss: headword?.gloss
+            )
         }
 
         let referenceLimit = policy.maximumSearchResults
