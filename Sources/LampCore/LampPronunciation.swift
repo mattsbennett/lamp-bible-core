@@ -11,21 +11,98 @@ import Foundation
 ///
 /// Greek is the Erasmian reading most English-speaking classrooms teach,
 /// worked out from the word in Greek script, so any lexicon's headword will
-/// do. Hebrew comes from Strong's own respelling ("kaw-far'").
+/// do; or, as a reader may choose, the word as Greek is spoken today, which a
+/// Greek voice reads from the headword itself. Hebrew comes from Strong's own
+/// respelling ("kaw-far'"), with no modern reading to offer: the Hebrew voice
+/// ignores vowel points, so it cannot read a biblical word from its spelling.
 public enum LampPronunciation {
-    /// The key's word in IPA, from whichever of `entries` can give it: a
-    /// Greek headword for a Greek key; Strong's respelling for a Hebrew one.
-    public static func ipa(forKey key: String, entries: [LampDictionaryResult]) -> String? {
+    /// How a Greek word is said.
+    public enum GreekReading: String, CaseIterable, Hashable, Sendable {
+        case classroom, modern
+
+        /// Where both apps keep the reader's choice.
+        public static let preferenceKey = "pronunciation.greekReading"
+
+        public var title: String {
+            switch self {
+            case .classroom: "Classroom (Erasmian)"
+            case .modern: "Modern Greek"
+            }
+        }
+
+        /// The reading to give: the stored choice, except that Modern Greek
+        /// needs a Greek voice, and without one the word is said — and
+        /// labelled — the classroom way rather than not at all.
+        public static func resolved(_ stored: String?, hasGreekVoice: Bool) -> GreekReading {
+            let chosen = stored.flatMap(GreekReading.init(rawValue:)) ?? .classroom
+            return chosen == .modern && !hasGreekVoice ? .classroom : chosen
+        }
+    }
+
+    /// The language of the voice that reads Modern Greek.
+    public static let greekVoiceLanguage = "el-GR"
+    /// The language of the voice that says IPA, when the reader has not
+    /// chosen an English voice of their own.
+    public static let englishVoiceLanguage = "en-US"
+
+    /// A word made ready for a speech engine.
+    public struct Utterance: Hashable, Sendable {
+        /// The word in its own script, as the reader sees it.
+        public let word: String
+        /// What an English voice is to say; nil when a Greek voice reads
+        /// `word` itself.
+        public let ipa: String?
+        /// The language of the voice to use: English for IPA, Greek for a
+        /// modern reading.
+        public let voiceLanguage: String
+        /// How a Greek word is said; nil for Hebrew, which has one reading.
+        public let greekReading: GreekReading?
+
+        public init(word: String, ipa: String?, voiceLanguage: String, greekReading: GreekReading?) {
+            self.word = word
+            self.ipa = ipa
+            self.voiceLanguage = voiceLanguage
+            self.greekReading = greekReading
+        }
+
+        /// What the speech engine is handed.
+        public var text: NSAttributedString {
+            ipa.map { spoken(word, ipa: $0) } ?? NSAttributedString(string: word)
+        }
+    }
+
+    /// The key's word as `greekReading` says it, or nil when no entry can
+    /// say it.
+    public static func utterance(
+        forKey key: String,
+        entries: [LampDictionaryResult],
+        greekReading: GreekReading
+    ) -> Utterance? {
         let normalized = LampStrongsKey.normalized(key)
         let own = entries.filter { LampStrongsKey.normalized($0.key) == normalized }
         switch normalized.first {
         case "G":
-            return own.lazy.compactMap { greek($0.lemma) }.first
+            guard let word = own.lazy.compactMap({ greekWord($0.lemma) }).first else { return nil }
+            switch greekReading {
+            case .classroom:
+                guard let ipa = greek(word) else { return nil }
+                return Utterance(word: word, ipa: ipa, voiceLanguage: englishVoiceLanguage, greekReading: .classroom)
+            case .modern:
+                return Utterance(word: word, ipa: nil, voiceLanguage: greekVoiceLanguage, greekReading: .modern)
+            }
         case "H":
-            return own.lazy.compactMap { $0.pronunciation.flatMap(hebrew(respelling:)) }.first
+            guard let entry = own.first(where: { $0.pronunciation.flatMap(hebrew(respelling:)) != nil }),
+                  let ipa = entry.pronunciation.flatMap(hebrew(respelling:)) else { return nil }
+            return Utterance(word: entry.lemma, ipa: ipa, voiceLanguage: englishVoiceLanguage, greekReading: nil)
         default:
             return nil
         }
+    }
+
+    /// The key's word in IPA, from whichever of `entries` can give it: a
+    /// Greek headword for a Greek key; Strong's respelling for a Hebrew one.
+    public static func ipa(forKey key: String, entries: [LampDictionaryResult]) -> String? {
+        utterance(forKey: key, entries: entries, greekReading: .classroom)?.ipa
     }
 
     /// What a speech engine is handed: `display` carrying `ipa` as its
@@ -40,10 +117,18 @@ public enum LampPronunciation {
 
     // MARK: - Greek
 
+    /// The first word of a headword when it is in Greek script: a headword
+    /// such as Dodson's "ἀγάπη, ης, ἡ" is read to its first comma.
+    static func greekWord(_ headword: String) -> String? {
+        guard let word = headword.split(whereSeparator: { $0 == "," || $0.isWhitespace }).first,
+              word.unicodeScalars.contains(where: { (0x0370...0x03FF).contains($0.value) || (0x1F00...0x1FFF).contains($0.value) })
+        else { return nil }
+        return String(word)
+    }
+
     /// The first word of a Greek headword in IPA; nil when it has no Greek.
-    /// A headword such as Dodson's "ἀγάπη, ης, ἡ" is read to its first comma.
     public static func greek(_ headword: String) -> String? {
-        let word = headword.split(whereSeparator: { $0 == "," || $0.isWhitespace }).first.map(String.init) ?? ""
+        let word = greekWord(headword) ?? ""
         var letters: [GreekLetter] = []
         for scalar in word.lowercased().decomposedStringWithCanonicalMapping.unicodeScalars {
             switch scalar.value {
@@ -90,13 +175,15 @@ public enum LampPronunciation {
         init(_ character: Character) { self.character = character }
     }
 
+    /// υ is a plain "u": marked long, the voice draws it out, and πνεῦμα
+    /// comes out in three syllables, "pnyoo-oo-ma".
     private static let greekVowels: [Character: String] = [
-        "α": "ɑ", "ε": "ɛ", "η": "eɪ", "ι": "i", "ο": "ɔ", "υ": "uː", "ω": "oʊ",
+        "α": "ɑ", "ε": "ɛ", "η": "eɪ", "ι": "i", "ο": "ɔ", "υ": "u", "ω": "oʊ",
     ]
 
     private static let greekDiphthongs: [String: String] = [
         "αι": "aɪ", "ει": "eɪ", "οι": "ɔɪ", "υι": "wi",
-        "αυ": "aʊ", "ευ": "juː", "ηυ": "juː", "ου": "uː",
+        "αυ": "aʊ", "ευ": "ju", "ηυ": "ju", "ου": "uː",
     ]
 
     /// χ is "k", as English speakers say Christ: the voice has no "ch" of

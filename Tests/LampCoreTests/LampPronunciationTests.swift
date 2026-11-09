@@ -5,8 +5,8 @@ import Testing
 struct LampPronunciationTests {
     /// Erasmian, from the Greek itself: the accent places the stress, a
     /// rough breathing is an "h" even on a diphthong's second vowel, γγ is
-    /// "ng", a doubled letter is said once, and χ is "k" — an English voice
-    /// has no "ch" of Bach.
+    /// "ng", a doubled letter is said once, χ is "k" — an English voice
+    /// has no "ch" of Bach — and υ is short, so πνεῦμα has two syllables.
     @Test(arguments: [
         ("ἀγάπη", "ɑˈɡɑpeɪ"),
         ("λόγος", "ˈlɔɡɔs"),
@@ -16,8 +16,12 @@ struct LampPronunciationTests {
         ("οὗτος", "ˈhuːtɔs"),
         ("υἱός", "hwiˈɔs"),
         ("ἐκκλησία", "ɛkleɪˈsiɑ"),
-        ("πνεῦμα", "ˈpnjuːmɑ"),
+        ("πνεῦμα", "ˈpnjumɑ"),
         ("ἀλληλουϊα", "ɑleɪluːiɑ"),
+        ("ψυχή", "psuˈkeɪ"),
+        ("κύριος", "ˈkuɹiɔs"),
+        ("εὐαγγέλιον", "juɑŋˈɡɛliɔn"),
+        ("ἰσχύς", "iˈskus"),
         ("ἀγάπη, ης, ἡ", "ɑˈɡɑpeɪ"),
     ])
     func greekIsSaidFromItsOwnLetters(word: String, ipa: String) {
@@ -67,6 +71,35 @@ struct LampPronunciationTests {
         ]
         #expect(LampPronunciation.ipa(forKey: "H3722", entries: hebrew) == "kɑˈfɑɹ")
         #expect(LampPronunciation.ipa(forKey: "H3722", entries: Array(hebrew.prefix(1))) == nil)
+    }
+
+    /// The modern reading hands a Greek voice the headword itself, read to
+    /// its first comma; the classroom one hands an English voice IPA.
+    /// Hebrew has the one reading whichever is chosen.
+    @Test func aGreekWordIsSaidTheWayTheReaderChose() {
+        let greek = [entry(key: "G26", lemma: "agapē"), entry(key: "G0026", lemma: "ἀγάπη, ης, ἡ")]
+        let modern = LampPronunciation.utterance(forKey: "G26", entries: greek, greekReading: .modern)
+        #expect(modern == .init(word: "ἀγάπη", ipa: nil, voiceLanguage: "el-GR", greekReading: .modern))
+        #expect(modern?.text.string == "ἀγάπη")
+        let classroom = LampPronunciation.utterance(forKey: "G26", entries: greek, greekReading: .classroom)
+        #expect(classroom == .init(word: "ἀγάπη", ipa: "ɑˈɡɑpeɪ", voiceLanguage: "en-US", greekReading: .classroom))
+
+        let hebrew = [entry(key: "H2617", lemma: "חֶסֶד", pronunciation: "kheh'-sed")]
+        for reading in LampPronunciation.GreekReading.allCases {
+            #expect(LampPronunciation.utterance(forKey: "H2617", entries: hebrew, greekReading: reading)
+                == .init(word: "חֶסֶד", ipa: "ˈhɛsɛd", voiceLanguage: "en-US", greekReading: nil))
+        }
+        #expect(LampPronunciation.utterance(forKey: "G26", entries: [entry(key: "G26", lemma: "agapē")], greekReading: .modern) == nil)
+    }
+
+    /// Modern Greek without a Greek voice is said the classroom way, and
+    /// labelled so, rather than not said at all.
+    @Test func modernGreekNeedsAGreekVoice() {
+        typealias Reading = LampPronunciation.GreekReading
+        #expect(Reading.resolved(nil, hasGreekVoice: true) == .classroom)
+        #expect(Reading.resolved("modern", hasGreekVoice: true) == .modern)
+        #expect(Reading.resolved("modern", hasGreekVoice: false) == .classroom)
+        #expect(Reading.resolved("unknown", hasGreekVoice: true) == .classroom)
     }
 
     @Test func theSpeechEngineIsHandedTheIPA() {
