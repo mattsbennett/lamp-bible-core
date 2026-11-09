@@ -707,6 +707,10 @@ public struct LampBook: Identifiable, Equatable, Sendable {
     public let license: String?
     public let version: String?
     public let tags: [String]
+    /// The id of the book's genre, such as `first-principles`; the bundle's
+    /// `book_genres` table names it and places it in a group. Nil for a book
+    /// built before books had genres.
+    public let genre: String?
     public let coverMediaID: String?
     public let isEditable: Bool
     public let created: Date?
@@ -731,6 +735,7 @@ public struct LampBook: Identifiable, Equatable, Sendable {
         license: String? = nil,
         version: String? = nil,
         tags: [String] = [],
+        genre: String? = nil,
         coverMediaID: String? = nil,
         isEditable: Bool = false,
         created: Date? = nil,
@@ -754,6 +759,7 @@ public struct LampBook: Identifiable, Equatable, Sendable {
         self.license = license
         self.version = version
         self.tags = tags
+        self.genre = genre
         self.coverMediaID = coverMediaID
         self.isEditable = isEditable
         self.created = created

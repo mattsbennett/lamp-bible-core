@@ -1627,6 +1627,7 @@ public actor LampLibrary {
                     license: row["license"],
                     version: row["version"],
                     tags: tags,
+                    genre: row.hasColumn("genre") ? row["genre"] : nil,
                     coverMediaID: row["cover_media_id"],
                     isEditable: editable != 0,
                     created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },

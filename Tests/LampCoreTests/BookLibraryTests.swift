@@ -18,7 +18,7 @@ struct BookLibraryTests {
                 "schemaVersion": "1.0", "id": "TEST_BOOK", "type": "book",
                 "title": "A Test Book", "subtitle": "Reading support",
                 "author": "Example Author", "language": "en",
-                "tags": ["study"]
+                "tags": ["study"], "genre": "bible-exposition"
               },
               "sections": [{
                 "id": "part-one", "type": "part", "title": "Part One",
@@ -47,6 +47,7 @@ struct BookLibraryTests {
         #expect(books.count == 1)
         #expect(books.first?.author == "Example Author")
         #expect(books.first?.tags == ["study"])
+        #expect(books.first?.genre == "bible-exposition")
 
         let sections = try await library.bookSections(moduleID: "TEST_BOOK")
         #expect(sections.count == 2)

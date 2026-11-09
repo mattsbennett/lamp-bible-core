@@ -23,8 +23,8 @@ extension LampModuleCompiler {
                     id, title, subtitle, description, author, editor, publisher,
                     year, edition, isbn, language, text_direction, copyright,
                     license, version, schema_version, tags_json, cover_media_id,
-                    is_editable, created, last_modified, footnotes_json, media_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    is_editable, created, last_modified, footnotes_json, media_json, genre
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: [
                     moduleID,
                     title,
@@ -49,6 +49,7 @@ extension LampModuleCompiler {
                     JSONSupport.integer(meta["lastModified"]),
                     try JSONSupport.jsonString(root["footnotes"]),
                     try JSONSupport.jsonString(root["media"]),
+                    JSONSupport.string(meta["genre"]),
                 ])
 
             var seenIDs = Set<String>()
@@ -146,7 +147,8 @@ extension LampModuleCompiler {
                 created INTEGER,
                 last_modified INTEGER,
                 footnotes_json TEXT,
-                media_json TEXT
+                media_json TEXT,
+                genre TEXT
             )
             """)
         try db.execute(sql: """
