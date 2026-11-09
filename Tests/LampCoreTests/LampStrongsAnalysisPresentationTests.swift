@@ -371,6 +371,44 @@ struct StrongsAnalysisSupportTests {
         #expect(bars[0].share == 0.25)
     }
 
+    /// Each bar carries its part of the whole, the same under either measure,
+    /// so a count can say "80%" without a ring beside it.
+    @Test func eachBarCarriesItsPartOfEveryOccurrence() {
+        let divisions = [
+            Self.division(id: 41, name: "Mark", occurrenceCount: 5, wordCount: 1_000),
+            Self.division(id: 43, name: "John", occurrenceCount: 20, wordCount: 100_000),
+            Self.division(id: 42, name: "Luke", occurrenceCount: 0, wordCount: 1_000),
+        ]
+        for measure in LampStrongsSpreadMeasure.allCases {
+            let bars = LampStrongsSpread.bars(divisions, measure: measure)
+            #expect(bars.map(\.fractionOfOccurrences) == [0.2, 0.8, 0])
+        }
+        let nowhere = LampStrongsSpread.bars(
+            [Self.division(id: 41, name: "Mark", occurrenceCount: 0, wordCount: 1_000)],
+            measure: .occurrences
+        )
+        #expect(nowhere[0].fractionOfOccurrences == 0)
+    }
+
+    /// A book that holds the word never reads "0%".
+    @Test func aPercentTooSmallToRoundIsLessThanOne() {
+        #expect(LampStrongsSpread.percent(0.16) == "16%")
+        #expect(LampStrongsSpread.percent(1) == "100%")
+        #expect(LampStrongsSpread.percent(0.004) == "<1%")
+        #expect(LampStrongsSpread.percent(0) == "0%")
+    }
+
+    /// Where the word occurs is the spread's one question: books and sections
+    /// are bars with a rate to offer, and chapters are the grid, without one.
+    @Test func theSpreadIsGroupedOnlyByWhere() {
+        #expect(LampStrongsSpreadGrouping.allCases.map(\.title) == ["Books", "Sections", "Chapters"])
+        #expect(LampStrongsSpreadGrouping.books.bars == .books)
+        #expect(LampStrongsSpreadGrouping.sections.bars == .sections)
+        #expect(LampStrongsSpreadGrouping.chapters.bars == nil)
+        #expect(LampStrongsSpreadGrouping.books.usesMeasure)
+        #expect(!LampStrongsSpreadGrouping.chapters.usesMeasure)
+    }
+
     /// Per 1,000 words is a different ranking, not a rescaling: a short book
     /// with few occurrences can outrank a long one with many.
     @Test func therateCanRankABookAboveOneWithMoreOccurrences() {

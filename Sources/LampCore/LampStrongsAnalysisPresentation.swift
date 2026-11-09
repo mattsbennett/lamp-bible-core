@@ -195,6 +195,42 @@ public enum LampStrongsSpreadMeasure: String, CaseIterable, Identifiable, Sendab
     }
 }
 
+/// What the spread divides a word's occurrences by: the one question it
+/// answers is where the word occurs.
+///
+/// Renderings and forms are not here. Overview lists them already, with
+/// their own ring, and a second chart of them was the same figures again.
+/// Books and sections are drawn as bars and chapters as a grid, so how a
+/// chart is drawn follows from this and is never a choice of its own.
+public enum LampStrongsSpreadGrouping: String, CaseIterable, Identifiable, Sendable {
+    case books
+    case sections
+    case chapters
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .books: "Books"
+        case .sections: "Sections"
+        case .chapters: "Chapters"
+        }
+    }
+
+    /// The grouping a bar chart draws, or nil for the chapter grid.
+    public var bars: LampStrongsGrouping? {
+        switch self {
+        case .books: .books
+        case .sections: .sections
+        case .chapters: nil
+        }
+    }
+
+    /// Whether "per 1,000 words" means anything. The grid shades chapters
+    /// by how often the word occurs in them, and has no rate to offer.
+    public var usesMeasure: Bool { self != .chapters }
+}
+
 /// One bar of the spread chart.
 public struct LampStrongsSpreadBar: Identifiable, Equatable, Sendable {
     public let id: Int
@@ -202,6 +238,9 @@ public struct LampStrongsSpreadBar: Identifiable, Equatable, Sendable {
     public let value: Double
     /// How long to draw the bar, as a fraction of the longest one.
     public let share: Double
+    /// This division's part of every occurrence charted, 0...1: the "16%"
+    /// beside a count, which is what a ring of the same figures would say.
+    public let fractionOfOccurrences: Double
     public let expectation: LampStrongsAnalysis.Expectation
     public let occurrenceCount: Int
     public let wordCount: Int
@@ -211,6 +250,7 @@ public struct LampStrongsSpreadBar: Identifiable, Equatable, Sendable {
         name: String,
         value: Double,
         share: Double,
+        fractionOfOccurrences: Double = 0,
         expectation: LampStrongsAnalysis.Expectation,
         occurrenceCount: Int,
         wordCount: Int
@@ -219,6 +259,7 @@ public struct LampStrongsSpreadBar: Identifiable, Equatable, Sendable {
         self.name = name
         self.value = value
         self.share = share
+        self.fractionOfOccurrences = fractionOfOccurrences
         self.expectation = expectation
         self.occurrenceCount = occurrenceCount
         self.wordCount = wordCount
@@ -243,17 +284,29 @@ public enum LampStrongsSpread {
             }
         }
         let longest = values.max() ?? 0
+        let total = divisions.reduce(0) { $0 + $1.occurrenceCount }
         return zip(divisions, values).map { division, value in
             LampStrongsSpreadBar(
                 id: division.id,
                 name: division.name,
                 value: value,
                 share: longest > 0 ? value / longest : 0,
+                fractionOfOccurrences: total > 0
+                    ? Double(division.occurrenceCount) / Double(total)
+                    : 0,
                 expectation: division.expectation,
                 occurrenceCount: division.occurrenceCount,
                 wordCount: division.wordCount
             )
         }
+    }
+
+    /// A part of the whole as a percentage: "16%", "<1%" for a part too
+    /// small to round to one, so a book holding the word never reads "0%".
+    public static func percent(_ fraction: Double) -> String {
+        guard fraction > 0 else { return "0%" }
+        let whole = Int((fraction * 100).rounded())
+        return whole < 1 ? "<1%" : "\(whole)%"
     }
 }
 
