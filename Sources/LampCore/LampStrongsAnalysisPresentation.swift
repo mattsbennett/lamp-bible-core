@@ -38,19 +38,23 @@ public enum LampStrongsFilter: Hashable, Sendable {
         }
     }
 
-    public func matches(_ occurrence: LampStrongsAnalysis.Occurrence) -> Bool {
+    /// Whether `occurrence` of `key` is one this filter keeps. A grammar
+    /// value needs the key: a Hebrew code is read for the morpheme its
+    /// Strong's number names, and the code alone cannot say whether it is
+    /// Hebrew or Greek.
+    public func matches(_ occurrence: LampStrongsAnalysis.Occurrence, key: String) -> Bool {
         switch self {
         case .rendering(let id, _):
             occurrence.renderingID == id
         case .form(let text):
             occurrence.form == text
         case .grammar(let feature, let value):
-            // Read through core's own parser rather than taking the code
-            // apart here. The grammar counts this filter narrows were built
-            // by that parser, so anything else would answer a different
-            // question from the number the reader clicked.
+            // Read through core's own parser for the key's language rather
+            // than taking the code apart here. The grammar counts this filter
+            // narrows were built by that parser, so anything else would answer
+            // a different question from the number the reader clicked.
             occurrence.morphology.map {
-                LampGreekMorphology.features(of: $0)
+                LampMorphology.features(of: $0, strongsKey: LampStrongsKey.normalized(key))
                     .contains { $0.feature == feature && $0.value == value }
             } ?? false
         case .book(let number):
@@ -155,7 +159,7 @@ extension LampStrongsAnalysis {
     /// chosen.
     public func occurrences(matching filter: LampStrongsFilter?) -> [Occurrence] {
         guard let filter else { return occurrences }
-        return occurrences.filter(filter.matches)
+        return occurrences.filter { filter.matches($0, key: key) }
     }
 }
 

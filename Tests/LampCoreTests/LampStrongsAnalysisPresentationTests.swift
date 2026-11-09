@@ -33,12 +33,13 @@ struct StrongsAnalysisSupportTests {
     }
 
     private static func analysis(
+        key: String = "G3056",
         translationID: String,
         occurrences: [LampStrongsAnalysis.Occurrence] = [],
         books: [LampStrongsAnalysis.Division] = []
     ) -> LampStrongsAnalysis {
         LampStrongsAnalysis(
-            key: "G3056",
+            key: key,
             translationID: translationID,
             translationName: translationID,
             translationAbbreviation: translationID,
@@ -167,6 +168,31 @@ struct StrongsAnalysisSupportTests {
             ).isEmpty,
             "the same value under another feature must not match"
         )
+    }
+
+    /// A Hebrew word's grammar is read by the Hebrew parser, for the morpheme
+    /// its Strong's number names, as the analysis counted it. Read as Greek,
+    /// "Noun 36" in TAHOT's ʼahăbâh (H160) narrowed to nothing.
+    @Test func hebrewGrammarMatchesTheWordsOwnMorpheme() throws {
+        let noun = try #require(
+            LampMorphology.features(of: "HR/Ncfsc/Sp3ms", strongsKey: "H160")
+                .first { $0.feature == .partOfSpeech }
+        )
+        let qal = try #require(
+            LampMorphology.features(of: "HR/Vqcc", strongsKey: "H160").first { $0.feature == .stem }
+        )
+        let analysis = Self.analysis(
+            key: "H160",
+            translationID: "TAHOT",
+            occurrences: [
+                Self.occurrence(book: 1, chapter: 29, verse: 20, form: nil, morphology: "HR/Ncfsc/Sp3ms"),
+                Self.occurrence(book: 22, chapter: 2, verse: 4, form: nil, morphology: "HNcfsa"),
+                Self.occurrence(book: 5, chapter: 10, verse: 15, form: nil, morphology: "HR/Vqcc"),
+            ]
+        )
+
+        #expect(analysis.occurrences(matching: .grammar(feature: noun.feature, value: noun.value)).count == 2)
+        #expect(analysis.occurrences(matching: .grammar(feature: qal.feature, value: qal.value)).count == 1)
     }
 
     @Test func aformMatchesTheTaggedWordAndNeverAnUntaggedOne() {
