@@ -344,11 +344,10 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     /// a companion by its word rather than its number.
     public func values(
         from analyses: [LampStrongsAnalysis],
-        headwords: [String: LampStrongsHeadword] = [:],
-        parsingsFrom others: [LampStrongsAnalysis] = []
+        headwords: [String: LampStrongsHeadword] = [:]
     ) -> [Value] {
         guard by == .translation else {
-            return analyses.first.map { values(from: $0, headwords: headwords, parsingsFrom: others) } ?? []
+            return analyses.first.map { values(from: $0, headwords: headwords) } ?? []
         }
         return analyses.map { analysis in
             Value(
@@ -371,18 +370,14 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     /// because there are few of them. A share is of occurrences, largest
     /// first, with everything past its sixth slice gathered as "Other" so the
     /// ring is the whole.
-    ///
-    /// `parsingsFrom` lends a form chart the parsings other translations give
-    /// the same spellings (`LampStrongsFormReading`).
     public func values(
         from analysis: LampStrongsAnalysis,
-        headwords: [String: LampStrongsHeadword] = [:],
-        parsingsFrom others: [LampStrongsAnalysis] = []
+        headwords: [String: LampStrongsHeadword] = [:]
     ) -> [Value] {
         func standing(_ division: LampStrongsAnalysis.Division) -> LampStrongsAnalysis.Expectation? {
             division.expectation == .asExpected ? nil : division.expectation
         }
-        if drawnStyle == .share, by.isPartOfWhole { return shareValues(from: analysis, parsingsFrom: others) }
+        if drawnStyle == .share, by.isPartOfWhole { return shareValues(from: analysis) }
         switch by {
         case .book where drawnStyle == .grid:
             return analysis.books.map { book in
@@ -428,7 +423,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             }
         case .form:
             let total = analysis.forms.reduce(0) { $0 + $1.count }
-            let readings = Self.formDetails(of: analysis, parsingsFrom: others)
+            let readings = Self.formDetails(of: analysis)
             return analysis.forms.prefix(Self.rankedLimit).map {
                 .init(
                     label: $0.text,
@@ -521,11 +516,8 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         return analysis.grammar.filter { $0.feature == feature }
     }
 
-    private func shareValues(
-        from analysis: LampStrongsAnalysis,
-        parsingsFrom others: [LampStrongsAnalysis]
-    ) -> [Value] {
-        let formDetails = by == .form ? Self.formDetails(of: analysis, parsingsFrom: others) : [:]
+    private func shareValues(from analysis: LampStrongsAnalysis) -> [Value] {
+        let formDetails = by == .form ? Self.formDetails(of: analysis) : [:]
         let counts: [(label: String, count: Int, detail: String?)] = switch by {
         case .book: analysis.books.map { ($0.name, $0.occurrenceCount, nil) }
         case .section: analysis.sections.map { ($0.name, $0.occurrenceCount, nil) }
@@ -546,12 +538,9 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
 
     /// Each form's line under its spelling, by form ID: its Latin letters and
     /// what it does, "agapēs · “of …”", for a room that reads no Greek.
-    private static func formDetails(
-        of analysis: LampStrongsAnalysis,
-        parsingsFrom others: [LampStrongsAnalysis]
-    ) -> [String: String] {
+    private static func formDetails(of analysis: LampStrongsAnalysis) -> [String: String] {
         var details: [String: String] = [:]
-        for reading in LampStrongsFormReading.readings(of: analysis, parsingsFrom: others) {
+        for reading in LampStrongsFormReading.readings(of: analysis) {
             let line = [reading.transliteration, reading.role].compactMap { $0 }.joined(separator: " · ")
             if !line.isEmpty { details[reading.form.id] = line }
         }
@@ -688,17 +677,8 @@ public extension LampLibrary {
                 (try? dictionaryEntries(keys: keys, moduleIDs: dictionaryIDs)) ?? []
             )
         }
-        // A form chart borrows parsings for spellings its own tags do not
-        // parse, from the other translations this library may read.
-        var lenders: [LampStrongsAnalysis] = []
-        if chart.by == .form, let first = analyses.first,
-           LampStrongsFormReading.readings(of: first).contains(where: { $0.role == nil }) {
-            lenders = try strongsAnalyses(
-                key: chart.source.strongs, moduleIDs: translationIDs, bookRange: books
-            ).filter { $0.translationID != first.translationID }
-        }
         var worked = chart
-        worked.values = chart.values(from: analyses, headwords: headwords, parsingsFrom: lenders)
+        worked.values = chart.values(from: analyses, headwords: headwords)
         worked.headword = chart.showsHeadword
             ? chart.headword(from: analyses[0], headword: headwords[LampStrongsKey.normalized(chart.source.strongs)])
             : nil

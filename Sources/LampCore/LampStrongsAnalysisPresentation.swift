@@ -1053,35 +1053,32 @@ public struct LampStrongsFormReading: Equatable, Sendable {
     public let role: String?
     /// The parsing in grammar's own terms, every one the spelling carries.
     public let parsing: String?
-    /// The English this form most often became, commonest first.
+    /// The English this form most often became in this translation,
+    /// commonest first. Empty for a Greek or Hebrew text, which has none.
     public let renderedAs: [String]
-    /// The translation `renderedAs` is from when it is not this analysis's:
-    /// a Greek or Hebrew text has no English of its own, so it shows the
-    /// English a translation gave the same spelling. Nil when it is this
-    /// translation's own.
-    public let renderedIn: String?
 
     public init(
         form: LampStrongsAnalysis.Form,
         transliteration: String?,
         role: String?,
         parsing: String?,
-        renderedAs: [String],
-        renderedIn: String? = nil
+        renderedAs: [String]
     ) {
         self.form = form
         self.transliteration = transliteration
         self.role = role
         self.parsing = parsing
         self.renderedAs = renderedAs
-        self.renderedIn = renderedIn
     }
 
-    /// A reading for each of the analysis's forms, in its order.
+    /// A reading for each of the analysis's forms, in its order, from this
+    /// translation's own tags and nothing else.
     ///
-    /// A form's parsings are its own tags' where they carry them. The BSB
-    /// tags the Greek it renders but not its parsing, so `parsingsFrom` lends
-    /// the codes other translations give the same spelling of the same word.
+    /// Nothing is borrowed from another text, by owner decision (2026-11-09):
+    /// a parsing or an English that Lamp inferred is not the source's claim,
+    /// and a reader cannot tell the two apart. A translation whose tags give
+    /// spellings without parsings has readings without roles, and `gaps`
+    /// says so.
     ///
     /// A spelling is not always one parsing: πνεῦμα is a subject in some
     /// verses and an object in others, ἡμέρας "of a day" or "days". So every
@@ -1089,47 +1086,26 @@ public struct LampStrongsFormReading: Equatable, Sendable {
     /// when they all agree on it. Stating the commonest alone was wrong for
     /// some 1 in 20 of the New Testament's nouns, to the reader least able to
     /// tell.
-    public static func readings(
-        of analysis: LampStrongsAnalysis,
-        parsingsFrom others: [LampStrongsAnalysis] = []
-    ) -> [LampStrongsFormReading] {
+    public static func readings(of analysis: LampStrongsAnalysis) -> [LampStrongsFormReading] {
         let key = LampStrongsKey.normalized(analysis.key)
         let isGreek = key.first == "G"
         let script = key.first ?? "G"
         var codes: [String: [String: Int]] = [:]
-        var lent: [String: [String: Int]] = [:]
         // By form, then by the English folded to lower case, each spelling
         // counted: "Love" at the start of a sentence is the same English as
         // "love", and is shown as it is most often written. A tag whose text
         // is the Greek or Hebrew word itself is no English at all.
-        typealias English = [String: [String: [String: Int]]]
-        func addEnglish(_ occurrence: LampStrongsAnalysis.Occurrence, id: String, to english: inout English) {
-            let text = englishOfForm(occurrence.text)
-            guard !text.isEmpty, !LampStrongsAnalyzer.isOriginalScript(text, language: script) else { return }
-            english[id, default: [:]][text.lowercased(), default: [:]][text, default: 0] += 1
-        }
-        var lentEnglish: [(name: String, english: English)] = []
-        for other in others where LampStrongsKey.normalized(other.key) == key {
-            var english: English = [:]
-            for occurrence in other.occurrences {
-                guard let form = occurrence.form else { continue }
-                let id = LampStrongsAnalyzer.formID(form)
-                if let code = occurrence.morphology { lent[id, default: [:]][code, default: 0] += 1 }
-                addEnglish(occurrence, id: id, to: &english)
-            }
-            if !english.isEmpty {
-                lentEnglish.append((other.translationAbbreviation ?? other.translationName, english))
-            }
-        }
-        var english: English = [:]
+        var english: [String: [String: [String: Int]]] = [:]
         for occurrence in analysis.occurrences {
             guard let form = occurrence.form else { continue }
             let id = LampStrongsAnalyzer.formID(form)
             if let code = occurrence.morphology { codes[id, default: [:]][code, default: 0] += 1 }
-            addEnglish(occurrence, id: id, to: &english)
+            let text = englishOfForm(occurrence.text)
+            guard !text.isEmpty, !LampStrongsAnalyzer.isOriginalScript(text, language: script) else { continue }
+            english[id, default: [:]][text.lowercased(), default: [:]][text, default: 0] += 1
         }
         return analysis.forms.map { form in
-            let carried = codes[form.id] ?? lent[form.id] ?? [:]
+            let carried = codes[form.id] ?? [:]
             var roles: [String: Int] = [:]
             var parsings: [String: Int] = [:]
             var partsOfSpeech: Set<String> = []
@@ -1149,17 +1125,7 @@ public struct LampStrongsFormReading: Equatable, Sendable {
                     parsings[features.map(\.value).joined(separator: " · "), default: 0] += count
                 }
             }
-            // This translation's English, or the English of whichever other
-            // gave this spelling most often.
-            var own = english[form.id]
-            var renderedIn: String?
-            if own == nil, let lender = lentEnglish
-                .filter({ $0.english[form.id] != nil })
-                .max(by: { total($0.english[form.id]) < total($1.english[form.id]) }) {
-                own = lender.english[form.id]
-                renderedIn = lender.name
-            }
-            let rendered = (own ?? [:]).values
+            let rendered = (english[form.id] ?? [:]).values
                 .map { spellings in
                     (
                         text: spellings.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? "",
@@ -1179,8 +1145,7 @@ public struct LampStrongsFormReading: Equatable, Sendable {
                 // the spelling ("a noun"); it is said only beside a job.
                 role: roles.count == 1 && partsOfSpeech.contains(roles.keys.first ?? "") ? nil : either(roles),
                 parsing: parsings.isEmpty ? nil : ranked(parsings).joined(separator: ", or "),
-                renderedAs: shown,
-                renderedIn: shown.isEmpty ? nil : renderedIn
+                renderedAs: shown
             )
         }
     }
@@ -1191,10 +1156,6 @@ public struct LampStrongsFormReading: Equatable, Sendable {
             return nil
         }
         return ("aeiou".contains(part.first ?? "x") ? "an " : "a ") + part
-    }
-
-    private static func total(_ english: [String: [String: Int]]?) -> Int {
-        (english ?? [:]).values.reduce(0) { $0 + $1.values.reduce(0, +) }
     }
 
     /// A Hebrew form's job, with the small words its spelling carries.
@@ -1328,15 +1289,51 @@ public struct LampStrongsFormReading: Equatable, Sendable {
         return words.joined(separator: " ")
     }
 
-    /// What the Forms heading says to a reader new to the language.
-    public static func note(forKey key: String) -> String {
-        LampStrongsKey.normalized(key).first == "H"
+    /// What the Forms heading says to a reader new to the language, and
+    /// what each spelling below is shown with, which depends on what this
+    /// translation's tags carry.
+    public static func note(for analysis: LampStrongsAnalysis, readings: [LampStrongsFormReading]) -> String {
+        let isHebrew = LampStrongsKey.normalized(analysis.key).first == "H"
+        let why = isHebrew
             ? "Hebrew joins words like “and”, “the” and “in” to the front of a word, "
-                + "and changes its ending for “of”, for more than one, and for who acts. "
-                + "Each spelling is shown with what it does and the English it became here."
+                + "and changes its ending for “of”, for more than one, and for who acts."
             : "Greek changes a word’s ending for its job in the sentence, where English "
-                + "uses word order and words like “of” and “to”. Each spelling is shown "
-                + "with how to say it, what it does, and the English it became here."
+                + "uses word order and words like “of” and “to”."
+        var shown: [String] = []
+        if readings.contains(where: { $0.transliteration != nil }) { shown.append("how to say it") }
+        if readings.contains(where: { $0.role != nil }) { shown.append("what it does") }
+        if readings.contains(where: { !$0.renderedAs.isEmpty }) { shown.append("the English it became here") }
+        guard !shown.isEmpty else { return why }
+        let list = shown.count == 1
+            ? shown[0]
+            : shown.dropLast().joined(separator: ", ") + " and " + shown[shown.count - 1]
+        return why + " Each spelling is shown with \(list)."
+    }
+
+    /// What this translation's tags do not say about the word's forms, each
+    /// a sentence the Forms section prints, so a figure that cannot be given
+    /// is said to be missing rather than looking miscounted.
+    public static func gaps(of analysis: LampStrongsAnalysis, readings: [LampStrongsFormReading]) -> [String] {
+        let name = analysis.translationAbbreviation ?? analysis.translationName
+        let language = LampStrongsKey.normalized(analysis.key).first == "H" ? "Hebrew" : "Greek"
+        guard !analysis.forms.isEmpty else {
+            return ["\(name) tags the word by its number but not by its \(language) spelling, "
+                + "so its forms cannot be counted here."]
+        }
+        var gaps: [String] = []
+        if !readings.contains(where: { $0.parsing != nil }) {
+            gaps.append("\(name) tags each \(language) spelling but not its grammar, "
+                + "so what each one does is not said here.")
+        }
+        let spelled = analysis.forms.reduce(0) { $0 + $1.count }
+        let total = analysis.occurrenceCount
+        if spelled < total {
+            let missing = total - spelled
+            gaps.append("\(missing) of \(total) "
+                + (total == 1 ? "occurrence is" : (missing == 1 ? "occurrences is" : "occurrences are"))
+                + " tagged in \(name) without a \(language) spelling.")
+        }
+        return gaps
     }
 
     /// The parsing's job in a sentence, in plain words.

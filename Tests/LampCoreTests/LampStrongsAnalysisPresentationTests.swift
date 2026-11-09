@@ -1300,20 +1300,49 @@ struct StrongsFormReadingTests {
         #expect(readings[1].parsing == "Noun · Genitive · Singular · Feminine")
     }
 
-    @Test func aFormWithoutItsOwnParsingBorrowsAnotherTranslations() {
-        var bare = LampStrongsAnalyzer(key: "G26", translationID: "B", translationName: "Bare")
-        for (index, row) in [("of love", "ἀγάπης"), ("And love", "ἀγάπη"), ("Love", "ἀγάπη"), ("love", "ἀγάπη")].enumerated() {
+    /// As the BSB tags it: each Greek spelling, no parsing, and three tags
+    /// with no spelling at all.
+    private var bare: LampStrongsAnalysis {
+        var bare = LampStrongsAnalyzer(key: "G26", translationID: "B", translationName: "Bare", translationAbbreviation: "BSB")
+        let rows: [(String, String?)] = [
+            ("of love", "ἀγάπης"), ("And love", "ἀγάπη"), ("Love", "ἀγάπη"), ("love", "ἀγάπη"), ("love", nil),
+        ]
+        for (index, row) in rows.enumerated() {
             let text = row.0 + " word"
-            let json = #"[{"start":0,"end":\#(row.0.count),"data":{"strongs":"G26","lemma":"\#(row.1)"}},"#
+            let lemma = row.1.map { #","lemma":"\#($0)""# } ?? ""
+            let json = #"[{"start":0,"end":\#(row.0.count),"data":{"strongs":"G26"\#(lemma)}},"#
                 + #"{"start":\#(row.0.count + 1),"end":\#(text.count),"data":{"strongs":"G1"}}]"#
             bare.add(reference: 46_013_001 + index, text: text, annotationsJSON: json)
         }
-        let unread = LampStrongsFormReading.readings(of: bare.analysis())
-        #expect(unread.allSatisfy { $0.role == nil })
-        let lent = LampStrongsFormReading.readings(of: bare.analysis(), parsingsFrom: [analysis])
-        #expect(lent.map(\.role) == ["the subject", "“of …”"])
+        return bare.analysis()
+    }
+
+    @Test func aFormWithoutItsOwnParsingSaysNoneAndTheSectionSaysWhy() {
+        let readings = LampStrongsFormReading.readings(of: bare)
+        // Nothing borrowed from another text, however well it would match.
+        #expect(readings.allSatisfy { $0.role == nil && $0.parsing == nil })
         // "And" came from a neighbouring word; "Love" starts a sentence.
-        #expect(lent[0].renderedAs == ["love"])
+        #expect(readings[0].renderedAs == ["love"])
+        #expect(LampStrongsFormReading.gaps(of: bare, readings: readings) == [
+            "BSB tags each Greek spelling but not its grammar, so what each one does is not said here.",
+            "1 of 5 occurrences is tagged in BSB without a Greek spelling.",
+        ])
+        #expect(LampStrongsFormReading.note(for: bare, readings: readings).hasSuffix(
+            "Each spelling is shown with how to say it and the English it became here."
+        ))
+        #expect(LampStrongsFormReading.gaps(of: analysis, readings: LampStrongsFormReading.readings(of: analysis)).isEmpty)
+    }
+
+    @Test func aTranslationWithoutSpellingsSaysItCannotCountForms() {
+        var esv = LampStrongsAnalyzer(key: "G26", translationID: "E", translationName: "English", translationAbbreviation: "ESV")
+        esv.add(
+            reference: 46_013_001, text: "love word",
+            annotationsJSON: #"[{"start":0,"end":4,"data":{"strongs":"G26"}},{"start":5,"end":9,"data":{"strongs":"G1"}}]"#
+        )
+        let analysis = esv.analysis()
+        #expect(LampStrongsFormReading.gaps(of: analysis, readings: []) == [
+            "ESV tags the word by its number but not by its Greek spelling, so its forms cannot be counted here.",
+        ])
     }
 
     @Test func aGreekTextsFormIsTheWordAsPrinted() {
@@ -1386,16 +1415,14 @@ struct StrongsFormReadingTests {
         return analyzer.analysis()
     }
 
-    @Test func aGreekTextBorrowsItsEnglishAndSaysFromWhere() {
+    @Test func aGreekTextHasNoEnglishOfItsOwn() {
         let tagnt = original("G26", language: "grc", words: [("ἀγάπης", "N-GSF"), ("ἀγάπης", "N-GSF")])
-        #expect(LampStrongsFormReading.readings(of: tagnt)[0].renderedAs.isEmpty)
-        var bsb = LampStrongsAnalyzer(key: "G26", translationID: "BSBs", translationName: "BSB", translationAbbreviation: "BSB")
-        let json = #"[{"start":0,"end":7,"data":{"strongs":"G26","lemma":"ἀγάπης"}}]"#
-        bsb.add(reference: 46_013_001, text: "of love", annotationsJSON: json)
-        let lent = LampStrongsFormReading.readings(of: tagnt, parsingsFrom: [bsb.analysis()])[0]
-        #expect(lent.renderedAs == ["of love"])
-        #expect(lent.renderedIn == "BSB")
-        #expect(lent.role == "“of …”")
+        let readings = LampStrongsFormReading.readings(of: tagnt)
+        #expect(readings[0].renderedAs.isEmpty)
+        #expect(readings[0].role == "“of …”")
+        #expect(LampStrongsFormReading.note(for: tagnt, readings: readings).hasSuffix(
+            "Each spelling is shown with how to say it and what it does."
+        ))
     }
 
     @Test func hebrewAccentsAreNotADifferentSpelling() {
