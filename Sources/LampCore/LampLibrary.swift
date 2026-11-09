@@ -380,30 +380,8 @@ public actor LampLibrary {
     public func versification(moduleID: String) throws -> LampVersification {
         let queue = try openDatabase(moduleID: moduleID)
         if let known = versifications[moduleID] { return known }
-        let declared: (scheme: String?, departures: String?) = try queue.read { db in
-            let tables = try tableNames(in: db)
-            if tables.contains("translation_meta") {
-                let row = try Row.fetchOne(db, sql: "SELECT versification FROM translation_meta LIMIT 1")
-                return (row?["versification"], nil)
-            }
-            guard tables.contains("translations") else { return (nil, nil) }
-            let columns = try columnNames(in: db, table: "translations")
-            guard columns.contains("versification") else { return (nil, nil) }
-            let hasDepartures = columns.contains("versification_mappings")
-            let row = try Row.fetchOne(
-                db,
-                sql: "SELECT versification\(hasDepartures ? ", versification_mappings" : "") FROM translations WHERE id = ?",
-                arguments: [moduleID]
-            )
-            return (row?["versification"], hasDepartures ? row?["versification_mappings"] : nil)
-        }
-        var versification = LampVersification.standard(
-            LampVersification.Scheme(moduleValue: declared.scheme) ?? .english
-        )
-        if let departures = declared.departures?.data(using: .utf8),
-           let lines = try? JSONDecoder().decode([String].self, from: departures),
-           !lines.isEmpty {
-            versification = versification.departing(by: lines)
+        let versification = try queue.read { db in
+            try LampVersification.declared(in: db, translationID: moduleID)
         }
         versifications[moduleID] = versification
         return versification
@@ -1042,16 +1020,8 @@ public actor LampLibrary {
     /// The table holding a translation's verses and, where several share it,
     /// the rows that are its own; nil for one without Strong's tags to read.
     private func verseSource(in db: Database, moduleID: String) throws -> (table: String, translationID: String?)? {
-        let tables = try tableNames(in: db)
-        let source: (table: String, translationID: String?)
-        if tables.contains("verses"), tables.contains("books") {
-            source = ("verses", nil)
-        } else if tables.contains("translation_verses") {
-            source = ("translation_verses", moduleID)
-        } else {
-            return nil
-        }
-        return try columnNames(in: db, table: source.table).contains("annotations_json") ? source : nil
+        try LampStrongsAnalysisReader.VerseSource.find(in: db, translationID: moduleID)
+            .map { ($0.table, $0.translationID) }
     }
 
     private func strongsFingerprint(moduleID: String) throws -> String? {
@@ -1116,17 +1086,33 @@ public actor LampLibrary {
         guard fileManager.fileExists(atPath: strongsIndexURL.path),
               let fingerprint = try strongsFingerprint(moduleID: module.id) else { return nil }
         let index = try openStrongsIndex()
-        let indexed = try index.read { db -> (LampStrongsCorpus, [Int])? in
-            guard try LampStrongsIndex.isCurrent(translationID: module.id, fingerprint: fingerprint, in: db) else {
-                return nil
-            }
-            return (
-                try LampStrongsIndex.corpus(for: key, translationID: module.id, bookRange: bookRange, in: db),
-                try LampStrongsIndex.references(of: key, translationID: module.id, bookRange: bookRange, in: db)
+        guard let indexed = try index.read({
+            try LampStrongsAnalysisReader.indexed(
+                key: key, translationID: module.id, fingerprint: fingerprint, bookRange: bookRange, in: $0
             )
+        }) else { return nil }
+        var analyzer = strongsAnalyzer(
+            module: module, key: key, includingVerseText: includingVerseText, corpus: indexed.corpus
+        )
+        try openDatabase(moduleID: module.id).read { db in
+            guard let source = try LampStrongsAnalysisReader.VerseSource.find(in: db, translationID: module.id)
+            else { return }
+            try LampStrongsAnalysisReader.addVerses(indexed.references, to: &analyzer, from: source, in: db)
         }
-        guard let (corpus, references) = indexed else { return nil }
-        var analyzer = LampStrongsAnalyzer(
+        return try analyzer.analysis { keys in
+            try index.read {
+                try LampStrongsIndex.verseCounts(of: keys, translationID: module.id, bookRange: bookRange, in: $0)
+            }
+        }
+    }
+
+    private func strongsAnalyzer(
+        module: LampInstalledModule,
+        key: String,
+        includingVerseText: Bool,
+        corpus: LampStrongsCorpus? = nil
+    ) -> LampStrongsAnalyzer {
+        LampStrongsAnalyzer(
             key: key,
             translationID: module.id,
             translationName: module.name,
@@ -1135,25 +1121,6 @@ public actor LampLibrary {
             includingVerseText: includingVerseText,
             corpus: corpus
         )
-        try openDatabase(moduleID: module.id).read { db in
-            guard let source = try verseSource(in: db, moduleID: module.id) else { return }
-            for start in stride(from: 0, to: references.count, by: 500) {
-                let batch = Array(references[start..<min(start + 500, references.count)])
-                var arguments: StatementArguments = source.translationID.map { [$0] } ?? []
-                arguments += StatementArguments(batch)
-                for row in try Row.fetchAll(db, sql: """
-                    SELECT ref, text, annotations_json FROM \(source.table)
-                    WHERE \(source.translationID == nil ? "" : "translation_id = ? AND ")ref IN (\(Array(repeating: "?", count: batch.count).joined(separator: ", ")))
-                    """, arguments: arguments) {
-                    analyzer.add(reference: row["ref"], text: row["text"], annotationsJSON: row["annotations_json"])
-                }
-            }
-        }
-        return try analyzer.analysis { keys in
-            try index.read {
-                try LampStrongsIndex.verseCounts(of: keys, translationID: module.id, bookRange: bookRange, in: $0)
-            }
-        }
     }
 
     /// Builds the Strong's index of each tagged translation in `moduleIDs`,
@@ -1251,8 +1218,6 @@ public actor LampLibrary {
         includingVerseText: Bool = false
     ) throws -> [LampStrongsAnalysis] {
         guard !LampStrongsKey.normalized(key).isEmpty else { return [] }
-        let firstBook = bookRange?.lowerBound ?? Int.min
-        let lastBook = bookRange?.upperBound ?? Int.max
         let modules = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
@@ -1263,38 +1228,11 @@ public actor LampLibrary {
             ) {
                 return analysis.wordCount > 0 ? analysis : nil
             }
-            let queue = try openDatabase(moduleID: module.id)
-            let analysis = try queue.read { db -> LampStrongsAnalysis? in
-                let tables = try tableNames(in: db)
-                let table: String
-                var condition = "book BETWEEN ? AND ? AND annotations_json IS NOT NULL"
-                var arguments: StatementArguments = [firstBook, lastBook]
-                if tables.contains("verses"), tables.contains("books") {
-                    table = "verses"
-                } else if tables.contains("translation_verses") {
-                    table = "translation_verses"
-                    condition = "translation_id = ? AND " + condition
-                    arguments = [module.id, firstBook, lastBook]
-                } else {
-                    return nil
-                }
-                guard try columnNames(in: db, table: table).contains("annotations_json") else {
-                    return nil
-                }
-                var analyzer = LampStrongsAnalyzer(
-                    key: key,
-                    translationID: module.id,
-                    translationName: module.name,
-                    translationAbbreviation: module.abbreviation,
-                    language: module.language,
-                    includingVerseText: includingVerseText
-                )
-                let rows = try Row.fetchCursor(db, sql: """
-                    SELECT ref, text, annotations_json FROM \(table) WHERE \(condition)
-                    """, arguments: arguments)
-                while let row = try rows.next() {
-                    analyzer.add(reference: row["ref"], text: row["text"], annotationsJSON: row["annotations_json"])
-                }
+            let analysis = try openDatabase(moduleID: module.id).read { db -> LampStrongsAnalysis? in
+                guard let source = try LampStrongsAnalysisReader.VerseSource.find(in: db, translationID: module.id)
+                else { return nil }
+                var analyzer = strongsAnalyzer(module: module, key: key, includingVerseText: includingVerseText)
+                try LampStrongsAnalysisReader.addEveryVerse(to: &analyzer, bookRange: bookRange, from: source, in: db)
                 return analyzer.analysis()
             }
             return analysis.flatMap { $0.wordCount > 0 ? $0 : nil }
@@ -1346,7 +1284,7 @@ public actor LampLibrary {
                     lemma: hit.lemma,
                     transliteration: hit.transliteration,
                     pronunciation: hit.pronunciation,
-                    senses: dictionarySenses(from: hit.sensesJSON)
+                    senses: Self.dictionarySenses(from: hit.sensesJSON)
                 )
             }
         }
@@ -1419,7 +1357,7 @@ public actor LampLibrary {
                         lemma: row["lemma"],
                         transliteration: row["transliteration"],
                         pronunciation: row["pronunciation"],
-                        senses: dictionarySenses(from: sensesJSON)
+                        senses: Self.dictionarySenses(from: sensesJSON)
                     )
                 }
             }
@@ -6113,7 +6051,10 @@ public actor LampLibrary {
         )
     }
 
-    private func dictionarySenses(from json: String?) -> [LampDictionarySense] {
+    /// A dictionary entry's senses from its `senses_json`. Static, so a
+    /// reader of a database the library doesn't open, the phone's bundled
+    /// dictionaries, reads them the same way: `LampDictionarySense.senses(fromJSON:)`.
+    static func dictionarySenses(from json: String?) -> [LampDictionarySense] {
         guard let json,
               let data = json.data(using: .utf8),
               let values = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
@@ -6122,14 +6063,14 @@ public actor LampLibrary {
         return values.compactMap { value in
             guard let object = value as? [String: Any] else { return nil }
             return LampDictionarySense(
-                partOfSpeech: plainText(from: object["partOfSpeech"] ?? object["part_of_speech"]),
-                gloss: plainText(from: object["gloss"]),
-                shortDefinition: plainText(from: object["shortDefinition"] ?? object["short_definition"]),
-                definition: plainText(from: object["definition"] ?? object["def"]),
-                derivation: plainText(from: object["derivation"]),
-                usage: plainText(from: object["usage"]),
-                scriptureLinks: dictionaryScriptureLinks(from: object),
-                dictionaryLinks: dictionaryEntryLinks(from: object),
+                partOfSpeech: LampModuleText.plainText(from: object["partOfSpeech"] ?? object["part_of_speech"]),
+                gloss: LampModuleText.plainText(from: object["gloss"]),
+                shortDefinition: LampModuleText.plainText(from: object["shortDefinition"] ?? object["short_definition"]),
+                definition: LampModuleText.plainText(from: object["definition"] ?? object["def"]),
+                derivation: LampModuleText.plainText(from: object["derivation"]),
+                usage: LampModuleText.plainText(from: object["usage"]),
+                scriptureLinks: Self.dictionaryScriptureLinks(from: object),
+                dictionaryLinks: Self.dictionaryEntryLinks(from: object),
                 styles: LampDictionaryStyles.styles(in: object),
                 septuagintHebrew: LampSeptuagintHebrew.list(
                     from: object["septuagintHebrew"] ?? object["septuagint_hebrew"]
@@ -6142,20 +6083,20 @@ public actor LampLibrary {
     /// annotated text and an explicit `references` collection. Preserve both so
     /// clients can make inline labels interactive and append references that do
     /// not occur verbatim in the prose.
-    private func dictionaryScriptureLinks(from sense: [String: Any]) -> [LampScriptureLink] {
+    private static func dictionaryScriptureLinks(from sense: [String: Any]) -> [LampScriptureLink] {
         var links: [LampScriptureLink] = []
-        collectScriptureLinks(from: sense, into: &links)
+        Self.collectScriptureLinks(from: sense, into: &links)
 
         if let references = sense["references"] as? [Any] {
             for value in references {
                 guard let reference = value as? [String: Any],
-                      let startReference = integerValue(reference["sv"]) else { continue }
-                let endReference = integerValue(reference["ev"])
+                      let startReference = LampModuleText.integerValue(reference["sv"]) else { continue }
+                let endReference = LampModuleText.integerValue(reference["ev"])
                 guard !links.contains(where: {
                     $0.startReference == startReference && $0.endReference == endReference
                 }) else { continue }
                 links.append(LampScriptureLink(
-                    text: stringValue(reference["label"] ?? reference["text"]),
+                    text: LampModuleText.stringValue(reference["label"] ?? reference["text"]),
                     startReference: startReference,
                     endReference: endReference
                 ))
@@ -6169,43 +6110,43 @@ public actor LampLibrary {
     /// Extracts annotated links to other lexicon entries. Strong's source data
     /// places these primarily in annotated derivation fields, but walking the
     /// complete sense also supports links embedded in definitions and usage notes.
-    private func dictionaryEntryLinks(from sense: [String: Any]) -> [LampDictionaryLink] {
+    private static func dictionaryEntryLinks(from sense: [String: Any]) -> [LampDictionaryLink] {
         var links: [LampDictionaryLink] = []
-        collectDictionaryEntryLinks(from: sense, into: &links)
+        Self.collectDictionaryEntryLinks(from: sense, into: &links)
         var seen = Set<String>()
         return links.filter { seen.insert($0.id).inserted }
     }
 
-    private func collectDictionaryEntryLinks(
+    private static func collectDictionaryEntryLinks(
         from value: Any,
         into links: inout [LampDictionaryLink]
     ) {
         if let values = value as? [Any] {
             for value in values {
-                collectDictionaryEntryLinks(from: value, into: &links)
+                Self.collectDictionaryEntryLinks(from: value, into: &links)
             }
             return
         }
         guard let object = value as? [String: Any] else { return }
 
-        let parentText = stringValue(object["text"])
+        let parentText = LampModuleText.stringValue(object["text"])
         var parentOffsets: CharacterOffsets?
         if let annotations = object["annotations"] as? [Any] {
             for annotationValue in annotations {
                 guard let annotation = annotationValue as? [String: Any] else { continue }
                 let annotationData = annotation["data"] as? [String: Any]
-                guard let key = stringValue(
+                guard let key = LampModuleText.stringValue(
                     annotationData?["strongs"]
                         ?? annotationData?["key"]
                         ?? annotation["strongs"]
                         ?? annotation["key"]
                 )?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !key.isEmpty else { continue }
-                var text = stringValue(annotation["text"])
+                var text = LampModuleText.stringValue(annotation["text"])
                 if text == nil,
                    let parentText,
-                   let start = integerValue(annotation["start"]),
-                   let end = integerValue(annotation["end"]) {
+                   let start = LampModuleText.integerValue(annotation["start"]),
+                   let end = LampModuleText.integerValue(annotation["end"]) {
                     let offsets = parentOffsets ?? CharacterOffsets(parentText)
                     parentOffsets = offsets
                     text = offsets.substring(from: start, to: end)
@@ -6218,7 +6159,7 @@ public actor LampLibrary {
         }
 
         for (key, nestedValue) in object where key != "annotations" {
-            collectDictionaryEntryLinks(from: nestedValue, into: &links)
+            Self.collectDictionaryEntryLinks(from: nestedValue, into: &links)
         }
     }
 
@@ -6332,41 +6273,41 @@ public actor LampLibrary {
             return []
         }
         var links: [LampScriptureLink] = []
-        collectScriptureLinks(from: value, into: &links)
+        Self.collectScriptureLinks(from: value, into: &links)
         var seen: Set<String> = []
         return links.filter { seen.insert($0.id).inserted }
     }
 
-    private func collectScriptureLinks(from value: Any, into links: inout [LampScriptureLink]) {
+    private static func collectScriptureLinks(from value: Any, into links: inout [LampScriptureLink]) {
         if let values = value as? [Any] {
             for value in values {
-                collectScriptureLinks(from: value, into: &links)
+                Self.collectScriptureLinks(from: value, into: &links)
             }
             return
         }
         guard let object = value as? [String: Any] else { return }
 
-        let parentText = stringValue(object["text"])
+        let parentText = LampModuleText.stringValue(object["text"])
         var parentOffsets: CharacterOffsets?
         if let annotations = object["annotations"] as? [Any] {
             for annotationValue in annotations {
                 guard let annotation = annotationValue as? [String: Any],
-                      let kind = stringValue(annotation["type"] ?? annotation["kind"])?.lowercased(),
+                      let kind = LampModuleText.stringValue(annotation["type"] ?? annotation["kind"])?.lowercased(),
                       kind == "scripture" || kind == "crossref" || kind == "cross-reference" else {
                     continue
                 }
                 let annotationData = annotation["data"] as? [String: Any]
-                guard let startReference = integerValue(annotationData?["sv"] ?? annotation["sv"]) else {
+                guard let startReference = LampModuleText.integerValue(annotationData?["sv"] ?? annotation["sv"]) else {
                     continue
                 }
                 // Only an annotation without its own text needs cutting out of
                 // the parent, so neither the offsets nor the cut is paid for
                 // until one asks.
-                var text = stringValue(annotation["text"])
+                var text = LampModuleText.stringValue(annotation["text"])
                 if text == nil,
                    let parentText,
-                   let start = integerValue(annotation["start"]),
-                   let end = integerValue(annotation["end"]) {
+                   let start = LampModuleText.integerValue(annotation["start"]),
+                   let end = LampModuleText.integerValue(annotation["end"]) {
                     let offsets = parentOffsets ?? CharacterOffsets(parentText)
                     parentOffsets = offsets
                     text = offsets.substring(from: start, to: end)
@@ -6374,13 +6315,13 @@ public actor LampLibrary {
                 links.append(LampScriptureLink(
                     text: text,
                     startReference: startReference,
-                    endReference: integerValue(annotationData?["ev"] ?? annotation["ev"])
+                    endReference: LampModuleText.integerValue(annotationData?["ev"] ?? annotation["ev"])
                 ))
             }
         }
 
         for (key, nestedValue) in object where key != "annotations" {
-            collectScriptureLinks(from: nestedValue, into: &links)
+            Self.collectScriptureLinks(from: nestedValue, into: &links)
         }
     }
 
