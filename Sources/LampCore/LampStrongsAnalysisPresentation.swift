@@ -818,6 +818,11 @@ public enum LampSeptuagintSection {
     /// numbering, from an English translation's analysis of the Hebrew word
     /// read with its verse text.
     ///
+    /// The number needs only the two numberings; the mark needs the
+    /// analysis. With no analysis — a Hebrew word with no Strong's number to
+    /// analyse, or one the translation tags nowhere — every verse still has
+    /// its English number, and none is marked.
+    ///
     /// The mark is the translation's own tag, at the offsets it records,
     /// and nothing is guessed: a verse the translation does not tag with
     /// this word has its English number and no snippet. Only a verse its
@@ -828,11 +833,11 @@ public enum LampSeptuagintSection {
         for references: [Int],
         hebrewNumbering: LampVersification,
         englishNumbering: LampVersification,
-        analysis: LampStrongsAnalysis,
+        analysis: LampStrongsAnalysis?,
         window: Int = 90
     ) -> [Int: English] {
         var first: [Int: LampStrongsAnalysis.Occurrence] = [:]
-        for occurrence in analysis.occurrences where first[occurrence.reference] == nil {
+        for occurrence in analysis?.occurrences ?? [] where first[occurrence.reference] == nil {
             first[occurrence.reference] = occurrence
         }
         var english: [Int: English] = [:]
@@ -840,7 +845,7 @@ public enum LampSeptuagintSection {
             guard let mapped = hebrewNumbering.convert(reference, to: englishNumbering)
             else { continue }
             var snippet: LampStrongsContext.Snippet?
-            if let occurrence = first[mapped], let text = analysis.verseTexts[mapped] {
+            if let occurrence = first[mapped], let text = analysis?.verseTexts[mapped] {
                 snippet = LampStrongsContext.snippet(
                     of: text,
                     from: occurrence.startOffset,

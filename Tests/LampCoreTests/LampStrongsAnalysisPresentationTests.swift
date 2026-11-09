@@ -1093,6 +1093,25 @@ struct SeptuagintEnglishTests {
         #expect(found[1_029_021]?.snippet == nil, "not marked at a likely word")
     }
 
+    /// A word with no analysis — no Strong's number to ask by — still has its
+    /// verses' English numbers, so they open where a reader of the English
+    /// looks them up, and none is marked.
+    @Test func withNoAnalysisEveryVerseHasItsEnglishNumber() throws {
+        let hebrew = LampVersification.standard(.original)
+        let english = LampVersification.standard(.english)
+        let found = LampSeptuagintSection.english(
+            for: [19_051_007, 1_029_020],
+            hebrewNumbering: hebrew,
+            englishNumbering: english,
+            analysis: nil
+        )
+        let psalm = try #require(found[19_051_007])
+        #expect(psalm.reference == hebrew.convert(19_051_007, to: english))
+        #expect(psalm.reference != 19_051_007)
+        #expect(psalm.snippet == nil)
+        #expect(found[1_029_020]?.reference == 1_029_020)
+    }
+
     /// A verse the English does not tag still has its English number, so one
     /// list never shows the Hebrew numbering beside the English: in the
     /// Psalms the two differ by the title.
