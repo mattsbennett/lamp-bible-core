@@ -397,39 +397,6 @@ public enum LampStrongsContext {
     }
 }
 
-/// How the spread is drawn.
-///
-/// One set of numbers, four readings of it. Bars rank, a histogram shows
-/// shape, a grid shows where inside a book, and share shows proportion.
-public enum LampStrongsChartStyle: String, CaseIterable, Identifiable, Sendable {
-    case bars
-    case columns
-    case grid
-    case share
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .bars: "Bars"
-        case .columns: "Columns"
-        case .grid: "Chapters"
-        case .share: "Share"
-        }
-    }
-
-    /// Whether the measure picker means anything here. A grid counts
-    /// occurrences per chapter and a share is a proportion of a whole, so
-    /// neither has a rate to offer.
-    public var usesMeasure: Bool {
-        self == .bars || self == .columns
-    }
-
-    /// Only books carry chapters, so the grid has nothing to draw for
-    /// sections.
-    public var needsBooks: Bool { self == .grid }
-}
-
 /// Each division's proportion of the whole.
 public enum LampStrongsShare {
     public struct Slice: Identifiable, Equatable, Sendable {
@@ -782,10 +749,103 @@ public enum LampSeptuagintSection {
         return greek
     }
 
-    /// "Hebrew אַהֲבָה (H160) · 40 verses", naming whose verses they are.
-    public static func heading(_ hebrew: LampSeptuagintHebrew, verses: Int) -> String {
-        let name = hebrew.strongs.map { "\(word(hebrew)) (\($0))" } ?? word(hebrew)
-        return "Hebrew \(name) · \(verses) \(verses == 1 ? "verse" : "verses")"
+    /// A Hebrew word's heading, naming whose verses they are.
+    ///
+    /// With its transliteration and the English it is most often rendered
+    /// by, it reads to someone with no Hebrew: "ʼahăbâh “love” (H160) · in
+    /// 40 Hebrew verses". Without them it is the Hebrew as printed: "Hebrew
+    /// אַהֲבָה (H160) · 40 verses".
+    public static func heading(
+        _ hebrew: LampSeptuagintHebrew,
+        transliteration: String? = nil,
+        rendering: String? = nil,
+        verses: Int
+    ) -> String {
+        let transliteration = transliteration.flatMap { $0.isEmpty ? nil : $0 }
+        let rendering = rendering.flatMap { $0.isEmpty ? nil : $0 }
+        guard transliteration != nil || rendering != nil else {
+            let name = hebrew.strongs.map { "\(word(hebrew)) (\($0))" } ?? word(hebrew)
+            return "Hebrew \(name) · \(verses) \(verses == 1 ? "verse" : "verses")"
+        }
+        var name = [transliteration ?? word(hebrew), rendering.map { "“\($0)”" }]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        if let strongs = hebrew.strongs { name += " (\(strongs))" }
+        return "\(name) · in \(verses) Hebrew \(verses == 1 ? "verse" : "verses")"
+    }
+
+    /// The section's title. It is the Hebrew a Greek word translates, which
+    /// the title says, because "Septuagint" alone promised the Greek word's
+    /// own verses through the Old Testament.
+    public static let title = "Hebrew It Translates"
+
+    /// What the section is, said once at its top: the lexicon's link from the
+    /// Greek word to these Hebrew words, and why the verses are the Hebrew
+    /// word's rather than the Greek word's.
+    public static func note(greek lemma: String?) -> String {
+        let lemma = lemma.flatMap { $0.isEmpty ? nil : $0 } ?? "this word"
+        return "The Septuagint, the Greek Old Testament, uses \(lemma) mostly "
+            + "for these Hebrew words. The verses are each Hebrew word’s, not "
+            + "\(lemma)’s: the Septuagint installed isn’t tagged word by word, "
+            + "so its Greek, under each verse, may use another word."
+    }
+
+    /// What a Hebrew word is most often rendered by in an English
+    /// translation's analysis of it: a gloss a reader with no Hebrew can
+    /// read, and a fact about that translation rather than a definition.
+    public static func rendering(in analysis: LampStrongsAnalysis) -> String? {
+        analysis.renderings.first { !$0.text.isEmpty }?.text
+    }
+
+    /// One verse of a Hebrew word's list in English, with the English the
+    /// word is rendered by marked.
+    public struct English: Equatable, Sendable {
+        /// In the English translation's own numbering.
+        public let reference: Int
+        public let snippet: LampStrongsContext.Snippet
+
+        public init(reference: Int, snippet: LampStrongsContext.Snippet) {
+            self.reference = reference
+            self.snippet = snippet
+        }
+    }
+
+    /// The English for each of `references`, given in the Hebrew text's
+    /// numbering, from an English translation's analysis of the Hebrew word
+    /// read with its verse text.
+    ///
+    /// The mark is the translation's own tag, at the offsets it records,
+    /// and nothing is guessed: a verse whose English the translation does
+    /// not tag with this word, or which its numbering has no counterpart for,
+    /// is left out.
+    public static func english(
+        for references: [Int],
+        hebrewNumbering: LampVersification,
+        englishNumbering: LampVersification,
+        analysis: LampStrongsAnalysis,
+        window: Int = 90
+    ) -> [Int: English] {
+        var first: [Int: LampStrongsAnalysis.Occurrence] = [:]
+        for occurrence in analysis.occurrences where first[occurrence.reference] == nil {
+            first[occurrence.reference] = occurrence
+        }
+        var english: [Int: English] = [:]
+        for reference in references {
+            guard let mapped = hebrewNumbering.convert(reference, to: englishNumbering),
+                  let occurrence = first[mapped],
+                  let text = analysis.verseTexts[mapped]
+            else { continue }
+            english[reference] = English(
+                reference: mapped,
+                snippet: LampStrongsContext.snippet(
+                    of: text,
+                    from: occurrence.startOffset,
+                    to: occurrence.endOffset,
+                    window: window
+                )
+            )
+        }
+        return english
     }
 }
 

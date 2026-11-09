@@ -725,14 +725,6 @@ struct StrongsChartStyleTests {
         )
         #expect(rows.first?.cells.allSatisfy { $0.intensity == 0 } == true)
     }
-
-    @Test func onlybarsAndColumnsHaveARate() {
-        #expect(LampStrongsChartStyle.bars.usesMeasure)
-        #expect(LampStrongsChartStyle.columns.usesMeasure)
-        #expect(!LampStrongsChartStyle.grid.usesMeasure)
-        #expect(!LampStrongsChartStyle.share.usesMeasure)
-        #expect(LampStrongsChartStyle.grid.needsBooks)
-    }
 }
 
 /// Charting renderings and forms, not only books and sections.
@@ -1038,6 +1030,94 @@ struct StrongsHeadwordTests {
 
 /// The Septuagint's Greek beside the Hebrew word's verses, found through the
 /// Septuagint's own numbering.
+/// The Septuagint section read by someone with no Hebrew: each Hebrew word
+/// named in English, and each verse in English with the word marked.
+struct SeptuagintEnglishTests {
+    private static func analysis(
+        occurrences: [LampStrongsAnalysis.Occurrence],
+        verseTexts: [Int: String],
+        renderings: [LampStrongsAnalysis.Rendering] = []
+    ) -> LampStrongsAnalysis {
+        LampStrongsAnalysis(
+            key: "H160", translationID: "BSBs", translationName: "Berean Standard Bible",
+            translationAbbreviation: "BSBs", wordCount: 1_000, taggedVerseCount: 2,
+            occurrences: occurrences, references: verseTexts.keys.sorted(),
+            renderings: renderings, forms: [], parsings: [], grammar: [],
+            books: [], sections: [], companions: [], verseTexts: verseTexts
+        )
+    }
+
+    private static func occurrence(_ reference: Int, _ start: Int, _ end: Int) -> LampStrongsAnalysis.Occurrence {
+        .init(reference: reference, startOffset: start, endOffset: end, text: "love",
+              renderingID: "love", form: nil, morphology: nil)
+    }
+
+    /// The Hebrew text numbers this verse Psalm 51:7, the English 51:5: the
+    /// English is read at its own number and marked where its tag says.
+    @Test func theEnglishIsReadAtItsOwnNumberAndMarkedByItsTag() throws {
+        let hebrew = LampVersification.standard(.original)
+        let english = LampVersification.standard(.english)
+        let hebrewReference = 19_051_007
+        let englishReference = try #require(hebrew.convert(hebrewReference, to: english))
+        #expect(englishReference != hebrewReference, "the psalm's title shifts the verse")
+        let verse = "Surely I was brought forth in iniquity; I was sinful when my mother conceived me."
+        let found = LampSeptuagintSection.english(
+            for: [hebrewReference],
+            hebrewNumbering: hebrew,
+            englishNumbering: english,
+            analysis: Self.analysis(
+                occurrences: [Self.occurrence(englishReference, 30, 38)],
+                verseTexts: [englishReference: verse]
+            )
+        )
+        let line = try #require(found[hebrewReference])
+        #expect(line.reference == englishReference)
+        #expect(line.snippet.word == "iniquity")
+    }
+
+    /// A verse the English does not tag with this word is left out, never
+    /// marked at a likely word.
+    @Test func aVerseTheTranslationDoesNotTagIsLeftOut() {
+        let numbering = LampVersification.standard(.english)
+        let found = LampSeptuagintSection.english(
+            for: [1_029_020, 1_029_021],
+            hebrewNumbering: numbering,
+            englishNumbering: numbering,
+            analysis: Self.analysis(
+                occurrences: [Self.occurrence(1_029_020, 4, 8)],
+                verseTexts: [1_029_020: "his love for her", 1_029_021: "love unmarked"]
+            )
+        )
+        #expect(found[1_029_020]?.snippet.word == "love")
+        #expect(found[1_029_021] == nil)
+    }
+
+    @Test func aHebrewWordIsNamedForSomeoneWithNoHebrew() {
+        let word = LampSeptuagintHebrew(text: "אַהֲבָה", strongs: "H160")
+        #expect(LampSeptuagintSection.heading(
+            word, transliteration: "ʼahăbâh", rendering: "love", verses: 40
+        ) == "ʼahăbâh “love” (H160) · in 40 Hebrew verses")
+        #expect(LampSeptuagintSection.heading(word, rendering: "love", verses: 1)
+            == "אַהֲבָה “love” (H160) · in 1 Hebrew verse")
+        #expect(LampSeptuagintSection.heading(word, verses: 40)
+            == "Hebrew אַהֲבָה (H160) · 40 verses", "unchanged without English")
+        let analysis = Self.analysis(occurrences: [], verseTexts: [:], renderings: [
+            .init(id: "", text: "", count: 9, variants: []),
+            .init(id: "love", text: "love", count: 8, variants: []),
+        ])
+        #expect(LampSeptuagintSection.rendering(in: analysis) == "love")
+    }
+
+    /// The note says whose verses these are: the Hebrew word's, not the
+    /// Greek word's, which no tag in the installed Septuagint can show.
+    @Test func theNoteSaysTheVersesAreTheHebrewWords() {
+        let note = LampSeptuagintSection.note(greek: "ἀγάπη")
+        #expect(note.contains("not ἀγάπη’s"))
+        #expect(note.contains("isn’t tagged word by word"))
+        #expect(LampSeptuagintSection.note(greek: nil).contains("not this word’s"))
+    }
+}
+
 struct SeptuagintGreekTests {
     /// The Hebrew text numbers this psalm 51 and the Septuagint 50, so the
     /// Greek is read from the Septuagint's chapter, at the verse its own
