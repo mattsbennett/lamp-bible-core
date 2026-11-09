@@ -26,6 +26,16 @@ public enum LampModuleSelection {
         }.map(\.element)
     }
 
+    /// The Greek dictionaries a reader who has chosen none falls back to, in
+    /// order, ahead of the caller's ordinary by-name order.
+    ///
+    /// Strong's first: its plain definitions and KJV renderings read without
+    /// Greek, which is who the default is for. TBESG next, whose Abbott-Smith
+    /// entries assume the language. Everything else keeps the caller's order,
+    /// so a newly bundled dictionary can never take the default by sorting
+    /// early in the alphabet — which is what Dodson had been doing.
+    public static let preferredGreekDictionaryIDs = ["strongs_greek", "tbesg"]
+
     public static func visible<Item>(
         _ items: [Item], hiddenIDs: Set<String>, preferredIDs: [String] = [],
         id: (Item) -> String
