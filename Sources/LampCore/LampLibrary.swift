@@ -6130,7 +6130,10 @@ public actor LampLibrary {
                 usage: plainText(from: object["usage"]),
                 scriptureLinks: dictionaryScriptureLinks(from: object),
                 dictionaryLinks: dictionaryEntryLinks(from: object),
-                styles: LampDictionaryStyles.styles(in: object)
+                styles: LampDictionaryStyles.styles(in: object),
+                septuagintHebrew: LampSeptuagintHebrew.list(
+                    from: object["septuagintHebrew"] ?? object["septuagint_hebrew"]
+                )
             )
         }
     }

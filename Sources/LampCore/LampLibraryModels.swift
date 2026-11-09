@@ -381,6 +381,51 @@ public struct LampVerseStudyData: Equatable, Sendable {
     }
 }
 
+/// A Hebrew word a Greek word renders in the Septuagint, as the lexicon prints
+/// it — TBESG's reading of Abbott-Smith's "[in LXX chiefly for …]" note.
+///
+/// `strongs` is there only where exactly one Hebrew word fits the form and the
+/// part of speech, which is most of them but not all: a word without one is
+/// still worth showing, and cannot be followed to an entry.
+///
+/// `stem` is the verbal stem the note names, such as "pi." for piel. It
+/// belongs to the printed word, not to the number, and some words carry a stem
+/// without a number.
+public struct LampSeptuagintHebrew: Equatable, Sendable {
+    public let text: String
+    public let stem: String?
+    public let strongs: String?
+
+    public init(text: String, stem: String? = nil, strongs: String? = nil) {
+        self.text = text
+        self.stem = stem
+        self.strongs = strongs
+    }
+
+    /// The list a sense's `septuagintHebrew` field holds, ignoring anything
+    /// without a word to print. A padded number ("H07941") is normalized, as
+    /// the lexicon's own links are.
+    static func list(from value: Any?) -> [LampSeptuagintHebrew] {
+        guard let values = value as? [Any] else { return [] }
+        return values.compactMap { entry in
+            guard let object = entry as? [String: Any] else { return nil }
+            let text = (object["text"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty else { return nil }
+            func field(_ name: String) -> String? {
+                let value = (object[name] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return value?.isEmpty == false ? value : nil
+            }
+            return LampSeptuagintHebrew(
+                text: text,
+                stem: field("stem"),
+                strongs: field("strongs").flatMap(LampStrongsKey.typedKey)
+            )
+        }
+    }
+}
+
 public struct LampDictionarySense: Equatable, Sendable {
     public let partOfSpeech: String?
     public let gloss: String?
@@ -392,6 +437,9 @@ public struct LampDictionarySense: Equatable, Sendable {
     public let dictionaryLinks: [LampDictionaryLink]
     /// Bold, italic, Greek and Hebrew stretches in the fields above.
     public let styles: [LampDictionaryStyle]
+    /// The Hebrew this sense renders in the Septuagint, where the lexicon says
+    /// so. Empty for every dictionary that does not carry the note.
+    public let septuagintHebrew: [LampSeptuagintHebrew]
 
     public init(
         partOfSpeech: String? = nil,
@@ -402,7 +450,8 @@ public struct LampDictionarySense: Equatable, Sendable {
         usage: String? = nil,
         scriptureLinks: [LampScriptureLink] = [],
         dictionaryLinks: [LampDictionaryLink] = [],
-        styles: [LampDictionaryStyle] = []
+        styles: [LampDictionaryStyle] = [],
+        septuagintHebrew: [LampSeptuagintHebrew] = []
     ) {
         self.partOfSpeech = partOfSpeech
         self.gloss = gloss
@@ -413,6 +462,7 @@ public struct LampDictionarySense: Equatable, Sendable {
         self.scriptureLinks = scriptureLinks
         self.dictionaryLinks = dictionaryLinks
         self.styles = styles
+        self.septuagintHebrew = septuagintHebrew
     }
 }
 
