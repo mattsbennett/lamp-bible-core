@@ -907,37 +907,73 @@ struct StrongsShareHitTests {
 /// One rule for what a key is called, shared by the apps and the agent tool.
 struct StrongsHeadwordTests {
     private func result(
-        _ key: String, lemma: String, transliteration: String? = nil,
+        _ key: String, module: String, lemma: String, transliteration: String? = nil,
         senses: [LampDictionarySense]
     ) -> LampDictionaryResult {
         LampDictionaryResult(
-            entryID: key, moduleID: "lexicon", moduleName: "Lexicon",
+            entryID: key, moduleID: module, moduleName: module,
             key: key, lemma: lemma, transliteration: transliteration, senses: senses
         )
     }
 
-    /// The first entry with a field gives it, and a later one only fills a
-    /// gap: the order is the order of the lexicons the caller permits.
-    @Test func theFirstEntryWithAFieldGivesIt() {
-        let headwords = LampStrongsHeadword.merging([
-            result("G0026", lemma: "ἀγάπη", senses: [LampDictionarySense(definition: "love")]),
-            result("G26", lemma: "agape", transliteration: "agápē",
-                   senses: [LampDictionarySense(shortDefinition: "love, benevolence")]),
-        ])
-        #expect(headwords["G26"] == LampStrongsHeadword(
-            lemma: "ἀγάπη", transliteration: "agápē", gloss: "love, benevolence"
-        ))
+    /// G26 as the bundled lexicons give it, in the library's order by name.
+    private var agape: [LampDictionaryResult] {
+        [
+            result("G26", module: "dodson_greek", lemma: "ἀγάπη, ης, ἡ", senses: [
+                LampDictionarySense(shortDefinition: "love, benevolence, good will, esteem"),
+            ]),
+            result("G0026", module: "strongs_greek", lemma: "ἀγάπη", transliteration: "agápē", senses: [
+                LampDictionarySense(shortDefinition: "(feast of) charity(-ably), dear, love",
+                                    definition: "love, i.e. affection or benevolence"),
+            ]),
+            result("G26", module: "tbesg", lemma: "ἀγάπη", senses: [LampDictionarySense(gloss: "love")]),
+        ]
     }
 
-    /// Entries read later — another translation's companions — never
-    /// overwrite what is already known.
+    /// Strong's names the word, bare, wherever it falls in the order given;
+    /// a lexicon's own gloss is the gloss, before anyone's short definition.
+    @Test func strongsNamesTheWordAndAGlossIsTheGloss() {
+        let headword = LampStrongsHeadword.merging(agape)["G26"]
+        #expect(headword?.lemma == "ἀγάπη")
+        #expect(headword?.transliteration == "agápē")
+        #expect(headword?.shortGloss == "love")
+        #expect(headword?.gloss == "love")
+    }
+
+    /// With no gloss anywhere, the first short definition stands in as the
+    /// gloss, and the short gloss stays empty for a heading to leave out.
+    @Test func withNoGlossAShortDefinitionStandsIn() {
+        let headword = LampStrongsHeadword.merging(Array(agape.prefix(2)))["G26"]
+        #expect(headword?.shortGloss == nil)
+        #expect(headword?.gloss == "(feast of) charity(-ably), dear, love")
+    }
+
+    /// Entries read later — another translation's companions — fill gaps and
+    /// never overwrite, though a gloss still displaces a short definition.
     @Test func entriesReadLaterOnlyFillGaps() {
-        let known = ["G26": LampStrongsHeadword(lemma: "ἀγάπη")]
+        let known = ["G26": LampStrongsHeadword(lemma: "ἀγάπη", shortDefinition: "charity")]
         let headwords = LampStrongsHeadword.merging(
-            [result("G26", lemma: "other", senses: [LampDictionarySense(gloss: "love")])],
+            [result("G26", module: "other", lemma: "other", senses: [LampDictionarySense(gloss: "love")])],
             into: known
         )
-        #expect(headwords["G26"] == LampStrongsHeadword(lemma: "ἀγάπη", gloss: "love"))
+        #expect(headwords["G26"]?.lemma == "ἀγάπη")
+        #expect(headwords["G26"]?.gloss == "love")
+    }
+
+    /// TBESG writes a gloss as senses under one head; the heading shows the
+    /// head, and a gloss naming different things is left whole. All from
+    /// TBESG as bundled.
+    @Test func sensesUnderOneHeadReadAsTheHead() {
+        #expect(LampStrongsHeadword.headGloss("faith; faith: faithfulness") == "faith")
+        #expect(LampStrongsHeadword.headGloss("to see: see; to see: appear") == "to see")
+        #expect(LampStrongsHeadword.headGloss("love") == "love")
+        #expect(LampStrongsHeadword.headGloss("John; Jonah") == "John; Jonah")
+        #expect(LampStrongsHeadword.headGloss("seed: offspring; seed(s)") == "seed: offspring; seed(s)")
+        let headwords = LampStrongsHeadword.merging([
+            result("G4102", module: "tbesg", lemma: "πίστις",
+                   senses: [LampDictionarySense(gloss: "faith; faith: faithfulness")]),
+        ])
+        #expect(headwords["G4102"]?.shortGloss == "faith")
     }
 }
 

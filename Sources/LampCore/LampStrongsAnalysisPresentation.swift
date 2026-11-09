@@ -741,42 +741,87 @@ public enum LampSeptuagintSection {
 ///
 /// One rule for every reader of an analysis — the Mac's pane, the phone's,
 /// and the agent tool — so the pane and an outside agent looking at the same
-/// key do not disagree about what the word is. Each field comes from the
-/// first entry that has one, in the order the entries are given, which is
-/// the order of the lexicons the caller permits. The gloss is the first
-/// sense carrying a gloss or a short definition; a short definition can run
-/// long, so a header line drawn from it must be cut by the view, and the
-/// Mac's analysis header leaves it out.
+/// key do not disagree about what the word is.
+///
+/// The lemma and transliteration come from the first entry that has them,
+/// Strong's own entries first (`preferredDictionaryIDs`), then the order
+/// given. Strong's prints the bare word; Dodson prints it with its endings
+/// ("ἀγάπη, ης, ἡ"), which is right in a lexicon and wrong as a heading.
+///
+/// The gloss is a sense's own `gloss` from any entry before a short
+/// definition from any: Strong's short definition is the King James
+/// renderings ("(feast of) charity(-ably), dear, love"), which is no gloss,
+/// and a short definition elsewhere can run to a sentence.
 public struct LampStrongsHeadword: Equatable, Sendable {
     public var lemma: String?
     public var transliteration: String?
-    public var gloss: String?
+    /// A sense's own gloss and never a short definition: "love, goodwill",
+    /// short enough to sit beside the word in a heading. Nil where no entry
+    /// has one, and a heading then shows none rather than a definition cut
+    /// off part way.
+    public var shortGloss: String?
+    /// The first short definition, for where no entry has a gloss.
+    public var shortDefinition: String?
 
-    public init(lemma: String? = nil, transliteration: String? = nil, gloss: String? = nil) {
+    /// The gloss where there is one, else the first short definition.
+    public var gloss: String? { shortGloss ?? shortDefinition }
+
+    public init(
+        lemma: String? = nil,
+        transliteration: String? = nil,
+        shortGloss: String? = nil,
+        shortDefinition: String? = nil
+    ) {
         self.lemma = lemma
         self.transliteration = transliteration
-        self.gloss = gloss
+        self.shortGloss = shortGloss
+        self.shortDefinition = shortDefinition
     }
+
+    /// The dictionaries a headword is read from first: Strong's Greek and
+    /// Hebrew, whose headings are the bare word, then TBESG.
+    public static let preferredDictionaryIDs = ["strongs_greek", "strongs_hebrew", "tbesg"]
 
     /// `known` with `results` read into it, by normalized key. A field already
     /// set is kept, so entries read later — another translation's companions,
-    /// a lexicon further down the order — fill gaps and never overwrite.
+    /// a lexicon further down the order — fill gaps and never overwrite; a
+    /// gloss found later still takes the place of a short definition.
     public static func merging(
         _ results: [LampDictionaryResult],
         into known: [String: LampStrongsHeadword] = [:]
     ) -> [String: LampStrongsHeadword] {
         var headwords = known
-        for result in results {
+        let ordered = LampModuleSelection.ordered(
+            results, preferredIDs: preferredDictionaryIDs, id: \.moduleID
+        )
+        for result in ordered {
             let key = LampStrongsKey.normalized(result.key)
             let current = headwords[key]
             headwords[key] = LampStrongsHeadword(
                 lemma: current?.lemma ?? result.lemma,
                 transliteration: current?.transliteration ?? result.transliteration,
-                gloss: current?.gloss
-                    ?? result.senses.lazy.compactMap { $0.gloss ?? $0.shortDefinition }.first
+                shortGloss: current?.shortGloss
+                    ?? result.senses.lazy.compactMap(\.gloss).first.map(headGloss),
+                shortDefinition: current?.shortDefinition
+                    ?? result.senses.lazy.compactMap(\.shortDefinition).first
             )
         }
         return headwords
+    }
+
+    /// A gloss written as senses under one head, "to see: see; to see:
+    /// appear" or "faith; faith: faithfulness" as TBESG writes them, read as
+    /// that head: "to see", "faith". Parts with different heads name
+    /// different things ("John; Jonah", "seed: offspring; seed(s)") and the
+    /// gloss is kept as written.
+    public static func headGloss(_ gloss: String) -> String {
+        let heads = gloss.components(separatedBy: ";").map { part in
+            (part.range(of: ":").map { String(part[..<$0.lowerBound]) } ?? part)
+                .trimmingCharacters(in: .whitespaces)
+        }
+        guard let head = heads.first, !head.isEmpty, heads.allSatisfy({ $0 == head })
+        else { return gloss }
+        return head
     }
 }
 
