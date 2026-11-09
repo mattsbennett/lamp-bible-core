@@ -1244,3 +1244,99 @@ struct SeptuagintGreekTests {
         #expect(throws: CancellationError.self) { try result.get() }
     }
 }
+
+struct StrongsFormReadingTests {
+    @Test func greekReadsInLatinLettersAsItIsSaid() {
+        let cases = [
+            ("ἀγάπην", "agapēn"), ("ἀγάπῃ", "agapēi"), ("τῷ", "tōi"), ("ἁγίων", "hagiōn"),
+            ("εὐαγγέλιον", "euangelion"), ("υἱός", "huios"), ("ῥῆμα", "rhēma"),
+            ("Ἰησοῦς", "Iēsous"), ("οὐρανοῦ", "ouranou"), ("ἠγάπησεν", "ēgapēsen"),
+            ("πνεῦμα", "pneuma"), ("ἐκκλησία", "ekklēsia"), ("ἄγγελος", "angelos"),
+            ("Χριστός", "Christos"), ("ψυχή", "psychē"), ("ὁ λόγος", "ho logos"),
+        ]
+        for (greek, latin) in cases {
+            #expect(LampGreekTransliteration.latin(greek) == latin, "\(greek)")
+        }
+    }
+
+    @Test func aParsingIsSaidByItsJobInTheSentence() {
+        func role(_ code: String, _ key: String = "G26") -> String? {
+            LampStrongsFormReading.role(of: LampMorphology.features(of: code, strongsKey: key))
+        }
+        #expect(role("N-NSF") == "the subject, or what is named")
+        #expect(role("N-GSF") == "“of …”")
+        #expect(role("N-APF") == "the object, what is acted on · more than one")
+        #expect(role("V-AAI-3S", "G25") == "he, she or it · did it, as a whole")
+        #expect(role("V-PAN", "G25") == "“to …”")
+        #expect(role("V-PAP-NSM", "G25") == "“…ing”, “the one who …”")
+        #expect(role("V-APM-2P", "G25") == "a command to more than one · done to, not doing")
+    }
+
+    /// ἀγάπη in three spellings: two nominatives, one rendered "Love" and
+    /// one "love"; a genitive "of love"; one form with a grave accent.
+    private var analysis: LampStrongsAnalysis {
+        var analyzer = LampStrongsAnalyzer(key: "G26", translationID: "T", translationName: "Test")
+        let rows: [(String, String, String)] = [
+            ("Love", "ἀγάπη", "N-NSF"), ("love", "ἀγάπη", "N-NSF"),
+            ("of love", "ἀγάπης", "N-GSF"), ("love", "ἀγὰπη", "N-NSF"),
+        ]
+        for (index, row) in rows.enumerated() {
+            let text = row.0 + " word"
+            let json = #"[{"start":0,"end":\#(row.0.count),"data":{"strongs":"G26","lemma":"\#(row.1)","morphology":"\#(row.2)"}},"#
+                + #"{"start":\#(row.0.count + 1),"end":\#(text.count),"data":{"strongs":"G1"}}]"#
+            analyzer.add(reference: 46_013_001 + index, text: text, annotationsJSON: json)
+        }
+        return analyzer.analysis()
+    }
+
+    @Test func eachFormSaysWhatItBecameInEnglish() {
+        let readings = LampStrongsFormReading.readings(of: analysis)
+        #expect(readings.map(\.form.text) == ["ἀγάπη", "ἀγάπης"])
+        #expect(readings[0].form.count == 3)
+        #expect(readings[0].transliteration == "agapē")
+        #expect(readings[0].role == "the subject, or what is named")
+        #expect(readings[0].renderedAs == ["love"])
+        #expect(readings[1].renderedAs == ["of love"])
+        #expect(readings[1].parsing == "Noun · Genitive · Singular · Feminine")
+    }
+
+    @Test func aFormWithoutItsOwnParsingBorrowsAnotherTranslations() {
+        var bare = LampStrongsAnalyzer(key: "G26", translationID: "B", translationName: "Bare")
+        for (index, row) in [("of love", "ἀγάπης"), ("And love", "ἀγάπη"), ("Love", "ἀγάπη"), ("love", "ἀγάπη")].enumerated() {
+            let text = row.0 + " word"
+            let json = #"[{"start":0,"end":\#(row.0.count),"data":{"strongs":"G26","lemma":"\#(row.1)"}},"#
+                + #"{"start":\#(row.0.count + 1),"end":\#(text.count),"data":{"strongs":"G1"}}]"#
+            bare.add(reference: 46_013_001 + index, text: text, annotationsJSON: json)
+        }
+        let unread = LampStrongsFormReading.readings(of: bare.analysis())
+        #expect(unread.allSatisfy { $0.role == nil })
+        let lent = LampStrongsFormReading.readings(of: bare.analysis(), parsingsFrom: [analysis])
+        #expect(lent.map(\.role) == ["the subject, or what is named", "“of …”"])
+        // "And" came from a neighbouring word; "Love" starts a sentence.
+        #expect(lent[0].renderedAs == ["love"])
+    }
+
+    @Test func aGreekTextsFormIsTheWordAsPrinted() {
+        // As TAGNT tags it: the word itself as the text, the dictionary form
+        // as `lemma`.
+        var greek = LampStrongsAnalyzer(key: "G26", translationID: "TAGNT", translationName: "TAGNT", language: "grc")
+        for (index, word) in ["ἀγάπην", "ἀγάπη", "ἀγάπῃ,"].enumerated() {
+            let text = word + " λόγος"
+            let json = #"[{"start":0,"end":\#(word.count),"data":{"strongs":"G26","lemma":"ἀγάπη","morphology":"N-ASF"}},"#
+                + #"{"start":\#(word.count + 1),"end":\#(text.count),"data":{"strongs":"G3056","lemma":"λόγος"}}]"#
+            greek.add(reference: 62_004_016 + index, text: text, annotationsJSON: json)
+        }
+        #expect(Set(greek.analysis().forms.map(\.text)) == ["ἀγάπην", "ἀγάπη", "ἀγάπῃ"])
+    }
+
+    @Test func aSecondEnglishIsShownOnlyWhenItIsCommon() {
+        #expect(LampStrongsFormReading.englishOfForm("And God, ") == "God")
+        #expect(LampStrongsFormReading.englishOfForm("and") == "and")
+    }
+
+    @Test func choosingAFormListsEverySpellingItCounts() {
+        let analysis = analysis
+        let form = analysis.forms[0]
+        #expect(analysis.occurrences(matching: .form(form.text)).count == form.count)
+    }
+}

@@ -265,10 +265,11 @@ struct LampPresentationChartView: View {
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
             let gap = Angle.degrees(values.count > 1 ? 0.8 : 0)
             let type = 18 * unit
-            let line = type * 2.6
+            let detailed = values.contains { $0.detail?.isEmpty == false }
+            let line = type * (detailed ? 3.6 : 2.6)
 
             var start = Angle.degrees(-90)
-            var labels: [(middle: Angle, text: Text, figures: Text)] = []
+            var labels: [(middle: Angle, text: Text, figures: Text, detail: Text?)] = []
             for value in values where value.value > 0 {
                 let sweep = Angle.degrees(360 * value.value / total)
                 var slice = Path()
@@ -280,7 +281,10 @@ struct LampPresentationChartView: View {
                 labels.append((
                     start + sweep / 2,
                     Text(value.label).font(.system(size: type, weight: .medium)),
-                    Text("\(chart.formatted(value.value)) · \(percent)%").font(.system(size: type * 0.85)).monospacedDigit()
+                    Text("\(chart.formatted(value.value)) · \(percent)%").font(.system(size: type * 0.85)).monospacedDigit(),
+                    value.detail.flatMap { $0.isEmpty ? nil : $0 }.map {
+                        Text($0).font(.system(size: type * 0.8)).foregroundStyle(foreground.opacity(0.7))
+                    }
                 ))
                 start += sweep
             }
@@ -320,6 +324,9 @@ struct LampPresentationChartView: View {
                     let anchor: UnitPoint = right ? .leading : .trailing
                     context.draw(label.text, at: CGPoint(x: x, y: entry.y - type * 0.55), anchor: anchor)
                     context.draw(label.figures, at: CGPoint(x: x, y: entry.y + type * 0.6), anchor: anchor)
+                    if let detail = label.detail {
+                        context.draw(detail, at: CGPoint(x: x, y: entry.y + type * 1.6), anchor: anchor)
+                    }
                 }
             }
         }

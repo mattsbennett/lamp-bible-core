@@ -47,7 +47,9 @@ public enum LampStrongsFilter: Hashable, Sendable {
         case .rendering(let id, _):
             occurrence.renderingID == id
         case .form(let text):
-            occurrence.form == text
+            // Compared as the Forms figure groups them: its count takes in
+            // every spelling of a form, so the list it opens must too.
+            occurrence.form.map(LampStrongsAnalyzer.formID) == LampStrongsAnalyzer.formID(text)
         case .grammar(let feature, let value):
             // Read through core's own parser for the key's language rather
             // than taking the code apart here. The grammar counts this filter
@@ -968,5 +970,285 @@ extension LampStrongsAnalysis {
     /// counts a Greek word against the New Testament rather than the canon.
     public var booksWithOccurrences: Int {
         books.filter { $0.occurrenceCount > 0 }.count
+    }
+}
+
+/// Greek in Latin letters, as a reader without Greek would say it:
+/// ἀγάπην "agapēn", εὐαγγέλιον "euangelion", ῥῆμα "rhēma", υἱός "huios".
+///
+/// The SBL scheme without its accents: η and ω are ē and ō, a rough
+/// breathing is an h before the word, γ before γ, κ, ξ or χ is n, and υ is u
+/// in a diphthong and y elsewhere. An iota written beneath its vowel is an i
+/// after it, ἀγάπῃ "agapēi", so it is not read as ἀγάπη, another form.
+public enum LampGreekTransliteration {
+    public static func latin(_ greek: String) -> String {
+        greek.split(separator: " ", omittingEmptySubsequences: false)
+            .map { word(String($0)) }
+            .joined(separator: " ")
+    }
+
+    private static let letters: [Character: String] = [
+        "α": "a", "β": "b", "γ": "g", "δ": "d", "ε": "e", "ζ": "z", "η": "ē", "θ": "th",
+        "ι": "i", "κ": "k", "λ": "l", "μ": "m", "ν": "n", "ξ": "x", "ο": "o", "π": "p",
+        "ρ": "r", "σ": "s", "ς": "s", "τ": "t", "υ": "y", "φ": "ph", "χ": "ch", "ψ": "ps",
+        "ω": "ō",
+    ]
+    private static let roughBreathing: Unicode.Scalar = "\u{0314}"
+    private static let iotaSubscript: Unicode.Scalar = "\u{0345}"
+
+    private static func word(_ word: String) -> String {
+        // Each letter with its marks, so a breathing is read with its letter.
+        let decomposed = Array(word.decomposedStringWithCanonicalMapping)
+        var bases: [Character] = []
+        var subscripts: Set<Int> = []
+        var rough = false
+        var isCapital = false
+        for (index, character) in decomposed.enumerated() {
+            let scalars = character.unicodeScalars
+            guard let base = scalars.first else { continue }
+            if index < 2, scalars.contains(roughBreathing) { rough = true }
+            let letter = Character(String(base).lowercased())
+            if index == 0, String(base) != String(base).lowercased() { isCapital = true }
+            if scalars.contains(iotaSubscript) { subscripts.insert(bases.count) }
+            bases.append(letter)
+        }
+        var out = ""
+        for (index, letter) in bases.enumerated() {
+            let next = index + 1 < bases.count ? bases[index + 1] : nil
+            let previous = index > 0 ? bases[index - 1] : nil
+            switch letter {
+            case "γ" where next.map { "γκξχ".contains($0) } == true:
+                out += "n"
+            case "υ" where previous.map { "αεηο".contains($0) } == true || next == "ι":
+                out += "u"
+            case "ρ" where index == 0 && rough:
+                out += "rh"
+            default:
+                out += letters[letter] ?? String(letter)
+            }
+            if subscripts.contains(index) { out += "i" }
+        }
+        if rough, bases.first != "ρ" { out = "h" + out }
+        return isCapital ? out.prefix(1).uppercased() + out.dropFirst() : out
+    }
+}
+
+/// A form of a word as a reader without Greek or Hebrew can read it: how to
+/// say it, what its spelling does in a sentence, and the English it became.
+///
+/// A bare list of ἀγάπη, ἀγάπην, ἀγάπῃ and ἀγάπης tells such a reader only
+/// that the word has four spellings. What separates them is their job — the
+/// one doing, the one done to, "of", "to" — which English does with word
+/// order and small words; so each is said in those terms, beside the English
+/// this translation actually gave it.
+public struct LampStrongsFormReading: Equatable, Sendable {
+    public let form: LampStrongsAnalysis.Form
+    /// Latin letters for a Greek form; nil for Hebrew, whose vowels a
+    /// letter-for-letter scheme gets wrong more often than right.
+    public let transliteration: String?
+    /// What the spelling does, in plain words: "the subject", "“of …”",
+    /// "he, she or it · in the past". Nil where the tags carry no parsing.
+    public let role: String?
+    /// The parsing in grammar's own terms, for whoever wants it.
+    public let parsing: String?
+    /// The English this form most often became here, commonest first.
+    public let renderedAs: [String]
+
+    public init(
+        form: LampStrongsAnalysis.Form,
+        transliteration: String?,
+        role: String?,
+        parsing: String?,
+        renderedAs: [String]
+    ) {
+        self.form = form
+        self.transliteration = transliteration
+        self.role = role
+        self.parsing = parsing
+        self.renderedAs = renderedAs
+    }
+
+    /// A reading for each of the analysis's forms, in its order.
+    ///
+    /// A form's parsing is its own tags' where they carry one. The BSB tags
+    /// the Greek it renders but not its parsing, so `parsingsFrom` lends the
+    /// codes other translations give the same spelling of the same word: a
+    /// spelling is the same form wherever it is printed, which is the point
+    /// of telling forms apart by spelling.
+    public static func readings(
+        of analysis: LampStrongsAnalysis,
+        parsingsFrom others: [LampStrongsAnalysis] = []
+    ) -> [LampStrongsFormReading] {
+        let key = LampStrongsKey.normalized(analysis.key)
+        let isGreek = key.first == "G"
+        var codes: [String: [String: Int]] = [:]
+        var lent: [String: [String: Int]] = [:]
+        for other in others where LampStrongsKey.normalized(other.key) == key {
+            for occurrence in other.occurrences {
+                guard let form = occurrence.form, let code = occurrence.morphology else { continue }
+                lent[LampStrongsAnalyzer.formID(form), default: [:]][code, default: 0] += 1
+            }
+        }
+        // By form, then by the English folded to lower case, each spelling
+        // counted: "Love" at the start of a sentence is the same English as
+        // "love", and is shown as it is most often written.
+        var english: [String: [String: [String: Int]]] = [:]
+        for occurrence in analysis.occurrences {
+            guard let form = occurrence.form else { continue }
+            let id = LampStrongsAnalyzer.formID(form)
+            if let code = occurrence.morphology { codes[id, default: [:]][code, default: 0] += 1 }
+            let text = englishOfForm(occurrence.text)
+            guard !text.isEmpty else { continue }
+            english[id, default: [:]][text.lowercased(), default: [:]][text, default: 0] += 1
+        }
+        return analysis.forms.map { form in
+            let code = (codes[form.id] ?? lent[form.id])?.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
+            let features = code.map { LampMorphology.features(of: $0, strongsKey: key) } ?? []
+            let rendered = (english[form.id] ?? [:]).values
+                .map { spellings in
+                    (
+                        text: spellings.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? "",
+                        count: spellings.values.reduce(0, +)
+                    )
+                }
+                .sorted { ($1.count, $0.text) < ($0.count, $1.text) }
+            // A second English only when it is a real alternative, not one
+            // tag's stray span.
+            let shown = rendered.prefix(2).enumerated()
+                .filter { $0.offset == 0 || $0.element.count * 4 >= rendered[0].count }
+                .map(\.element.text)
+            return LampStrongsFormReading(
+                form: form,
+                transliteration: isGreek ? LampGreekTransliteration.latin(form.text) : nil,
+                role: role(of: features),
+                parsing: features.isEmpty ? nil : features.map(\.value).joined(separator: " · "),
+                renderedAs: shown
+            )
+        }
+    }
+
+    /// Words a tag can take in from its neighbours that the form itself does
+    /// not carry: a καί before it, a sentence's "But".
+    private static let joiningWords: Set<String> = ["and", "but", "or", "so", "yet", "then", "now"]
+
+    /// The English a tag covers, as a form's rendering: without edge
+    /// punctuation or a joining word in front. Its case is left alone, since
+    /// "God" is not "god"; a capital that only starts a sentence is folded
+    /// in with the rest where the renderings are counted.
+    static func englishOfForm(_ text: String) -> String {
+        var words = text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            .split(whereSeparator: \.isWhitespace).map(String.init)
+        while words.count > 1, joiningWords.contains(words[0].lowercased()) { words.removeFirst() }
+        return words.joined(separator: " ")
+    }
+
+    /// What the Forms heading says to a reader new to the language.
+    public static func note(forKey key: String) -> String {
+        LampStrongsKey.normalized(key).first == "H"
+            ? "Hebrew joins words like “and”, “the” and “in” to the front of a word, "
+                + "and changes its ending for “of”, for more than one, and for who acts. "
+                + "Each spelling is shown with what it does and the English it became here."
+            : "Greek changes a word’s ending for its job in the sentence, where English "
+                + "uses word order and words like “of” and “to”. Each spelling is shown "
+                + "with how to say it, what it does, and the English it became here."
+    }
+
+    /// The parsing's job in a sentence, in plain words.
+    static func role(of features: [LampGrammarValue]) -> String? {
+        var values: [LampGrammarFeature: String] = [:]
+        for feature in features where values[feature.feature] == nil {
+            values[feature.feature] = feature.value
+        }
+        let plural = values[.number].map { $0 == "Plural" || $0 == "Dual" } ?? false
+        var parts: [String] = []
+
+        if let mood = values[.mood] ?? values[.form].flatMap(hebrewVerbForm) {
+            switch mood {
+            case "Infinitive":
+                parts.append("“to …”")
+            case "Participle", "Imperative participle":
+                parts.append("“…ing”, “the one who …”")
+            case "Participle passive":
+                parts.append("“…ed”, “the one who is …ed”")
+            case "Imperative":
+                parts.append(plural ? "a command to more than one" : "a command")
+            case "Subjunctive":
+                parts.append("“may …”, “might …”")
+            case "Optative":
+                parts.append("a wish, “may it …”")
+            default:
+                if let who = person(values[.person], plural: plural, gender: values[.gender]) {
+                    parts.append(who)
+                }
+                let when = values[.tense].flatMap(greekTime) ?? values[.form].flatMap(hebrewTime)
+                if let when { parts.append(when) }
+            }
+            if values[.voice] == "Passive" { parts.append("done to, not doing") }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+
+        switch values[.grammaticalCase] {
+        case "Nominative": parts.append("the subject, or what is named")
+        case "Genitive": parts.append("“of …”")
+        case "Dative": parts.append("“to …”, “for …”, “in …”")
+        case "Accusative": parts.append("the object, what is acted on")
+        case "Vocative": parts.append("someone spoken to, “O …”")
+        default: break
+        }
+        switch values[.state] {
+        case "Construct": parts.append("“… of”, bound to the word after it")
+        case "Definite": parts.append("“the …”")
+        default: break
+        }
+        if plural { parts.append(values[.number] == "Dual" ? "two of them" : "more than one") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// A Hebrew verb's form as the mood it stands in for here.
+    private static func hebrewVerbForm(_ form: String) -> String? {
+        switch form {
+        case "Infinitive": "Infinitive"
+        case "Participle": "Participle"
+        case "Participle passive": "Participle passive"
+        case "Imperative": "Imperative"
+        case "Perfect", "Consecutive Perfect", "Imperfect", "Consecutive Imperfect",
+             "Conjunction+Imperfect": "Finite"
+        default: nil
+        }
+    }
+
+    private static func person(_ person: String?, plural: Bool, gender: String?) -> String? {
+        switch person {
+        case "1st person", "First": plural ? "we" : "I"
+        case "2nd person", "Second": plural ? "you, more than one" : "you"
+        case "3rd person", "Third":
+            plural ? "they" : gender == "Masculine" ? "he" : gender == "Feminine" ? "she" : "he, she or it"
+        default: nil
+        }
+    }
+
+    private static func greekTime(_ tense: String) -> String? {
+        switch tense {
+        case "Present": "now, or as a habit"
+        case "Imperfect": "“was …ing”, “used to …”"
+        case "Future": "“will …”"
+        case "Aorist": "did it, as a whole"
+        case "Perfect": "“has …”, done and still so"
+        case "Pluperfect": "“had …”"
+        default: nil
+        }
+    }
+
+    /// A Hebrew verb's form says less about time than about whether the act
+    /// is whole or under way, so these are its usual English.
+    private static func hebrewTime(_ form: String) -> String? {
+        switch form {
+        case "Perfect": "“did”, “has done”"
+        case "Imperfect": "“does”, “will do”"
+        case "Consecutive Imperfect": "“and … did”, the next thing that happened"
+        case "Consecutive Perfect": "“and … will”"
+        case "Conjunction+Imperfect": "“and … does” or “will”"
+        default: nil
+        }
     }
 }

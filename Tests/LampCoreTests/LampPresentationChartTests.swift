@@ -557,4 +557,13 @@ struct LampPresentationChartTests {
         #expect(report.issues.map(\.message)
             == ["U is not available to agents, so the chart keeps the values it carries."])
     }
+
+    @Test func aFormChartSaysEachFormForARoomWithoutGreek() {
+        let values = chart(by: .form).values(from: narrowed(nil))
+        #expect(values.map(\.label) == ["ἀγάπη", "ἀγάπης"])
+        #expect(values.map(\.detail) == ["agapē · the subject, or what is named", "agapēs · “of …”"])
+        var ring = chart(by: .form)
+        ring.style = .share
+        #expect(ring.values(from: narrowed(nil)).map(\.detail) == values.map(\.detail))
+    }
 }

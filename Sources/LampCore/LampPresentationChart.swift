@@ -344,10 +344,11 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     /// a companion by its word rather than its number.
     public func values(
         from analyses: [LampStrongsAnalysis],
-        headwords: [String: LampStrongsHeadword] = [:]
+        headwords: [String: LampStrongsHeadword] = [:],
+        parsingsFrom others: [LampStrongsAnalysis] = []
     ) -> [Value] {
         guard by == .translation else {
-            return analyses.first.map { values(from: $0, headwords: headwords) } ?? []
+            return analyses.first.map { values(from: $0, headwords: headwords, parsingsFrom: others) } ?? []
         }
         return analyses.map { analysis in
             Value(
@@ -370,14 +371,18 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     /// because there are few of them. A share is of occurrences, largest
     /// first, with everything past its sixth slice gathered as "Other" so the
     /// ring is the whole.
+    ///
+    /// `parsingsFrom` lends a form chart the parsings other translations give
+    /// the same spellings (`LampStrongsFormReading`).
     public func values(
         from analysis: LampStrongsAnalysis,
-        headwords: [String: LampStrongsHeadword] = [:]
+        headwords: [String: LampStrongsHeadword] = [:],
+        parsingsFrom others: [LampStrongsAnalysis] = []
     ) -> [Value] {
         func standing(_ division: LampStrongsAnalysis.Division) -> LampStrongsAnalysis.Expectation? {
             division.expectation == .asExpected ? nil : division.expectation
         }
-        if drawnStyle == .share, by.isPartOfWhole { return shareValues(from: analysis) }
+        if drawnStyle == .share, by.isPartOfWhole { return shareValues(from: analysis, parsingsFrom: others) }
         switch by {
         case .book where drawnStyle == .grid:
             return analysis.books.map { book in
@@ -423,10 +428,12 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             }
         case .form:
             let total = analysis.forms.reduce(0) { $0 + $1.count }
+            let readings = Self.formDetails(of: analysis, parsingsFrom: others)
             return analysis.forms.prefix(Self.rankedLimit).map {
                 .init(
                     label: $0.text,
                     value: measured($0.count, of: analysis.wordCount),
+                    detail: readings[$0.id],
                     share: share($0.count, of: total)
                 )
             }
@@ -514,22 +521,41 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         return analysis.grammar.filter { $0.feature == feature }
     }
 
-    private func shareValues(from analysis: LampStrongsAnalysis) -> [Value] {
-        let counts: [(label: String, count: Int)] = switch by {
-        case .book: analysis.books.map { ($0.name, $0.occurrenceCount) }
-        case .section: analysis.sections.map { ($0.name, $0.occurrenceCount) }
-        case .rendering: analysis.renderings.map { ($0.text.isEmpty ? "(no English)" : $0.text, $0.count) }
-        case .form: analysis.forms.map { ($0.text, $0.count) }
-        case .grammar: grammarCounts(in: analysis).map { ($0.value, $0.count) }
+    private func shareValues(
+        from analysis: LampStrongsAnalysis,
+        parsingsFrom others: [LampStrongsAnalysis]
+    ) -> [Value] {
+        let formDetails = by == .form ? Self.formDetails(of: analysis, parsingsFrom: others) : [:]
+        let counts: [(label: String, count: Int, detail: String?)] = switch by {
+        case .book: analysis.books.map { ($0.name, $0.occurrenceCount, nil) }
+        case .section: analysis.sections.map { ($0.name, $0.occurrenceCount, nil) }
+        case .rendering: analysis.renderings.map { ($0.text.isEmpty ? "(no English)" : $0.text, $0.count, nil) }
+        case .form: analysis.forms.map { ($0.text, $0.count, formDetails[$0.id]) }
+        case .grammar: grammarCounts(in: analysis).map { ($0.value, $0.count, nil) }
         case .translation, .companion: []
         }
         let ranked = counts.filter { $0.count > 0 }.sorted { ($1.count, $0.label) < ($0.count, $1.label) }
         guard ranked.count > Self.shareSlices else {
-            return ranked.map { .init(label: $0.label, value: Double($0.count)) }
+            return ranked.map { .init(label: $0.label, value: Double($0.count), detail: $0.detail) }
         }
         let others = ranked.dropFirst(Self.shareSlices - 1).reduce(0) { $0 + $1.count }
-        return ranked.prefix(Self.shareSlices - 1).map { .init(label: $0.label, value: Double($0.count)) }
-            + [.init(label: "Other", value: Double(others))]
+        return ranked.prefix(Self.shareSlices - 1).map {
+            .init(label: $0.label, value: Double($0.count), detail: $0.detail)
+        } + [.init(label: "Other", value: Double(others))]
+    }
+
+    /// Each form's line under its spelling, by form ID: its Latin letters and
+    /// what it does, "agapēs · “of …”", for a room that reads no Greek.
+    private static func formDetails(
+        of analysis: LampStrongsAnalysis,
+        parsingsFrom others: [LampStrongsAnalysis]
+    ) -> [String: String] {
+        var details: [String: String] = [:]
+        for reading in LampStrongsFormReading.readings(of: analysis, parsingsFrom: others) {
+            let line = [reading.transliteration, reading.role].compactMap { $0 }.joined(separator: " · ")
+            if !line.isEmpty { details[reading.form.id] = line }
+        }
+        return details
     }
 
     /// A value as the chart prints it.
@@ -662,8 +688,17 @@ public extension LampLibrary {
                 (try? dictionaryEntries(keys: keys, moduleIDs: dictionaryIDs)) ?? []
             )
         }
+        // A form chart borrows parsings for spellings its own tags do not
+        // parse, from the other translations this library may read.
+        var lenders: [LampStrongsAnalysis] = []
+        if chart.by == .form, let first = analyses.first,
+           LampStrongsFormReading.readings(of: first).contains(where: { $0.role == nil }) {
+            lenders = try strongsAnalyses(
+                key: chart.source.strongs, moduleIDs: translationIDs, bookRange: books
+            ).filter { $0.translationID != first.translationID }
+        }
         var worked = chart
-        worked.values = chart.values(from: analyses, headwords: headwords)
+        worked.values = chart.values(from: analyses, headwords: headwords, parsingsFrom: lenders)
         worked.headword = chart.showsHeadword
             ? chart.headword(from: analyses[0], headword: headwords[LampStrongsKey.normalized(chart.source.strongs)])
             : nil

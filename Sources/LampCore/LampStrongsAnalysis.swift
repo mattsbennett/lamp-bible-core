@@ -584,7 +584,8 @@ public struct LampStrongsAnalyzer {
             let rendered = annotation["text"] as? String ?? substring(start, end) ?? ""
             tagged.append(occurrence(
                 reference: reference, start: start, end: end, text: rendered,
-                form: Self.aligned((data?["lemma"] ?? annotation["lemma"]) as? String, index, keys.count),
+                form: originalSpelling(of: rendered)
+                    ?? Self.aligned((data?["lemma"] ?? annotation["lemma"]) as? String, index, keys.count),
                 morphology: Self.aligned((data?["morphology"] ?? annotation["morphology"]) as? String, index, keys.count)
             ))
         }
@@ -619,6 +620,27 @@ public struct LampStrongsAnalyzer {
             joined += 1
         }
         return (found, joined)
+    }
+
+    /// The tagged words themselves as the form, in a text written in the
+    /// key's own language. TAGNT's and TAHOT's `lemma` is the dictionary
+    /// form, so every ἀγάπην and ἀγάπῃ read as ἀγάπη and the Forms figure
+    /// held one spelling; the spelling is the word as printed. Nil for a
+    /// translation, whose words are English and whose `lemma` is the form.
+    private func originalSpelling(of text: String) -> String? {
+        guard !isEnglish, let keyLanguage else { return nil }
+        let word = text.trimmingCharacters(in: Self.edgePunctuation)
+        guard !word.isEmpty else { return nil }
+        let isOriginal = word.unicodeScalars.allSatisfy { scalar in
+            if CharacterSet.whitespaces.contains(scalar) { return true }
+            switch keyLanguage {
+            case "G": return (0x0370...0x03FF).contains(scalar.value) || (0x1F00...0x1FFF).contains(scalar.value)
+                || (0x0300...0x036F).contains(scalar.value)
+            default: return (0x0590...0x05FF).contains(scalar.value) || (0xFB1D...0xFB4F).contains(scalar.value)
+                || scalar.value == 0x2F
+            }
+        }
+        return isOriginal ? word : nil
     }
 
     private func occurrence(
