@@ -813,7 +813,9 @@ public struct LampStrongsHeadword: Equatable, Sendable {
     /// appear" or "faith; faith: faithfulness" as TBESG writes them, read as
     /// that head: "to see", "faith". Parts with different heads name
     /// different things ("John; Jonah", "seed: offspring; seed(s)"), as does
-    /// a single sense ("hell: Hades"), and the gloss is kept as written. Nil for a gloss with nothing in it, so a
+    /// a single sense ("hell: Hades"), and the gloss is kept, tidied for a
+    /// heading: blank parts dropped and parts joined with "; ", so it need
+    /// not match the lexicon's stored text character for character. Nil for a gloss with nothing in it, so a
     /// blank field falls through to the next sense or the short definition.
     public static func headGloss(_ gloss: String) -> String? {
         let parts = gloss.components(separatedBy: ";")
