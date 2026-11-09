@@ -812,8 +812,8 @@ public struct LampStrongsHeadword: Equatable, Sendable {
     /// A gloss written as senses under one head, "to see: see; to see:
     /// appear" or "faith; faith: faithfulness" as TBESG writes them, read as
     /// that head: "to see", "faith". Parts with different heads name
-    /// different things ("John; Jonah", "seed: offspring; seed(s)") and the
-    /// gloss is kept as written. Nil for a gloss with nothing in it, so a
+    /// different things ("John; Jonah", "seed: offspring; seed(s)"), as does
+    /// a single sense ("hell: Hades"), and the gloss is kept as written. Nil for a gloss with nothing in it, so a
     /// blank field falls through to the next sense or the short definition.
     public static func headGloss(_ gloss: String) -> String? {
         let parts = gloss.components(separatedBy: ";")
@@ -824,7 +824,9 @@ public struct LampStrongsHeadword: Equatable, Sendable {
                 .trimmingCharacters(in: .whitespaces)
         }
         guard let head = heads.first else { return nil }
-        guard !head.isEmpty, heads.allSatisfy({ $0 == head }) else {
+        // One part is one sense, "hell: Hades", and its head alone would
+        // make Hades, Gehenna and Tartarus all "hell".
+        guard heads.count > 1, !head.isEmpty, heads.allSatisfy({ $0 == head }) else {
             return parts.joined(separator: "; ")
         }
         return head

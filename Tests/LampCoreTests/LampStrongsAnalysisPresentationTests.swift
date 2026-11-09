@@ -969,6 +969,8 @@ struct StrongsHeadwordTests {
         #expect(LampStrongsHeadword.headGloss("love") == "love")
         #expect(LampStrongsHeadword.headGloss("John; Jonah") == "John; Jonah")
         #expect(LampStrongsHeadword.headGloss("seed: offspring; seed(s)") == "seed: offspring; seed(s)")
+        #expect(LampStrongsHeadword.headGloss("hell: Hades") == "hell: Hades")
+        #expect(LampStrongsHeadword.headGloss("reckoning: accounts") == "reckoning: accounts")
         let headwords = LampStrongsHeadword.merging([
             result("G4102", module: "tbesg", lemma: "πίστις",
                    senses: [LampDictionarySense(gloss: "faith; faith: faithfulness")]),
