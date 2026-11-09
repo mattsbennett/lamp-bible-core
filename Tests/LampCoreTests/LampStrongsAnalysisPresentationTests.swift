@@ -1263,9 +1263,9 @@ struct StrongsFormReadingTests {
         func role(_ code: String, _ key: String = "G26") -> String? {
             LampStrongsFormReading.role(of: LampMorphology.features(of: code, strongsKey: key))
         }
-        #expect(role("N-NSF") == "the subject, or what is named")
+        #expect(role("N-NSF") == "the subject")
         #expect(role("N-GSF") == "“of …”")
-        #expect(role("N-APF") == "the object, what is acted on · more than one")
+        #expect(role("N-APF") == "the object · more than one")
         #expect(role("V-AAI-3S", "G25") == "he, she or it · did it, as a whole")
         #expect(role("V-PAN", "G25") == "“to …”")
         #expect(role("V-PAP-NSM", "G25") == "“…ing”, “the one who …”")
@@ -1294,7 +1294,7 @@ struct StrongsFormReadingTests {
         #expect(readings.map(\.form.text) == ["ἀγάπη", "ἀγάπης"])
         #expect(readings[0].form.count == 3)
         #expect(readings[0].transliteration == "agapē")
-        #expect(readings[0].role == "the subject, or what is named")
+        #expect(readings[0].role == "the subject")
         #expect(readings[0].renderedAs == ["love"])
         #expect(readings[1].renderedAs == ["of love"])
         #expect(readings[1].parsing == "Noun · Genitive · Singular · Feminine")
@@ -1311,7 +1311,7 @@ struct StrongsFormReadingTests {
         let unread = LampStrongsFormReading.readings(of: bare.analysis())
         #expect(unread.allSatisfy { $0.role == nil })
         let lent = LampStrongsFormReading.readings(of: bare.analysis(), parsingsFrom: [analysis])
-        #expect(lent.map(\.role) == ["the subject, or what is named", "“of …”"])
+        #expect(lent.map(\.role) == ["the subject", "“of …”"])
         // "And" came from a neighbouring word; "Love" starts a sentence.
         #expect(lent[0].renderedAs == ["love"])
     }
@@ -1327,6 +1327,38 @@ struct StrongsFormReadingTests {
             greek.add(reference: 62_004_016 + index, text: text, annotationsJSON: json)
         }
         #expect(Set(greek.analysis().forms.map(\.text)) == ["ἀγάπην", "ἀγάπη", "ἀγάπῃ"])
+    }
+
+    /// πνεῦμα is a subject in some verses and an object in others: one
+    /// spelling, two jobs. Stating the commonest alone was wrong for 62 of
+    /// its 145 New Testament occurrences.
+    @Test func aSpellingWithTwoJobsNamesBoth() {
+        var analyzer = LampStrongsAnalyzer(key: "G4151", translationID: "T", translationName: "Test")
+        for (index, code) in ["N-NSN", "N-NSN", "N-ASN", "N-GSN"].enumerated() {
+            let word = code == "N-GSN" ? "πνεύματος" : "πνεῦμα"
+            let text = "Spirit word"
+            let json = #"[{"start":0,"end":6,"data":{"strongs":"G4151","lemma":"\#(word)","morphology":"\#(code)"}},"#
+                + #"{"start":7,"end":11,"data":{"strongs":"G1"}}]"#
+            analyzer.add(reference: 43_003_005 + index, text: text, annotationsJSON: json)
+        }
+        let readings = LampStrongsFormReading.readings(of: analyzer.analysis())
+        let pneuma = readings.first { $0.form.text == "πνεῦμα" }
+        #expect(pneuma?.role == "either the subject or the object, one spelling for both")
+        #expect(pneuma?.parsing == "Noun · Nominative · Singular · Neuter, or Noun · Accusative · Singular · Neuter")
+        #expect(readings.first { $0.form.text == "πνεύματος" }?.role == "“of …”")
+        #expect(LampStrongsFormReading.either(["a": 3, "b": 2, "c": 1, "d": 1])
+            == "either a or b or c or more, one spelling for each")
+        // What the jobs share is said once.
+        #expect(LampStrongsFormReading.either(["the object · more than one": 2, "the subject · more than one": 1])
+            == "either the object or the subject, one spelling for both · more than one")
+        #expect(LampStrongsFormReading.either(["he · did it": 2, "he · “has …”": 1])
+            == "he · either did it or “has …”, one spelling for both")
+        #expect(LampStrongsFormReading.either(["x · y": 2, "x": 1]) == "either x · y or x, one spelling for both")
+
+        // A chart of its forms says the same, so a slide cannot state less.
+        let chart = LampPresentationChart(source: .init(strongs: "G4151", translationID: "T"), by: .form)
+        #expect(chart.values(from: analyzer.analysis()).first?.detail
+            == "pneuma · either the subject or the object, one spelling for both")
     }
 
     @Test func aSecondEnglishIsShownOnlyWhenItIsCommon() {

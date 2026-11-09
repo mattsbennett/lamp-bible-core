@@ -561,7 +561,7 @@ struct LampPresentationChartTests {
     @Test func aFormChartSaysEachFormForARoomWithoutGreek() {
         let values = chart(by: .form).values(from: narrowed(nil))
         #expect(values.map(\.label) == ["ἀγάπη", "ἀγάπης"])
-        #expect(values.map(\.detail) == ["agapē · the subject, or what is named", "agapēs · “of …”"])
+        #expect(values.map(\.detail) == ["agapē · the subject", "agapēs · “of …”"])
         var ring = chart(by: .form)
         ring.style = .share
         #expect(ring.values(from: narrowed(nil)).map(\.detail) == values.map(\.detail))

@@ -1047,9 +1047,11 @@ public struct LampStrongsFormReading: Equatable, Sendable {
     /// letter-for-letter scheme gets wrong more often than right.
     public let transliteration: String?
     /// What the spelling does, in plain words: "the subject", "“of …”",
-    /// "he, she or it · in the past". Nil where the tags carry no parsing.
+    /// "he, she or it · did it, as a whole". A spelling that does more than
+    /// one job names every one, commonest first: "either the subject or the
+    /// object, one spelling for both". Nil where the tags carry no parsing.
     public let role: String?
-    /// The parsing in grammar's own terms, for whoever wants it.
+    /// The parsing in grammar's own terms, every one the spelling carries.
     public let parsing: String?
     /// The English this form most often became here, commonest first.
     public let renderedAs: [String]
@@ -1070,11 +1072,16 @@ public struct LampStrongsFormReading: Equatable, Sendable {
 
     /// A reading for each of the analysis's forms, in its order.
     ///
-    /// A form's parsing is its own tags' where they carry one. The BSB tags
-    /// the Greek it renders but not its parsing, so `parsingsFrom` lends the
-    /// codes other translations give the same spelling of the same word: a
-    /// spelling is the same form wherever it is printed, which is the point
-    /// of telling forms apart by spelling.
+    /// A form's parsings are its own tags' where they carry them. The BSB
+    /// tags the Greek it renders but not its parsing, so `parsingsFrom` lends
+    /// the codes other translations give the same spelling of the same word.
+    ///
+    /// A spelling is not always one parsing: πνεῦμα is a subject in some
+    /// verses and an object in others, ἡμέρας "of a day" or "days". So every
+    /// parsing a spelling carries is kept, and a role is stated alone only
+    /// when they all agree on it. Stating the commonest alone was wrong for
+    /// some 1 in 20 of the New Testament's nouns, to the reader least able to
+    /// tell.
     public static func readings(
         of analysis: LampStrongsAnalysis,
         parsingsFrom others: [LampStrongsAnalysis] = []
@@ -1102,8 +1109,16 @@ public struct LampStrongsFormReading: Equatable, Sendable {
             english[id, default: [:]][text.lowercased(), default: [:]][text, default: 0] += 1
         }
         return analysis.forms.map { form in
-            let code = (codes[form.id] ?? lent[form.id])?.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
-            let features = code.map { LampMorphology.features(of: $0, strongsKey: key) } ?? []
+            let carried = codes[form.id] ?? lent[form.id] ?? [:]
+            var roles: [String: Int] = [:]
+            var parsings: [String: Int] = [:]
+            for (code, count) in carried {
+                let features = LampMorphology.features(of: code, strongsKey: key)
+                if let role = role(of: features) { roles[role, default: 0] += count }
+                if !features.isEmpty {
+                    parsings[features.map(\.value).joined(separator: " · "), default: 0] += count
+                }
+            }
             let rendered = (english[form.id] ?? [:]).values
                 .map { spellings in
                     (
@@ -1120,11 +1135,40 @@ public struct LampStrongsFormReading: Equatable, Sendable {
             return LampStrongsFormReading(
                 form: form,
                 transliteration: isGreek ? LampGreekTransliteration.latin(form.text) : nil,
-                role: role(of: features),
-                parsing: features.isEmpty ? nil : features.map(\.value).joined(separator: " · "),
+                role: either(roles),
+                parsing: parsings.isEmpty ? nil : ranked(parsings).joined(separator: ", or "),
                 renderedAs: shown
             )
         }
+    }
+
+    private static func ranked(_ counts: [String: Int]) -> [String] {
+        counts.sorted { ($1.value, $0.key) < ($0.value, $1.key) }.map(\.key)
+    }
+
+    /// One role, or every role a spelling does, said as a choice. What the
+    /// roles share is said once, outside it: "either the object or the
+    /// subject, one spelling for both · more than one".
+    static func either(_ roles: [String: Int]) -> String? {
+        let all = ranked(roles)
+        guard all.count > 1 else { return all.first }
+        let parts = all.map { $0.components(separatedBy: " · ") }
+        var head: [String] = []
+        while let first = parts[0].dropFirst(head.count).first,
+              parts.allSatisfy({ $0.count > head.count + 1 && $0[head.count] == first }) {
+            head.append(first)
+        }
+        var tail: [String] = []
+        while let last = parts[0].dropLast(tail.count).last,
+              parts.allSatisfy({ $0.count > head.count + tail.count + 1 && $0[$0.count - 1 - tail.count] == last }) {
+            tail.insert(last, at: 0)
+        }
+        let choices = parts.map { $0[head.count..<($0.count - tail.count)].joined(separator: " · ") }
+        let shown = choices.prefix(3)
+        let rest = choices.count > shown.count ? " or more" : ""
+        let jobs = choices.count == 2 ? "both" : "each"
+        let choice = "either " + shown.joined(separator: " or ") + rest + ", one spelling for \(jobs)"
+        return (head + [choice] + tail).joined(separator: " · ")
     }
 
     /// Words a tag can take in from its neighbours that the form itself does
@@ -1188,10 +1232,10 @@ public struct LampStrongsFormReading: Equatable, Sendable {
         }
 
         switch values[.grammaticalCase] {
-        case "Nominative": parts.append("the subject, or what is named")
+        case "Nominative": parts.append("the subject")
         case "Genitive": parts.append("“of …”")
         case "Dative": parts.append("“to …”, “for …”, “in …”")
-        case "Accusative": parts.append("the object, what is acted on")
+        case "Accusative": parts.append("the object")
         case "Vocative": parts.append("someone spoken to, “O …”")
         default: break
         }
