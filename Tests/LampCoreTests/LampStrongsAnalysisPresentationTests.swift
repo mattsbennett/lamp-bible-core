@@ -335,6 +335,26 @@ struct StrongsAnalysisSupportTests {
             == "This verse isn’t in the Greek text installed.")
     }
 
+    /// With no Septuagint installed there is one thing to say, and it is about
+    /// the library. Saying it against each verse instead would make
+    /// twenty-five claims about verses nothing has looked at.
+    @Test func noSeptuagintIsOneFactAboutTheLibraryNotOneAboutEachVerse() {
+        #expect(LampSeptuagintSection.withoutSeptuagint
+            == "No Septuagint is installed, so there’s no Greek to put beside these verses.")
+        #expect(!LampSeptuagintSection.withoutSeptuagint.contains("This verse"))
+    }
+
+    /// A read that failed says so. It must not borrow the missing-verse
+    /// wording, which claims the text does not have the verse — a failed read
+    /// has not established that, and the next attempt may well find it.
+    @Test func afailedReadIsNotAMissingVerse() {
+        #expect(LampSeptuagintSection.unreadable("Brenton Greek Septuagint")
+            == "Brenton Greek Septuagint couldn’t be read.")
+        #expect(LampSeptuagintSection.unreadable(nil) == "The Greek text couldn’t be read.")
+        #expect(LampSeptuagintSection.unreadable("") == "The Greek text couldn’t be read.")
+        #expect(!LampSeptuagintSection.unreadable("Brenton").contains("isn’t in"))
+    }
+
     // MARK: - The spread chart
 
     @Test func barsAreScaledAgainstTheLongestOne() {

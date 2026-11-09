@@ -663,6 +663,27 @@ public enum LampSeptuagintSection {
         return "This verse isn’t in \(septuagint)."
     }
 
+    /// What stands in place of the verses when no Septuagint is installed.
+    ///
+    /// Said once, because it is one fact about the library rather than
+    /// twenty-five facts about the text. `missingVerse(in:)` would be wrong
+    /// here in both halves: it names a text that isn't there, and it says the
+    /// verse is absent from it, which nothing has checked.
+    public static let withoutSeptuagint =
+        "No Septuagint is installed, so there’s no Greek to put beside these verses."
+
+    /// What to say when the Greek text is installed but could not be read.
+    ///
+    /// Kept apart from `missingVerse(in:)` deliberately. That one is a claim
+    /// about the text — this verse is not in it — and this one is a claim
+    /// about the attempt, which is all a failed read supports.
+    public static func unreadable(_ septuagint: String?) -> String {
+        guard let septuagint, !septuagint.isEmpty else {
+            return "The Greek text couldn’t be read."
+        }
+        return "\(septuagint) couldn’t be read."
+    }
+
     /// The Septuagint's Greek for each of `references`, given in the Hebrew
     /// text's numbering, read a chapter at a time.
     ///
