@@ -1053,21 +1053,28 @@ public struct LampStrongsFormReading: Equatable, Sendable {
     public let role: String?
     /// The parsing in grammar's own terms, every one the spelling carries.
     public let parsing: String?
-    /// The English this form most often became here, commonest first.
+    /// The English this form most often became, commonest first.
     public let renderedAs: [String]
+    /// The translation `renderedAs` is from when it is not this analysis's:
+    /// a Greek or Hebrew text has no English of its own, so it shows the
+    /// English a translation gave the same spelling. Nil when it is this
+    /// translation's own.
+    public let renderedIn: String?
 
     public init(
         form: LampStrongsAnalysis.Form,
         transliteration: String?,
         role: String?,
         parsing: String?,
-        renderedAs: [String]
+        renderedAs: [String],
+        renderedIn: String? = nil
     ) {
         self.form = form
         self.transliteration = transliteration
         self.role = role
         self.parsing = parsing
         self.renderedAs = renderedAs
+        self.renderedIn = renderedIn
     }
 
     /// A reading for each of the analysis's forms, in its order.
@@ -1088,38 +1095,71 @@ public struct LampStrongsFormReading: Equatable, Sendable {
     ) -> [LampStrongsFormReading] {
         let key = LampStrongsKey.normalized(analysis.key)
         let isGreek = key.first == "G"
+        let script = key.first ?? "G"
         var codes: [String: [String: Int]] = [:]
         var lent: [String: [String: Int]] = [:]
-        for other in others where LampStrongsKey.normalized(other.key) == key {
-            for occurrence in other.occurrences {
-                guard let form = occurrence.form, let code = occurrence.morphology else { continue }
-                lent[LampStrongsAnalyzer.formID(form), default: [:]][code, default: 0] += 1
-            }
-        }
         // By form, then by the English folded to lower case, each spelling
         // counted: "Love" at the start of a sentence is the same English as
-        // "love", and is shown as it is most often written.
-        var english: [String: [String: [String: Int]]] = [:]
+        // "love", and is shown as it is most often written. A tag whose text
+        // is the Greek or Hebrew word itself is no English at all.
+        typealias English = [String: [String: [String: Int]]]
+        func addEnglish(_ occurrence: LampStrongsAnalysis.Occurrence, id: String, to english: inout English) {
+            let text = englishOfForm(occurrence.text)
+            guard !text.isEmpty, !LampStrongsAnalyzer.isOriginalScript(text, language: script) else { return }
+            english[id, default: [:]][text.lowercased(), default: [:]][text, default: 0] += 1
+        }
+        var lentEnglish: [(name: String, english: English)] = []
+        for other in others where LampStrongsKey.normalized(other.key) == key {
+            var english: English = [:]
+            for occurrence in other.occurrences {
+                guard let form = occurrence.form else { continue }
+                let id = LampStrongsAnalyzer.formID(form)
+                if let code = occurrence.morphology { lent[id, default: [:]][code, default: 0] += 1 }
+                addEnglish(occurrence, id: id, to: &english)
+            }
+            if !english.isEmpty {
+                lentEnglish.append((other.translationAbbreviation ?? other.translationName, english))
+            }
+        }
+        var english: English = [:]
         for occurrence in analysis.occurrences {
             guard let form = occurrence.form else { continue }
             let id = LampStrongsAnalyzer.formID(form)
             if let code = occurrence.morphology { codes[id, default: [:]][code, default: 0] += 1 }
-            let text = englishOfForm(occurrence.text)
-            guard !text.isEmpty else { continue }
-            english[id, default: [:]][text.lowercased(), default: [:]][text, default: 0] += 1
+            addEnglish(occurrence, id: id, to: &english)
         }
         return analysis.forms.map { form in
             let carried = codes[form.id] ?? lent[form.id] ?? [:]
             var roles: [String: Int] = [:]
             var parsings: [String: Int] = [:]
+            var partsOfSpeech: Set<String> = []
             for (code, count) in carried {
                 let features = LampMorphology.features(of: code, strongsKey: key)
-                if let role = role(of: features) { roles[role, default: 0] += count }
+                // A parsing with no job to say, an adverb's, is still a choice
+                // of its own: dropped, the role beside it would speak for it,
+                // as "the subject" did for πλησίον, an adverb sixteen times
+                // in seventeen.
+                let job = script == "H"
+                    ? hebrewRole(code: code, form: form.text, features: features)
+                    : role(of: features)
+                let said = job ?? partOfSpeech(features)
+                if job == nil, let said { partsOfSpeech.insert(said) }
+                if let said { roles[said, default: 0] += count }
                 if !features.isEmpty {
                     parsings[features.map(\.value).joined(separator: " · "), default: 0] += count
                 }
             }
-            let rendered = (english[form.id] ?? [:]).values
+            // This translation's English, or the English of whichever other
+            // gave this spelling most often.
+            var own = english[form.id]
+            var renderedIn: String?
+            if own == nil, let lender = lentEnglish
+                .filter({ $0.english[form.id] != nil })
+                .max(by: { total($0.english[form.id]) < total($1.english[form.id]) }) {
+                own = lender.english[form.id]
+                renderedIn = lender.name
+            }
+            let rendered = (own ?? [:]).values
                 .map { spellings in
                     (
                         text: spellings.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? "",
@@ -1135,10 +1175,112 @@ public struct LampStrongsFormReading: Equatable, Sendable {
             return LampStrongsFormReading(
                 form: form,
                 transliteration: isGreek ? LampGreekTransliteration.latin(form.text) : nil,
-                role: either(roles),
+                // A part of speech alone says nothing a reader can use about
+                // the spelling ("a noun"); it is said only beside a job.
+                role: roles.count == 1 && partsOfSpeech.contains(roles.keys.first ?? "") ? nil : either(roles),
                 parsing: parsings.isEmpty ? nil : ranked(parsings).joined(separator: ", or "),
-                renderedAs: shown
+                renderedAs: shown,
+                renderedIn: shown.isEmpty ? nil : renderedIn
             )
+        }
+    }
+
+    /// A parsing named by its part of speech: "an adverb", "a noun".
+    private static func partOfSpeech(_ features: [LampGrammarValue]) -> String? {
+        guard let part = features.first(where: { $0.feature == .partOfSpeech })?.value.lowercased() else {
+            return nil
+        }
+        return ("aeiou".contains(part.first ?? "x") ? "an " : "a ") + part
+    }
+
+    private static func total(_ english: [String: [String: Int]]?) -> Int {
+        (english ?? [:]).values.reduce(0) { $0 + $1.values.reduce(0, +) }
+    }
+
+    /// A Hebrew form's job, with the small words its spelling carries.
+    ///
+    /// A Hebrew word takes "and", "in", "to", "the" on its front and "his",
+    /// "her", "their" on its end, each a morpheme of its code (`HR/Ncfsc/Sp3ms`
+    /// is in + love + his). The number names the noun, so `features` reads
+    /// only that; the rest are read here from the code and, for which
+    /// preposition it is, from the letter that spells it. A noun bound to a
+    /// suffix is bound to it, not to the word after: בְּאַהֲבָתוֹ is "in his …".
+    static func hebrewRole(code: String, form: String, features: [LampGrammarValue]) -> String? {
+        var segments = code.split(separator: "/").map(String.init)
+        if let first = segments.first, first.first == "H" || first.first == "A" {
+            segments[0] = String(first.dropFirst())
+        }
+        guard let content = segments.firstIndex(where: { segment in
+            guard let letter = segment.first else { return false }
+            return "NAVP".contains(letter)
+        }) else { return role(of: features) }
+        let letters = form.unicodeScalars.filter { (0x05D0...0x05EA).contains($0.value) }.map(Character.init)
+        var front: [String] = []
+        var letterIndex = 0
+        for segment in segments[..<content] {
+            switch segment.first {
+            case "C":
+                front.append("and")
+                letterIndex += 1
+            case "R":
+                let letter = letterIndex < letters.count ? letters[letterIndex] : nil
+                if let word = prepositions[letter ?? " "] { front.append(word) }
+                letterIndex += 1
+                if segment.dropFirst().first == "d" { front.append("the") }
+            case "T" where segment.dropFirst().first == "d":
+                front.append("the")
+                letterIndex += 1
+            default:
+                letterIndex += 1
+            }
+        }
+        let isVerb = segments[content].first == "V"
+        var suffix: String?
+        for segment in segments[(content + 1)...] {
+            if segment.hasPrefix("Sp") {
+                suffix = pronoun(Array(segment.dropFirst(2)), possessive: !isVerb)
+            } else if segment.hasPrefix("Sd") {
+                front.append("toward")
+            }
+        }
+        // Bound to its suffix, a noun says so through the suffix alone.
+        let content_ = suffix != nil && !isVerb
+            ? features.filter { !($0.feature == .state && $0.value == "Construct") }
+            : features
+        var frame: String?
+        if isVerb {
+            if !front.isEmpty || suffix != nil {
+                frame = "“" + (front + ["…"] + [suffix].compactMap { $0 }).joined(separator: " ") + "”"
+            }
+        } else if !front.isEmpty || suffix != nil {
+            frame = "“" + (front + [suffix].compactMap { $0 } + ["…"]).joined(separator: " ") + "”"
+        }
+        let parts = [frame, role(of: content_)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static let prepositions: [Character: String] = [
+        "ב": "in", "ל": "to", "כ": "like", "מ": "from",
+    ]
+
+    /// A pronoun suffix's person, gender and number (`3ms`) as English: "his"
+    /// on a noun, "him" on a verb.
+    private static func pronoun(_ fields: [Character], possessive: Bool) -> String? {
+        guard fields.count >= 3 else { return nil }
+        let (person, gender, number) = (fields[0], fields[1], fields[2])
+        let plural = number == "p"
+        switch (person, plural) {
+        case ("1", false): return possessive ? "my" : "me"
+        case ("1", true): return possessive ? "our" : "us"
+        case ("2", _): return possessive ? "your" : "you"
+        case ("3", true): return possessive ? "their" : "them"
+        case ("3", false):
+            switch gender {
+            case "f": return possessive ? "her" : "her"
+            case "m": return possessive ? "his" : "him"
+            default: return possessive ? "its" : "it"
+            }
+        default: return nil
         }
     }
 

@@ -630,17 +630,36 @@ public struct LampStrongsAnalyzer {
     private func originalSpelling(of text: String) -> String? {
         guard !isEnglish, let keyLanguage else { return nil }
         let word = text.trimmingCharacters(in: Self.edgePunctuation)
-        guard !word.isEmpty else { return nil }
-        let isOriginal = word.unicodeScalars.allSatisfy { scalar in
+        return Self.isOriginalScript(word, language: keyLanguage) ? word : nil
+    }
+
+    /// Whether `text` is written wholly in the Greek (`G`) or Hebrew (`H`)
+    /// script, as the original-language texts' tagged words are.
+    static func isOriginalScript(_ text: String, language: Character) -> Bool {
+        guard !text.isEmpty else { return false }
+        return text.unicodeScalars.allSatisfy { scalar in
             if CharacterSet.whitespaces.contains(scalar) { return true }
-            switch keyLanguage {
+            switch language {
             case "G": return (0x0370...0x03FF).contains(scalar.value) || (0x1F00...0x1FFF).contains(scalar.value)
                 || (0x0300...0x036F).contains(scalar.value)
             default: return (0x0590...0x05FF).contains(scalar.value) || (0xFB1D...0xFB4F).contains(scalar.value)
                 || scalar.value == 0x2F
             }
         }
-        return isOriginal ? word : nil
+    }
+
+    /// Hebrew without its cantillation and meteg: the marks that say how a
+    /// word is chanted and stressed in its verse, not which word it is. אַהֲבָ֑ה
+    /// and אַהֲבָ֥ה are one spelling, and counted as one.
+    static func withoutCantillation(_ text: String) -> String {
+        guard text.unicodeScalars.contains(where: { (0x0591...0x05AF).contains($0.value) || $0.value == 0x05BD })
+        else { return text }
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars
+        where !((0x0591...0x05AF).contains(scalar.value) || scalar.value == 0x05BD) {
+            scalars.append(scalar)
+        }
+        return String(scalars)
     }
 
     private func occurrence(
@@ -731,11 +750,11 @@ public struct LampStrongsAnalyzer {
         }.sorted { ($1.count, $0.text) < ($0.count, $1.text) }
     }
 
-    /// A form compared without case, and with a grave accent read as the acute
-    /// it stands for at rest.
+    /// A form compared without case, with a grave accent read as the acute
+    /// it stands for at rest, and without Hebrew cantillation or meteg.
     static func formID(_ form: String) -> String {
-        form.trimmingCharacters(in: edgePunctuation)
-            .decomposedStringWithCanonicalMapping
+        withoutCantillation(form.trimmingCharacters(in: edgePunctuation)
+            .decomposedStringWithCanonicalMapping)
             .replacingOccurrences(of: "\u{0300}", with: "\u{0301}")
             .lowercased()
             .precomposedStringWithCanonicalMapping
@@ -747,7 +766,7 @@ public struct LampStrongsAnalyzer {
             guard let form = occurrence.form?.precomposedStringWithCanonicalMapping else { continue }
             let id = Self.formID(form)
             guard !id.isEmpty else { continue }
-            spellings[id, default: [:]][form.trimmingCharacters(in: Self.edgePunctuation), default: 0] += 1
+            spellings[id, default: [:]][Self.withoutCantillation(form.trimmingCharacters(in: Self.edgePunctuation)), default: 0] += 1
         }
         return spellings.map { id, written in
             LampStrongsAnalysis.Form(id: id, text: Self.mostCommon(written), count: written.values.reduce(0, +))

@@ -1371,4 +1371,59 @@ struct StrongsFormReadingTests {
         let form = analysis.forms[0]
         #expect(analysis.occurrences(matching: .form(form.text)).count == form.count)
     }
+
+    /// A verse as an original-language text tags it: the word itself as the
+    /// text, its dictionary form as `lemma`.
+    private func original(
+        _ key: String, language: String, words: [(word: String, code: String)]
+    ) -> LampStrongsAnalysis {
+        var analyzer = LampStrongsAnalyzer(key: key, translationID: "O", translationName: "Original", language: language)
+        for (index, row) in words.enumerated() {
+            let text = row.word + " x"
+            let json = #"[{"start":0,"end":\#(row.word.count),"data":{"strongs":"\#(key)","lemma":"lemma","morphology":"\#(row.code)"}}]"#
+            analyzer.add(reference: 19_001_001 + index, text: text, annotationsJSON: json)
+        }
+        return analyzer.analysis()
+    }
+
+    @Test func aGreekTextBorrowsItsEnglishAndSaysFromWhere() {
+        let tagnt = original("G26", language: "grc", words: [("ἀγάπης", "N-GSF"), ("ἀγάπης", "N-GSF")])
+        #expect(LampStrongsFormReading.readings(of: tagnt)[0].renderedAs.isEmpty)
+        var bsb = LampStrongsAnalyzer(key: "G26", translationID: "BSBs", translationName: "BSB", translationAbbreviation: "BSB")
+        let json = #"[{"start":0,"end":7,"data":{"strongs":"G26","lemma":"ἀγάπης"}}]"#
+        bsb.add(reference: 46_013_001, text: "of love", annotationsJSON: json)
+        let lent = LampStrongsFormReading.readings(of: tagnt, parsingsFrom: [bsb.analysis()])[0]
+        #expect(lent.renderedAs == ["of love"])
+        #expect(lent.renderedIn == "BSB")
+        #expect(lent.role == "“of …”")
+    }
+
+    @Test func hebrewAccentsAreNotADifferentSpelling() {
+        let tahot = original("H160", language: "hbo", words: [("אַהֲבָ֑ה", "HNcfsa"), ("אַהֲבָ֥ה", "HNcfsa"), ("אַֽהֲבָה", "HNcfsa")])
+        #expect(tahot.forms.map(\.text) == ["אַהֲבָה"])
+        #expect(tahot.forms.first?.count == 3)
+    }
+
+    @Test func aHebrewFormSaysTheSmallWordsItCarries() {
+        func role(_ word: String, _ code: String, _ key: String = "H160") -> String? {
+            LampStrongsFormReading.readings(of: original(key, language: "hbo", words: [(word, code)]))[0].role
+        }
+        #expect(role("בְּאַהֲבָתוֹ", "HR/Ncfsc/Sp3ms") == "“in his …”")
+        #expect(role("וְאַהֲבָה", "HC/Ncfsa") == "“and …”")
+        #expect(role("אַהֲבַת", "HNcfsc") == "“… of”, bound to the word after it")
+        #expect(role("אַהֲבָה", "HNcfsa") == nil)
+        #expect(role("לָאַהֲבָה", "HRd/Ncfsa") == "“to the …”")
+        #expect(role("וַיֶּאֱהַב", "Hc/Vqw3ms", "H157") == "he · “and … did”, the next thing that happened")
+        #expect(role("אֲהֵבוֹ", "HVqp3ms/Sp3ms", "H157") == "“… him” · he · “did”, “has done”")
+    }
+
+    @Test func aParsingWithNoJobIsAChoiceOfItsOwn() {
+        var analyzer = LampStrongsAnalyzer(key: "G4139", translationID: "T", translationName: "T")
+        for (index, code) in (Array(repeating: "ADV", count: 16) + ["N-NSF"]).enumerated() {
+            let json = #"[{"start":0,"end":9,"data":{"strongs":"G4139","lemma":"πλησίον","morphology":"\#(code)"}}]"#
+            analyzer.add(reference: 40_022_039 + index, text: "neighbour", annotationsJSON: json)
+        }
+        #expect(LampStrongsFormReading.readings(of: analyzer.analysis())[0].role
+            == "either an adverb or the subject, one spelling for both")
+    }
 }
