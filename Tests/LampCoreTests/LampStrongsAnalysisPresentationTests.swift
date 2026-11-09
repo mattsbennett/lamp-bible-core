@@ -975,6 +975,25 @@ struct StrongsHeadwordTests {
         ])
         #expect(headwords["G4102"]?.shortGloss == "faith")
     }
+
+    /// A blank gloss is no gloss: the heading falls through to the next
+    /// sense's gloss, or shows the short definition where a gloss is wanted.
+    @Test func aBlankGlossIsNoGloss() {
+        #expect(LampStrongsHeadword.headGloss("") == nil)
+        #expect(LampStrongsHeadword.headGloss(" ; ") == nil)
+        let headwords = LampStrongsHeadword.merging([
+            result("G26", module: "tbesg", lemma: "ἀγάπη", senses: [
+                LampDictionarySense(gloss: " "),
+                LampDictionarySense(gloss: "love"),
+            ]),
+            result("G25", module: "tbesg", lemma: "ἀγαπάω", senses: [
+                LampDictionarySense(gloss: ";", shortDefinition: "to love"),
+            ]),
+        ])
+        #expect(headwords["G26"]?.shortGloss == "love")
+        #expect(headwords["G25"]?.shortGloss == nil)
+        #expect(headwords["G25"]?.gloss == "to love")
+    }
 }
 
 /// The Septuagint's Greek beside the Hebrew word's verses, found through the

@@ -801,7 +801,7 @@ public struct LampStrongsHeadword: Equatable, Sendable {
                 lemma: current?.lemma ?? result.lemma,
                 transliteration: current?.transliteration ?? result.transliteration,
                 shortGloss: current?.shortGloss
-                    ?? result.senses.lazy.compactMap(\.gloss).first.map(headGloss),
+                    ?? result.senses.lazy.compactMap { $0.gloss.flatMap(headGloss) }.first,
                 shortDefinition: current?.shortDefinition
                     ?? result.senses.lazy.compactMap(\.shortDefinition).first
             )
@@ -813,14 +813,20 @@ public struct LampStrongsHeadword: Equatable, Sendable {
     /// appear" or "faith; faith: faithfulness" as TBESG writes them, read as
     /// that head: "to see", "faith". Parts with different heads name
     /// different things ("John; Jonah", "seed: offspring; seed(s)") and the
-    /// gloss is kept as written.
-    public static func headGloss(_ gloss: String) -> String {
-        let heads = gloss.components(separatedBy: ";").map { part in
+    /// gloss is kept as written. Nil for a gloss with nothing in it, so a
+    /// blank field falls through to the next sense or the short definition.
+    public static func headGloss(_ gloss: String) -> String? {
+        let parts = gloss.components(separatedBy: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let heads = parts.map { part in
             (part.range(of: ":").map { String(part[..<$0.lowerBound]) } ?? part)
                 .trimmingCharacters(in: .whitespaces)
         }
-        guard let head = heads.first, !head.isEmpty, heads.allSatisfy({ $0 == head })
-        else { return gloss }
+        guard let head = heads.first else { return nil }
+        guard !head.isEmpty, heads.allSatisfy({ $0 == head }) else {
+            return parts.joined(separator: "; ")
+        }
         return head
     }
 }
