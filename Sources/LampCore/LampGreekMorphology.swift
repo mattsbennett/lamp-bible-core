@@ -17,6 +17,30 @@ public enum LampGrammarFeature: String, CaseIterable, Codable, Sendable {
     case gender
     case state
 
+    /// Reads a feature by its raw value, or by its title folded to one word
+    /// ("case", "partofspeech"). A deck's chart names one, and "case" is what
+    /// anyone writing it by hand will write; refusing it would refuse the
+    /// whole deck.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let name = try container.decode(String.self)
+        guard let feature = Self.named(name) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "\(name) is not a grammatical feature"
+            )
+        }
+        self = feature
+    }
+
+    public static func named(_ name: String) -> LampGrammarFeature? {
+        if let exact = LampGrammarFeature(rawValue: name) { return exact }
+        let folded = name.lowercased().filter(\.isLetter)
+        return allCases.first {
+            $0.rawValue.lowercased() == folded || $0.title.lowercased().filter(\.isLetter) == folded
+        }
+    }
+
     public var title: String {
         switch self {
         case .partOfSpeech: "Part of speech"

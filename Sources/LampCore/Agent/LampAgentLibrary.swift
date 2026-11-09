@@ -629,25 +629,35 @@ public actor LampAgentLibrary {
     public func workingOutCharts(in deck: LampPresentationDeck) async throws -> LampPresentationChartReport {
         try requireEnabled()
         let permitted = Set(try await permittedInstalledModules(kinds: [.translation]).map(\.id))
+        let dictionaries = Set(try await permittedInstalledModules(kinds: [.dictionary]).map(\.id))
         var screened = deck
         var withheld: [(slide: Int, block: Int)] = []
         var issues: [LampPresentationDeckIssue] = []
         for (slideIndex, slide) in deck.slides.enumerated() {
             for (blockIndex, block) in slide.blocks.enumerated() {
-                guard block.kind == .chart, let chart = block.chart,
-                      !permitted.contains(chart.source.translationID) else { continue }
+                guard block.kind == .chart, let chart = block.chart else { continue }
+                // A comparison names its translations, or takes every one the
+                // policy permits; a chart of one translation names that one.
+                let named = chart.by == .translation
+                    ? chart.source.translations ?? []
+                    : [chart.source.translationID]
+                let refused = named.filter { !permitted.contains($0) }
+                guard !refused.isEmpty else { continue }
                 // Without its chart the library passes the block by.
                 screened.slides[slideIndex].blocks[blockIndex].chart = nil
                 withheld.append((slideIndex, blockIndex))
                 issues.append(.init(
                     severity: .warning,
                     path: "slides[\(slideIndex)].blocks[\(blockIndex)].chart.source",
-                    message: "\(chart.source.translationID) is not available to agents, "
-                        + "so the chart keeps the values it carries."
+                    message: "\(refused.joined(separator: ", ")) "
+                        + (refused.count == 1 ? "is" : "are")
+                        + " not available to agents, so the chart keeps the values it carries."
                 ))
             }
         }
-        var report = await library.workingOutCharts(in: screened)
+        var report = await library.workingOutCharts(
+            in: screened, translationIDs: permitted, dictionaryIDs: dictionaries
+        )
         for (slideIndex, blockIndex) in withheld {
             report.deck.slides[slideIndex].blocks[blockIndex].chart =
                 deck.slides[slideIndex].blocks[blockIndex].chart

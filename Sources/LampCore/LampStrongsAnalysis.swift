@@ -356,6 +356,8 @@ public struct LampStrongsAnalyzer {
     private let keepsVerseText: Bool
     /// Whether the totals come from every verse added, or were given.
     private let countsCorpus: Bool
+    /// The occurrences to keep, or nil for every one.
+    private let keeping: (@Sendable (LampStrongsAnalysis.Occurrence) -> Bool)?
 
     private var normalizedTags: [String: String] = [:]
     private var chapterWords: [Int: [Int: Int]] = [:]
@@ -372,6 +374,12 @@ public struct LampStrongsAnalyzer {
     /// a caller that shows occurrences in context. It is off by default:
     /// a common key's verses run to a megabyte, held for each translation
     /// analysed, and most callers want only the counts.
+    ///
+    /// `keeping` narrows the analysis to the occurrences it accepts, as in a
+    /// chart of where ἀγάπη is rendered "love". Every figure is then of those
+    /// occurrences alone, companions included, and is still weighed against
+    /// every tagged word in range: those are the words the kept occurrences
+    /// stand among.
     public init(
         key: String,
         translationID: String,
@@ -379,8 +387,10 @@ public struct LampStrongsAnalyzer {
         translationAbbreviation: String? = nil,
         language: String? = nil,
         includingVerseText: Bool = false,
-        corpus: LampStrongsCorpus? = nil
+        corpus: LampStrongsCorpus? = nil,
+        keeping: (@Sendable (LampStrongsAnalysis.Occurrence) -> Bool)? = nil
     ) {
+        self.keeping = keeping
         let normalized = LampStrongsKey.normalized(key)
         self.key = normalized
         self.translationID = translationID
@@ -417,11 +427,13 @@ public struct LampStrongsAnalyzer {
         guard distinct.contains(where: isKey) else { return }
 
         let verseText = text()
-        let (found, joined) = verseOccurrences(reference: reference, text: verseText, annotationsJSON: annotationsJSON)
+        let (all, joined) = verseOccurrences(reference: reference, text: verseText, annotationsJSON: annotationsJSON)
+        guard !all.isEmpty else { return }
+        // A word tagged in two pieces was counted twice above, kept or not.
+        chapterWords[book, default: [:]][chapter, default: 0] -= joined
+        let found = keeping.map { all.filter($0) } ?? all
         guard !found.isEmpty else { return }
         if keepsVerseText { verseTexts[reference] = verseText }
-        // A word tagged in two pieces was counted twice above.
-        chapterWords[book, default: [:]][chapter, default: 0] -= joined
         occurrences += found
         for tag in distinct where !isKey(tag) { sharedVerses[tag, default: 0] += 1 }
     }

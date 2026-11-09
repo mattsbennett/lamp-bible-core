@@ -739,8 +739,84 @@ public enum LampPresentationDeckValidator {
                 "A bare number counts Hebrew and Greek alike. Prefix it with H or G."
             ))
         }
-        if chart.source.translationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if chart.by != .translation,
+           chart.source.translationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             issues.append((.error, "chart.source.translationID", "A translation ID is required."))
+        }
+        if chart.by == .translation, let named = chart.source.translations,
+           named.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            issues.append((
+                .error,
+                "chart.source.translations",
+                "Name the translations to compare, or leave the list out to compare every tagged one."
+            ))
+        }
+        if chart.source.translations != nil && chart.by != .translation {
+            issues.append((
+                .warning,
+                "chart.source.translations",
+                "Only a chart by translation compares translations; this one counts translationID."
+            ))
+        }
+        if let filter = chart.source.filter {
+            if filter.isEmpty {
+                issues.append((
+                    .warning,
+                    "chart.source.filter",
+                    "This filter names nothing, so every occurrence is counted."
+                ))
+            }
+            let narrowsGrouping = switch chart.by {
+            case .rendering: filter.rendering != nil
+            case .form: filter.form != nil
+            case .grammar: filter.grammar != nil && filter.grammar?.feature == chart.feature
+            default: false
+            }
+            if narrowsGrouping {
+                issues.append((
+                    .warning,
+                    "chart.source.filter",
+                    "The filter keeps one \(chart.by.title.lowercased()), so a chart by "
+                        + "\(chart.by.title.lowercased()) draws a single value."
+                ))
+            }
+        }
+        if chart.by == .grammar && chart.feature == nil {
+            issues.append((
+                .error,
+                "chart.feature",
+                "A chart by grammar names its feature, such as grammaticalCase or tense."
+            ))
+        }
+        if chart.feature != nil && chart.by != .grammar {
+            issues.append((.warning, "chart.feature", "A feature is read only by a chart by grammar."))
+        }
+        if chart.drawnStyle == .card && chart.by != .book {
+            issues.append((
+                .error,
+                "chart.by",
+                "A card draws a column for each book under the word, so it charts by book."
+            ))
+        }
+        if chart.drawnStyle == .share && !chart.by.isPartOfWhole {
+            issues.append((
+                .error,
+                "chart.style",
+                chart.by == .translation
+                    ? "Each translation counts the whole again, so they are not slices of one ring."
+                    : "Companions are measured against chance, not counted, so they make no ring."
+            ))
+        }
+        if chart.by == .companion && chart.measure == .perThousandWords {
+            issues.append((
+                .warning,
+                "chart.measure",
+                "A companion is measured by how many times chance it shares the key's verses, "
+                    + "so the measure is not read."
+            ))
+        }
+        if chart.headword != nil && chart.drawnStyle != .card {
+            issues.append((.warning, "chart.headword", "Only a card draws a headword."))
         }
         if let range = chart.source.range, (try? LampReferenceParser.books(range)) == nil {
             issues.append((

@@ -13,7 +13,9 @@ import SwiftUI
 /// than the rest; a key says so whenever either appears, since colour alone
 /// tells a room nothing. The grid and the share have one hue that deepens with
 /// the count, because their colour is the count: a palette of hues would have
-/// to be told apart, and the numbers are printed beside the ring anyway.
+/// to be told apart, and the numbers are printed beside the ring anyway. A
+/// card is the analysis's headword card: the word, its gloss and its counts
+/// over a column for each book.
 struct LampPresentationChartView: View {
     let block: LampPresentationBlock
     let unit: CGFloat
@@ -36,6 +38,7 @@ struct LampPresentationChartView: View {
                 case .columns: columns(chart, values)
                 case .grid: grid(chart, values)
                 case .share: share(chart, values)
+                case .card: card(chart, values)
                 }
             } else {
                 placeholder
@@ -51,25 +54,37 @@ struct LampPresentationChartView: View {
     /// at its bar's end, and the key directly beneath them.
     private func bars(_ chart: LampPresentationChart, _ values: [LampPresentationChart.Value]) -> some View {
         let standings = Set(values.compactMap(\.standing))
-        let keyHeight = standings.isEmpty ? 0 : 44 * unit
+        let keyHeight = standings.isEmpty ? (chart.by == .companion ? 44 * unit : 0) : 44 * unit
         return GeometryReader { geometry in
-            let row = min(64 * unit, max(geometry.size.height - keyHeight, 0) / CGFloat(values.count))
-            let type = max(min(row * 0.48, 26 * unit), 11 * unit)
+            let detailed = values.contains { $0.detail?.isEmpty == false }
+            let row = min((detailed ? 84 : 64) * unit, max(geometry.size.height - keyHeight, 0) / CGFloat(values.count))
+            let type = max(min(row * (detailed ? 0.36 : 0.48), 26 * unit), 11 * unit)
             let gap = 14 * unit
-            let labelWidth = geometry.size.width * 0.3
-            let room = max(geometry.size.width - labelWidth - type * 3.6 - 2 * gap, 0)
+            let labelWidth = geometry.size.width * (detailed ? 0.38 : 0.3)
+            // Room for the widest figure: "120 · 16%" is longer than "120".
+            let figureWidth = type * (values.contains { $0.share != nil } ? 5.6 : 3.6)
+            let room = max(geometry.size.width - labelWidth - figureWidth - 2 * gap, 0)
             let largest = values.map(\.value).max() ?? 0
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(values.enumerated()), id: \.offset) { _, value in
                     HStack(spacing: gap) {
-                        Text(value.label)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .frame(width: labelWidth, alignment: .trailing)
+                        VStack(alignment: .trailing, spacing: 2 * unit) {
+                            Text(value.label)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
+                            if let detail = value.detail, !detail.isEmpty {
+                                Text(detail)
+                                    .font(.system(size: type * 0.7))
+                                    .foregroundStyle(foreground.opacity(0.7))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                        }
+                        .frame(width: labelWidth, alignment: .trailing)
                         RoundedRectangle(cornerRadius: 4 * unit)
                             .fill(color(for: value.standing))
-                            .frame(width: length(of: value, in: room, largest: largest), height: row * 0.62)
-                        Text(chart.formatted(value.value))
+                            .frame(width: length(of: value, in: room, largest: largest), height: row * (detailed ? 0.46 : 0.62))
+                        Text(chart.printed(value))
                             .monospacedDigit()
                             .lineLimit(1)
                     }
@@ -79,6 +94,16 @@ struct LampPresentationChartView: View {
                 }
                 key(standings)
                     .frame(height: keyHeight)
+                if chart.by == .companion {
+                    // Without this the bars read as badly sorted: they are
+                    // ranked by how strongly the association shows, and a
+                    // high multiple over few verses says less than a smaller
+                    // one over many.
+                    Text("Strongest association first, which is not the largest multiple of chance")
+                        .font(.system(size: 18 * unit))
+                        .foregroundStyle(foreground.opacity(0.7))
+                        .padding(.top, 12 * unit)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -301,21 +326,108 @@ struct LampPresentationChartView: View {
         .foregroundStyle(foreground)
     }
 
+    // MARK: - Card
+
+    /// The analysis's headword card at the size of a room: the word large,
+    /// its transliteration and gloss, the three counts that say how common it
+    /// is, and a column for each book beneath, so where it gathers is seen
+    /// with the figures it qualifies.
+    private func card(_ chart: LampPresentationChart, _ values: [LampPresentationChart.Value]) -> some View {
+        let headword = chart.headword
+        let filter = chart.source.filter.flatMap { $0.isEmpty ? nil : $0.narrowing }
+        return VStack(alignment: .leading, spacing: 22 * unit) {
+            VStack(alignment: .leading, spacing: 8 * unit) {
+                HStack(alignment: .firstTextBaseline, spacing: 20 * unit) {
+                    Text(headword?.lemma ?? chart.source.strongs)
+                        .font(.system(size: 92 * unit, weight: .semibold, design: .serif))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                    Text(LampStrongsKey.normalized(chart.source.strongs))
+                        .font(.system(size: 26 * unit, weight: .semibold).monospacedDigit())
+                        .padding(.horizontal, 14 * unit)
+                        .padding(.vertical, 4 * unit)
+                        .background(foreground.opacity(0.1), in: Capsule())
+                }
+                if headword?.transliteration != nil || headword?.gloss != nil {
+                    HStack(alignment: .firstTextBaseline, spacing: 16 * unit) {
+                        if let transliteration = headword?.transliteration {
+                            Text(transliteration)
+                                .font(.system(size: 34 * unit, design: .serif).italic())
+                                .foregroundStyle(foreground.opacity(0.7))
+                        }
+                        if let gloss = headword?.gloss {
+                            Text(gloss)
+                                .font(.system(size: 34 * unit, weight: .medium))
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+            if let headword {
+                HStack(alignment: .top, spacing: 0) {
+                    statTile("Occurrences", "\(headword.occurrences)")
+                    statTile("Verses", "\(headword.verses)")
+                    statTile("Books", "\(headword.books)", of: "of \(headword.bookCount)")
+                }
+            }
+            if values.count > 1 {
+                columns(chart, values)
+            }
+            if let headword {
+                Text(
+                    ([filter.map { "Only occurrences \($0)" }] as [String?]).compactMap { $0 }
+                        .map { $0 + " · " }.joined()
+                        + "\(headword.perThousandWords.formatted(.number.precision(.fractionLength(0...2)))) "
+                        + "per 1,000 tagged words · \(headword.translation)"
+                )
+                .font(.system(size: 20 * unit))
+                .foregroundStyle(foreground.opacity(0.7))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            }
+        }
+        .foregroundStyle(foreground)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func statTile(_ label: String, _ figure: String, of total: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2 * unit) {
+            Text(label)
+                .font(.system(size: 22 * unit, weight: .medium))
+                .foregroundStyle(foreground.opacity(0.7))
+            HStack(alignment: .firstTextBaseline, spacing: 10 * unit) {
+                Text(figure)
+                    .font(.system(size: 64 * unit, weight: .bold, design: .rounded).monospacedDigit())
+                if let total {
+                    Text(total)
+                        .font(.system(size: 28 * unit, weight: .semibold, design: .rounded))
+                        .foregroundStyle(foreground.opacity(0.7))
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     // MARK: - Keys and colour
 
     @ViewBuilder
     private func key(_ standings: Set<LampStrongsAnalysis.Expectation>) -> some View {
         if !standings.isEmpty {
+            // All three whenever either mark appears, as the analysis's key
+            // has them: an unmarked bar is a finding too, not a gap in the key.
             HStack(spacing: 28 * unit) {
-                if standings.contains(.more) { swatch(.more, "More than its size predicts") }
-                if standings.contains(.fewer) { swatch(.fewer, "Fewer than its size predicts") }
+                swatch(.more, "More than its size predicts")
+                swatch(nil, "As its size predicts")
+                swatch(.fewer, "Fewer than its size predicts")
             }
             .font(.system(size: 18 * unit))
             .foregroundStyle(foreground.opacity(0.8))
         }
     }
 
-    private func swatch(_ standing: LampStrongsAnalysis.Expectation, _ label: String) -> some View {
+    private func swatch(_ standing: LampStrongsAnalysis.Expectation?, _ label: String) -> some View {
         HStack(spacing: 8 * unit) {
             RoundedRectangle(cornerRadius: 3 * unit)
                 .fill(color(for: standing))

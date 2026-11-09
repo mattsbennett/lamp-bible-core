@@ -1081,7 +1081,8 @@ public actor LampLibrary {
         module: LampInstalledModule,
         key: String,
         bookRange: ClosedRange<Int>?,
-        includingVerseText: Bool
+        includingVerseText: Bool,
+        keeping: (@Sendable (LampStrongsAnalysis.Occurrence) -> Bool)?
     ) throws -> LampStrongsAnalysis? {
         guard fileManager.fileExists(atPath: strongsIndexURL.path),
               let fingerprint = try strongsFingerprint(moduleID: module.id) else { return nil }
@@ -1092,7 +1093,8 @@ public actor LampLibrary {
             )
         }) else { return nil }
         var analyzer = strongsAnalyzer(
-            module: module, key: key, includingVerseText: includingVerseText, corpus: indexed.corpus
+            module: module, key: key, includingVerseText: includingVerseText,
+            corpus: indexed.corpus, keeping: keeping
         )
         try openDatabase(moduleID: module.id).read { db in
             guard let source = try LampStrongsAnalysisReader.VerseSource.find(in: db, translationID: module.id)
@@ -1110,7 +1112,8 @@ public actor LampLibrary {
         module: LampInstalledModule,
         key: String,
         includingVerseText: Bool,
-        corpus: LampStrongsCorpus? = nil
+        corpus: LampStrongsCorpus? = nil,
+        keeping: (@Sendable (LampStrongsAnalysis.Occurrence) -> Bool)? = nil
     ) -> LampStrongsAnalyzer {
         LampStrongsAnalyzer(
             key: key,
@@ -1119,7 +1122,8 @@ public actor LampLibrary {
             translationAbbreviation: module.abbreviation,
             language: module.language,
             includingVerseText: includingVerseText,
-            corpus: corpus
+            corpus: corpus,
+            keeping: keeping
         )
     }
 
@@ -1210,12 +1214,14 @@ public actor LampLibrary {
     /// there, in installed order. Unlike a search this reads the whole range
     /// rather than a page of hits, because every count is measured against
     /// all of the range's tags. `includingVerseText` keeps each verse holding
-    /// the key, for showing occurrences in context.
+    /// the key, for showing occurrences in context. `keeping` narrows each
+    /// analysis to the occurrences it accepts (`LampStrongsAnalyzer`).
     public func strongsAnalyses(
         key: String,
         moduleIDs: Set<String>? = nil,
         bookRange: ClosedRange<Int>? = nil,
-        includingVerseText: Bool = false
+        includingVerseText: Bool = false,
+        keeping: (@Sendable (LampStrongsAnalysis.Occurrence) -> Bool)? = nil
     ) throws -> [LampStrongsAnalysis] {
         guard !LampStrongsKey.normalized(key).isEmpty else { return [] }
         let modules = try installedModules().filter {
@@ -1224,14 +1230,17 @@ public actor LampLibrary {
         return try modules.compactMap { module in
             try Task.checkCancellation()
             if let analysis = try indexedAnalysis(
-                module: module, key: key, bookRange: bookRange, includingVerseText: includingVerseText
+                module: module, key: key, bookRange: bookRange,
+                includingVerseText: includingVerseText, keeping: keeping
             ) {
                 return analysis.wordCount > 0 ? analysis : nil
             }
             let analysis = try openDatabase(moduleID: module.id).read { db -> LampStrongsAnalysis? in
                 guard let source = try LampStrongsAnalysisReader.VerseSource.find(in: db, translationID: module.id)
                 else { return nil }
-                var analyzer = strongsAnalyzer(module: module, key: key, includingVerseText: includingVerseText)
+                var analyzer = strongsAnalyzer(
+                    module: module, key: key, includingVerseText: includingVerseText, keeping: keeping
+                )
                 try LampStrongsAnalysisReader.addEveryVerse(to: &analyzer, bookRange: bookRange, from: source, in: db)
                 return analyzer.analysis()
             }
