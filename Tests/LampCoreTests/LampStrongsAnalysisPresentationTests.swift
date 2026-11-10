@@ -1454,3 +1454,47 @@ struct StrongsFormReadingTests {
             == "either an adverb or the subject, one spelling for both")
     }
 }
+
+struct TranslationSourceTests {
+    @Test func aModuleSaysWhereItsTaggingCameFrom() {
+        let json = #"""
+            [ { "part": "forms", "source": "an earlier BSB module", "method": "matched by each verse's Strong's numbers when the module was built" },
+              { "part": "strongs", "source": "the WEB USFM's machine alignment" },
+              { "part": "morphology", "source": "ignored" },
+              "NA28", { "part": "forms", "source": " " } ]
+            """#
+        let sources = LampTranslationSource.parsed(json)
+        #expect(sources == [
+            .init(part: .forms, source: "an earlier BSB module",
+                  method: "matched by each verse's Strong's numbers when the module was built"),
+            .init(part: .strongs, source: "the WEB USFM's machine alignment"),
+        ])
+        #expect(sources[0].disclosure(translationName: "BSBs", strongsKey: "G26")
+            == "Greek spellings in BSBs come from an earlier BSB module, matched by each verse's Strong's numbers when the module was built.")
+        #expect(sources[1].disclosure(translationName: "WEBs", strongsKey: "H160")
+            == "Strong’s numbers in WEBs come from the WEB USFM's machine alignment.")
+        #expect(LampTranslationSource.parsed(nil).isEmpty)
+        #expect(LampTranslationSource.parsed(#"{"part": "forms"}"#).isEmpty)
+    }
+
+    @Test func theLibraryReadsAnInstalledModulesSources() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-source-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = LampLibrary(rootURL: fixture.appendingPathComponent("Library"))
+        let moduleURL = fixture.appendingPathComponent("T.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {"meta": {"schemaVersion": "1.0", "id": "T", "type": "translation", "name": "Test", "abbreviation": "T", "language": "en",
+                      "sourceTexts": [{"part": "forms", "source": "an earlier module", "method": "matched by Strong's numbers"}]},
+             "books": [{"id": "John", "name": "John", "number": 43, "testament": "NT", "chapters": [{"chapter": 1, "verses": [{"v": 1, "content": {"text": "In the beginning"}}]}]}]}
+            """#.utf8),
+            sourceFilename: "T.json",
+            destinationURL: moduleURL
+        )
+        _ = try await library.install(from: moduleURL)
+        #expect(try await library.translationSources(moduleID: "T")
+            == [.init(part: .forms, source: "an earlier module", method: "matched by Strong's numbers")])
+    }
+}

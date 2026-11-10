@@ -387,6 +387,15 @@ public actor LampLibrary {
         return versification
     }
 
+    /// The sources a translation declares for its tagging
+    /// (`LampTranslationSource`); empty where it declares none, which is to
+    /// say its source printed what it carries.
+    public func translationSources(moduleID: String) throws -> [LampTranslationSource] {
+        try openDatabase(moduleID: moduleID).read { db in
+            try LampTranslationSource.declared(in: db, translationID: moduleID)
+        }
+    }
+
     public func translationBooks(moduleID: String) throws -> [LampTranslationBook] {
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in
