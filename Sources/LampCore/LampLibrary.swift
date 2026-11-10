@@ -4759,14 +4759,19 @@ public actor LampLibrary {
             let tables = try tableNames(in: db)
             var modules: [LampInstalledModule] = []
             if tables.contains("translations") {
+                let features = try LampModuleText.columnNames(in: db, table: "translations")
+                    .contains("features_json") ? ", features_json" : ""
                 modules += try Row.fetchAll(db, sql: """
-                    SELECT id, name, abbreviation, language FROM translations
+                    SELECT id, name, abbreviation, language\(features) FROM translations
                     ORDER BY name
                     """).map { row in
                         LampInstalledModule(
                             id: row["id"], kind: .translation, name: row["name"],
                             abbreviation: row["abbreviation"], language: row["language"],
-                            isBundled: true
+                            isBundled: true,
+                            tagsStrongs: LampInstalledModule.declaresStrongs(
+                                row.hasColumn("features_json") ? row["features_json"] : nil
+                            )
                         )
                     }
             }
@@ -5314,25 +5319,31 @@ public actor LampLibrary {
             let declaredKind = formatType.flatMap(LampModuleKind.init(rawValue:))
 
             if tables.contains("translation_meta"),
-               let row = try Row.fetchOne(db, sql: "SELECT id, name, abbreviation, language FROM translation_meta LIMIT 1") {
+               let row = try Row.fetchOne(db, sql: "SELECT * FROM translation_meta LIMIT 1") {
                 return LampInstalledModule(
                     id: formatID ?? row["id"],
                     kind: declaredKind ?? .translation,
                     name: row["name"],
                     abbreviation: row["abbreviation"],
                     language: row["language"],
-                    compressedByteCount: compressedByteCount
+                    compressedByteCount: compressedByteCount,
+                    tagsStrongs: LampInstalledModule.declaresStrongs(
+                        row.hasColumn("features_json") ? row["features_json"] : nil
+                    )
                 )
             }
             if tables.contains("translations"),
-               let row = try Row.fetchOne(db, sql: "SELECT id, name, abbreviation, language FROM translations LIMIT 1") {
+               let row = try Row.fetchOne(db, sql: "SELECT * FROM translations LIMIT 1") {
                 return LampInstalledModule(
                     id: formatID ?? row["id"],
                     kind: declaredKind ?? .translation,
                     name: row["name"],
                     abbreviation: row["abbreviation"],
                     language: row["language"],
-                    compressedByteCount: compressedByteCount
+                    compressedByteCount: compressedByteCount,
+                    tagsStrongs: LampInstalledModule.declaresStrongs(
+                        row.hasColumn("features_json") ? row["features_json"] : nil
+                    )
                 )
             }
             if tables.contains("module_metadata"),

@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import LampModuleKit
 import Testing
 @testable import LampCore
 
@@ -38,5 +39,30 @@ struct LampBookGenreTests {
         let json = #"{"nt": ["Nestle-Aland"], "annotations": [{"part": "forms", "source": "an earlier module"}]}"#
         #expect(LampTranslationSource.parsed(json) == [.init(part: .forms, source: "an earlier module")])
         #expect(LampTranslationSource.parsed(#"{"ot": ["BHS"], "nt": ["NA28"]}"#).isEmpty)
+    }
+}
+
+struct TranslationStrongsFeatureTests {
+    @Test func aTranslationIsMarkedTaggedOnlyWhereItDeclaresIt() async throws {
+        #expect(LampInstalledModule.declaresStrongs(#"{"strongs": true, "morphology": false}"#))
+        #expect(!LampInstalledModule.declaresStrongs(#"{"strongs": false}"#))
+        #expect(!LampInstalledModule.declaresStrongs(nil))
+
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-feature-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = LampLibrary(rootURL: fixture.appendingPathComponent("Library"))
+        for (id, strongs) in [("T", true), ("U", false)] {
+            let moduleURL = fixture.appendingPathComponent("\(id).lamp")
+            let meta: String = #"{"schemaVersion": "1.0", "id": "\#(id)", "type": "translation", "name": "Test \#(id)", "abbreviation": "\#(id)", "language": "en", "features": {"strongs": \#(strongs)}}"#
+            let books: String = #"[{"id": "John", "name": "John", "number": 43, "testament": "NT", "chapters": [{"chapter": 1, "verses": [{"v": 1, "content": {"text": "In the beginning"}}]}]}]"#
+            let document: String = #"{"meta": \#(meta), "books": \#(books)}"#
+            _ = try LampModuleCompiler().compile(data: Data(document.utf8), sourceFilename: "\(id).json", destinationURL: moduleURL)
+            _ = try await library.install(from: moduleURL)
+        }
+        let modules = try await library.installedModules()
+        #expect(modules.first { $0.id == "T" }?.tagsStrongs == true)
+        #expect(modules.first { $0.id == "U" }?.tagsStrongs == false)
     }
 }

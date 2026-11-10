@@ -9,6 +9,11 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
     public let language: String?
     public let compressedByteCount: Int
     public let isBundled: Bool
+    /// Whether a translation declares its words tagged with Strong's numbers
+    /// (`features.strongs`), which the apps mark it by. A name no longer
+    /// says so ("Berean Standard Bible", not "… (Strongs)"), and a feature a
+    /// translation does not declare is not claimed for it.
+    public let tagsStrongs: Bool
 
     public init(
         id: String,
@@ -17,7 +22,8 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
         abbreviation: String? = nil,
         language: String? = nil,
         compressedByteCount: Int = 0,
-        isBundled: Bool = false
+        isBundled: Bool = false,
+        tagsStrongs: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -26,6 +32,15 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
         self.language = language
         self.compressedByteCount = compressedByteCount
         self.isBundled = isBundled
+        self.tagsStrongs = tagsStrongs
+    }
+
+    /// Whether a module's `features_json` declares Strong's tagging.
+    public static func declaresStrongs(_ featuresJSON: String?) -> Bool {
+        guard let data = featuresJSON?.data(using: .utf8),
+              let features = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return features["strongs"] as? Bool == true
     }
 }
 
