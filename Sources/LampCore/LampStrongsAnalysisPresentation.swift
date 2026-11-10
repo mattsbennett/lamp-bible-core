@@ -1015,6 +1015,36 @@ extension LampStrongsAnalysis {
 /// breathing is an h before the word, γ before γ, κ, ξ or χ is n, and υ is u
 /// in a diphthong and y elsewhere. An iota written beneath its vowel is an i
 /// after it, ἀγάπῃ "agapēi", so it is not read as ἀγάπη, another form.
+extension LampStrongsAnalysis {
+    /// Whether this text is written in the key's own language — TAGNT for a
+    /// Greek key, TAHOT for a Hebrew one — so that what it "translates as"
+    /// is the key's own spellings, which Forms already lists with their
+    /// Latin letters and what each does.
+    ///
+    /// Both apps then show no Translated As here, and point to Compare,
+    /// where every translation's English for the word is listed. Decided by
+    /// the script of what the text tags, most of it by count, not by the
+    /// module's name.
+    public var isInKeysOwnLanguage: Bool {
+        let first = LampStrongsKey.normalized(key).first
+        let inScript: (Unicode.Scalar) -> Bool
+        switch first {
+        case "G":
+            inScript = { (0x0370...0x03FF).contains($0.value) || (0x1F00...0x1FFF).contains($0.value) }
+        case "H":
+            inScript = { (0x0590...0x05FF).contains($0.value) || (0xFB1D...0xFB4F).contains($0.value) }
+        default:
+            return false
+        }
+        let total = renderings.reduce(0) { $0 + $1.count }
+        guard total > 0 else { return false }
+        let written = renderings
+            .filter { $0.text.unicodeScalars.contains(where: inScript) }
+            .reduce(0) { $0 + $1.count }
+        return written * 2 > total
+    }
+}
+
 /// A translation's commonest renderings in one line, as Compare lists them:
 /// "love (112), It (1), beloved (1)". A Greek text's own Greek is said in
 /// Latin letters too, "ἀγάπη agapē (36)", as its forms are. One wording for

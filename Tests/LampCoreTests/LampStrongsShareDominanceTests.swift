@@ -71,3 +71,40 @@ struct LampGreekRenderingTransliterationTests {
         #expect(LampStrongsRenderingSummary.line(of: analysis) == "ἀγάπη agapē (36), love (112), — (2)")
     }
 }
+
+/// A text in the key's own language has no Translated As of its own: its
+/// renderings are its spellings, the forms again.
+struct LampStrongsOwnLanguageTests {
+    private func analysis(_ key: String, _ renderings: [(String, Int)]) -> LampStrongsAnalysis {
+        LampStrongsAnalysis(
+            key: key, translationID: "t", translationName: "T", translationAbbreviation: nil,
+            wordCount: 0, taggedVerseCount: 0, occurrences: [], references: [],
+            renderings: renderings.enumerated().map {
+                .init(id: String($0.offset), text: $0.element.0, count: $0.element.1, variants: [])
+            },
+            forms: [], parsings: [], grammar: [], books: [], sections: [], companions: []
+        )
+    }
+
+    @Test func greekTextForAGreekKeyIsInItsOwnLanguage() {
+        #expect(analysis("G26", [("ἀγάπη", 36), ("ἀγάπην", 33)]).isInKeysOwnLanguage)
+    }
+
+    @Test func hebrewTextForAHebrewKeyIsInItsOwnLanguage() {
+        #expect(analysis("H160", [("אַהֲבָה", 30)]).isInKeysOwnLanguage)
+    }
+
+    @Test func anEnglishTranslationIsNot() {
+        #expect(!analysis("G26", [("love", 112), ("beloved", 1)]).isInKeysOwnLanguage)
+    }
+
+    @Test func greekWordsInAHebrewKeysTextDoNotCount() {
+        // The Septuagint tags Hebrew keys with Greek: a translation of them.
+        #expect(!analysis("H160", [("ἀγάπη", 10)]).isInKeysOwnLanguage)
+    }
+
+    @Test func theCardOffersNoTranslatedAsChartForIt() {
+        #expect(!LampStrongsGrouping.renderings.canDraw(analysis("G26", [("ἀγάπη", 36), ("ἀγάπην", 33)])))
+        #expect(LampStrongsGrouping.renderings.canDraw(analysis("G26", [("love", 112), ("beloved", 1)])))
+    }
+}

@@ -277,7 +277,9 @@ extension LampStrongsGrouping {
         switch self {
         case .books: analysis.books.count > 1
         case .sections: analysis.sections.count > 1
-        case .renderings: analysis.renderings.count > 1
+        // Not for a text in the key's own language: what it "translates
+        // as" is its own spellings, the forms chart again.
+        case .renderings: analysis.renderings.count > 1 && !analysis.isInKeysOwnLanguage
         case .forms: analysis.forms.count > 1
         }
     }
