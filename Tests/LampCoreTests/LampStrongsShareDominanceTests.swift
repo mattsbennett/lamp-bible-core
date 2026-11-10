@@ -52,6 +52,17 @@ struct LampGreekRenderingTransliterationTests {
         #expect(LampGreekTransliteration.latinIfGreek("ἀγάπῃ") == "agapēi")
     }
 
+    @Test func hebrewInTheCompareLineIsIsolated() {
+        let hebrew = LampStrongsAnalysis.Rendering(id: "a", text: "אֹהֵב", count: 10, variants: [])
+        let analysis = LampStrongsAnalysis(
+            key: "H157", translationID: "t", translationName: "T", translationAbbreviation: nil,
+            wordCount: 0, taggedVerseCount: 0, occurrences: [], references: [],
+            renderings: [hebrew], forms: [], parsings: [], grammar: [],
+            books: [], sections: [], companions: []
+        )
+        #expect(LampStrongsRenderingSummary.line(of: analysis) == "\u{2068}אֹהֵב\u{2069} (10)")
+    }
+
     @Test func englishAndHebrewAreLeftAlone() {
         #expect(LampGreekTransliteration.latinIfGreek("love") == nil)
         #expect(LampGreekTransliteration.latinIfGreek("אַהֲבָה") == nil)

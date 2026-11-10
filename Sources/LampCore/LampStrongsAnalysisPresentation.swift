@@ -1008,13 +1008,6 @@ extension LampStrongsAnalysis {
     }
 }
 
-/// Greek in Latin letters, as a reader without Greek would say it:
-/// ἀγάπην "agapēn", εὐαγγέλιον "euangelion", ῥῆμα "rhēma", υἱός "huios".
-///
-/// The SBL scheme without its accents: η and ω are ē and ō, a rough
-/// breathing is an h before the word, γ before γ, κ, ξ or χ is n, and υ is u
-/// in a diphthong and y elsewhere. An iota written beneath its vowel is an i
-/// after it, ἀγάπῃ "agapēi", so it is not read as ἀγάπη, another form.
 extension LampStrongsAnalysis {
     /// Whether this text is written in the key's own language — TAGNT for a
     /// Greek key, TAHOT for a Hebrew one — so that what it "translates as"
@@ -1053,7 +1046,12 @@ public enum LampStrongsRenderingSummary {
     public static func line(of analysis: LampStrongsAnalysis, limit: Int = 3) -> String {
         analysis.renderings.prefix(limit)
             .map { rendering in
-                let text = rendering.text.isEmpty ? "—" : rendering.text
+                var text = rendering.text.isEmpty ? "—" : rendering.text
+                // Hebrew in its own isolate, so a line that starts with it
+                // still reads left to right, word, count, comma.
+                if text.unicodeScalars.contains(where: { (0x0590...0x05FF).contains($0.value) }) {
+                    text = "\u{2068}\(text)\u{2069}"
+                }
                 let said = LampGreekTransliteration.latinIfGreek(rendering.text).map { " \($0)" } ?? ""
                 return "\(text)\(said) (\(rendering.count))"
             }
@@ -1061,6 +1059,13 @@ public enum LampStrongsRenderingSummary {
     }
 }
 
+/// Greek in Latin letters, as a reader without Greek would say it:
+/// ἀγάπην "agapēn", εὐαγγέλιον "euangelion", ῥῆμα "rhēma", υἱός "huios".
+///
+/// The SBL scheme without its accents: η and ω are ē and ō, a rough
+/// breathing is an h before the word, γ before γ, κ, ξ or χ is n, and υ is u
+/// in a diphthong and y elsewhere. An iota written beneath its vowel is an i
+/// after it, ἀγάπῃ "agapēi", so it is not read as ἀγάπη, another form.
 public enum LampGreekTransliteration {
     /// Latin letters for words written in Greek, and nil for anything else:
     /// the English a translation gave, or Hebrew, which a letter-for-letter
