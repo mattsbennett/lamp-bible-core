@@ -776,8 +776,8 @@ public enum LampPresentationDeckValidator {
                 issues.append((
                     .warning,
                     "chart.source.filter",
-                    "The filter keeps one \(chart.by.title.lowercased()), so a chart by "
-                        + "\(chart.by.title.lowercased()) draws a single value."
+                    "The filter keeps only one of the values this chart is grouped by, "
+                        + "so it draws a single value."
                 ))
             }
         }

@@ -127,7 +127,7 @@ extension LampStrongsFilter {
     /// was clicked.
     public var narrowing: String {
         switch self {
-        case .rendering(_, let text): "rendered “\(text)”"
+        case .rendering(_, let text): "translated “\(text)”"
         case .form(let text): "as \(text)"
         case .grammar: label
         case .book, .chapter: "in \(label)"
@@ -554,7 +554,7 @@ public enum LampStrongsGrouping: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .books: "Books"
         case .sections: "Sections"
-        case .renderings: "Renderings"
+        case .renderings: "Translated As"
         case .forms: "Forms"
         }
     }

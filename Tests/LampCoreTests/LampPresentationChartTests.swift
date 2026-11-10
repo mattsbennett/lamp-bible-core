@@ -361,7 +361,7 @@ struct LampPresentationChartTests {
 
         #expect(LampPresentationChart.Filter(
             rendering: "love", form: "ἀγάπη", grammar: .init(feature: .grammaticalCase, value: "Nominative")
-        ).narrowing == "rendered “love”, as ἀγάπη, Case: Nominative")
+        ).narrowing == "translated “love”, as ἀγάπη, Case: Nominative")
     }
 
     @Test func aChartNamesItsFilterAndFeatureAsADeckWritesThem() throws {
@@ -374,7 +374,7 @@ struct LampPresentationChartTests {
         #expect(chart.feature == .grammaticalCase)
         #expect(chart.measure == .occurrences)
         #expect(chart.source.filter?.grammar == .init(feature: .grammaticalCase, value: "Genitive"))
-        #expect(chart.subject == "G26 in T, rendered “love”, Case: Genitive, by case")
+        #expect(chart.subject == "G26 in T, translated “love”, Case: Genitive, by case")
         let again = try JSONDecoder().decode(LampPresentationChart.self, from: JSONEncoder().encode(chart))
         #expect(again == chart)
         #expect(LampGrammarFeature.named("Part of speech") == .partOfSpeech)
@@ -496,7 +496,7 @@ struct LampPresentationChartTests {
         #expect(messages(.init(source: .init(strongs: "G26", translationID: "T", filter: .init()), by: .book))
             == ["This filter names nothing, so every occurrence is counted."])
         #expect(messages(.init(source: .init(strongs: "G26", translationID: "T", filter: .init(rendering: "love")), by: .rendering))
-            == ["The filter keeps one rendering, so a chart by rendering draws a single value."])
+            == ["The filter keeps only one of the values this chart is grouped by, so it draws a single value."])
         #expect(messages(.init(source: .init(strongs: "G26", translationID: "T", filter: .init(rendering: "love")), by: .book))
             .isEmpty)
     }

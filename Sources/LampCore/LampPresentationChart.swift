@@ -95,7 +95,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         /// “love”, as ἀγάπης, Case: Genitive".
         public var narrowing: String {
             var parts: [String] = []
-            if let rendering = Self.given(rendering) { parts.append("rendered “\(rendering)”") }
+            if let rendering = Self.given(rendering) { parts.append("translated “\(rendering)”") }
             if let form = Self.given(form) { parts.append("as \(form)") }
             if let grammar, let value = Self.given(grammar.value) {
                 parts.append("\(grammar.feature.title): \(value)")
@@ -155,7 +155,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             switch self {
             case .book: "Book"
             case .section: "Section"
-            case .rendering: "Rendering"
+            case .rendering: "Translated As"
             case .form: "Form"
             case .grammar: "Grammar"
             case .translation: "Translation"

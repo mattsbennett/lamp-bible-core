@@ -228,7 +228,7 @@ struct StrongsAnalysisSupportTests {
     /// “beloved”".
     @Test func everyFilterFinishesTheListsHeading() {
         #expect(LampStrongsFilter.rendering(id: "word-1", text: "beloved").narrowing
-            == "rendered “beloved”")
+            == "translated “beloved”")
         #expect(LampStrongsFilter.form("λόγον").narrowing == "as λόγον")
         #expect(LampStrongsFilter.grammar(feature: .tense, value: "Aorist").narrowing
             == "Tense: Aorist")
