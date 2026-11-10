@@ -299,6 +299,10 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     public var values: [Value]?
     /// A card's word and counts. Written by Lamp, never by hand.
     public var headword: Headword?
+    /// What was matched to the counted translation when its module was built
+    /// and the chart rests on, each said as a sentence the slide prints
+    /// under the chart (`LampTranslationSource`). Written by Lamp.
+    public var sources: [String]?
 
     public init(
         source: Source,
@@ -307,7 +311,8 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         measure: Measure = .occurrences,
         style: Style? = nil,
         values: [Value]? = nil,
-        headword: Headword? = nil
+        headword: Headword? = nil,
+        sources: [String]? = nil
     ) {
         self.source = source
         self.by = by
@@ -316,6 +321,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         self.style = style
         self.values = values
         self.headword = headword
+        self.sources = sources
     }
 
     /// A measure left out counts occurrences, as the skill's validator has
@@ -329,6 +335,13 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         style = try container.decodeIfPresent(Style.self, forKey: .style)
         values = try container.decodeIfPresent([Value].self, forKey: .values)
         headword = try container.decodeIfPresent(Headword.self, forKey: .headword)
+        sources = try container.decodeIfPresent([String].self, forKey: .sources)
+    }
+
+    /// The parts of a translation's tagging this chart rests on: its Strong's
+    /// numbers always, and its spellings too for a chart of forms.
+    public var restsOn: Set<LampTranslationSource.Part> {
+        by == .form ? [.strongs, .forms] : [.strongs]
     }
 
     public var drawnStyle: Style { style ?? .bars }
@@ -596,8 +609,9 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
                     + "in \(headword.books) of \(headword.bookCount) books"
             )
         }
+        let footnote = (sources ?? []).map { " " + $0 }.joined()
         guard let values, !values.isEmpty else {
-            return heard.isEmpty ? "Chart of \(what)" : "Chart of \(what): " + heard.joined()
+            return (heard.isEmpty ? "Chart of \(what)" : "Chart of \(what): " + heard.joined()) + footnote
         }
         let total = values.reduce(0) { $0 + $1.value }
         heard += values.map { value in
@@ -618,7 +632,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
                 ? "\(formatted(value.value)) chance" : formatted(value.value)
             return "\(value.label) \(figure)\(share)\(note)"
         }
-        return "Chart of \(what): " + heard.joined(separator: "; ")
+        return "Chart of \(what): " + heard.joined(separator: "; ") + (footnote.isEmpty ? "" : "." + footnote)
     }
 }
 
@@ -679,6 +693,19 @@ public extension LampLibrary {
         }
         var worked = chart
         worked.values = chart.values(from: analyses, headwords: headwords)
+        // Said on the slide, as the analysis says it, so what was matched to
+        // a translation when it was built is never shown as its own print.
+        let said = try analyses.flatMap { analysis in
+            try translationSources(moduleID: analysis.translationID)
+                .filter { chart.restsOn.contains($0.part) }
+                .map {
+                    $0.disclosure(
+                        translationName: analysis.translationAbbreviation ?? analysis.translationName,
+                        strongsKey: chart.source.strongs
+                    )
+                }
+        }
+        worked.sources = said.isEmpty ? nil : said
         worked.headword = chart.showsHeadword
             ? chart.headword(from: analyses[0], headword: headwords[LampStrongsKey.normalized(chart.source.strongs)])
             : nil
@@ -732,7 +759,8 @@ public extension LampLibrary {
                         message: "\(named) has nothing to chart in this range."
                     ))
                 }
-                guard worked.values != chart.values || worked.headword != chart.headword else { continue }
+                guard worked.values != chart.values || worked.headword != chart.headword
+                        || worked.sources != chart.sources else { continue }
                 if chart.values != nil {
                     issues.append(.init(
                         severity: .warning,

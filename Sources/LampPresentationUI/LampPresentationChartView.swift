@@ -43,6 +43,16 @@ struct LampPresentationChartView: View {
             } else {
                 placeholder
             }
+            // What was matched to the translation when its module was built,
+            // said where the figures that rest on it are shown.
+            if let sources = block.chart?.sources, !sources.isEmpty {
+                Text(sources.joined(separator: " "))
+                    .font(.system(size: 16 * unit))
+                    .foregroundStyle(foreground.opacity(0.65))
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(block.chart?.spokenDescription ?? "Chart")

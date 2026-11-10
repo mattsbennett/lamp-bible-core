@@ -1497,4 +1497,30 @@ struct TranslationSourceTests {
         #expect(try await library.translationSources(moduleID: "T")
             == [.init(part: .forms, source: "an earlier module", method: "matched by Strong's numbers")])
     }
+
+    @Test func aChartSaysWhatItRestsOnThatWasMatchedAtBuild() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-source-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = LampLibrary(rootURL: fixture.appendingPathComponent("Library"))
+        let moduleURL = fixture.appendingPathComponent("T.lamp")
+        let annotations = #"[{"start":0,"end":4,"data":{"strongs":"G26","lemma":"ἀγάπη"}},{"start":5,"end":9,"data":{"strongs":"G1"}}]"#
+        let meta = #"{"schemaVersion": "1.0", "id": "T", "type": "translation", "name": "Test", "abbreviation": "T", "language": "en", "sourceTexts": [{"part": "forms", "source": "an earlier module"}, {"part": "strongs", "source": "a machine alignment"}]}"#
+        let verse: String = #"{"v": 1, "content": {"text": "love word", "annotations": \#(annotations)}}"#
+        let books: String = #"[{"id": "John", "name": "John", "number": 43, "testament": "NT", "chapters": [{"chapter": 1, "verses": [\#(verse)]}]}]"#
+        let document: String = #"{"meta": \#(meta), "books": \#(books)}"#
+        _ = try LampModuleCompiler().compile(
+            data: Data(document.utf8),
+            sourceFilename: "T.json",
+            destinationURL: moduleURL
+        )
+        _ = try await library.install(from: moduleURL)
+        let numbers = "Strong’s numbers in T come from a machine alignment."
+        let spellings = "Greek spellings in T come from an earlier module."
+        let byBook = LampPresentationChart(source: .init(strongs: "G26", translationID: "T"), by: .book)
+        #expect(try await library.workedOut(byBook)?.sources == [numbers])
+        let forms = LampPresentationChart(source: .init(strongs: "G26", translationID: "T"), by: .form)
+        #expect(Set(try await library.workedOut(forms)?.sources ?? []) == [numbers, spellings])
+    }
 }
