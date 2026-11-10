@@ -90,6 +90,18 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
         return uploaded != digest
     }
 
+    /// The revision recorded for each listed file of `source`: what a probe
+    /// compares a listing with (`LampSyncFilePlan.remoteChanges`).
+    public func listedRevisions(in source: String) -> [String: String] {
+        var revisions: [String: String] = [:]
+        for (path, record) in sources[source]?.files ?? [:] {
+            guard LampSyncFolderLayout.kind(of: path)?.isListed == true,
+                  let revision = record.effectiveRevision else { continue }
+            revisions[path] = revision
+        }
+        return revisions
+    }
+
     public func highlightModuleID(forSet setID: String, in source: String) -> String? {
         sources[source]?.highlightModuleIDsBySet[setID]
     }

@@ -244,6 +244,51 @@ public enum LampSyncFilePlan {
     }
 }
 
+extension LampSyncFilePlan {
+    /// The listed files' revisions as a listing reports them, reading no
+    /// file: for a probe made every couple of minutes while the app is open.
+    ///
+    /// WebDAV reports each file's ETag. A folder listing reports none, and
+    /// its revision is a digest of the contents, which would mean reading
+    /// (and on iCloud, downloading) every file each time; so a folder file
+    /// takes the revision this client recorded, or "present" for one it has
+    /// no record of. On a folder, then, a probe sees files dropped in and
+    /// taken away, but not one replaced in place, which waits for the next
+    /// pass.
+    public static func listing(
+        in store: any LampSyncRemoteStore,
+        recorded: [String: String]
+    ) async throws -> [String: String] {
+        var listing: [String: String] = [:]
+        for directory in LampSyncFolderLayout.listedDirectories {
+            for item in try await store.list(directory: directory + "/") ?? [] where !item.isDirectory {
+                let path = "\(directory)/\(item.name)"
+                guard LampSyncFolderLayout.kind(of: path)?.isListed == true else { continue }
+                listing[path] = item.revision ?? recorded[path] ?? "present"
+            }
+        }
+        return listing
+    }
+
+    /// The listed files a pass would act on: one whose revision has moved
+    /// from what this client recorded, one with no record (dropped in from
+    /// outside the apps, as a module replaced by hand on the server), and a
+    /// recorded one the listing no longer holds. Empty when a pass would find
+    /// nothing to do, so a probe starts one only when it has work.
+    public static func remoteChanges(
+        listing: [String: String],
+        recorded: [String: String]
+    ) -> Set<String> {
+        var changed = Set<String>()
+        for (path, revision) in listing {
+            guard let known = recorded[path] else { changed.insert(path); continue }
+            if !LampSyncConditionalWrite.namesSameRevision(revision, known) { changed.insert(path) }
+        }
+        for path in recorded.keys where listing[path] == nil { changed.insert(path) }
+        return changed
+    }
+}
+
 extension LampSyncFilePlan.Plan {
     mutating func apply(_ action: LampSyncFilePlan.Action, at path: String) {
         if action.download { downloads.append(path) }
