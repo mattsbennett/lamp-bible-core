@@ -274,7 +274,9 @@ struct LampPresentationChartView: View {
             let hole = radius * 0.6
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
             let gap = Angle.degrees(values.count > 1 ? 0.8 : 0)
-            let type = 18 * unit
+            // Read from the back of a room, as a bar's label is: 18 points
+            // read as fine print beside a ring this size.
+            let type = 27 * unit
             let detailed = values.contains { $0.detail?.isEmpty == false }
             let line = type * (detailed ? 3.6 : 2.6)
 
