@@ -396,6 +396,15 @@ public actor LampLibrary {
         }
     }
 
+    /// The genres books are grouped by, from the bundle, in catalog order;
+    /// empty for a bundle built before books had genres.
+    public func bookGenres() throws -> [LampBookGenre] {
+        guard let databaseURL = try preparedBundledDatabaseURL() else { return [] }
+        return try openReadOnlyDatabase(at: databaseURL).read { db in
+            try LampBookGenre.catalog(in: db)
+        }
+    }
+
     public func translationBooks(moduleID: String) throws -> [LampTranslationBook] {
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in

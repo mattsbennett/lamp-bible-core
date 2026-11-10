@@ -39,8 +39,12 @@ public struct LampTranslationSource: Equatable, Sendable {
     /// source are kept, so nothing is said about a part no entry describes.
     public static func parsed(_ json: String?) -> [LampTranslationSource] {
         guard let data = json?.data(using: .utf8),
-              let entries = try? JSONSerialization.jsonObject(with: data) as? [Any]
+              let parsed = try? JSONSerialization.jsonObject(with: data)
         else { return [] }
+        // A list of entries, or the schema's object of manuscript texts
+        // ({"ot": […], "nt": […]}) with the tagging's sources under
+        // "annotations".
+        let entries = parsed as? [Any] ?? (parsed as? [String: Any])?["annotations"] as? [Any] ?? []
         return entries.compactMap { entry in
             guard let entry = entry as? [String: Any],
                   let part = (entry["part"] as? String).flatMap(Part.init(rawValue:)),
