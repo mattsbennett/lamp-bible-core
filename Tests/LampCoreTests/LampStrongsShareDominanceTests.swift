@@ -43,3 +43,31 @@ struct LampStrongsShareDominanceTests {
         #expect(LampStrongsCompanionStrength.fraction(of: weak, among: [weak]) == 0)
     }
 }
+
+/// What a Greek text "translates as" is its own Greek, said in Latin letters
+/// as its forms are; English and Hebrew are left as they are.
+struct LampGreekRenderingTransliterationTests {
+    @Test func greekIsSaidInLatinLetters() {
+        #expect(LampGreekTransliteration.latinIfGreek("ἀγάπην") == "agapēn")
+        #expect(LampGreekTransliteration.latinIfGreek("ἀγάπῃ") == "agapēi")
+    }
+
+    @Test func englishAndHebrewAreLeftAlone() {
+        #expect(LampGreekTransliteration.latinIfGreek("love") == nil)
+        #expect(LampGreekTransliteration.latinIfGreek("אַהֲבָה") == nil)
+        #expect(LampGreekTransliteration.latinIfGreek("") == nil)
+    }
+
+    @Test func theCompareLineSaysGreekAndLeavesEnglish() {
+        let greek = LampStrongsAnalysis.Rendering(id: "a", text: "ἀγάπη", count: 36, variants: [])
+        let english = LampStrongsAnalysis.Rendering(id: "b", text: "love", count: 112, variants: [])
+        let blank = LampStrongsAnalysis.Rendering(id: "c", text: "", count: 2, variants: [])
+        let analysis = LampStrongsAnalysis(
+            key: "G26", translationID: "t", translationName: "T", translationAbbreviation: nil,
+            wordCount: 0, taggedVerseCount: 0, occurrences: [], references: [],
+            renderings: [greek, english, blank], forms: [], parsings: [], grammar: [],
+            books: [], sections: [], companions: []
+        )
+        #expect(LampStrongsRenderingSummary.line(of: analysis) == "ἀγάπη agapē (36), love (112), — (2)")
+    }
+}

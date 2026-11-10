@@ -405,9 +405,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             Value(
                 label: analysis.translationAbbreviation ?? analysis.translationName,
                 value: measured(analysis.occurrenceCount, of: analysis.wordCount),
-                detail: analysis.renderings.prefix(3)
-                    .map { "\($0.text.isEmpty ? "—" : $0.text) (\($0.count))" }
-                    .joined(separator: ", ")
+                detail: LampStrongsRenderingSummary.line(of: analysis)
             )
         }
         .sorted { ($1.value, $0.label) < ($0.value, $1.label) }
@@ -470,6 +468,9 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
                 .init(
                     label: $0.text.isEmpty ? "(no English)" : $0.text,
                     value: measured($0.count, of: analysis.wordCount),
+                    // A Greek text's own Greek, said in Latin letters, as
+                    // its forms are.
+                    detail: LampGreekTransliteration.latinIfGreek($0.text),
                     share: share($0.count, of: analysis.occurrenceCount)
                 )
             }
@@ -590,7 +591,9 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         let counts: [(label: String, count: Int, detail: String?)] = switch by {
         case .book: analysis.books.map { ($0.name, $0.occurrenceCount, nil) }
         case .section: analysis.sections.map { ($0.name, $0.occurrenceCount, nil) }
-        case .rendering: analysis.renderings.map { ($0.text.isEmpty ? "(no English)" : $0.text, $0.count, nil) }
+        case .rendering: analysis.renderings.map {
+            ($0.text.isEmpty ? "(no English)" : $0.text, $0.count, LampGreekTransliteration.latinIfGreek($0.text))
+        }
         case .form: analysis.forms.map { ($0.text, $0.count, formDetails[$0.id]) }
         case .grammar: grammarCounts(in: analysis).map { ($0.value, $0.count, nil) }
         case .translation, .companion: []

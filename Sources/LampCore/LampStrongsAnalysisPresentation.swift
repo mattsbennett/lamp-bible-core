@@ -1015,7 +1015,37 @@ extension LampStrongsAnalysis {
 /// breathing is an h before the word, γ before γ, κ, ξ or χ is n, and υ is u
 /// in a diphthong and y elsewhere. An iota written beneath its vowel is an i
 /// after it, ἀγάπῃ "agapēi", so it is not read as ἀγάπη, another form.
+/// A translation's commonest renderings in one line, as Compare lists them:
+/// "love (112), It (1), beloved (1)". A Greek text's own Greek is said in
+/// Latin letters too, "ἀγάπη agapē (36)", as its forms are. One wording for
+/// both apps and the deck slide, so the three cannot drift apart.
+public enum LampStrongsRenderingSummary {
+    public static func line(of analysis: LampStrongsAnalysis, limit: Int = 3) -> String {
+        analysis.renderings.prefix(limit)
+            .map { rendering in
+                let text = rendering.text.isEmpty ? "—" : rendering.text
+                let said = LampGreekTransliteration.latinIfGreek(rendering.text).map { " \($0)" } ?? ""
+                return "\(text)\(said) (\(rendering.count))"
+            }
+            .joined(separator: ", ")
+    }
+}
+
 public enum LampGreekTransliteration {
+    /// Latin letters for words written in Greek, and nil for anything else:
+    /// the English a translation gave, or Hebrew, which a letter-for-letter
+    /// scheme reads wrongly more often than not (as `LampStrongsFormReading`
+    /// leaves it). For what a Greek text "translates as", which is its own
+    /// Greek, so a reader without the language can say it as the forms are.
+    public static func latinIfGreek(_ text: String) -> String? {
+        let isGreek = text.unicodeScalars.contains {
+            (0x0370...0x03FF).contains($0.value) || (0x1F00...0x1FFF).contains($0.value)
+        }
+        guard isGreek else { return nil }
+        let latin = latin(text).trimmingCharacters(in: .whitespaces)
+        return latin.isEmpty ? nil : latin
+    }
+
     public static func latin(_ greek: String) -> String {
         greek.split(separator: " ", omittingEmptySubsequences: false)
             .map { word(String($0)) }
