@@ -31,4 +31,15 @@ public enum LampPreferenceDefaults {
     /// often outstanding rather than already done.
     public static let plansReminderHour = 18
     public static let plansReminderMinute = 30
+
+    /// Whether the app's AI features are shown at all: the reader's chat, the
+    /// writing agent, plans made from a description, and the settings for
+    /// them. A shared preference, so one choice covers every device.
+    ///
+    /// Off until someone turns it on. Many readers want nothing to do with AI,
+    /// and features they never asked for put them off the app. A library that
+    /// already uses AI is switched on once by the app that finds the use, so
+    /// no one loses what they rely on (each app decides what counts).
+    public static let aiFeaturesKey = "ai.enabled"
+    public static let aiFeaturesEnabled = false
 }

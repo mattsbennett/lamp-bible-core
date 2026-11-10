@@ -31,6 +31,7 @@ public enum LampPortableSettingsCodec {
         "devotional.editor.fontSize", "devotional.lineSpacing", "devotional.typeface",
         "writing.sortOrder", "writing.groupBy",
         "books.fontSize", "books.lineSpacing", "books.typeface",
+        LampPreferenceDefaults.aiFeaturesKey,
     ]
 
     public static func encode(from defaults: UserDefaults) throws -> Data {
