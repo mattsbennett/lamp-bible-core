@@ -7,7 +7,7 @@ import Foundation
 /// role is never for, are in Documentation/ColorRules.md.
 ///
 /// Values are sRGB, for light and dark appearance. Where a role is a system
-/// colour (link, original language, find match, the statuses), these are that
+/// colour (original language, find match, the statuses), these are that
 /// colour's values, for the places that have no system colour to ask for: the
 /// writing editor's CSS, exported files, the widget. In app UI each platform
 /// uses its own system colour, which matches.
@@ -17,10 +17,12 @@ public enum LampColorRole: String, CaseIterable, Sendable {
     /// in a conversation. Never links in text, search matches, tags or status,
     /// and nothing inside scripture text.
     case accent
-    /// System blue. Anything in Bible, module, note, devotional or chat text
-    /// that takes you somewhere: verse references, cross-references, footnote
-    /// markers and labels, web links. Never a control, and never on text that
-    /// opens nothing.
+    /// Lamp's link blue. Anything in Bible, module, note, devotional or chat
+    /// text that takes you somewhere: verse references, cross-references,
+    /// footnote markers and labels, web links. Never a control, and never on
+    /// text that opens nothing. A step deeper than the system blue on white
+    /// and a step softer on dark, so a paragraph dense with references, such
+    /// as a lexicon sense, is still read for its words.
     case link
     /// System purple. Strong's numbers, Greek and Hebrew words, and lexicon
     /// references: links of one kind, kept apart from verse references where
@@ -43,7 +45,7 @@ public enum LampColorRole: String, CaseIterable, Sendable {
     public var color: LampThemedColor {
         switch self {
         case .accent: LampThemedColor(light: 0xDB344A, dark: 0xEF4F63)
-        case .link: LampThemedColor(light: 0x007AFF, dark: 0x0A84FF)
+        case .link: LampThemedColor(light: 0x1A61CC, dark: 0x78ABF5)
         case .originalLanguage: LampThemedColor(light: 0xAF52DE, dark: 0xBF5AF2)
         case .wordsOfChrist: LampThemedColor(light: 0xBF4848, dark: 0xE07272)
         case .findMatch: LampThemedColor(light: 0xFFCC00, dark: 0xFFD60A)

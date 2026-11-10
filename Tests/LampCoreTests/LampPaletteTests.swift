@@ -8,9 +8,9 @@ struct LampPaletteTests {
     private let darkBackground = LampRGB(0x1C1C1E)
 
     @Test func lampsOwnColorsReadAsBodyText() {
-        // The accent and red-letter text are Lamp's own values, with no
-        // system colour vouching for them, so they're held to 4.5:1 here.
-        for role in [LampColorRole.accent, .wordsOfChrist] {
+        // The accent, links and red-letter text are Lamp's own values, with
+        // no system colour vouching for them, so they're held to 4.5:1 here.
+        for role in [LampColorRole.accent, .link, .wordsOfChrist] {
             #expect(LampRGB.contrast(role.color.light, lightBackground) >= 4.5, "\(role) light")
             #expect(LampRGB.contrast(role.color.dark, darkBackground) >= 4.5, "\(role) dark")
         }
