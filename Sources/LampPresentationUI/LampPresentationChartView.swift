@@ -348,9 +348,13 @@ struct LampPresentationChartView: View {
     // MARK: - Card
 
     /// The analysis's headword card at the size of a room: the word large,
-    /// its transliteration and gloss, the three counts that say how common it
-    /// is, and a column for each book beneath, so where it gathers is seen
-    /// with the figures it qualifies.
+    /// its transliteration and gloss, the figures that say how common it is,
+    /// and a column for each book beneath, so where it gathers is seen with
+    /// the figures it qualifies.
+    ///
+    /// The figures are the ones the card printed when the chart was added,
+    /// which a reader chooses; `headword`'s own fields are the three Lamp has
+    /// always written, and are what this draws when none were chosen.
     private func card(_ chart: LampPresentationChart, _ values: [LampPresentationChart.Value]) -> some View {
         let headword = chart.headword
         let filter = chart.source.filter.flatMap { $0.isEmpty ? nil : $0.narrowing }
@@ -384,20 +388,29 @@ struct LampPresentationChartView: View {
             }
             if let headword {
                 HStack(alignment: .top, spacing: 0) {
-                    statTile("Occurrences", "\(headword.occurrences)")
-                    statTile("Verses", "\(headword.verses)")
-                    statTile("Books", "\(headword.books)", of: "of \(headword.bookCount)")
+                    if let figures = headword.figures, !figures.isEmpty {
+                        ForEach(Array(figures.enumerated()), id: \.offset) { _, figure in
+                            statTile(figure.label, figure.value, of: figure.of)
+                        }
+                    } else {
+                        statTile("Occurrences", "\(headword.occurrences)")
+                        statTile("Verses", "\(headword.verses)")
+                        statTile("Books", "\(headword.books)", of: "of \(headword.bookCount)")
+                    }
                 }
             }
             if values.count > 1 {
                 columns(chart, values)
             }
             if let headword {
+                let rate = chart.cardFigures.contains(.perThousandWords)
+                    ? nil
+                    : "\(headword.perThousandWords.formatted(.number.precision(.fractionLength(0...2)))) "
+                        + "per 1,000 tagged words"
                 Text(
-                    ([filter.map { "Only occurrences \($0)" }] as [String?]).compactMap { $0 }
-                        .map { $0 + " · " }.joined()
-                        + "\(headword.perThousandWords.formatted(.number.precision(.fractionLength(0...2)))) "
-                        + "per 1,000 tagged words · \(headword.translation)"
+                    ([filter.map { "Only occurrences \($0)" }, rate, headword.translation] as [String?])
+                        .compactMap { $0 }
+                        .joined(separator: " · ")
                 )
                 .font(.system(size: 20 * unit))
                 .foregroundStyle(foreground.opacity(0.7))

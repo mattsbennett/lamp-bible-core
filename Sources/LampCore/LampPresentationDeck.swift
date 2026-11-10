@@ -818,6 +818,34 @@ public enum LampPresentationDeckValidator {
         if chart.headword != nil && chart.drawnStyle != .card {
             issues.append((.warning, "chart.headword", "Only a card draws a headword."))
         }
+        if let figures = chart.figures {
+            if chart.drawnStyle != .card {
+                issues.append((.warning, "chart.figures", "Only a card prints figures."))
+            }
+            // A name Lamp does not know is left out rather than refused, so
+            // that a deck from a newer Lamp opens; said all the same, because
+            // the likelier writer of an unknown name is a typo, and a card
+            // that quietly prints its usual three looks like it was obeyed.
+            let unknown = figures.filter { LampStrongsCardFigure(rawValue: $0) == nil }
+            if !unknown.isEmpty {
+                issues.append((
+                    .warning,
+                    "chart.figures",
+                    "\(unknown.map { "“\($0)”" }.joined(separator: ", ")) "
+                        + "\(unknown.count == 1 ? "is not a figure" : "are not figures") a card prints, "
+                        + "so \(unknown.count == 1 ? "it is" : "they are") left out. The figures are "
+                        + LampStrongsCardFigure.allCases.map(\.rawValue).joined(separator: ", ") + "."
+                ))
+            }
+            if figures.count > LampStrongsCardChoice.slots {
+                issues.append((
+                    .warning,
+                    "chart.figures",
+                    "A card prints \(LampStrongsCardChoice.slots) figures, "
+                        + "so the rest are not drawn."
+                ))
+            }
+        }
         if let range = chart.source.range, (try? LampReferenceParser.books(range)) == nil {
             issues.append((
                 .error,

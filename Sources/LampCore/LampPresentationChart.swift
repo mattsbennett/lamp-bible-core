@@ -253,6 +253,28 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         public var perThousandWords: Double
         /// The translation counted, as a reader knows it.
         public var translation: String
+        /// The figures the card printed, in its slots' order, where they are
+        /// not the three the fields above name.
+        ///
+        /// Those fields are always written, so a card in a deck opened by a
+        /// Lamp that predates choosable slots draws the card it always drew
+        /// rather than an empty row.
+        public var figures: [Figure]?
+
+        /// A figure as a card's tile prints it. Written by Lamp.
+        public struct Figure: Codable, Equatable, Sendable {
+            public var label: String
+            public var value: String
+            /// The smaller text beside the value: "of 27", or the word a
+            /// share is of.
+            public var of: String?
+
+            public init(label: String, value: String, of: String? = nil) {
+                self.label = label
+                self.value = value
+                self.of = of
+            }
+        }
 
         public init(
             lemma: String? = nil,
@@ -263,7 +285,8 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             books: Int,
             bookCount: Int,
             perThousandWords: Double,
-            translation: String
+            translation: String,
+            figures: [Figure]? = nil
         ) {
             self.lemma = lemma
             self.transliteration = transliteration
@@ -274,6 +297,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             self.bookCount = bookCount
             self.perThousandWords = perThousandWords
             self.translation = translation
+            self.figures = figures
         }
     }
 
@@ -295,6 +319,11 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     public var measure: Measure
     /// Absent, the chart is bars.
     public var style: Style?
+    /// Which figures a card prints, named as `LampStrongsCardFigure` names
+    /// them, when they are not the card's standard three. A name this version
+    /// does not know is left out rather than refused, so a deck written by a
+    /// newer Lamp still opens here.
+    public var figures: [String]?
     /// Written by Lamp, never by hand.
     public var values: [Value]?
     /// A card's word and counts. Written by Lamp, never by hand.
@@ -310,6 +339,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         feature: LampGrammarFeature? = nil,
         measure: Measure = .occurrences,
         style: Style? = nil,
+        figures: [String]? = nil,
         values: [Value]? = nil,
         headword: Headword? = nil,
         sources: [String]? = nil
@@ -319,6 +349,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         self.feature = feature
         self.measure = measure
         self.style = style
+        self.figures = figures
         self.values = values
         self.headword = headword
         self.sources = sources
@@ -333,6 +364,9 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         feature = try container.decodeIfPresent(LampGrammarFeature.self, forKey: .feature)
         measure = try container.decodeIfPresent(Measure.self, forKey: .measure) ?? .occurrences
         style = try container.decodeIfPresent(Style.self, forKey: .style)
+        // Names, not cases: an unknown figure is dropped when they are read,
+        // where an unknown case would throw and take the whole deck with it.
+        figures = try container.decodeIfPresent([String].self, forKey: .figures)
         values = try container.decodeIfPresent([Value].self, forKey: .values)
         headword = try container.decodeIfPresent(Headword.self, forKey: .headword)
         sources = try container.decodeIfPresent([String].self, forKey: .sources)
@@ -345,6 +379,11 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     }
 
     public var drawnStyle: Style { style ?? .bars }
+
+    /// The figures this card prints, the standard three where none are named.
+    public var cardFigures: [LampStrongsCardFigure] {
+        LampStrongsCardChoice.figures(named: figures ?? [])
+    }
 
     /// Whether values print as whole counts. A share is always of occurrences:
     /// rates per thousand words do not add up to a whole.
@@ -482,6 +521,15 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         func given(_ text: String?) -> String? {
             text.flatMap { $0.isEmpty ? nil : $0 }
         }
+        let chosen = cardFigures
+        // What the card printed, which is not always what was chosen: a word
+        // with no forms prints no Forms tile, and the slide should show the
+        // card that was added rather than a fuller one.
+        let printed = chosen.compactMap { figure in
+            figure.reading(of: analysis).map {
+                Headword.Figure(label: figure.title, value: $0.value, of: $0.of)
+            }
+        }
         return Headword(
             lemma: given(headword?.lemma),
             transliteration: given(headword?.transliteration),
@@ -491,7 +539,15 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             books: analysis.booksWithOccurrences,
             bookCount: analysis.books.count,
             perThousandWords: (analysis.ratePerThousandWords * 100).rounded() / 100,
-            translation: analysis.translationAbbreviation ?? analysis.translationName
+            translation: analysis.translationAbbreviation ?? analysis.translationName,
+            // Left out where the card prints its standard three, which the
+            // fields above already carry: a deck of ordinary cards is then
+            // written exactly as it was before slots could be chosen. Left
+            // out too where nothing printable is left, since the three are
+            // then the only figures there are to draw.
+            figures: chosen == LampStrongsCardChoice.standard.figures || printed.isEmpty
+                ? nil
+                : printed
         )
     }
 
@@ -603,11 +659,16 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         var heard: [String] = []
         if showsHeadword, let headword {
             let word = [headword.lemma, headword.gloss].compactMap { $0 }.joined(separator: ", ")
-            heard.append(
-                (word.isEmpty ? "" : "\(word): ")
-                    + "\(headword.occurrences) times in \(headword.verses) verses, "
-                    + "in \(headword.books) of \(headword.bookCount) books"
-            )
+            // The figures the card actually printed, not the three the
+            // struct carries for an older Lamp's benefit: a listener given
+            // the wrong three hears a card that is not on the screen.
+            let counts = headword.figures.map { figures in
+                figures
+                    .map { "\($0.label) \($0.value)" + ($0.of.map { " \($0)" } ?? "") }
+                    .joined(separator: ", ")
+            } ?? "\(headword.occurrences) times in \(headword.verses) verses, "
+                + "in \(headword.books) of \(headword.bookCount) books"
+            heard.append((word.isEmpty ? "" : "\(word): ") + counts)
         }
         let footnote = (sources ?? []).map { " " + $0 }.joined()
         guard let values, !values.isEmpty else {
