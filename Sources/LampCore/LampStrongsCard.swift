@@ -259,10 +259,27 @@ public struct LampStrongsCardChoice: Equatable, Sendable {
         LampStrongsCardFigure.allCases.filter { $0.reading(of: analysis) != nil }
     }
 
-    /// The chart to draw for this analysis: the chosen one, or nil where it
-    /// has nothing to draw.
+    /// The chart to draw for this analysis: the chosen one, its stand-in, or
+    /// nil where it has nothing to draw.
     public func chart(for analysis: LampStrongsAnalysis) -> LampStrongsGrouping? {
-        chart.flatMap { $0.canDraw(analysis) ? $0 : nil }
+        guard let chart else { return nil }
+        if chart.canDraw(analysis) { return chart }
+        return standIn(for: analysis)
+    }
+
+    /// The chart drawn in place of the chosen one, where the chosen one has
+    /// nothing to draw and another says the same: nil otherwise.
+    ///
+    /// In a text in the word's own language (TAGNT, TAHOT), what it
+    /// "translates as" is its own spellings, so a card set to Translated As
+    /// draws the forms: the same words, with their Latin letters and what
+    /// each does. The choice itself is kept, so an English translation draws
+    /// Translated As again. The apps name the stand-in in their choosers.
+    public func standIn(for analysis: LampStrongsAnalysis) -> LampStrongsGrouping? {
+        guard chart == .renderings,
+              analysis.isInKeysOwnLanguage,
+              LampStrongsGrouping.forms.canDraw(analysis) else { return nil }
+        return .forms
     }
 }
 

@@ -119,3 +119,38 @@ struct LampStrongsOwnLanguageTests {
         #expect(LampStrongsGrouping.renderings.canDraw(analysis("G26", [("love", 112), ("beloved", 1)])))
     }
 }
+
+/// A card set to Translated As draws the forms in a text in the word's own
+/// language, where they are the same words; elsewhere it is unchanged.
+struct LampStrongsCardStandInTests {
+    private func analysis(_ renderings: [(String, Int)], forms: [(String, Int)]) -> LampStrongsAnalysis {
+        LampStrongsAnalysis(
+            key: "G26", translationID: "t", translationName: "T", translationAbbreviation: nil,
+            wordCount: 0, taggedVerseCount: 0, occurrences: [], references: [],
+            renderings: renderings.enumerated().map {
+                .init(id: String($0.offset), text: $0.element.0, count: $0.element.1, variants: [])
+            },
+            forms: forms.enumerated().map { .init(id: String($0.offset), text: $0.element.0, count: $0.element.1) },
+            parsings: [], grammar: [], books: [], sections: [], companions: []
+        )
+    }
+
+    private let choice = LampStrongsCardChoice(figures: [.occurrences], chart: .renderings)
+
+    @Test func aGreekTextDrawsItsFormsInstead() {
+        let tagnt = analysis([("ἀγάπη", 36), ("ἀγάπην", 33)], forms: [("ἀγάπη", 36), ("ἀγάπην", 33)])
+        #expect(choice.chart(for: tagnt) == .forms)
+        #expect(choice.standIn(for: tagnt) == .forms)
+    }
+
+    @Test func anEnglishTranslationDrawsTranslatedAs() {
+        let bsb = analysis([("love", 112), ("beloved", 1)], forms: [("ἀγάπη", 35), ("ἀγάπην", 31)])
+        #expect(choice.chart(for: bsb) == .renderings)
+        #expect(choice.standIn(for: bsb) == nil)
+    }
+
+    @Test func noFormsToDrawLeavesNoChart() {
+        let bare = analysis([("ἀγάπη", 36), ("ἀγάπην", 33)], forms: [])
+        #expect(choice.chart(for: bare) == nil)
+    }
+}
