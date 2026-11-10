@@ -462,6 +462,41 @@ public enum LampStrongsShare {
     }
 }
 
+extension LampStrongsShare {
+    /// At or above this share, one slice is nearly the whole ring.
+    public static let dominantFraction = 0.9
+
+    /// Whether one count is nearly all of them, so a ring of them says
+    /// only that, and a list says it as well with the rest legible.
+    ///
+    /// Both apps open such a figure as a list. A blind panel marked down the
+    /// ring in every round when one slice held 97%: four 1% slivers that no
+    /// reader can tell apart.
+    public static func isDominated(_ counts: [Int]) -> Bool {
+        let total = counts.reduce(0, +)
+        guard total > 0, let largest = counts.max() else { return false }
+        return Double(largest) / Double(total) >= dominantFraction
+    }
+}
+
+/// How strongly a companion goes with the key, for showing beside it.
+///
+/// Companions are listed by their keyness (log-likelihood), the strength of
+/// the association, which is not the multiplier beside them: a high multiple
+/// over few verses says less than a smaller one over many. Shown as a share
+/// of the strongest, so the order reads as sorted.
+public enum LampStrongsCompanionStrength {
+    /// 0...1: this companion's keyness against the strongest listed.
+    public static func fraction(
+        of companion: LampStrongsAnalysis.Companion,
+        among companions: [LampStrongsAnalysis.Companion]
+    ) -> Double {
+        let strongest = companions.map(\.keyness).max() ?? 0
+        guard strongest > 0 else { return 0 }
+        return min(max(companion.keyness / strongest, 0), 1)
+    }
+}
+
 /// Every chapter of every book, shaded by how often the key occurs.
 public enum LampStrongsGrid {
     public struct Cell: Identifiable, Equatable, Sendable {
