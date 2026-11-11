@@ -129,7 +129,7 @@ public enum LampModuleCompiledSchema {
                     "editor", "publisher", "year", "isbn", "language",
                 ],
                 mayBeNull: [
-                    "description", "author", "version", "series_abbrev",
+                    "description", "author", "version", "key_type", "series_abbrev",
                     "series_full", "editor", "publisher", "year", "isbn", "language",
                 ]
             ),
@@ -139,7 +139,12 @@ public enum LampModuleCompiledSchema {
                     "id", "module_id", "key", "lemma", "transliteration",
                     "pronunciation", "senses_json", "metadata_json", "search_text",
                 ],
-                mayBeNull: ["transliteration", "pronunciation", "metadata_json"]
+                // senses_json is NULL for an entry with an empty `senses`
+                // and no legacy definition fields: JSONSupport.jsonString
+                // gives nothing back for an empty array.
+                mayBeNull: [
+                    "transliteration", "pronunciation", "senses_json", "metadata_json",
+                ]
             ),
         ]
 
@@ -172,6 +177,11 @@ public enum LampModuleCompiledSchema {
                     "annotations_json", "footnotes_json", "footnote_refs_json",
                     "paragraph", "poetry_json",
                 ],
+                // Standalone translations written before modules 8c2a7f6 have
+                // no footnote_refs_json, and the iPhone still accommodates
+                // those files; requiring it would reject a module that
+                // imports today.
+                mayBeAbsent: ["footnote_refs_json"],
                 mayBeNull: [
                     "annotations_json", "footnotes_json",
                     "footnote_refs_json", "poetry_json",
@@ -192,7 +202,12 @@ public enum LampModuleCompiledSchema {
                 ],
                 // The source work and its licence, stored from 2026-11-11.
                 mayBeAbsent: ["source", "license"],
-                mayBeNull: ["description", "author", "full_description", "source", "license"]
+                // readings_per_day is taken from the first day when the
+                // author gives no count, so a plan with no days has none.
+                mayBeNull: [
+                    "description", "author", "full_description",
+                    "readings_per_day", "source", "license",
+                ]
             ),
             LampModuleTableShape(
                 table: "plan_days",
@@ -216,7 +231,7 @@ public enum LampModuleCompiledSchema {
                     "question_index", "question_json", "answer_json", "theme",
                     "christ_focused", "references_json", "cross_references_json",
                 ],
-                mayBeNull: ["cross_references_json"]
+                mayBeNull: ["references_json", "cross_references_json"]
             ),
         ]
 
@@ -232,12 +247,13 @@ public enum LampModuleCompiledSchema {
             ),
             LampModuleTableShape(
                 table: "highlights",
-                columns: ["id", "ref", "sc", "ec", "style", "color"]
+                columns: ["id", "ref", "sc", "ec", "style", "color"],
+                mayBeNull: ["color"]
             ),
             LampModuleTableShape(
                 table: "highlight_themes",
                 columns: ["color", "style", "name", "description"],
-                mayBeNull: ["description"]
+                mayBeNull: ["description", "questions_per_reading"]
             ),
         ]
 

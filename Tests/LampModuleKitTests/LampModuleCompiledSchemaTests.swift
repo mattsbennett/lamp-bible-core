@@ -154,14 +154,28 @@ struct LampModuleCompiledSchemaTests {
                         empty.insert(column)
                     }
                 }
+                // A **subset**, not an equality. The fixture is one valid
+                // input, not every one: a sense list can be empty, a
+                // highlight can omit its colour, a plan can give no day, and
+                // each of those leaves a column NULL that this module fills.
+                // So the fixture proves a column *can* be NULL, never that
+                // another cannot, and the declaration is allowed to be wider
+                // than what one compile shows.
+                //
+                // The direction matters. Over-declaring costs a client a
+                // column that permits NULL and never holds one; under-
+                // declaring invites it to write NOT NULL and fail on a module
+                // the schema permits, which is the quiz bug exactly — SQLite
+                // does not apply a DEFAULT to an explicitly inserted NULL.
+                // An equality check here read as rigour and quietly enforced
+                // the dangerous direction, missing five columns when it was
+                // written.
                 #expect(
-                    empty == Set(shape.mayBeNull),
+                    empty.isSubset(of: Set(shape.mayBeNull)),
                     """
-                    \(kind.rawValue)/\(shape.table): a minimal module leaves \(empty.sorted()) \
-                    empty, declared \(Set(shape.mayBeNull).sorted()). A client's column must \
-                    allow NULL in each — SQLite does not apply a DEFAULT to an explicitly \
-                    inserted NULL, which is how a quiz without questionsPerReading rolled \
-                    back the whole iPhone import.
+                    \(kind.rawValue)/\(shape.table): a minimal module leaves \
+                    \(empty.subtracting(Set(shape.mayBeNull)).sorted()) empty, which is not \
+                    declared. A client's column must allow NULL in each.
                     """
                 )
             }

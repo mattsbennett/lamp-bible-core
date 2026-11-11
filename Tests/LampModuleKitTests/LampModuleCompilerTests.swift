@@ -711,66 +711,53 @@ struct LampModuleCompilerTests {
         }
     }
 
-    /// A module is not built with an ID the installer would refuse. The rule
-    /// lived in two places that disagreed, so `study+one` compiled and then
-    /// failed to install; and the ID checked is the *effective* one, which
-    /// for a commentary volume — it declares none — is the source filename,
-    /// a string nothing checked before.
-    @Test func aModuleIsNotBuiltWithAnIDTheInstallerWouldRefuse() throws {
+    /// One identifier rule, with the severity each stage needs — and a
+    /// compile that still succeeds, because the iPhone compiles a JSON book
+    /// through the same call and a book whose ID holds "+" imports there
+    /// today. The rule is the installer's, space included: unifying it must
+    /// not refuse an ID that already works.
+    @Test func oneIdentifierRuleIsSharedAndCompilingStillSucceeds() throws {
+        #expect(LampModuleIdentifier.isValid("Daily Light"))
+        #expect(LampModuleIdentifier.isValid("wsd_greek"))
+        #expect(LampModuleIdentifier.isValid("NIC-2.1"))
+        #expect(!LampModuleIdentifier.isValid("study+one"))
+        #expect(!LampModuleIdentifier.isValid("a/b"))
+        #expect(!LampModuleIdentifier.isValid(""))
+
+        // The inspector warns rather than failing, and over the same set, so
+        // a space is no longer reported as unsafe when the installer takes it.
+        let warned = ModuleJSONInspector().inspect(root: [
+            "meta": ["schemaVersion": "2.1", "id": "study+one", "type": "dictionary", "name": "S"],
+            "entries": [],
+        ])
+        #expect(warned.issues.contains {
+            $0.severity == .warning && $0.path == "/meta/id"
+        })
+        #expect(!warned.issues.contains { $0.severity == .error })
+
+        let spaced = ModuleJSONInspector().inspect(root: [
+            "meta": ["schemaVersion": "2.1", "id": "Daily Light", "type": "dictionary", "name": "S"],
+            "entries": [],
+        ])
+        #expect(!spaced.issues.contains { $0.path == "/meta/id" })
+
+        // And it compiles, warning and all.
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
-
-        // ModuleCompilationError is not Equatable, so the error is read the
-        // way enforcesModuleIdentityFilename reads its own.
-        func expectRefused(_ source: String, filename: String, named output: String, path: String) {
-            do {
-                _ = try LampModuleCompiler().compile(
-                    data: Data(source.utf8),
-                    sourceFilename: filename,
-                    destinationURL: fixture.url.appendingPathComponent(output)
-                )
-                Issue.record("Expected \(filename) to be refused for its identifier")
-            } catch let error as ModuleCompilationError {
-                guard case .invalidValue(let reported, let expected) = error else {
-                    Issue.record("Unexpected compilation error: \(error)")
-                    return
-                }
-                #expect(reported == path)
-                #expect(expected == LampModuleIdentifier.advice)
-            } catch {
-                Issue.record("Unexpected error: \(error)")
-            }
-        }
-
-        // An ID the author wrote.
-        expectRefused(#"""
+        let result = try LampModuleCompiler().compile(
+            data: Data(#"""
             {
               "meta": {
                 "schemaVersion": "2.1", "id": "study+one",
                 "type": "dictionary", "name": "Study"
               },
-              "entries": []
+              "entries": [{"key": "G1", "lemma": "alpha", "senses": [{"definition": "first"}]}]
             }
-            """#, filename: "study+one.json", named: "study+one.lamp", path: "/meta/id")
-
-        // A commentary volume declares none, so the filename becomes the ID.
-        expectRefused(#"""
-            {
-              "meta": {"schemaVersion":"2.2","seriesAbbrev":"NIC","seriesFull":"NIC","title":"Genesis"},
-              "book": "Gen", "bookNumber": 1,
-              "chapters": [{"chapter": 1, "sections": [{
-                "title": "Creation", "sv": 1001001, "ev": 1001002,
-                "pericopae": [{"title": "The beginning", "sv": 1001001, "ev": 1001002,
-                  "verses": [{"sv": 1001001, "commentary": [{"type":"paragraph","text":"A note"}]}]}]
-              }]}]
-            }
-            """#, filename: "nic+genesis.json", named: "nic+genesis.lamp", path: "/")
-
-        // A space has always installed, so it still builds: unifying the two
-        // rules must not refuse an ID that works today.
-        #expect(LampModuleIdentifier.isValid("Daily Light"))
-        #expect(!LampModuleIdentifier.isValid("study+one"))
-        #expect(!LampModuleIdentifier.isValid(""))
+            """#.utf8),
+            sourceFilename: "study+one.json",
+            destinationURL: fixture.url.appendingPathComponent("study+one.lamp")
+        )
+        #expect(result.moduleID == "study+one")
     }
 
     /// A plan keeps the source work and licence its author gave it. The

@@ -90,17 +90,22 @@ public struct LampModuleCompiler: Sendable {
         guard !moduleID.isEmpty else {
             throw ModuleCompilationError.missingValue(path: "/meta/id")
         }
-        // The ID that will be used, not the one that was written: a
-        // commentary volume declares none and takes the source filename, so
-        // this is the only place the string that becomes the filename — and
-        // the Mac's storage key — can be held to the rule. Refusing here
-        // means a module the installer would reject is never built.
-        guard LampModuleIdentifier.isValid(moduleID) else {
-            throw ModuleCompilationError.invalidValue(
-                path: inspection.metadata.id == nil ? "/" : "/meta/id",
-                expected: LampModuleIdentifier.advice
-            )
-        }
+        // Deliberately **not** refused here, though the Mac's installer will
+        // refuse it (`LampLibrary.validateIdentifier`, the same
+        // `LampModuleIdentifier` rule). Refusing at compile time was tried in
+        // d08d007 and reverted: the iPhone compiles a JSON book through this
+        // very call (`importBookJSONFromFile`), and a book whose ID holds a
+        // character like "+" imports there today. Throwing took a module that
+        // worked on one device and made it work on neither, which is the one
+        // thing unifying the rule had to avoid.
+        //
+        // So an unsafe ID is a warning while authoring (`ModuleJSONInspector`)
+        // and an error only where it actually cannot be stored. The gap that
+        // leaves is real and worth knowing: a commentary volume declares no
+        // ID and takes the source filename, which the inspector never sees,
+        // so such a volume gets no warning at all and fails at Mac install.
+        // Closing it needs the filename to reach the inspection, not a throw
+        // here.
 
         let destinationURL = requestedDestinationURL
             ?? URL(fileURLWithPath: sourceFilename)
