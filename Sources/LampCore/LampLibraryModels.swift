@@ -947,6 +947,15 @@ public struct LampVerseNote: Identifiable, Equatable, Sendable {
     public let content: String
     public let verseReferences: [Int]
     public let footnotes: [LampVerseFootnote]
+    /// The note's own media, as the JSON it was stored as.
+    ///
+    /// Raw rather than `[LampMediaReference]`, as a devotional keeps it: a
+    /// reference written by a newer Lamp carries fields this one has no name
+    /// for, and decoding to re-encode would drop them on every save. Clients
+    /// decode a view of it and append through
+    /// `LampPortableDevotionalMedia.appending(_:to:)`, which leaves entries
+    /// it did not write alone.
+    public let mediaJSON: String?
     public let lastModified: Date
 
     public init(
@@ -957,6 +966,7 @@ public struct LampVerseNote: Identifiable, Equatable, Sendable {
         content: String,
         verseReferences: [Int] = [],
         footnotes: [LampVerseFootnote] = [],
+        mediaJSON: String? = nil,
         lastModified: Date = Date()
     ) {
         self.id = id
@@ -966,6 +976,7 @@ public struct LampVerseNote: Identifiable, Equatable, Sendable {
         self.content = content
         self.verseReferences = verseReferences
         self.footnotes = footnotes
+        self.mediaJSON = mediaJSON
         self.lastModified = lastModified
     }
 

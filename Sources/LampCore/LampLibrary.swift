@@ -3268,7 +3268,7 @@ public actor LampLibrary {
         return try queue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, module_id, verse_id, title, content,
-                       verse_refs_json, footnotes_json, last_modified
+                       verse_refs_json, footnotes_json, media_json, last_modified
                 FROM personal_notes
                 WHERE verse_id = ?
                 ORDER BY last_modified DESC, id
@@ -3342,7 +3342,7 @@ public actor LampLibrary {
         return try queue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, module_id, verse_id, title, content,
-                       verse_refs_json, footnotes_json, last_modified
+                       verse_refs_json, footnotes_json, media_json, last_modified
                 FROM personal_notes
                 WHERE book = ? AND chapter = ?
                 ORDER BY verse, last_modified DESC, id
@@ -3365,8 +3365,9 @@ public actor LampLibrary {
             try db.execute(sql: """
                 INSERT OR REPLACE INTO personal_notes (
                     id, module_id, verse_id, book, chapter, verse,
-                    title, content, verse_refs_json, footnotes_json, last_modified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    title, content, verse_refs_json, footnotes_json, media_json,
+                    last_modified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: [
                     note.id,
                     note.moduleID,
@@ -3378,6 +3379,7 @@ public actor LampLibrary {
                     note.content,
                     referencesJSON,
                     footnotesJSON,
+                    note.mediaJSON,
                     Int(note.lastModified.timeIntervalSince1970),
                 ])
             try Self.recordPresence(db, .note, note.id)
@@ -3727,6 +3729,11 @@ public actor LampLibrary {
     ) throws -> LampPortableStudyDocument {
         let queue = try openUserDatabase()
         let notes = try queue.read { db in
+            // No media_json: a study document carries no files, so sending
+            // the references alone would describe attachments the reader
+            // receiving it has no way to see. The export says less rather
+            // than promising what it cannot deliver; carrying media here
+            // means carrying the files, which the format does not do yet.
             try Row.fetchAll(db, sql: """
                 SELECT id, module_id, verse_id, title, content,
                        verse_refs_json, footnotes_json, last_modified
@@ -4263,7 +4270,8 @@ public actor LampLibrary {
                 )
                 let footnotesJSON = String(decoding: footnotesData, as: UTF8.self)
                 let existing = try Row.fetchOne(db, sql: """
-                    SELECT title, content, verse_refs_json, footnotes_json, last_modified
+                    SELECT title, content, verse_refs_json, footnotes_json, media_json,
+                           last_modified
                     FROM personal_notes WHERE id = ?
                     """, arguments: [id])
                 let existingTimestamp: Int? = existing?["last_modified"]
@@ -4327,11 +4335,19 @@ public actor LampLibrary {
                         continue
                     }
                 }
+                // The media carried forward, not dropped. This is INSERT OR
+                // REPLACE, so a column left out of it is a column emptied —
+                // and a study document has no media of its own to put there,
+                // so an import or a sync of a note would have taken the
+                // attachments off it. They belong to this device until the
+                // document format can carry them.
+                let keptMedia: String? = existing?["media_json"]
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO personal_notes (
                         id, module_id, verse_id, book, chapter, verse,
-                        title, content, verse_refs_json, footnotes_json, last_modified
-                    ) VALUES (?, 'personal-notes', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        title, content, verse_refs_json, footnotes_json, media_json,
+                        last_modified
+                    ) VALUES (?, 'personal-notes', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: [
                         id,
                         note.reference,
@@ -4342,6 +4358,7 @@ public actor LampLibrary {
                         note.content,
                         referencesJSON,
                         footnotesJSON,
+                        keptMedia,
                         incomingTimestamp > 0 ? incomingTimestamp : importTimestamp,
                     ])
                 if !forSync { try Self.recordPresence(db, .note, id) }
@@ -5142,6 +5159,7 @@ public actor LampLibrary {
                     content TEXT NOT NULL,
                     verse_refs_json TEXT,
                     footnotes_json TEXT,
+                    media_json TEXT,
                     last_modified INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_personal_notes_verse
@@ -5203,6 +5221,9 @@ public actor LampLibrary {
                 .compactMap { $0["name"] as String? }
             if !personalNoteColumns.contains("footnotes_json") {
                 try db.execute(sql: "ALTER TABLE personal_notes ADD COLUMN footnotes_json TEXT")
+            }
+            if !personalNoteColumns.contains("media_json") {
+                try db.execute(sql: "ALTER TABLE personal_notes ADD COLUMN media_json TEXT")
             }
             let devotionalColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(personal_devotionals)")
                 .compactMap { $0["name"] as String? }
@@ -5269,6 +5290,7 @@ public actor LampLibrary {
             content: row["content"],
             verseReferences: references,
             footnotes: verseFootnotes(from: footnotesJSON),
+            mediaJSON: row.hasColumn("media_json") ? row["media_json"] : nil,
             lastModified: Date(timeIntervalSince1970: TimeInterval(modifiedTimestamp ?? 0))
         )
     }

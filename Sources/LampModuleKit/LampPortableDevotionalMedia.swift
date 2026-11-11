@@ -10,9 +10,12 @@ public enum LampPortableDevotionalMedia {
         public let devotionalID: String
         public let filename: String
         public let kind: Kind
+        /// What this media belongs to. Devotionals had it to themselves
+        /// until notes gained media, and the folder said so in a literal.
+        public var scope: LampMediaScope = .devotional
 
         public var archivePath: String {
-            "Media/Devotionals/\(devotionalID)/\(filename)"
+            "Media/\(scope.folder)/\(devotionalID)/\(filename)"
         }
 
         public var mimeType: String {
@@ -112,6 +115,17 @@ public enum LampPortableDevotionalMedia {
         pattern: #"(!?)\[[^\]]*\]\((lamp-media://([^)]*))\)"#
     )
 
+    /// The folder one owner's media is kept in, inside a library.
+    public static func folderURL(
+        rootURL: URL, scope: LampMediaScope, ownerID: String
+    ) -> URL? {
+        guard isSafePathComponent(ownerID) else { return nil }
+        return rootURL
+            .appendingPathComponent("Media", isDirectory: true)
+            .appendingPathComponent(scope.folder, isDirectory: true)
+            .appendingPathComponent(ownerID, isDirectory: true)
+    }
+
     public static func isSafePathComponent(_ value: String) -> Bool {
         !value.isEmpty && value != "." && value != ".."
             && !value.contains("/") && !value.contains("\\")
@@ -122,12 +136,22 @@ public enum LampPortableDevotionalMedia {
     public static func iOSRemotePath(
         moduleID: String, devotionalID: String, filename: String
     ) throws -> String {
+        try remotePath(
+            scope: .devotional, moduleID: moduleID, ownerID: devotionalID, filename: filename
+        )
+    }
+
+    /// Where a client publishes one piece of media. The same shape for every
+    /// scope, so a note's media syncs the way a devotional's does.
+    public static func remotePath(
+        scope: LampMediaScope, moduleID: String, ownerID: String, filename: String
+    ) throws -> String {
         guard isSafePathComponent(moduleID),
-              isSafePathComponent(devotionalID),
+              isSafePathComponent(ownerID),
               isSafePathComponent(filename) else {
             throw ReferenceError.unsafeFilename(filename)
         }
-        return "DevotionalMedia/\(moduleID)/\(devotionalID)/\(filename)"
+        return "\(scope.remoteDirectory)/\(moduleID)/\(ownerID)/\(filename)"
     }
 
     /// Resolve both the legacy Mac URL and iOS's metadata-backed media ID in
@@ -136,7 +160,8 @@ public enum LampPortableDevotionalMedia {
         for link: URL,
         rootURL: URL,
         devotionalID: String?,
-        references: [LampDevotionalMediaReference]
+        references: [LampMediaReference],
+        scope: LampMediaScope = .devotional
     ) -> URL {
         let owner: String
         let filename: String
@@ -155,7 +180,8 @@ public enum LampPortableDevotionalMedia {
         }
         guard isSafePathComponent(owner), isSafePathComponent(filename) else { return link }
         return rootURL
-            .appendingPathComponent("Media/Devotionals", isDirectory: true)
+            .appendingPathComponent("Media", isDirectory: true)
+            .appendingPathComponent(scope.folder, isDirectory: true)
             .appendingPathComponent(owner, isDirectory: true)
             .appendingPathComponent(filename)
     }
