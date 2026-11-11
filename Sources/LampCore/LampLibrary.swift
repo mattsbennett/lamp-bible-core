@@ -3455,14 +3455,44 @@ public actor LampLibrary {
             try db.execute(sql: "DELETE FROM personal_notes WHERE id = ?", arguments: [id])
             try Self.recordDeletion(db, .note, id)
         }
-        // The note's attachments go with it. A row deleted while its files
-        // stay leaves a folder nothing points at, growing quietly for as
-        // long as the library exists.
-        if let reference,
-           let folder = LampPortableDevotionalMedia.folderURL(
-               rootURL: rootURL, scope: .note, ownerID: Self.noteMediaOwnerID(reference)
-           ) {
-            try? fileManager.removeItem(at: folder)
+        // The note's attachments go with it — but only once nothing else is
+        // using them. The folder is named for the verse, and `saveVerseNote`
+        // takes any id, so a second row on the same verse shares it:
+        // deleting that row must not take the surviving note's pictures.
+        // Counted after the delete, so the row just removed cannot count
+        // itself.
+        guard let reference else { return }
+        let stillOwned = try queue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM personal_notes WHERE verse_id = ?",
+                arguments: [reference]
+            ) ?? 0
+        }
+        guard stillOwned == 0,
+              let folder = LampPortableDevotionalMedia.folderURL(
+                  rootURL: rootURL, scope: .note, ownerID: Self.noteMediaOwnerID(reference)
+              )
+        else { return }
+        try? fileManager.removeItem(at: folder)
+    }
+
+    /// Adds a column, tolerating another process having just added it.
+    ///
+    /// Checking the columns and then altering is two steps, and two
+    /// libraries opening the same file for the first time can both see the
+    /// column missing; the second `ALTER` then fails with "duplicate column
+    /// name" and takes that whole open down with it. The library is opened
+    /// by the app, by each lamp-mcp and by sync, so first opens do race.
+    private static func addColumn(
+        _ column: String, type: String, to table: String,
+        existing: [String], in db: Database
+    ) throws {
+        guard !existing.contains(column) else { return }
+        do {
+            try db.execute(sql: "ALTER TABLE \(table) ADD COLUMN \(column) \(type)")
+        } catch let error as DatabaseError where error.message?.contains("duplicate column") == true {
+            // Someone else was a moment ahead; the column is there either way.
         }
     }
 
@@ -3780,6 +3810,24 @@ public actor LampLibrary {
         }
     }
 
+    /// The reader's notes on a book, as a document.
+    ///
+    /// **Carries no media, and a portable backup is the loss worth knowing
+    /// about.** A document shared with someone else should carry none: it
+    /// holds no files, so references would describe attachments the reader
+    /// cannot see. But `exportPortableBackup` writes these same documents
+    /// and copies `Media/` beside them, so a backup keeps a note's files
+    /// and nothing that says which note they belonged to — restore into a
+    /// fresh library and the pictures are on disk, unreachable.
+    ///
+    /// Closing that is not a flag here. These documents are imported by
+    /// being compiled into a module (`NotesModuleCompiler`), whose
+    /// `note_entries` has no media column, so carrying it means changing
+    /// the module format: a new column, declared in
+    /// `LampModuleCompiledSchema`, with the phone's copy following. That
+    /// belongs with module-notes media, which is the next piece of this
+    /// work, rather than smuggled in behind a default argument.
+    /// Found by a Codex review, 2026-11-11.
     public func personalNotesDocument(
         bookNumber: Int,
         moduleID requestedModuleID: String? = nil,
@@ -3788,11 +3836,6 @@ public actor LampLibrary {
     ) throws -> LampPortableStudyDocument {
         let queue = try openUserDatabase()
         let notes = try queue.read { db in
-            // No media_json: a study document carries no files, so sending
-            // the references alone would describe attachments the reader
-            // receiving it has no way to see. The export says less rather
-            // than promising what it cannot deliver; carrying media here
-            // means carrying the files, which the format does not do yet.
             try Row.fetchAll(db, sql: """
                 SELECT id, module_id, verse_id, title, content,
                        verse_refs_json, footnotes_json, last_modified
@@ -5281,9 +5324,8 @@ public actor LampLibrary {
             if !personalNoteColumns.contains("footnotes_json") {
                 try db.execute(sql: "ALTER TABLE personal_notes ADD COLUMN footnotes_json TEXT")
             }
-            if !personalNoteColumns.contains("media_json") {
-                try db.execute(sql: "ALTER TABLE personal_notes ADD COLUMN media_json TEXT")
-            }
+            try Self.addColumn("media_json", type: "TEXT", to: "personal_notes",
+                               existing: personalNoteColumns, in: db)
             let devotionalColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(personal_devotionals)")
                 .compactMap { $0["name"] as String? }
             if !devotionalColumns.contains("media_json") {

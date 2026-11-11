@@ -261,6 +261,9 @@ enum LampSyncConflictPayload {
             "lastModified": Int(note.lastModified.timeIntervalSince1970),
         ]
         object["title"] = note.title
+        // A set-aside note keeps its media, so choosing it later restores
+        // the note as it was rather than a copy with its pictures gone.
+        object["mediaJSON"] = note.mediaJSON
         return try json(object)
     }
 
@@ -287,6 +290,7 @@ enum LampSyncConflictPayload {
             content: content,
             verseReferences: object["verseReferences"] as? [Int] ?? [],
             footnotes: footnotes,
+            mediaJSON: object["mediaJSON"] as? String,
             lastModified: Date(
                 timeIntervalSince1970: TimeInterval(object["lastModified"] as? Int ?? 0)
             )

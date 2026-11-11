@@ -1418,6 +1418,11 @@ public extension LampVerseNote {
             content: content,
             verseReferences: verseReferences,
             footnotes: footnotes,
+            // Carried, like everything else about the note. Resolving a
+            // conflict re-dates a note and saves it, so a field left out
+            // here is a field the conflict silently deletes — whichever
+            // version the reader chose.
+            mediaJSON: mediaJSON,
             lastModified: date
         )
     }

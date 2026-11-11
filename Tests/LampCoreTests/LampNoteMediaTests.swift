@@ -1,6 +1,6 @@
 import Foundation
 import GRDB
-import LampCore
+@testable import LampCore
 import LampModuleKit
 import Testing
 
@@ -258,5 +258,65 @@ struct LampNoteMediaTests {
             rootURL: URL(fileURLWithPath: "/tmp/library"), reference: 43_011_035
         )
         #expect(folder?.path == "/tmp/library/Media/Notes/43011035")
+    }
+
+    /// Deleting one note must not take another's pictures. The folder is
+    /// named for the verse, and `saveVerseNote` takes any id, so two rows on
+    /// one verse share it.
+    @Test func deletingOneNoteLeavesAnothersMediaAlone() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "![](media/8A1F) Kept.", mediaJSON: mediaJSON
+        )
+        // A second row on the same verse, as the public API allows.
+        try await library.saveVerseNote(LampVerseNote(
+            id: "another-note", reference: 43_011_035, content: "Also here."
+        ))
+        let folder = try #require(
+            LampLibrary.noteMediaFolderURL(rootURL: root, reference: 43_011_035)
+        )
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("png".utf8).write(to: folder.appendingPathComponent("tomb.png"))
+
+        try await library.deleteVerseNote(id: "another-note")
+        #expect(FileManager.default.fileExists(atPath: folder.path),
+                "the surviving note still has its pictures")
+
+        // Once the last note on the verse goes, so do they.
+        _ = try await library.setPersonalVerseNote(reference: 43_011_035, content: "  ")
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    /// Resolving a conflict re-dates a note and saves it, so anything the
+    /// re-dating drops is deleted by the act of choosing.
+    @Test func reDatingANoteKeepsItsMedia() {
+        let note = LampVerseNote(
+            id: "n", reference: 43_011_035, content: "He wept.", mediaJSON: mediaJSON
+        )
+        #expect(note.withLastModified(Date(timeIntervalSince1970: 9_000)).mediaJSON == mediaJSON)
+        // And a note set aside as a conflict comes back with its media, so
+        // choosing it later restores the note rather than a stripped copy.
+        let payload = try? LampSyncConflictPayload.encode(note)
+        let restored = payload.flatMap { LampSyncConflictPayload.note(from: $0) }
+        #expect(restored?.mediaJSON == mediaJSON)
+    }
+
+    /// What a study document does *not* carry, written down so the gap is
+    /// deliberate rather than forgotten: a backup keeps a note's files and
+    /// nothing pointing at them. Closing it is a module format change, and
+    /// belongs with module-notes media.
+    @Test func aStudyDocumentCarriesNoMedia() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "He wept.", mediaJSON: mediaJSON
+        )
+        let document = try await library.personalNotesDocument(bookNumber: 43)
+        let text = String(decoding: document.jsonData, as: UTF8.self)
+        #expect(!text.contains("tomb.png"), "no media list in a shared document")
     }
 }
