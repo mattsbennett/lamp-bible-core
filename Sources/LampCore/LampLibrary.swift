@@ -5558,10 +5558,11 @@ public actor LampLibrary {
         try LampModuleText.columnNames(in: db, table: table)
     }
 
+    /// The last line of one rule: `LampModuleIdentifier`, which the inspector
+    /// warns by and the compiler refuses by. An archive may arrive from
+    /// anywhere, so the check stays here too.
     private func validateIdentifier(_ identifier: String) throws {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " ._-") )
-        guard !identifier.isEmpty,
-              identifier.unicodeScalars.allSatisfy(allowed.contains) else {
+        guard LampModuleIdentifier.isValid(identifier) else {
             throw LampLibraryError.unsafeModuleIdentifier(identifier)
         }
     }

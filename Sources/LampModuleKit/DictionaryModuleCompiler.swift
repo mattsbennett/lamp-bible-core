@@ -128,6 +128,13 @@ extension LampModuleCompiler {
             return sourceSenses.compactMap(JSONSupport.object).map(normalizedSense)
         }
 
+        // No senses: the one sense is made from the entry's own fields, and
+        // this list stays a selection rather than becoming a pass-through —
+        // an entry holds `key`, `lemma` and `transliteration` too, which are
+        // the entry's and not the sense's. Every field the schema puts on a
+        // sense is reachable through `senses`, which is where an author
+        // writing one would put it.
+
         var sense: [String: Any] = [:]
         copyFirstValue(from: entry, keys: ["definition", "def"], to: "definition", in: &sense)
         copyFirstValue(from: entry, keys: ["shortDefinition", "short_definition"], to: "shortDefinition", in: &sense)
@@ -142,23 +149,55 @@ extension LampModuleCompiler {
         return [sense]
     }
 
+    /// The spellings this format has accepted for one sense field over time.
+    /// The first key present wins, and the value is stored under the first
+    /// name, so a reader has one name to look for.
+    private static let senseKeySpellings: [[String]] = [
+        ["definition", "def"],
+        ["shortDefinition", "short_definition"],
+        ["partOfSpeech", "part_of_speech"],
+        ["usage"],
+        ["derivation"],
+        ["gloss"],
+        ["references"],
+        ["translationUsages", "translation_usages"],
+    ]
+
+    /// A sense as the reader will see it: **the author's own object**, with
+    /// those alternate spellings folded onto one name and `id` made a string.
+    ///
+    /// It used to be rebuilt from a list of eight keys, which dropped
+    /// everything else the author wrote. `septuagintHebrew` — the Hebrew a
+    /// Greek word renders, a published field of `sense` — was among them, so
+    /// a compiled lexicon carried none of it while the bundled copy, written
+    /// by a different tool, did; `LampStrongsAnalysisPresentation` reads it,
+    /// so the two were not interchangeable. A whitelist here is a second,
+    /// narrower contract than the published schema, declared nowhere and
+    /// impossible to notice from either side. The schema decides what a sense
+    /// may hold; this carries what it holds.
+    ///
+    /// Carrying unknown keys is safe to store: every value came from
+    /// `JSONSerialization`, and `JSONSupport.jsonString` sorts keys, so the
+    /// bytes stay the same for the same source (`LampModuleDeterminismTests`).
     private func normalizedSense(_ source: [String: Any]) -> [String: Any] {
-        var sense: [String: Any] = [:]
-        copyFirstValue(from: source, keys: ["definition", "def"], to: "definition", in: &sense)
-        copyFirstValue(from: source, keys: ["shortDefinition", "short_definition"], to: "shortDefinition", in: &sense)
-        copyFirstValue(from: source, keys: ["partOfSpeech", "part_of_speech"], to: "partOfSpeech", in: &sense)
-        copyFirstValue(from: source, keys: ["usage"], to: "usage", in: &sense)
-        copyFirstValue(from: source, keys: ["derivation"], to: "derivation", in: &sense)
-        copyFirstValue(from: source, keys: ["gloss"], to: "gloss", in: &sense)
-        copyFirstValue(from: source, keys: ["references"], to: "references", in: &sense)
-        copyFirstValue(from: source, keys: ["translationUsages", "translation_usages"], to: "translationUsages", in: &sense)
+        var sense = source
+        for spellings in Self.senseKeySpellings {
+            let value = JSONSupport.firstValue(in: source, keys: spellings)
+            for spelling in spellings { sense.removeValue(forKey: spelling) }
+            if let value { sense[spellings[0]] = value }
+        }
 
         if let id = JSONSupport.string(source["id"]) {
             sense["id"] = id
         } else if let id = JSONSupport.integer(source["id"]) {
             sense["id"] = String(id)
+        } else {
+            // As before: an id of any other shape is no id.
+            sense.removeValue(forKey: "id")
         }
-        return sense
+        // A key explicitly null says nothing, and reaching the file would
+        // make a sense that differs from one where it was left out.
+        return sense.filter { !($0.value is NSNull) }
     }
 
     private func copyFirstValue(

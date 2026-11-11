@@ -663,6 +663,147 @@ struct LampModuleCompilerTests {
             source: withGenre, destination: withGenre
         ).prefix(required.count) == LampPortableModuleInspector.bookModuleColumns.prefix(required.count))
     }
+
+    /// A sense keeps a field the compiler has no name for. It used to be
+    /// rebuilt from eight keys, so `septuagintHebrew` — a published field of
+    /// `sense`, read by the Strong's analysis — reached a bundled lexicon,
+    /// written by another tool, and never a compiled one.
+    @Test func aSenseKeepsAFieldTheCompilerDoesNotKnow() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("carried_dict.lamp")
+
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "2.1", "id": "carried_dict",
+                "type": "dictionary", "name": "Carried", "keyType": "strongs"
+              },
+              "entries": [{
+                "key": "G18",
+                "lemma": "agathos",
+                "senses": [{
+                  "short_definition": "good",
+                  "septuagintHebrew": [{"lemma": "טוֹב", "strongs": "H2896"}],
+                  "aFieldFromTheFuture": "kept"
+                }]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "carried_dict.json",
+            destinationURL: outputURL
+        )
+
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let senses: String? = try #require(
+                try Row.fetchOne(db, sql: "SELECT senses_json FROM dictionary_entries")
+            )["senses_json"]
+            #expect(senses?.contains("\"septuagintHebrew\"") == true)
+            #expect(senses?.contains("H2896") == true)
+            // Anything else an author writes is carried too: the published
+            // schema decides what a sense may hold, not this compiler.
+            #expect(senses?.contains("\"aFieldFromTheFuture\":\"kept\"") == true)
+            // And the alternate spellings are still folded onto one name.
+            #expect(senses?.contains("\"shortDefinition\":\"good\"") == true)
+            #expect(senses?.contains("short_definition") == false)
+        }
+    }
+
+    /// A module is not built with an ID the installer would refuse. The rule
+    /// lived in two places that disagreed, so `study+one` compiled and then
+    /// failed to install; and the ID checked is the *effective* one, which
+    /// for a commentary volume — it declares none — is the source filename,
+    /// a string nothing checked before.
+    @Test func aModuleIsNotBuiltWithAnIDTheInstallerWouldRefuse() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+
+        // ModuleCompilationError is not Equatable, so the error is read the
+        // way enforcesModuleIdentityFilename reads its own.
+        func expectRefused(_ source: String, filename: String, named output: String, path: String) {
+            do {
+                _ = try LampModuleCompiler().compile(
+                    data: Data(source.utf8),
+                    sourceFilename: filename,
+                    destinationURL: fixture.url.appendingPathComponent(output)
+                )
+                Issue.record("Expected \(filename) to be refused for its identifier")
+            } catch let error as ModuleCompilationError {
+                guard case .invalidValue(let reported, let expected) = error else {
+                    Issue.record("Unexpected compilation error: \(error)")
+                    return
+                }
+                #expect(reported == path)
+                #expect(expected == LampModuleIdentifier.advice)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+
+        // An ID the author wrote.
+        expectRefused(#"""
+            {
+              "meta": {
+                "schemaVersion": "2.1", "id": "study+one",
+                "type": "dictionary", "name": "Study"
+              },
+              "entries": []
+            }
+            """#, filename: "study+one.json", named: "study+one.lamp", path: "/meta/id")
+
+        // A commentary volume declares none, so the filename becomes the ID.
+        expectRefused(#"""
+            {
+              "meta": {"schemaVersion":"2.2","seriesAbbrev":"NIC","seriesFull":"NIC","title":"Genesis"},
+              "book": "Gen", "bookNumber": 1,
+              "chapters": [{"chapter": 1, "sections": [{
+                "title": "Creation", "sv": 1001001, "ev": 1001002,
+                "pericopae": [{"title": "The beginning", "sv": 1001001, "ev": 1001002,
+                  "verses": [{"sv": 1001001, "commentary": [{"type":"paragraph","text":"A note"}]}]}]
+              }]}]
+            }
+            """#, filename: "nic+genesis.json", named: "nic+genesis.lamp", path: "/")
+
+        // A space has always installed, so it still builds: unifying the two
+        // rules must not refuse an ID that works today.
+        #expect(LampModuleIdentifier.isValid("Daily Light"))
+        #expect(!LampModuleIdentifier.isValid("study+one"))
+        #expect(!LampModuleIdentifier.isValid(""))
+    }
+
+    /// A plan keeps the source work and licence its author gave it. The
+    /// schema has asked for both all along and nothing stored them, so a
+    /// plan's attribution was dropped at compile time on both apps.
+    @Test func aPlanKeepsItsSourceAndLicence() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("attributed_plan.lamp")
+
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "1.0", "id": "attributed_plan",
+                "type": "plan", "name": "Attributed",
+                "source": "Daily Light on the Daily Path (1794)",
+                "license": "Public domain"
+              },
+              "days": [{"day": 1, "readings": [{"sv": 1001001, "ev": 1001999}]}]
+            }
+            """#.utf8),
+            sourceFilename: "attributed_plan.json",
+            destinationURL: outputURL
+        )
+
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let row = try #require(try Row.fetchOne(db, sql: "SELECT source, license FROM plans"))
+            #expect(row["source"] as String? == "Daily Light on the Daily Path (1794)")
+            #expect(row["license"] as String? == "Public domain")
+        }
+    }
 }
 
 private struct FixtureDirectory {

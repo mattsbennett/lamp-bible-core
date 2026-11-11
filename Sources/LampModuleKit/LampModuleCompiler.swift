@@ -90,6 +90,17 @@ public struct LampModuleCompiler: Sendable {
         guard !moduleID.isEmpty else {
             throw ModuleCompilationError.missingValue(path: "/meta/id")
         }
+        // The ID that will be used, not the one that was written: a
+        // commentary volume declares none and takes the source filename, so
+        // this is the only place the string that becomes the filename — and
+        // the Mac's storage key — can be held to the rule. Refusing here
+        // means a module the installer would reject is never built.
+        guard LampModuleIdentifier.isValid(moduleID) else {
+            throw ModuleCompilationError.invalidValue(
+                path: inspection.metadata.id == nil ? "/" : "/meta/id",
+                expected: LampModuleIdentifier.advice
+            )
+        }
 
         let destinationURL = requestedDestinationURL
             ?? URL(fileURLWithPath: sourceFilename)

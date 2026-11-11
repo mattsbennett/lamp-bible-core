@@ -25,8 +25,8 @@ extension LampModuleCompiler {
                 sql: """
                     INSERT INTO plans (
                         id, name, description, author, full_description,
-                        duration, readings_per_day
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        duration, readings_per_day, source, license
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     moduleID,
@@ -36,6 +36,13 @@ extension LampModuleCompiler {
                     JSONSupport.string(meta["fullDescription"]),
                     duration,
                     readingsPerDay,
+                    // The source work and its licence, which the schema has
+                    // asked an author for all along and nothing stored, so a
+                    // plan arrived with its attribution dropped. Nothing
+                    // reads them yet; a plan's rights are not something to
+                    // discard while waiting for a screen to show them.
+                    JSONSupport.string(meta["source"]),
+                    JSONSupport.string(meta["license"]),
                 ]
             )
 
@@ -82,7 +89,9 @@ extension LampModuleCompiler {
                 author TEXT,
                 full_description TEXT,
                 duration INTEGER NOT NULL,
-                readings_per_day INTEGER
+                readings_per_day INTEGER,
+                source TEXT,
+                license TEXT
             )
             """)
         try db.execute(sql: """

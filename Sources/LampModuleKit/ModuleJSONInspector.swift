@@ -141,13 +141,15 @@ public struct ModuleJSONInspector: Sendable {
         kind: LampModuleKind,
         issues: inout [ModuleValidationIssue]
     ) {
+        // A commentary volume is identified by its series and book, so its
+        // `/meta/id` is not the module's ID; the compiler checks the
+        // effective one, which for such a volume is the source filename.
         guard kind != .commentary, let id else { return }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        if id.isEmpty || id.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+        if !LampModuleIdentifier.isValid(id) {
             issues.append(.init(
                 severity: .warning,
                 path: "/meta/id",
-                message: "Use only letters, numbers, periods, underscores, and hyphens so the ID is safe as a .lamp filename."
+                message: "Use \(LampModuleIdentifier.advice)."
             ))
         }
     }
