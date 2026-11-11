@@ -378,46 +378,6 @@ struct LampNoteMediaTests {
         #expect(LampSyncFolderLayout.kind(of: "NoteMedia/notes/x.png") == nil)
     }
 
-    /// The notes file that syncs carries media, and matches what core
-    /// declares for it.
-    ///
-    /// Two writers produce this file — this one and the phone's exporter —
-    /// so a column one writes and the other does not is a note's pictures
-    /// arriving on one device and not the other. ios-56 pins the phone's
-    /// against the same declaration.
-    @Test func theExportedNotesShapeMatchesTheDeclaration() async throws {
-        let root = try scratch()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let library = LampLibrary(rootURL: root)
-        _ = try await library.setPersonalVerseNote(
-            reference: 43_011_035, content: "![](media/8A1F) He wept.", mediaJSON: mediaJSON
-        )
-
-        let exported = root.appendingPathComponent("notes.lamp")
-        try await library.exportPersonalModule(.notes, format: .lamp, to: exported)
-
-        let body = try (Data(contentsOf: exported) as NSData).decompressed(using: .zlib) as Data
-        let databaseURL = root.appendingPathComponent("notes.sqlite")
-        try body.write(to: databaseURL)
-        let queue = try DatabaseQueue(path: databaseURL.path)
-        let (columns, media) = try await queue.read { db in
-            let names = try Row.fetchAll(db, sql: "PRAGMA table_info(note_entries)")
-                .compactMap { $0["name"] as String? }
-            let stored = try String.fetchOne(
-                db, sql: "SELECT media_json FROM note_entries WHERE verse_id = ?",
-                arguments: [43_011_035]
-            )
-            return (Set(names), stored)
-        }
-        try queue.close()
-
-        let shape = try #require(
-            LampModuleCompiledSchema.tables(for: .notes).first { $0.table == "note_entries" }
-        )
-        #expect(columns == Set(shape.columns), "the file written is the shape declared")
-        #expect(media == mediaJSON, "and the note's pictures travel in it")
-    }
-
     /// A note's picture reaches a second device.
     ///
     /// The file carries the media list now, so the receiving device knows

@@ -5224,7 +5224,11 @@ public actor LampLibrary {
         ).isDeleted(itemModified: itemModified)
     }
 
-    private static func highlightKey(
+    /// How a highlight is named in the deletion ledger: its set, verse,
+    /// span, style and colour. Public because the phone has to delete and
+    /// look up by the same key — a union of two devices' highlights that
+    /// disagreed about the key would resurrect deletions (ios-56).
+    public static func highlightKey(
         setID: String,
         reference: Int,
         start: Int,

@@ -102,34 +102,20 @@ struct LampModuleCompiledSchemaTests {
         """#,
     ]
 
-    /// Kinds whose declaration describes a file a compiler does not write,
-    /// and which are therefore held to it by whoever does write it.
-    private static let pinnedByTheirExporter: Set<LampModuleKind> = [.notes]
-
     @Test(arguments: LampModuleKind.allCases)
     func theDeclaredShapeIsTheCompiledShape(kind: LampModuleKind) throws {
         let declared = LampModuleCompiledSchema.tables(for: kind)
         guard let source = Self.minimalSources[kind] else {
-            // A kind this suite cannot compile must either declare nothing,
-            // or be pinned somewhere that can. Notes are the second: their
-            // declaration is the *exported* shape, written by
-            // `LampLibrary.createPersonalNotesDatabase` rather than by a
-            // compiler, so `LampNoteMediaTests.theExportedNotesShapeMatchesTheDeclaration`
-            // in LampCoreTests holds it. Naming the exception here keeps it
-            // from becoming a hole: a kind pinned elsewhere still has to
-            // declare something, and anything else still has to declare
-            // nothing.
-            if Self.pinnedByTheirExporter.contains(kind) {
-                #expect(
-                    !declared.isEmpty,
-                    "\(kind.rawValue) is pinned by its exporter but declares nothing"
-                )
-            } else {
-                #expect(
-                    declared.isEmpty,
-                    "\(kind.rawValue) declares tables with no fixture to check them against"
-                )
-            }
+            // notes and devotional reconcile through typed records rather
+            // than copying columns, so they declare nothing here — and must
+            // not start declaring something without a fixture to hold it to.
+            // What the reader's *own* notes and writings are written as is a
+            // different file and a different declaration,
+            // `exportedTables(for:)`, pinned by exporting one.
+            #expect(
+                declared.isEmpty,
+                "\(kind.rawValue) declares tables with no fixture to check them against"
+            )
             return
         }
         #expect(!declared.isEmpty, "\(kind.rawValue) has a fixture but declares no tables")
