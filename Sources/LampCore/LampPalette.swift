@@ -56,8 +56,21 @@ public enum LampColorRole: String, CaseIterable, Sendable {
     }
 
     /// How strongly a find match's background is drawn, behind text that
-    /// keeps its own colour.
+    /// keeps its own colour. In light appearance only: see
+    /// `findMatchDarkGround`.
     public static let findMatchOpacity = 0.4
+
+    /// A find match's ground in dark appearance: solid deep amber, under
+    /// cream words (`findMatchDarkText`). The yellow's own wash goes muddy
+    /// olive on charcoal; a light gold block with dark text glares, and a
+    /// list of matches looks stamped; and yellow words on amber, though
+    /// 6.5:1, read as dimmer than the text round them. Solid rather than a
+    /// wash, so a selected row's fill can't show through.
+    public static let findMatchDarkGround = LampRGB(0x4A3A0E)
+
+    /// The words on `findMatchDarkGround`: cream, 9.9:1 against it (APCA Lc
+    /// 91), as readable as body text on the dark window.
+    public static let findMatchDarkText = LampRGB(0xFFF2C7)
 }
 
 /// A colour as it is in light and in dark appearance.
