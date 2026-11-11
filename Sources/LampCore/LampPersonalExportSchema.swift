@@ -52,6 +52,15 @@ public enum LampPersonalExportSchema {
             ),
         ]
 
+        // **The whole library's highlights in one file, which is *not* what
+        // syncs.** `exportPersonalModule(.highlights)` writes this, for a
+        // manual export or a backup. A sync publishes one set per file and
+        // compiles it (`exportHighlights` on the Mac, through
+        // `LampModuleCompiler`), so that file is the compiled shape —
+        // `LampModuleCompiledSchema.tables(for: .highlights)` — with
+        // `highlight_meta` and no `set_id`, the set's identity being the
+        // module's. Notes and writings have no such split: their sync file
+        // is this file. Spotted by ios-56 when its pin would not fit.
         case .highlights: [
             LampModuleTableShape(
                 table: "highlight_sets",
