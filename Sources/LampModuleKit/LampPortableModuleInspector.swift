@@ -14,24 +14,6 @@ public struct LampPortableModuleDescriptor: Equatable, Sendable {
 /// Reads module identity from the SQLite payload. Archive filenames are storage
 /// keys on Mac and must never be treated as module IDs by another client.
 public enum LampPortableModuleInspector {
-    /// Source tables used by the iOS archive installer for this module kind.
-    /// The installer stages only these tables before its local transaction.
-    public static func archiveImportSourceTables(for kind: LampModuleKind) -> [String] {
-        switch kind {
-        case .dictionary: ["dictionary_entries", "module_meta", "module_metadata"]
-        case .commentary: ["series_meta", "commentary_books", "commentary_units"]
-        case .book: ["book_modules", "book_sections"]
-        case .plan: ["plan_meta", "days", "plans", "plan_days"]
-        case .highlights: ["highlight_meta", "highlight_sets", "highlights", "highlight_themes"]
-        case .quiz: ["quiz_modules", "quiz_questions"]
-        case .translation: [
-            "translations", "translation_books", "translation_verses",
-            "translation_headings", "translation_meta", "books", "verses", "headings"
-        ]
-        case .notes, .devotional: []
-        }
-    }
-
     /// Columns a book module must carry for an archive import to reconcile.
     ///
     /// **This is the gate, not the copy list.** `inspect` refuses a module
