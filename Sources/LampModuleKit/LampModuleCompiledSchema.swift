@@ -9,9 +9,10 @@ public struct LampModuleTableShape: Sendable, Equatable {
     public let columns: [String]
 
     /// Columns added after the format was in use, which a module built by an
-    /// older Lamp will not have. Copy one only where the source carries it —
-    /// `LampPortableModuleInspector.bookModuleColumnsToCopy` is that for
-    /// books — and never require one, or an older module stops importing.
+    /// older Lamp will not have. Copy one only where the source carries it
+    /// and the destination can hold it, and never require one, or an older
+    /// module stops importing. The iPhone's `copyCompiled` does that for
+    /// every kind declared here.
     public let mayBeAbsent: [String]
 
     /// Columns the compiler leaves NULL when the author supplies only what

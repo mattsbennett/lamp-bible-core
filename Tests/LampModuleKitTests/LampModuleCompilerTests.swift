@@ -640,28 +640,17 @@ struct LampModuleCompilerTests {
         }
     }
 
-    /// A column the compiler added after a client was written is copied when
-    /// both sides have it, and skipped — rather than failing — when either
-    /// does not. An older module has no `genre`; a client that has not
-    /// migrated has nowhere to put one.
-    @Test func optionalBookColumnsAreCopiedOnlyWhereBothSidesHaveThem() {
-        let required = Set(LampPortableModuleInspector.bookModuleColumns)
-        let withGenre = required.union(["genre"])
-
-        #expect(LampPortableModuleInspector.bookModuleColumnsToCopy(
-            source: withGenre, destination: withGenre
-        ).contains("genre"))
-        #expect(!LampPortableModuleInspector.bookModuleColumnsToCopy(
-            source: required, destination: withGenre
-        ).contains("genre"))
-        #expect(!LampPortableModuleInspector.bookModuleColumnsToCopy(
-            source: withGenre, destination: required
-        ).contains("genre"))
-        // The required columns are copied whatever the optional ones do, and
-        // in the declared order, so the INSERT and the SELECT line up.
-        #expect(LampPortableModuleInspector.bookModuleColumnsToCopy(
-            source: withGenre, destination: withGenre
-        ).prefix(required.count) == LampPortableModuleInspector.bookModuleColumns.prefix(required.count))
+    /// The two book lists say different things, and a client must not read
+    /// one as the other: the gate list is what a module must carry, so a
+    /// column added later belongs in the optional list, and putting it in
+    /// the gate would refuse every book built before it.
+    @Test func theBookGateAndItsLaterColumnsAreSeparate() {
+        let gate = Set(LampPortableModuleInspector.bookModuleColumns)
+        let later = Set(LampPortableModuleInspector.bookModuleOptionalColumns)
+        #expect(gate.isDisjoint(with: later))
+        #expect(later.contains("genre"))
+        #expect(!gate.contains("genre"))
+        #expect(LampPortableModuleInspector.bookSectionOptionalColumns.isEmpty)
     }
 
     /// A sense keeps a field the compiler has no name for. It used to be

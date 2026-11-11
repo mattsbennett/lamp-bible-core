@@ -19,8 +19,10 @@ public enum LampPortableModuleInspector {
     /// **This is the gate, not the copy list.** `inspect` refuses a module
     /// missing any of these, so a column added to `BookModuleCompiler` must
     /// never be added here: a module built before that column existed would
-    /// stop importing. Declare a new one in `bookModuleOptionalColumns` and
-    /// copy through `bookModuleColumnsToCopy(source:destination:)`.
+    /// stop importing. Declare a new one in `bookModuleOptionalColumns`, and
+    /// copy it the way `LampModuleCompiledSchema` describes — the columns the
+    /// source carries and the destination can hold, asked of both schemas
+    /// rather than typed.
     ///
     /// The two jobs were one list until 2026-11-11, which is how `genre`
     /// came to be written by the compiler and dropped by the iPhone: adding
@@ -39,25 +41,6 @@ public enum LampPortableModuleInspector {
     /// `bookTableColumnsAreDeclared`, so a column added there and declared
     /// nowhere fails core's suite rather than going missing on one app.
     public static let bookModuleOptionalColumns = ["genre"]
-
-    /// The columns to copy out of a source `book_modules`: everything
-    /// required, plus the optional ones the source actually carries and the
-    /// destination can hold. A client that types its own list drops whatever
-    /// was added after it was typed, silently; this asks both schemas
-    /// instead.
-    ///
-    /// Pass the column names of each table, as `PRAGMA table_info` reports
-    /// them. An optional column missing from the destination is skipped
-    /// rather than failing, so a client may adopt a new column when it has
-    /// somewhere to put it.
-    public static func bookModuleColumnsToCopy(
-        source: Set<String>,
-        destination: Set<String>
-    ) -> [String] {
-        bookModuleColumns + bookModuleOptionalColumns.filter {
-            source.contains($0) && destination.contains($0)
-        }
-    }
 
     public static let bookSectionColumns = [
         "id", "module_id", "section_id", "parent_id", "section_type",
