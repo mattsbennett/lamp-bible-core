@@ -4585,8 +4585,19 @@ public actor LampLibrary {
                         id, name, description, translation_id, created, last_modified
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
-                        name = excluded.name,
-                        description = excluded.description,
+                        -- The newer side's name, not the incoming one.
+                        -- Taking incoming always meant renaming a set here
+                        -- and then syncing from a device that never touched
+                        -- the name put the old name back — and this Mac then
+                        -- published it, so the rename was gone on both
+                        -- (ios-56's scenario, 2026-11-11). The phone already
+                        -- gives names to whichever copy changed last.
+                        name = CASE
+                            WHEN excluded.last_modified > highlight_sets.last_modified
+                            THEN excluded.name ELSE highlight_sets.name END,
+                        description = CASE
+                            WHEN excluded.last_modified > highlight_sets.last_modified
+                            THEN excluded.description ELSE highlight_sets.description END,
                         translation_id = excluded.translation_id,
                         last_modified = MAX(highlight_sets.last_modified, excluded.last_modified)
                     """, arguments: [

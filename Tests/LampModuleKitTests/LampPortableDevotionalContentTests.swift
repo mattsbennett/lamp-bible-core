@@ -272,4 +272,59 @@ struct LampPortableDevotionalContentTests {
         #expect(blocks.first?["type"] as? String == "heading")
         #expect(LampPortableDevotionalContent.markdown(from: revised) == edited)
     }
+
+    /// What a note's media annotation comes out as, exactly.
+    ///
+    /// Notes carry media inline — the annotation marks a span of the
+    /// sentence — so the link lands **mid-paragraph**, not on a line of its
+    /// own the way the editor writes a writing's picture. Both apps' readers
+    /// have to draw an inline image; a renderer that only draws a link
+    /// occupying a whole line shows this as plain caption text instead
+    /// (ios-56 asked, and it decides their renderer).
+    @Test func aNotesMediaAnnotationIsAnInlineImage() {
+        let note: [String: Any] = [
+            "text": "He wept at the tomb, and then called him out.",
+            "annotations": [
+                [
+                    "type": "media", "start": 15, "end": 19,
+                    "data": ["mediaId": "TOMB", "mediaType": "image"],
+                ] as [String: Any],
+            ],
+        ]
+        #expect(
+            LampPortableDevotionalContent.annotatedText(note)
+                == "He wept at the ![tomb](media/TOMB), and then called him out."
+        )
+
+        // Audio is a plain link rather than an image.
+        let audio: [String: Any] = [
+            "text": "Hear it read.",
+            "annotations": [
+                [
+                    "type": "media", "start": 0, "end": 4,
+                    "data": ["mediaId": "READ", "mediaType": "audio"],
+                ] as [String: Any],
+            ],
+        ]
+        #expect(
+            LampPortableDevotionalContent.annotatedText(audio)
+                == "[Hear](media/READ) it read."
+        )
+
+        // An annotation spanning the whole text does give a line of its own,
+        // which is the only way a note's picture arrives block-like.
+        let whole: [String: Any] = [
+            "text": "The empty tomb",
+            "annotations": [
+                [
+                    "type": "media", "start": 0, "end": 14,
+                    "data": ["mediaId": "TOMB", "mediaType": "image"],
+                ] as [String: Any],
+            ],
+        ]
+        #expect(
+            LampPortableDevotionalContent.annotatedText(whole)
+                == "![The empty tomb](media/TOMB)"
+        )
+    }
 }

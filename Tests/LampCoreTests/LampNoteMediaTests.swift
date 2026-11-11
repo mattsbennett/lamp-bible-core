@@ -433,4 +433,49 @@ struct LampNoteMediaTests {
         )
         #expect(note.mediaJSON == mediaJSON, "silence is not an empty list")
     }
+
+    /// Renaming a highlight set here is not undone by a device that never
+    /// touched the name.
+    ///
+    /// The upsert took the incoming name always, so a phone syncing a set
+    /// it had only added a highlight to put the old name back — and this Mac
+    /// then published it, losing the rename on both devices (ios-56's
+    /// scenario). The newer side's name wins now, as the phone already does.
+    @Test func theNewerSidesSetNameWins() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        // A set of the reader's own: the default set's id holds a colon,
+        // which saveHighlightSet refuses.
+        let created = try await library.saveHighlightSet(LampHighlightSet(
+            id: "promises", name: "Promises", translationID: "KJV",
+            lastModified: Date(timeIntervalSince1970: 1_000)
+        ))
+        _ = try await library.saveVerseHighlight(
+            translationID: "KJV", reference: 43_003_016,
+            startOffset: 0, endOffset: 5, color: "#ffcc00", setID: created.id
+        )
+
+        // A copy from elsewhere, older, carrying the name it always had.
+        let document = try await library.personalHighlightsDocument(
+            translationID: "KJV", moduleID: "promises",
+            name: "Promises", setID: created.id
+        )
+        let url = root.appendingPathComponent(document.suggestedJSONFilename)
+        try document.jsonData.write(to: url)
+
+        // Renamed here afterwards, so this is the later edit.
+        _ = try await library.saveHighlightSet(LampHighlightSet(
+            id: created.id, name: "Promises of God", translationID: "KJV",
+            created: created.created, lastModified: Date(timeIntervalSince1970: 9_000)
+        ))
+
+        _ = try await library.importPersonalStudyData(from: url, forSync: true)
+
+        let after = try #require(
+            try await library.highlightSets().first { $0.id == created.id }
+        )
+        #expect(after.name == "Promises of God", "the rename stands")
+    }
 }
