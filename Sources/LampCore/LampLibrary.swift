@@ -4276,13 +4276,22 @@ public actor LampLibrary {
                     ? "last_modified" : "NULL AS last_modified"
                 let module = columns.contains("module_id")
                     ? "module_id" : "'\(moduleID.replacingOccurrences(of: "'", with: "''"))' AS module_id"
+                // A file written before notes carried media has no column,
+                // which is not the same as an empty list: see
+                // `mergeImportedNotes`, which keeps what is here in that
+                // case and takes what arrives in this one.
+                let media = columns.contains("media_json")
+                    ? "media_json" : "NULL AS media_json"
                 let notes = try Row.fetchAll(db, sql: """
                     SELECT id, \(module), verse_id, \(title), content,
-                           \(references), \(footnotes), \(modified)
+                           \(references), \(footnotes), \(media), \(modified)
                     FROM note_entries
                     ORDER BY verse_id, id
                     """).map(makeVerseNote)
-                return try mergeImportedNotes(notes, moduleID: moduleID, forSync: forSync)
+                let carriesMedia = columns.contains("media_json")
+                return try mergeImportedNotes(
+                    notes, moduleID: moduleID, forSync: forSync, carriesMedia: carriesMedia
+                )
             }
             if declaredKind == .highlights
                 || (tables.contains("highlights")
@@ -4354,10 +4363,19 @@ public actor LampLibrary {
         }
     }
 
+    /// Takes in notes from a file.
+    ///
+    /// `carriesMedia` is whether the file had a media column at all, which
+    /// is not the same as its being empty. A file written before notes had
+    /// media says nothing about pictures, so this device keeps its own; a
+    /// file that has the column is believed, including when it says the note
+    /// has none, because that is how a picture removed on one device is
+    /// removed on the other (ios-56's rule).
     private func mergeImportedNotes(
         _ notes: [LampVerseNote],
         moduleID: String,
-        forSync: Bool
+        forSync: Bool,
+        carriesMedia: Bool = false
     ) throws -> LampStudyImportResult {
         let queue = try openUserDatabase()
         let importTimestamp = Int(Date().timeIntervalSince1970)
@@ -4406,6 +4424,7 @@ public actor LampLibrary {
                     let existingContent: String? = existing?["content"]
                     let existingReferences: String? = existing?["verse_refs_json"]
                     let existingFootnotes: String? = existing?["footnotes_json"]
+                    let existingMedia: String? = existing?["media_json"]
                     let decision = LampSyncMerge.decide(
                         localModified: existingTimestamp,
                         incomingModified: incomingTimestamp,
@@ -4417,6 +4436,15 @@ public actor LampLibrary {
                             && LampSyncJSONComparison.sameValue(
                                 existingFootnotes, footnotesJSON
                             )
+                            // A picture is part of the note: attaching or
+                            // removing one is an edit, and two notes whose
+                            // text agrees but whose pictures do not have not
+                            // got the same content. Only where the file can
+                            // speak about media at all — otherwise it is
+                            // silence, not disagreement.
+                            && (!carriesMedia || LampSyncJSONComparison.sameValue(
+                                existingMedia, note.mediaJSON
+                            ))
                     )
                     let outcome = LampSyncMerge.importOutcome(decision, forSync: forSync)
                     // Set aside rather than thrown, for the same reason a
@@ -4455,13 +4483,14 @@ public actor LampLibrary {
                         continue
                     }
                 }
-                // The media carried forward, not dropped. This is INSERT OR
-                // REPLACE, so a column left out of it is a column emptied —
-                // and a study document has no media of its own to put there,
-                // so an import or a sync of a note would have taken the
-                // attachments off it. They belong to this device until the
-                // document format can carry them.
-                let keptMedia: String? = existing?["media_json"]
+                // This is INSERT OR REPLACE, so a column left out of it is a
+                // column emptied. What goes in depends on whether the file
+                // had anything to say: one that carries media is taken at
+                // its word, one that predates the column leaves this
+                // device's own alone.
+                let keptMedia: String? = carriesMedia
+                    ? note.mediaJSON
+                    : existing?["media_json"]
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO personal_notes (
                         id, module_id, verse_id, book, chapter, verse,
@@ -5892,7 +5921,7 @@ public actor LampLibrary {
         return try queue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, module_id, verse_id, title, content,
-                       verse_refs_json, footnotes_json, last_modified
+                       verse_refs_json, footnotes_json, media_json, last_modified
                 FROM personal_notes
                 WHERE module_id = 'personal-notes'
                 ORDER BY book, chapter, verse, last_modified, id
@@ -6037,7 +6066,7 @@ public actor LampLibrary {
                     book INTEGER NOT NULL, chapter INTEGER NOT NULL, verse INTEGER NOT NULL,
                     title TEXT, content TEXT NOT NULL, verse_refs_json TEXT,
                     last_modified INTEGER, footnotes_json TEXT, search_text TEXT,
-                    record_change_tag TEXT
+                    record_change_tag TEXT, media_json TEXT
                 );
                 CREATE INDEX idx_note_module ON note_entries(module_id);
                 CREATE INDEX idx_note_verse ON note_entries(verse_id);
@@ -6063,8 +6092,8 @@ public actor LampLibrary {
                     INSERT INTO note_entries (
                         id, module_id, verse_id, book, chapter, verse, title, content,
                         verse_refs_json, last_modified, footnotes_json, search_text,
-                        record_change_tag
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                        record_change_tag, media_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
                     """, arguments: [
                         note.id,
                         LampPersonalModule.notes.id,
@@ -6078,6 +6107,13 @@ public actor LampLibrary {
                         Int(note.lastModified.timeIntervalSince1970),
                         try jsonFragmentString(footnotes),
                         [note.title, note.content].compactMap { $0 }.joined(separator: " "),
+                        // Without this the file that syncs says a note has a
+                        // picture — its text holds `media/<id>` — and nothing
+                        // says which file that is. The other device then had
+                        // no way to ask for it, so a note's pictures only
+                        // ever showed on the device they were attached on
+                        // (found by ios-56).
+                        note.mediaJSON,
                     ])
             }
         }

@@ -260,7 +260,32 @@ public enum LampModuleCompiledSchema {
             ),
         ]
 
-        case .notes, .devotional: []
+        // **The exported shape, not a copied one.** Notes are not taken in
+        // column by column — both apps decode typed records — so this is not
+        // here for a copy to be held to. It is here because two writers
+        // produce this file, core's `createPersonalNotesDatabase` and the
+        // phone's own exporter, and a column one writes and the other does
+        // not is a note's pictures arriving on one device and not the other.
+        // Each side pins its exporter against this (ios-56's shape).
+        case .notes: [
+            LampModuleTableShape(
+                table: "note_entries",
+                columns: [
+                    "id", "module_id", "verse_id", "book", "chapter", "verse",
+                    "title", "content", "verse_refs_json", "last_modified",
+                    "footnotes_json", "search_text", "record_change_tag", "media_json",
+                ],
+                // A file written before notes carried media has no column,
+                // and that is not an empty list: the reader keeps its own.
+                mayBeAbsent: ["media_json"],
+                mayBeNull: [
+                    "title", "verse_refs_json", "footnotes_json",
+                    "record_change_tag", "media_json",
+                ]
+            ),
+        ]
+
+        case .devotional: []
         }
     }
 }

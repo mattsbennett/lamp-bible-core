@@ -377,4 +377,100 @@ struct LampNoteMediaTests {
         // Not a path at all: media is three components under its directory.
         #expect(LampSyncFolderLayout.kind(of: "NoteMedia/notes/x.png") == nil)
     }
+
+    /// The notes file that syncs carries media, and matches what core
+    /// declares for it.
+    ///
+    /// Two writers produce this file — this one and the phone's exporter —
+    /// so a column one writes and the other does not is a note's pictures
+    /// arriving on one device and not the other. ios-56 pins the phone's
+    /// against the same declaration.
+    @Test func theExportedNotesShapeMatchesTheDeclaration() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "![](media/8A1F) He wept.", mediaJSON: mediaJSON
+        )
+
+        let exported = root.appendingPathComponent("notes.lamp")
+        try await library.exportPersonalModule(.notes, format: .lamp, to: exported)
+
+        let body = try (Data(contentsOf: exported) as NSData).decompressed(using: .zlib) as Data
+        let databaseURL = root.appendingPathComponent("notes.sqlite")
+        try body.write(to: databaseURL)
+        let queue = try DatabaseQueue(path: databaseURL.path)
+        let (columns, media) = try await queue.read { db in
+            let names = try Row.fetchAll(db, sql: "PRAGMA table_info(note_entries)")
+                .compactMap { $0["name"] as String? }
+            let stored = try String.fetchOne(
+                db, sql: "SELECT media_json FROM note_entries WHERE verse_id = ?",
+                arguments: [43_011_035]
+            )
+            return (Set(names), stored)
+        }
+        try queue.close()
+
+        let shape = try #require(
+            LampModuleCompiledSchema.tables(for: .notes).first { $0.table == "note_entries" }
+        )
+        #expect(columns == Set(shape.columns), "the file written is the shape declared")
+        #expect(media == mediaJSON, "and the note's pictures travel in it")
+    }
+
+    /// A note's picture reaches a second device.
+    ///
+    /// The file carries the media list now, so the receiving device knows
+    /// the note has a picture and which file it is. Before, the text arrived
+    /// holding `media/<id>` and nothing said what that was, so the download
+    /// — which asks only about notes that have media here — asked for
+    /// nothing and the picture stayed on the device it was attached on.
+    @Test func aNotesMediaReachesADeviceThatNeverHadIt() async throws {
+        let here = try scratch()
+        let there = try scratch()
+        defer {
+            try? FileManager.default.removeItem(at: here)
+            try? FileManager.default.removeItem(at: there)
+        }
+        let source = LampLibrary(rootURL: here)
+        let target = LampLibrary(rootURL: there)
+
+        _ = try await source.setPersonalVerseNote(
+            reference: 43_011_035, content: "![](media/8A1F) He wept.", mediaJSON: mediaJSON
+        )
+        let exported = here.appendingPathComponent("notes.lamp")
+        try await source.exportPersonalModule(.notes, format: .lamp, to: exported)
+        _ = try await target.importPersonalStudyData(from: exported, forSync: true)
+
+        let arrived = try #require(
+            try await target.verseNotes(reference: 43_011_035)
+                .first { $0.moduleID == "personal-notes" }
+        )
+        #expect(arrived.mediaJSON == mediaJSON, "the other device knows which file it wants")
+        // Which is what lets it ask for the file at all.
+        #expect(try await target.personalNotesWithMedia().count == 1)
+    }
+
+    /// A file that predates the column says nothing about pictures, which is
+    /// not the same as saying there are none: this device keeps its own.
+    @Test func aFileWithoutTheColumnLeavesLocalMediaAlone() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "Mine.", mediaJSON: mediaJSON
+        )
+
+        // A document, which carries no media column at all.
+        let document = try await library.personalNotesDocument(bookNumber: 43)
+        let documentURL = root.appendingPathComponent(document.suggestedJSONFilename)
+        try document.jsonData.write(to: documentURL)
+        _ = try await library.importPersonalStudyData(from: documentURL, forSync: true)
+
+        let note = try #require(
+            try await library.verseNotes(reference: 43_011_035)
+                .first { $0.moduleID == "personal-notes" }
+        )
+        #expect(note.mediaJSON == mediaJSON, "silence is not an empty list")
+    }
 }
