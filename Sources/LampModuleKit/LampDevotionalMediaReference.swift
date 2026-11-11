@@ -86,3 +86,21 @@ public struct LampMediaReference: Codable, Equatable, Sendable, Identifiable {
 /// media. Kept so the Mac, the phone and the archive readers need no change
 /// to go on using it.
 public typealias LampDevotionalMediaReference = LampMediaReference
+
+public extension LampMediaReference {
+    /// The references a stored media list holds, entry by entry.
+    ///
+    /// One entry this Lamp cannot read — a media type a later one knows —
+    /// costs its own picture and no others. Decoding the array in one go
+    /// made a single bad entry blank the lot, which is a fault we have
+    /// already shipped once.
+    static func list(fromJSON json: String?) -> [LampMediaReference] {
+        guard let json, let data = json.data(using: .utf8),
+              let entries = (try? JSONSerialization.jsonObject(with: data)) as? [Any]
+        else { return [] }
+        return entries.compactMap { entry in
+            guard let body = try? JSONSerialization.data(withJSONObject: entry) else { return nil }
+            return try? JSONDecoder().decode(LampMediaReference.self, from: body)
+        }
+    }
+}

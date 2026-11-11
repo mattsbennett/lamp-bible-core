@@ -3527,6 +3527,38 @@ public actor LampLibrary {
         String(reference)
     }
 
+    /// Which folder a note's media sits in, personal or from a module.
+    ///
+    /// The reader's own notes are one per verse and keyed by it. A module's
+    /// pictures belong to the module — it declares them once at its root and
+    /// its notes refer to them by id — so they are keyed by the module, as a
+    /// book's are. The two cannot collide: a verse is a number and a module
+    /// id is not, and they are different lengths of path besides.
+    public nonisolated static func noteMediaOwnerID(of note: LampVerseNote) -> String {
+        note.moduleID == LampPersonalModule.notes.id
+            ? noteMediaOwnerID(note.reference)
+            : note.moduleID
+    }
+
+    /// Where a note's picture is, for a `media/<id>` link in its text.
+    ///
+    /// Nil when the note names no such media — a link to an id the note does
+    /// not carry resolves to nothing rather than to an invented filename.
+    public nonisolated static func noteMediaURL(
+        for link: URL, in note: LampVerseNote, rootURL: URL
+    ) -> URL? {
+        let references = LampMediaReference.list(fromJSON: note.mediaJSON)
+        guard !references.isEmpty else { return nil }
+        let resolved = LampPortableDevotionalMedia.libraryURL(
+            for: link,
+            rootURL: rootURL,
+            devotionalID: noteMediaOwnerID(of: note),
+            references: references,
+            scope: .note
+        )
+        return resolved == link ? nil : resolved
+    }
+
     /// Where this library keeps a verse note's media.
     public nonisolated static func noteMediaFolderURL(
         rootURL: URL, reference: Int

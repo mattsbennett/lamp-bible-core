@@ -478,4 +478,56 @@ struct LampNoteMediaTests {
         )
         #expect(after.name == "Promises of God", "the rename stands")
     }
+
+    /// Where a picture is depends on whose note it is.
+    ///
+    /// The reader's own notes are one per verse and keyed by it; a module's
+    /// pictures belong to the module, which declares them once and whose
+    /// notes point at them by id.
+    @Test func aNotesPictureIsFoundWhereItsOwnerKeepsIt() {
+        let root = URL(fileURLWithPath: "/tmp/library")
+        let link = URL(string: "media/8A1F")!
+
+        let mine = LampVerseNote(
+            id: "personal-notes:43011035", reference: 43_011_035,
+            content: "![](media/8A1F)", mediaJSON: mediaJSON
+        )
+        #expect(LampLibrary.noteMediaOwnerID(of: mine) == "43011035")
+        #expect(
+            LampLibrary.noteMediaURL(for: link, in: mine, rootURL: root)?.path
+                == "/tmp/library/Media/Notes/43011035/tomb.png"
+        )
+
+        let theirs = LampVerseNote(
+            id: "tske:43011035", moduleID: "tske", reference: 43_011_035,
+            content: "![](media/8A1F)", mediaJSON: mediaJSON
+        )
+        #expect(LampLibrary.noteMediaOwnerID(of: theirs) == "tske")
+        #expect(
+            LampLibrary.noteMediaURL(for: link, in: theirs, rootURL: root)?.path
+                == "/tmp/library/Media/Notes/tske/tomb.png"
+        )
+
+        // A link to something the note does not carry resolves to nothing
+        // rather than to an invented filename.
+        #expect(LampLibrary.noteMediaURL(
+            for: URL(string: "media/NOPE")!, in: mine, rootURL: root
+        ) == nil)
+        let bare = LampVerseNote(reference: 43_011_035, content: "No pictures.")
+        #expect(LampLibrary.noteMediaURL(for: link, in: bare, rootURL: root) == nil)
+    }
+
+    /// One unreadable entry costs its own picture and no others — the fault
+    /// we shipped once already, now in the shared decoder.
+    @Test func oneBadMediaEntryDoesNotBlankTheRest() {
+        let mixed = """
+            [{"id":"A","type":"image","filename":"a.png","mimeType":"image/png"},
+             {"id":"B","type":"hologram","filename":"b.xyz","mimeType":"x/y"},
+             {"id":"C","type":"image","filename":"c.png","mimeType":"image/png"}]
+            """
+        let list = LampMediaReference.list(fromJSON: mixed)
+        #expect(list.map(\.id) == ["A", "C"])
+        #expect(LampMediaReference.list(fromJSON: nil).isEmpty)
+        #expect(LampMediaReference.list(fromJSON: "not json").isEmpty)
+    }
 }
