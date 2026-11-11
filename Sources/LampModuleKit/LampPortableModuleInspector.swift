@@ -32,8 +32,18 @@ public enum LampPortableModuleInspector {
         }
     }
 
-    /// Columns copied verbatim by the iOS book importer. Keep inspection and
-    /// installation tied to one schema contract.
+    /// Columns a book module must carry for an archive import to reconcile.
+    ///
+    /// **This is the gate, not the copy list.** `inspect` refuses a module
+    /// missing any of these, so a column added to `BookModuleCompiler` must
+    /// never be added here: a module built before that column existed would
+    /// stop importing. Declare a new one in `bookModuleOptionalColumns` and
+    /// copy through `bookModuleColumnsToCopy(source:destination:)`.
+    ///
+    /// The two jobs were one list until 2026-11-11, which is how `genre`
+    /// came to be written by the compiler and dropped by the iPhone: adding
+    /// it to the list a client copies would have made this gate reject every
+    /// older book.
     public static let bookModuleColumns = [
         "id", "title", "subtitle", "description", "author", "editor",
         "publisher", "year", "edition", "isbn", "language",
@@ -42,11 +52,40 @@ public enum LampPortableModuleInspector {
         "created", "last_modified", "footnotes_json", "media_json"
     ]
 
+    /// Columns `BookModuleCompiler` writes that an older book module may not
+    /// have. Pinned to the compiler's own table by
+    /// `bookTableColumnsAreDeclared`, so a column added there and declared
+    /// nowhere fails core's suite rather than going missing on one app.
+    public static let bookModuleOptionalColumns = ["genre"]
+
+    /// The columns to copy out of a source `book_modules`: everything
+    /// required, plus the optional ones the source actually carries and the
+    /// destination can hold. A client that types its own list drops whatever
+    /// was added after it was typed, silently; this asks both schemas
+    /// instead.
+    ///
+    /// Pass the column names of each table, as `PRAGMA table_info` reports
+    /// them. An optional column missing from the destination is skipped
+    /// rather than failing, so a client may adopt a new column when it has
+    /// somewhere to put it.
+    public static func bookModuleColumnsToCopy(
+        source: Set<String>,
+        destination: Set<String>
+    ) -> [String] {
+        bookModuleColumns + bookModuleOptionalColumns.filter {
+            source.contains($0) && destination.contains($0)
+        }
+    }
+
     public static let bookSectionColumns = [
         "id", "module_id", "section_id", "parent_id", "section_type",
         "number", "title", "subtitle", "depth", "order_index",
         "key_scriptures_json", "content_json", "search_text"
     ]
+
+    /// As `bookModuleOptionalColumns`, for `book_sections`. Empty: every
+    /// column the compiler writes there is required.
+    public static let bookSectionOptionalColumns: [String] = []
 
     public enum InspectionError: Error, LocalizedError, Equatable {
         case invalidArchive

@@ -592,6 +592,77 @@ struct LampModuleCompilerTests {
             #expect(actual == "wrong_name")
         }
     }
+
+    /// Every column the book compiler writes is declared to the clients that
+    /// copy a book module column by column, either as required or as
+    /// optional. The iPhone copies by name, so a column written here and
+    /// declared nowhere reaches the Mac — which installs the file whole —
+    /// and is lost on the phone, which is how `genre` went missing. This
+    /// fails in core's suite instead.
+    @Test func bookTableColumnsAreDeclared() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("declared_book.lamp")
+
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "1.0", "id": "declared_book", "type": "book",
+                "title": "Declared", "language": "en"
+              },
+              "sections": [{
+                "id": "one", "type": "chapter", "title": "One",
+                "content": [{"type": "paragraph", "content": {"text": "Text."}}]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "declared_book.json",
+            destinationURL: outputURL
+        )
+
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            func columns(of table: String) throws -> Set<String> {
+                let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
+                return Set(rows.compactMap { $0["name"] as String? })
+            }
+            let moduleColumns = try columns(of: "book_modules")
+            let sectionColumns = try columns(of: "book_sections")
+            #expect(moduleColumns == Set(
+                LampPortableModuleInspector.bookModuleColumns
+                    + LampPortableModuleInspector.bookModuleOptionalColumns
+            ))
+            #expect(sectionColumns == Set(
+                LampPortableModuleInspector.bookSectionColumns
+                    + LampPortableModuleInspector.bookSectionOptionalColumns
+            ))
+        }
+    }
+
+    /// A column the compiler added after a client was written is copied when
+    /// both sides have it, and skipped — rather than failing — when either
+    /// does not. An older module has no `genre`; a client that has not
+    /// migrated has nowhere to put one.
+    @Test func optionalBookColumnsAreCopiedOnlyWhereBothSidesHaveThem() {
+        let required = Set(LampPortableModuleInspector.bookModuleColumns)
+        let withGenre = required.union(["genre"])
+
+        #expect(LampPortableModuleInspector.bookModuleColumnsToCopy(
+            source: withGenre, destination: withGenre
+        ).contains("genre"))
+        #expect(!LampPortableModuleInspector.bookModuleColumnsToCopy(
+            source: required, destination: withGenre
+        ).contains("genre"))
+        #expect(!LampPortableModuleInspector.bookModuleColumnsToCopy(
+            source: withGenre, destination: required
+        ).contains("genre"))
+        // The required columns are copied whatever the optional ones do, and
+        // in the declared order, so the INSERT and the SELECT line up.
+        #expect(LampPortableModuleInspector.bookModuleColumnsToCopy(
+            source: withGenre, destination: withGenre
+        ).prefix(required.count) == LampPortableModuleInspector.bookModuleColumns.prefix(required.count))
+    }
 }
 
 private struct FixtureDirectory {
