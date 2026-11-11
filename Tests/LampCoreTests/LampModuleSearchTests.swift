@@ -117,6 +117,65 @@ struct LampModuleSearchTests {
         #expect(merged.map(\.id) == ["b3", "a1", "b1", "a2", "b2", "a3", "c1"])
     }
 
+    /// Shared by kind, a page goes evenly to the kinds that matched, each
+    /// kind's first in the order given, room a kind can't use going to the
+    /// rest, and the kinds cut are named. Seven tied commentaries can't keep
+    /// the book's one match off a page of two, as they do in a merged list.
+    @Test func sharedByKindGivesEveryKindItsShareAndNamesTheCut() {
+        func result(_ id: String, _ kind: LampModuleKind, _ module: String, title: String = "Genesis 1:1") -> LampModuleSearchResult {
+            LampModuleSearchResult(id: id, kind: kind, moduleID: module, moduleName: module, title: title, snippet: "of hope")
+        }
+        let results = [
+            result("a1", .commentary, "A"), result("a2", .commentary, "A"), result("a3", .commentary, "A"),
+            result("b1", .commentary, "B"), result("b2", .commentary, "B"), result("b3", .commentary, "B", title: "Hope"),
+            result("b4", .commentary, "B"), result("c1", .book, "C"),
+        ]
+        let query = LampSearchQuery("hope")
+        #expect(LampModuleSearch.ranked(results, by: query, limit: 2).map(\.kind) == [.commentary, .commentary])
+
+        let shared = LampModuleSearch.rankedByKind(results, by: query, limit: 2)
+        #expect(shared.results.map(\.id) == ["b3", "c1"])
+        #expect(shared.moreIn == ["commentary"])
+        let roomy = LampModuleSearch.rankedByKind(results, by: query, limit: 4)
+        #expect(roomy.results.map(\.id) == ["b3", "a1", "b1", "c1"])
+        #expect(roomy.moreIn == ["commentary"])
+
+        // On its own, for results with nothing to rank by: kept in the order
+        // given, the kinds in kindOrder whatever order they came in, a kind
+        // core doesn't know after them.
+        let plain = LampModuleSearch.sharedByKind(
+            ["x:book", "y:translation", "z:mine", "w:translation"], limit: 3, kind: { String($0.split(separator: ":")[1]) }
+        )
+        #expect(plain.results == ["y:translation", "x:book", "z:mine"])
+        #expect(plain.moreIn == ["translation"])
+        #expect(LampModuleSearch.sharedByKind(results, limit: 0, kind: \.kind.rawValue).results.isEmpty)
+    }
+
+    /// Ties between kinds go by kindOrder, whatever order an app searched
+    /// them in, so the same search leads with the same kind everywhere.
+    @Test func tiesBetweenKindsFollowKindOrderNotTheOrderSearched() {
+        func result(_ id: String, _ kind: LampModuleKind) -> LampModuleSearchResult {
+            LampModuleSearchResult(id: id, kind: kind, moduleID: "M", moduleName: "M", title: "Genesis 1:1", snippet: "of hope")
+        }
+        let merged = LampModuleSearch.ranked(
+            [result("d", .dictionary), result("n", .notes), result("t", .translation)],
+            by: LampSearchQuery("hope"), limit: 3
+        )
+        #expect(merged.map(\.id) == ["t", "d", "n"])
+    }
+
+    /// Both orders cover every kind once: one decides ties, one shelves.
+    @Test func kindAndShelfOrdersArePinned() {
+        #expect(LampModuleSearch.kindOrder == [
+            .translation, .dictionary, .commentary, .book, .notes, .devotional, .plan, .quiz, .highlights,
+        ])
+        #expect(LampModuleSearch.shelfOrder == [
+            .translation, .highlights, .notes, .devotional, .commentary, .dictionary, .book, .plan, .quiz,
+        ])
+        #expect(Set(LampModuleSearch.kindOrder) == Set(LampModuleSearch.shelfOrder))
+        #expect(LampModuleSearch.kindOrder.count == 9)
+    }
+
     /// Sections of the books asked about, one named for the words before one
     /// whose text holds them, each keyed to its passage.
     @Test func bookSectionsAreTakenBestFirstFromTheBooksAskedAbout() throws {

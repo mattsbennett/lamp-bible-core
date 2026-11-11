@@ -120,6 +120,51 @@ struct LampLibrarySearchPerformanceTests {
         #expect(Set(hits.map(\.moduleID)) == ["A", "B"])
     }
 
+    /// Searched by kind, the page is shared among every kind that matched,
+    /// each kind's best, a kind's together, and each says whether it found
+    /// more than it kept. A merged list cut short gave the places to
+    /// whichever kinds won its ties.
+    @Test func searchByKindSharesThePageAndSaysWhichKindsHadMore() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"2.1","id":"C","title":"C Commentary","seriesAbbrev":"C","seriesFull":"C Commentary"},
+             "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,"verses":[
+               {"sv":1001001,"commentary":{"text":"Faith and hope."}},
+               {"sv":1001002,"commentary":{"text":"Hope again."}},
+               {"sv":1001003,"commentary":{"text":"Hope at last."}}
+             ]}]}
+            """#, id: "C", in: root, library: library)
+        _ = try await install(#"""
+            {"meta":{"schemaVersion":"1.0","id":"B","type":"book","title":"Book","language":"en"},
+             "sections":[{"id":"one","type":"chapter","title":"Waiting","content":[{"type":"paragraph","content":{"text":"A living hope."}}]}]}
+            """#, id: "B", in: root, library: library)
+        for verse in 1...2 {
+            try await library.saveVerseNote(LampVerseNote(reference: 1_001_000 + verse, content: "I hope so, verse \(verse)."))
+        }
+
+        // A page of three: one each, though the commentary alone could fill it.
+        let groups = try await library.searchModulesByKind(query: "hope", limit: 3)
+        #expect(groups.map(\.kind) == [.commentary, .book, .notes])
+        #expect(groups.map(\.results.count) == [1, 1, 1])
+        #expect(groups.map(\.hasMore) == [true, false, true])
+        #expect(groups.allSatisfy { $0.results.allSatisfy { $0.snippet.contains("<mark>") } }, "snippets cut for the kept")
+
+        // Room a kind can't use goes to the others.
+        let roomy = try await library.searchModulesByKind(query: "hope", limit: 5)
+        #expect(roomy.map(\.results.count) == [2, 1, 2])
+        #expect(roomy.map(\.hasMore) == [true, false, false])
+
+        // One kind gets the whole page.
+        let commentary = try await library.searchModulesByKind(query: "hope", kinds: [.commentary], limit: 10)
+        #expect(commentary.map(\.kind) == [.commentary])
+        #expect(commentary.first?.results.count == 3)
+        #expect(commentary.first?.hasMore == false)
+
+        #expect(try await library.searchModulesByKind(query: "neverpresent").isEmpty)
+    }
+
     /// My Notes and a notes module are each asked for the whole limit: my own
     /// notes holding the word can't keep out the module's note titled with it.
     @Test func myNotesAndANotesModuleEachGetTheWholeLimit() async throws {

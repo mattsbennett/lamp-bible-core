@@ -234,6 +234,22 @@ public struct LampTranslationSearchResult: Identifiable, Equatable, Sendable {
     }
 }
 
+/// One kind's best results from `LampLibrary.searchModulesByKind`, and
+/// whether it found more than it kept.
+public struct LampModuleSearchKindResults: Equatable, Sendable {
+    public var kind: LampModuleKind
+    public var results: [LampModuleSearchResult]
+    /// It found more than `results` holds. Not how many: the count stops at
+    /// the search's limit.
+    public var hasMore: Bool
+
+    public init(kind: LampModuleKind, results: [LampModuleSearchResult], hasMore: Bool) {
+        self.kind = kind
+        self.results = results
+        self.hasMore = hasMore
+    }
+}
+
 public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
     public let id: String
     public let kind: LampModuleKind

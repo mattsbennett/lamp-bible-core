@@ -2547,6 +2547,78 @@ public actor LampLibrary {
         devotionalCriteria: LampDevotionalSearchCriteria = .init(),
         limit: Int = 200
     ) throws -> [LampModuleSearchResult] {
+        guard let found = try gatherModuleSearch(
+            query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
+            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: limit
+        ) else { return [] }
+        let merged = LampModuleSearch.ranked(found.results, by: found.query, limit: found.limit)
+        listWordsIfNeeded(found)
+        return try addingSnippets(to: merged, from: found.snippetSources, query: found.query)
+    }
+
+    /// The same search, its places shared among the kinds that matched
+    /// (`LampModuleSearch.rankedByKind`), each kind's best, a kind's
+    /// together: for a list that shows every kind that matched, rather than
+    /// whichever won a merged list's ties. `limit` is the whole page, shared;
+    /// a single kind asked for gets all of it.
+    ///
+    /// `hasMore` says a kind found more than it kept. Each kind is asked for
+    /// the whole limit, so it says so truly; not how many more.
+    public func searchModulesByKind(
+        query: String,
+        kinds: Set<LampModuleKind>? = nil,
+        moduleIDs: Set<String>? = nil,
+        bookRange: ClosedRange<Int>? = nil,
+        strongsKey: String? = nil,
+        highlightColors: Set<String>? = nil,
+        devotionalCriteria: LampDevotionalSearchCriteria = .init(),
+        limit: Int = 200
+    ) throws -> [LampModuleSearchKindResults] {
+        guard let found = try gatherModuleSearch(
+            query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
+            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: limit
+        ) else { return [] }
+        // Each kind's block asked for the whole limit; one more than the
+        // share would show is enough to know there were more, and it was.
+        let share = LampModuleSearch.rankedByKind(found.results, by: found.query, limit: found.limit)
+        listWordsIfNeeded(found)
+        let filled = try addingSnippets(to: share.results, from: found.snippetSources, query: found.query)
+        var groups: [LampModuleSearchKindResults] = []
+        for result in filled {
+            if groups.last?.kind == result.kind {
+                groups[groups.count - 1].results.append(result)
+            } else {
+                groups.append(LampModuleSearchKindResults(
+                    kind: result.kind, results: [result], hasMore: share.moreIn.contains(result.kind.rawValue)
+                ))
+            }
+        }
+        return groups
+    }
+
+    /// After a search for part of a word, the words of the indexes it read
+    /// are listed in the background, so the next such search asks the list
+    /// (`listWordsInBackground`).
+    private func listWordsIfNeeded(_ found: ModuleSearchGathering) {
+        if found.query.hasWithinWordTerms {
+            listWordsInBackground(of: Set(found.snippetSources.values.flatMap(\.values)))
+        }
+    }
+
+    /// Every kind's results for a search, each kind's block asked for the
+    /// whole limit, unmerged and without their snippets: what
+    /// `searchModules` and `searchModulesByKind` each rank their own way.
+    /// Nil when there is nothing to search for.
+    private func gatherModuleSearch(
+        query: String,
+        kinds: Set<LampModuleKind>?,
+        moduleIDs: Set<String>?,
+        bookRange: ClosedRange<Int>?,
+        strongsKey: String?,
+        highlightColors: Set<String>?,
+        devotionalCriteria: LampDevotionalSearchCriteria,
+        limit: Int
+    ) throws -> ModuleSearchGathering? {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let resultLimit = min(max(limit, 1), 500)
         let parsedQuery = LampSearchQuery(trimmedQuery)
@@ -2558,7 +2630,7 @@ public actor LampLibrary {
         let wants: (LampModuleKind) -> Bool = { kinds == nil || kinds?.contains($0) == true }
         // Writing found by its date, tag or category alone, as the facets ask.
         let hasDevotionalCriteria = !devotionalCriteria.isEmpty && wants(.devotional)
-        guard hasTextQuery || normalizedStrongs != nil || hasColorFilter || hasDevotionalCriteria else { return [] }
+        guard hasTextQuery || normalizedStrongs != nil || hasColorFilter || hasDevotionalCriteria else { return nil }
         let installed = try installedModules()
         /// A result's text cut around what the query found, the found words
         /// marked; without a text query, its opening.
@@ -2758,11 +2830,9 @@ public actor LampLibrary {
             )
         }
 
-        let merged = LampModuleSearch.ranked(results, by: parsedQuery, limit: resultLimit)
-        if parsedQuery.hasWithinWordTerms {
-            listWordsInBackground(of: Set(snippetSources.values.flatMap(\.values)))
-        }
-        return try addingSnippets(to: merged, from: snippetSources, query: parsedQuery)
+        return ModuleSearchGathering(
+            results: results, snippetSources: snippetSources, query: parsedQuery, limit: resultLimit
+        )
     }
 
     /// The commentary, book, note and devotional results the merge kept,
@@ -6533,4 +6603,15 @@ private extension String {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+}
+
+/// What a module search found before it is ranked: see
+/// `LampLibrary.gatherModuleSearch`.
+struct ModuleSearchGathering {
+    var results: [LampModuleSearchResult]
+    /// Where each commentary, book, note and devotional result was found,
+    /// to cut its snippet from once a ranking has kept it.
+    var snippetSources: [LampModuleKind: [String: URL]]
+    var query: LampSearchQuery
+    var limit: Int
 }

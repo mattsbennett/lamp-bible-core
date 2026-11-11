@@ -924,8 +924,8 @@ public enum LampModuleSearch {
     /// rank that means the same whichever database a result came from, as an
     /// index's own does not (`mergeRank`).
     ///
-    /// Many results tie on it. Among equals the kinds keep the order they
-    /// were found in, and within a kind the modules take turns, each in its
+    /// Many results tie on it. Among equals the kinds go in `kindOrder`, and
+    /// within a kind the modules take turns, each in its
     /// own order, best first where it ranks its rows: taking them a database
     /// at a time gave every place in a common word's results to whichever was
     /// searched first.
@@ -943,6 +943,94 @@ public enum LampModuleSearch {
             holdingPhrase: \.holdsPhrase,
             from: { ($0.kind.rawValue, $0.moduleID) }
         )
+    }
+
+    /// The order ties between kinds are broken in, and kinds searched and
+    /// shared in: a relevance decision, the same in every app, so the same
+    /// search answers the same on each device. Before it each app broke
+    /// ties in the order it happened to search, and a common word led with
+    /// verses on one and dictionary entries on the other. Not the order
+    /// kinds are shown in: that is `shelfOrder`.
+    public static let kindOrder: [LampModuleKind] = [
+        .translation, .dictionary, .commentary, .book, .notes, .devotional, .plan, .quiz, .highlights,
+    ]
+
+    /// The order kinds are shown in, a shelf each. Scripture leads, because a
+    /// word search in a Bible app is first a search of the Bible; the
+    /// reader's own highlights, notes and writing come next, then reference
+    /// works, then everything else.
+    public static let shelfOrder: [LampModuleKind] = [
+        .translation, .highlights, .notes, .devotional, .commentary, .dictionary, .book, .plan, .quiz,
+    ]
+
+    /// `kindOrder` by the names `ranked`'s and `sharedByKind`'s callers give.
+    private static let kindOrderNames = kindOrder.map(\.rawValue)
+
+    /// What `sharedByKind` keeps, and the kinds it cut.
+    public struct KindShare<Result> {
+        /// The kept results, a kind's together, the kinds in `kindOrder`
+        /// (any it doesn't name after, in the order found), each kind's in
+        /// the order given. Shown by `shelfOrder`, not this.
+        public let results: [Result]
+        /// The kinds that had more than they kept. Not how many more: a
+        /// caller only learns that there were more if it passed more than
+        /// the limit could keep, so ask each kind for at least `limit + 1`.
+        public let moreIn: Set<String>
+    }
+
+    /// Results already in the order to keep them, at most `limit`, shared as
+    /// evenly among their kinds as the kinds allow (`shares`, as `sharedEvenly`):
+    /// each kind's first, and room a kind can't fill goes to the others. A
+    /// common word's verses can't take every place from commentaries and
+    /// books that matched too. On its own for a search with nothing to rank
+    /// by (a key or a colour alone); `rankedByKind` ranks first.
+    public static func sharedByKind<Result>(
+        _ results: [Result],
+        limit: Int,
+        kind: (Result) -> String
+    ) -> KindShare<Result> {
+        var found: [String] = []
+        var byKind: [String: [Result]] = [:]
+        for result in results {
+            let name = kind(result)
+            if byKind[name] == nil { found.append(name) }
+            byKind[name, default: []].append(result)
+        }
+        let kinds = kindOrderNames.filter { byKind[$0] != nil } + found.filter { !kindOrderNames.contains($0) }
+        let lists = kinds.map { byKind[$0] ?? [] }
+        let kept = shares(of: lists.map(\.count), limit: max(limit, 0))
+        return KindShare(
+            results: zip(lists, kept).flatMap { $0.prefix($1) },
+            moreIn: Set(kinds.indices.filter { lists[$0].count > kept[$0] }.map { kinds[$0] })
+        )
+    }
+
+    /// Results ranked as `ranked` ranks them, then shared among their kinds
+    /// (`sharedByKind`): each kind's best, for a list that shows every kind
+    /// that matched.
+    public static func rankedByKind(
+        _ results: [LampModuleSearchResult],
+        by query: LampSearchQuery,
+        limit: Int
+    ) -> KindShare<LampModuleSearchResult> {
+        sharedByKind(ranked(results, by: query, limit: results.count), limit: limit, kind: \.kind.rawValue)
+    }
+
+    /// The same for an app's own kind of result, taking what `ranked` takes.
+    public static func rankedByKind<Result>(
+        _ results: [Result],
+        by query: LampSearchQuery,
+        limit: Int,
+        named names: (Result) -> [String],
+        shown: (Result) -> [String],
+        holdingPhrase holdsPhrase: (Result) -> Bool = { _ in false },
+        from source: (Result) -> (kind: String, module: String)
+    ) -> KindShare<Result> {
+        let ordered = ranked(
+            results, by: query, limit: results.count,
+            named: names, shown: shown, holdingPhrase: holdsPhrase, from: source
+        )
+        return sharedByKind(ordered, limit: limit, kind: { source($0).kind })
     }
 
     /// How well a result answers the query. Named for it outright, or
@@ -981,8 +1069,11 @@ public enum LampModuleSearch {
         var taken: [String: [String: Int]] = [:]
         let keys = results.map { result -> (rank: Double, kind: Int, turn: Int) in
             let (kind, module) = source(result)
-            let kindOrder = kinds[kind] ?? kinds.count
-            kinds[kind] = kindOrder
+            // The kinds in `kindOrder`; any it doesn't name after them, in
+            // the order found.
+            let kindOrder = kindOrderNames.firstIndex(of: kind)
+                ?? kindOrderNames.count + (kinds[kind] ?? kinds.count)
+            if kindOrderNames.firstIndex(of: kind) == nil, kinds[kind] == nil { kinds[kind] = kinds.count }
             let turn = taken[kind, default: [:]][module, default: 0]
             taken[kind, default: [:]][module] = turn + 1
             let rank = mergeRank(
@@ -1164,3 +1255,5 @@ extension LampModuleSearchResult {
         )
     }
 }
+
+extension LampModuleSearch.KindShare: Sendable where Result: Sendable {}
