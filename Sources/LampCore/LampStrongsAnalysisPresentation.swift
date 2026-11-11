@@ -1535,3 +1535,57 @@ public struct LampStrongsFormReading: Equatable, Sendable {
         }
     }
 }
+
+/// Where the standout book's name goes on the canon strip.
+///
+/// The name is drawn over its own column, but it is usually wider than one
+/// column, so a tall neighbour can end up with the name running through it.
+/// The owner saw it as ἔθνος G1484 in the ESV: Romans is the standout with
+/// 29 occurrences, Acts beside it has 43 and is the tallest column on the
+/// chart, and "Romans" — centred over Romans — crossed Acts' bar.
+///
+/// Both apps draw this strip, so the placement is decided here rather than
+/// twice. Found and first solved on the phone by ios-56 (iOS c0929c7); this
+/// is that rule, in the one place the two can share.
+public enum LampStrongsCanonStripLabel {
+    /// Where to centre the name, and the height of the tallest column it
+    /// would then stand over.
+    ///
+    /// Three positions are tried — centred over the book's column, starting
+    /// at its left edge, and ending at its right edge — each kept inside the
+    /// chart. Whichever stands over the lowest column wins, so the name
+    /// steps aside when a tall neighbour sits on one side only; a tie keeps
+    /// it centred, which is where it belongs when nothing is in the way.
+    ///
+    /// `heights` is every column's drawn height, in the order they are laid
+    /// out, measured the same way the bars are: a label cleared of a height
+    /// the bar does not actually have is a label in the wrong place.
+    public static func place(
+        labelWidth: Double,
+        over index: Int,
+        heights: [Double],
+        column: Double,
+        spacing: Double,
+        in width: Double
+    ) -> (x: Double, clearing: Double) {
+        let half = labelWidth / 2
+        let left = (column + spacing) * Double(index)
+        // A couple of points of slack, so a column the name merely grazes
+        // still counts as under it.
+        let slack = 2.0
+        func clearing(at x: Double) -> Double {
+            heights.indices
+                .filter { index in
+                    let start = (column + spacing) * Double(index)
+                    return start < x + half + slack && start + column > x - half - slack
+                }
+                .map { heights[$0] }
+                .max() ?? 0
+        }
+        return [left + column / 2, left + half, left + column - half]
+            .map { min(max($0, half), width - half) }
+            .map { (x: $0, clearing: clearing(at: $0)) }
+            // `min(by:)` keeps the first of equals, and centred is first.
+            .min { $0.clearing < $1.clearing }!
+    }
+}
