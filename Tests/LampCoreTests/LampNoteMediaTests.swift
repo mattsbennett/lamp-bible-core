@@ -374,8 +374,12 @@ struct LampNoteMediaTests {
         ) == "NoteMedia/notes/43011035/tomb.png")
         #expect(LampSyncFolderLayout.kind(of: "DevotionalMedia/d/1/x.png") == .devotionalMedia)
         #expect(LampSyncFolderLayout.remoteModuleID(of: "NoteMedia/notes/43011035/x.png") == "notes")
-        // Not a path at all: media is three components under its directory.
-        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/notes/x.png") == nil)
+        // Three segments is a notes *module's* picture, not an invalid
+        // personal one: the count is what tells the two apart, and this
+        // assertion read the other way until modules gained pictures.
+        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/notes/x.png") == .noteMedia)
+        // Two is neither.
+        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/x.png") == nil)
     }
 
     /// A note's picture reaches a second device.
@@ -529,5 +533,33 @@ struct LampNoteMediaTests {
         #expect(list.map(\.id) == ["A", "C"])
         #expect(LampMediaReference.list(fromJSON: nil).isEmpty)
         #expect(LampMediaReference.list(fromJSON: "not json").isEmpty)
+    }
+
+    /// Where a notes module's picture travels, and that the two shapes under
+    /// NoteMedia stay apart.
+    @Test func aNotesModulesPictureHasAPathOfItsOwn() throws {
+        #expect(try LampSyncFolderLayout.noteModuleMediaPath(
+            moduleID: "tske", filename: "tomb.png"
+        ) == "NoteMedia/tske/tomb.png")
+        #expect(try LampSyncFolderLayout.noteMediaPath(
+            moduleID: "notes", noteOwnerID: "43011035", filename: "tomb.png"
+        ) == "NoteMedia/notes/43011035/tomb.png")
+
+        // Both are note media, and both are media: never merged, uploaded
+        // only where absent, a different copy on the server a conflict.
+        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/tske/tomb.png") == .noteMedia)
+        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/notes/43011035/tomb.png") == .noteMedia)
+        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/tske/tomb.png")?.isMedia == true)
+        // And neither is a path with nothing but a module in it.
+        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/tske") == nil)
+
+        #expect(LampSyncFolderLayout.remoteModuleID(of: "NoteMedia/tske/tomb.png") == "tske")
+
+        // A name that would climb out of the folder is refused.
+        #expect(throws: (any Error).self) {
+            try LampSyncFolderLayout.noteModuleMediaPath(
+                moduleID: "tske", filename: "../escape.png"
+            )
+        }
     }
 }

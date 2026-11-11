@@ -3500,6 +3500,45 @@ public actor LampLibrary {
         }
     }
 
+    /// Every installed notes module that has pictures, and the files each
+    /// one needs, for a sync pass planning them.
+    ///
+    /// A module's pictures are not inside its `.lamp` — a module is one
+    /// compressed database — so they travel on their own, as a book's do.
+    /// Each module is asked separately, so one whose notes cannot be read
+    /// does not hide another's pictures.
+    public func noteModuleMediaFilenames() throws -> [(moduleID: String, filenames: [String])] {
+        try installedModules()
+            .filter { $0.kind == .notes && !$0.isBundled }
+            .compactMap { module in
+                guard let filenames = try? noteModuleMediaFilenames(moduleID: module.id),
+                      !filenames.isEmpty else { return nil }
+                return (module.id, filenames)
+            }
+    }
+
+    /// The files one notes module's pictures live in, without repeats.
+    public func noteModuleMediaFilenames(moduleID: String) throws -> [String] {
+        let queue = try openDatabase(moduleID: moduleID)
+        return try queue.read { db in
+            let tables = try tableNames(in: db)
+            guard tables.contains("note_entries"),
+                  try columnNames(in: db, table: "note_entries").contains("media_json")
+            else { return [] }
+            var seen = Set<String>()
+            var filenames: [String] = []
+            for json in try String.fetchAll(db, sql: """
+                SELECT media_json FROM note_entries WHERE media_json IS NOT NULL
+                """) {
+                for reference in LampMediaReference.list(fromJSON: json)
+                where seen.insert(reference.filename).inserted {
+                    filenames.append(reference.filename)
+                }
+            }
+            return filenames
+        }
+    }
+
     /// Every personal note that has media, for a sync pass planning files.
     ///
     /// Only the notes with attachments: a library of thousands of notes and

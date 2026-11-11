@@ -99,6 +99,15 @@ public enum LampSyncFolderLayout {
         try checked([noteMediaDirectory, moduleID, noteOwnerID], filename)
     }
 
+    /// Where a notes **module**'s picture sits on the server. Keyed by the
+    /// module alone, as a book's is: the module declares its pictures once
+    /// and its notes point at them by id, so they are not one note's.
+    public static func noteModuleMediaPath(
+        moduleID: String, filename: String
+    ) throws -> String {
+        try checked([noteMediaDirectory, moduleID], filename)
+    }
+
     public static func devotionalMediaPath(
         moduleID: String, devotionalID: String, filename: String
     ) throws -> String {
@@ -140,7 +149,11 @@ public enum LampSyncFolderLayout {
             return components.count == 4 ? .devotionalMedia : nil
         }
         if head == noteMediaDirectory {
-            return components.count == 4 ? .noteMedia : nil
+            // Four for one of the reader's own notes, keyed by its verse;
+            // three for a notes module's, keyed by the module, which
+            // declares its pictures once and whose notes point at them by
+            // id. The count tells them apart, not the look of the segment.
+            return (3...4).contains(components.count) ? .noteMedia : nil
         }
         if head == bookMediaDirectory {
             return components.count >= 3 ? .bookMedia : nil
