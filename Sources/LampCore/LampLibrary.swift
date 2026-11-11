@@ -3387,12 +3387,20 @@ public actor LampLibrary {
     }
 
     @discardableResult
+    /// Writes the reader's note on a verse, or deletes it when nothing is
+    /// left in it.
+    ///
+    /// `verseReferences`, `footnotes` and `mediaJSON` are nil to leave what
+    /// is already there — a caller editing the text does not have to carry
+    /// the rest of the note to avoid erasing it. Media is cleared by passing
+    /// an empty array rather than nil, as the others are.
     public func setPersonalVerseNote(
         reference: Int,
         title: String? = nil,
         content: String,
         verseReferences: [Int]? = nil,
-        footnotes: [LampVerseFootnote]? = nil
+        footnotes: [LampVerseFootnote]? = nil,
+        mediaJSON: String? = nil
     ) throws -> LampVerseNote? {
         let noteID = "personal-notes:\(reference)"
         let meaningfulTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3411,7 +3419,11 @@ public actor LampLibrary {
             title: meaningfulTitle?.isEmpty == false ? title : nil,
             content: content,
             verseReferences: verseReferences ?? existing?.verseReferences ?? [],
-            footnotes: footnotes ?? existing?.footnotes ?? []
+            footnotes: footnotes ?? existing?.footnotes ?? [],
+            // Carried forward like the two above. Without this, every save
+            // of a note's text would take its attachments off it: this
+            // rebuilds the note rather than updating the text in place.
+            mediaJSON: mediaJSON ?? existing?.mediaJSON
         )
         try saveVerseNote(note)
         return note
@@ -3419,10 +3431,42 @@ public actor LampLibrary {
 
     public func deleteVerseNote(id: String) throws {
         let queue = try openUserDatabase()
+        let reference: Int? = try queue.read { db in
+            try Int.fetchOne(
+                db, sql: "SELECT verse_id FROM personal_notes WHERE id = ?", arguments: [id]
+            )
+        }
         try queue.write { db in
             try db.execute(sql: "DELETE FROM personal_notes WHERE id = ?", arguments: [id])
             try Self.recordDeletion(db, .note, id)
         }
+        // The note's attachments go with it. A row deleted while its files
+        // stay leaves a folder nothing points at, growing quietly for as
+        // long as the library exists.
+        if let reference,
+           let folder = LampPortableDevotionalMedia.folderURL(
+               rootURL: rootURL, scope: .note, ownerID: Self.noteMediaOwnerID(reference)
+           ) {
+            try? fileManager.removeItem(at: folder)
+        }
+    }
+
+    /// Which folder a verse's note keeps its media in.
+    ///
+    /// The verse, not the note's id: a personal note is one per verse and
+    /// its id is `personal-notes:<reference>`, whose colon has no business
+    /// in a path. The reference is the stable, safe name for the same thing.
+    public nonisolated static func noteMediaOwnerID(_ reference: Int) -> String {
+        String(reference)
+    }
+
+    /// Where this library keeps a verse note's media.
+    public nonisolated static func noteMediaFolderURL(
+        rootURL: URL, reference: Int
+    ) -> URL? {
+        LampPortableDevotionalMedia.folderURL(
+            rootURL: rootURL, scope: .note, ownerID: noteMediaOwnerID(reference)
+        )
     }
 
     public func highlightSets(translationID: String? = nil) throws -> [LampHighlightSet] {

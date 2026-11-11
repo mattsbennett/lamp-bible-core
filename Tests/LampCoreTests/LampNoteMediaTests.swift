@@ -197,4 +197,66 @@ struct LampNoteMediaTests {
         #expect(note.content == "He wept, and the tomb was opened.", "the newer text is taken")
         #expect(note.mediaJSON == mediaJSON, "and the media it had is still on it")
     }
+
+    /// Editing a note's text does not take its attachments off it.
+    ///
+    /// `setPersonalVerseNote` rebuilds the note rather than updating the
+    /// text in place, and carried `verseReferences` and `footnotes` forward
+    /// but not media — so the first word typed after attaching an image
+    /// would have removed it.
+    @Test func editingANotesTextKeepsItsMedia() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "He wept.", mediaJSON: mediaJSON
+        )
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "He wept, and the tomb was opened."
+        )
+
+        let note = try #require(try await library.verseNotes(reference: 43_011_035).first { $0.moduleID == "personal-notes" })
+        #expect(note.content == "He wept, and the tomb was opened.")
+        #expect(note.mediaJSON == mediaJSON)
+
+        // And it can be cleared on purpose, as the other fields are.
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "No pictures.", mediaJSON: "[]"
+        )
+        #expect(try await library.verseNotes(reference: 43_011_035).first { $0.moduleID == "personal-notes" }?.mediaJSON == "[]")
+    }
+
+    /// A deleted note takes its files with it, rather than leaving a folder
+    /// nothing points at.
+    @Test func aDeletedNoteTakesItsMediaFolder() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        _ = try await library.setPersonalVerseNote(
+            reference: 43_011_035, content: "![](media/8A1F)", mediaJSON: mediaJSON
+        )
+        let folder = try #require(
+            LampLibrary.noteMediaFolderURL(rootURL: root, reference: 43_011_035)
+        )
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("png".utf8).write(to: folder.appendingPathComponent("tomb.png"))
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+
+        // Emptying the note deletes it, as it always has.
+        _ = try await library.setPersonalVerseNote(reference: 43_011_035, content: "   ")
+        #expect(try await library.verseNotes(reference: 43_011_035).first { $0.moduleID == "personal-notes" } == nil)
+        #expect(!FileManager.default.fileExists(atPath: folder.path), "its files went with it")
+    }
+
+    /// The folder is named for the verse, not the note's id: the id holds a
+    /// colon, which has no business in a path.
+    @Test func theMediaFolderIsNamedForTheVerse() {
+        #expect(LampLibrary.noteMediaOwnerID(43_011_035) == "43011035")
+        let folder = LampLibrary.noteMediaFolderURL(
+            rootURL: URL(fileURLWithPath: "/tmp/library"), reference: 43_011_035
+        )
+        #expect(folder?.path == "/tmp/library/Media/Notes/43011035")
+    }
 }
