@@ -2426,15 +2426,30 @@ public actor LampLibrary {
         from sourceURL: URL,
         devotionalID: String
     ) throws -> URL {
-        try validateIdentifier(devotionalID)
+        try storePersonalMedia(from: sourceURL, scope: .devotional, ownerID: devotionalID)
+    }
+
+    /// Copies a file into the library as one owner's media, under a name of
+    /// its own, and says where it went.
+    ///
+    /// The scope decides the folder — a writing's media and a note's sit
+    /// apart — and the name is made safe and made unique, so attaching two
+    /// files called `photo.png` keeps both.
+    public func storePersonalMedia(
+        from sourceURL: URL,
+        scope: LampMediaScope,
+        ownerID: String
+    ) throws -> URL {
+        try validateIdentifier(ownerID)
         let hasSecurityScope = sourceURL.startAccessingSecurityScopedResource()
         defer {
             if hasSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
         }
-        let destinationDirectory = rootURL
-            .appendingPathComponent("Media", isDirectory: true)
-            .appendingPathComponent("Devotionals", isDirectory: true)
-            .appendingPathComponent(devotionalID, isDirectory: true)
+        guard let destinationDirectory = LampPortableDevotionalMedia.folderURL(
+            rootURL: rootURL, scope: scope, ownerID: ownerID
+        ) else {
+            throw LampLibraryError.unsafeModuleIdentifier(ownerID)
+        }
         try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
         let sourceName = sourceURL.deletingPathExtension().lastPathComponent
         let safeName = sourceName
