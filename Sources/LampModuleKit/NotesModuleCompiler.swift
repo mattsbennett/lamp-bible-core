@@ -29,15 +29,17 @@ extension LampModuleCompiler {
                     JSONSupport.string(meta["author"]),
                     JSONSupport.string(meta["schemaVersion"]),
                 ])
+            // No media: a notes module cannot carry files. A `.lamp` is one
+            // compressed database, so this was only ever a manifest naming
+            // files that would have to arrive another way — and nothing
+            // delivered them, nothing read this, and no notes module has
+            // ever had any. The schema's promise goes with it (asked of
+            // modules-91); book media, which does work, arrives by its own
+            // sync path and lands under Media/Books.
             try db.execute(sql: """
-                INSERT INTO note_book_meta (module_id, book, book_number, media_json)
-                VALUES (?, ?, ?, ?)
-                """, arguments: [
-                    moduleID,
-                    book,
-                    bookNumber,
-                    try JSONSupport.jsonString(root["media"]),
-                ])
+                INSERT INTO note_book_meta (module_id, book, book_number)
+                VALUES (?, ?, ?)
+                """, arguments: [moduleID, book, bookNumber])
 
             for (chapterIndex, chapterValue) in chapters.enumerated() {
                 let chapterPath = "/chapters/\(chapterIndex)"
@@ -160,8 +162,7 @@ extension LampModuleCompiler {
             CREATE TABLE note_book_meta (
                 module_id TEXT PRIMARY KEY REFERENCES module_meta(id) ON DELETE CASCADE,
                 book TEXT NOT NULL,
-                book_number INTEGER NOT NULL,
-                media_json TEXT
+                book_number INTEGER NOT NULL
             );
             CREATE TABLE note_entries (
                 id TEXT PRIMARY KEY,
