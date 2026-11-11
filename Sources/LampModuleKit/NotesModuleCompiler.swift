@@ -14,8 +14,21 @@ extension LampModuleCompiler {
         let queue = try makeDatabaseQueue(at: databaseURL)
         var entryCount = 0
 
+        // The module's media, by id, so each note can carry the entries its
+        // own text refers to. A reader resolving `media/<id>` needs the
+        // filename, and asking the book-level manifest for it would mean
+        // every note carrying every picture in the module.
+        let mediaByID = Dictionary(
+            (JSONSupport.array(root["media"]) ?? [])
+                .compactMap(JSONSupport.object)
+                .compactMap { entry -> (String, [String: Any])? in
+                    JSONSupport.string(entry["id"]).map { ($0, entry) }
+                },
+            uniquingKeysWith: { first, _ in first }
+        )
+
         try queue.write { db in
-            try createNotesSchema(in: db)
+            try createNotesSchema(in: db, carryingMedia: !mediaByID.isEmpty)
             try createFormatMetadata(in: db, kind: .notes, moduleID: moduleID)
 
             try db.execute(sql: """
@@ -60,7 +73,8 @@ extension LampModuleCompiler {
                         contentValue: introduction,
                         endReference: nil,
                         lastModified: JSONSupport.integer(chapter["lastModified"]),
-                        footnotes: footnotes
+                        footnotes: footnotes,
+                        mediaByID: mediaByID
                     )
                     entryCount += 1
                 }
@@ -86,7 +100,8 @@ extension LampModuleCompiler {
                         contentValue: commentary,
                         endReference: JSONSupport.integer(verse["ev"]),
                         lastModified: JSONSupport.integer(verse["lastModified"]),
-                        footnotes: JSONSupport.array(verse["footnotes"])
+                        footnotes: JSONSupport.array(verse["footnotes"]),
+                        mediaByID: mediaByID
                     )
                     entryCount += 1
                 }
@@ -112,8 +127,13 @@ extension LampModuleCompiler {
         contentValue: Any,
         endReference: Int?,
         lastModified: Int?,
-        footnotes: [Any]?
+        footnotes: [Any]?,
+        mediaByID: [String: [String: Any]]
     ) throws {
+        // The module's shape, not this note's: where the module declares
+        // media every row writes the column, empty or not, because the
+        // column's presence is what says the file speaks about pictures.
+        let carriesMedia = !mediaByID.isEmpty
         // Both apps keep a note as Markdown, so annotated text arrives as the
         // links and footnote markers they write themselves; searched as text.
         let content = LampPortableDevotionalContent.annotatedText(contentValue)
@@ -125,12 +145,24 @@ extension LampModuleCompiler {
             .filter { !$0.isEmpty }
         let searchText = ([JSONSupport.plainText(contentValue)] + footnoteText).joined(separator: " ")
 
+        // The pictures this note actually refers to, taken from what the
+        // content came out as rather than from the annotations it came from:
+        // `LampPortableDevotionalContent` writes a media block as
+        // `![caption](media/<id>)`, and that text is what a reader resolves,
+        // so reading the ids back out of it cannot disagree with what will
+        // be shown. A note referring to an id the module never declared
+        // carries nothing for it, and shows as a broken link rather than
+        // inventing a filename.
+        let referenced = Self.mediaIDs(in: content)
+        let media = referenced.compactMap { mediaByID[$0] }
+        let mediaJSON = media.isEmpty ? nil : try JSONSupport.jsonString(media)
+
         try db.execute(sql: """
             INSERT INTO note_entries (
                 id, module_id, verse_id, book, chapter, verse,
                 title, content, verse_refs_json, last_modified,
-                footnotes_json, search_text, record_change_tag
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                footnotes_json, search_text, record_change_tag\(carriesMedia ? ", media_json" : "")
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL\(carriesMedia ? ", ?" : ""))
             """, arguments: [
                 id,
                 moduleID,
@@ -144,10 +176,20 @@ extension LampModuleCompiler {
                 lastModified,
                 try JSONSupport.jsonString(footnotes),
                 searchText,
-            ])
+            ] + (carriesMedia ? [mediaJSON] : []))
     }
 
-    private func createNotesSchema(in db: Database) throws {
+    /// `carryingMedia` adds the per-note media column.
+    ///
+    /// Only when the module actually declares media, because the column's
+    /// presence is what tells a reader this file **speaks** about pictures:
+    /// `mergeImportedNotes` keeps the reader's own media when a file is
+    /// silent and believes the file when it is not. A study document has no
+    /// media concept at all, and compiling one into a module that carried an
+    /// empty column would have told the importer the reader had no
+    /// pictures — taking them off every note on the next sync. The suite
+    /// caught exactly that.
+    private func createNotesSchema(in db: Database, carryingMedia: Bool) throws {
         try db.execute(sql: """
             CREATE TABLE module_meta (
                 id TEXT PRIMARY KEY,
@@ -175,6 +217,7 @@ extension LampModuleCompiler {
                 verse_refs_json TEXT,
                 last_modified INTEGER,
                 footnotes_json TEXT,
+                \(carryingMedia ? "media_json TEXT," : "")
                 search_text TEXT,
                 record_change_tag TEXT
             );
@@ -186,5 +229,25 @@ extension LampModuleCompiler {
                 content='note_entries', content_rowid='rowid'
             );
             """)
+    }
+}
+
+extension LampModuleCompiler {
+    /// The media ids a note's Markdown refers to, in the order they appear
+    /// and without repeats.
+    ///
+    /// Matches what `LampPortableDevotionalContent` writes — `(media/<id>)`
+    /// — which is also what a reader resolves, so the two cannot drift.
+    static func mediaIDs(in markdown: String) -> [String] {
+        let pattern = try? NSRegularExpression(pattern: #"\]\(media/([^)\s]+)\)"#)
+        guard let pattern else { return [] }
+        var seen = Set<String>()
+        var ids: [String] = []
+        let text = markdown as NSString
+        for match in pattern.matches(in: markdown, range: NSRange(location: 0, length: text.length)) {
+            let id = text.substring(with: match.range(at: 1))
+            if seen.insert(id).inserted { ids.append(id) }
+        }
+        return ids
     }
 }

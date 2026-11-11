@@ -884,4 +884,97 @@ private struct FixtureDirectory {
     func remove() {
         try? FileManager.default.removeItem(at: url)
     }
+
+    /// A notes module's pictures reach the note that refers to them.
+    ///
+    /// The module lists its media once at the root and a note's text points
+    /// at entries by id; each note carries the entries its own text uses, so
+    /// a reader resolving `media/<id>` has the filename without every note
+    /// hauling every picture in the module.
+    @Test func aNotesModuleCarriesEachNotesOwnPictures() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("picture_notes.lamp")
+
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {"schemaVersion": "1.0", "id": "picture_notes", "type": "notes"},
+              "book": "John", "bookNumber": 43,
+              "media": [
+                {"id": "TOMB", "type": "image", "filename": "tomb.png", "mimeType": "image/png"},
+                {"id": "MAP", "type": "image", "filename": "map.png", "mimeType": "image/png"}
+              ],
+              "chapters": [{
+                "chapter": 11,
+                "verses": [
+                  {"sv": 43011035, "commentary": {
+                    "text": "He wept at the tomb.",
+                    "annotations": [
+                      {"type": "media", "start": 13, "end": 17,
+                       "data": {"mediaId": "TOMB", "mediaType": "image"}}
+                    ]
+                  }},
+                  {"sv": 43011043, "commentary": "Lazarus, come out."}
+                ]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "picture_notes.json",
+            destinationURL: outputURL
+        )
+
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let withPicture = try #require(try Row.fetchOne(
+                db, sql: "SELECT content, media_json FROM note_entries WHERE verse_id = ?",
+                arguments: [43_011_035]
+            ))
+            let content: String = withPicture["content"]
+            let media: String? = withPicture["media_json"]
+            #expect(content.contains("media/TOMB"), "the text points at the picture")
+            #expect(media?.contains("tomb.png") == true, "and the note says which file that is")
+            // Only what this note uses: the module's other picture stays out.
+            #expect(media?.contains("map.png") == false)
+
+            // A note with no picture carries none.
+            let plain = try #require(try Row.fetchOne(
+                db, sql: "SELECT media_json FROM note_entries WHERE verse_id = ?",
+                arguments: [43_011_043]
+            ))
+            #expect(plain["media_json"] as String? == nil)
+        }
+    }
+
+    /// A module that declares no media has no column at all — which is how a
+    /// reader tells "this file says nothing about pictures" from "this file
+    /// says there are none". A study document compiled into a module must
+    /// not claim the second, or importing one takes the reader's own
+    /// pictures off their notes.
+    @Test func aNotesModuleWithoutMediaHasNoColumnToSpeakWith() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("plain_notes.lamp")
+
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {"schemaVersion": "1.0", "id": "plain_notes", "type": "notes"},
+              "book": "John", "bookNumber": 43,
+              "chapters": [{"chapter": 11, "verses": [
+                {"sv": 43011035, "commentary": "He wept."}
+              ]}]
+            }
+            """#.utf8),
+            sourceFilename: "plain_notes.json",
+            destinationURL: outputURL
+        )
+
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(note_entries)")
+                .compactMap { $0["name"] as String? }
+            #expect(!columns.contains("media_json"))
+        }
+    }
 }

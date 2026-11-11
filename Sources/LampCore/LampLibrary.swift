@@ -3308,9 +3308,13 @@ public actor LampLibrary {
             let title = columns.contains("title") ? "title" : "NULL AS title"
             let modified = columns.contains("last_modified")
                 ? "last_modified" : "NULL AS last_modified"
+            // A module built before notes carried pictures has no column,
+            // and a note then simply has none.
+            let media = columns.contains("media_json")
+                ? "media_json" : "NULL AS media_json"
             return try Row.fetchAll(db, sql: """
                 SELECT id, module_id, verse_id, \(title), content,
-                       \(references), \(footnotes), \(modified)
+                       \(references), \(footnotes), \(media), \(modified)
                 FROM note_entries
                 WHERE verse_id = ?
                 ORDER BY last_modified DESC, id

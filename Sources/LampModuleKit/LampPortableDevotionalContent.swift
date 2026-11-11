@@ -198,6 +198,14 @@ public enum LampPortableDevotionalContent {
         case "link":
             guard let url = data["url"] as? String else { return nil }
             return ("[", "](\(url))")
+        case "media":
+            // A note's picture. Devotional content carries media as a block
+            // and this is the inline form notes use, but both come out as
+            // the same `media/<id>` link, so one resolver serves both and a
+            // note's pictures work the way a writing's already do.
+            guard let id = data["mediaId"] as? String else { return nil }
+            let isAudio = (data["mediaType"] as? String) == "audio"
+            return (isAudio ? "[" : "![", "](media/\(id))")
         default:
             return nil
         }
