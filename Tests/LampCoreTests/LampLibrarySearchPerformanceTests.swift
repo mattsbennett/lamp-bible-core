@@ -162,6 +162,13 @@ struct LampLibrarySearchPerformanceTests {
         #expect(commentary.first?.results.count == 3)
         #expect(commentary.first?.hasMore == false)
 
+        // One kind alone filling the page still knows there were more.
+        let filled = try await library.searchModulesByKind(query: "hope", kinds: [.commentary], limit: 2)
+        #expect(filled.first?.results.count == 2)
+        #expect(filled.first?.hasMore == true)
+        let exactly = try await library.searchModulesByKind(query: "hope", kinds: [.commentary], limit: 3)
+        #expect(exactly.first?.hasMore == false)
+
         #expect(try await library.searchModulesByKind(query: "neverpresent").isEmpty)
     }
 
