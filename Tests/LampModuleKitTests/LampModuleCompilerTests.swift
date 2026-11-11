@@ -730,6 +730,45 @@ struct LampModuleCompilerTests {
         ])
         #expect(!spaced.issues.contains { $0.path == "/meta/id" })
 
+        // The ID a module is *built* with, not the one it wrote. A module
+        // declaring none takes the filename's stem, which went unchecked
+        // while the Mac's installer refused it.
+        let unnamed = ModuleJSONInspector().inspect(
+            root: [
+                "meta": ["schemaVersion": "2.2", "seriesAbbrev": "NIC", "seriesFull": "NIC", "title": "Genesis"],
+                "book": "Gen", "bookNumber": 1, "chapters": [],
+            ],
+            sourceFilename: "nic+genesis.json"
+        )
+        let fromFilename = try #require(unnamed.issues.first { $0.path == "/" })
+        #expect(fromFilename.severity == .warning)
+        #expect(fromFilename.message.contains("nic+genesis"))
+
+        // A commentary that does declare an ID is built with it, so it is
+        // checked like any other kind; it used to be skipped outright.
+        let namedCommentary = ModuleJSONInspector().inspect(
+            root: [
+                "meta": [
+                    "schemaVersion": "2.2", "id": "nic+genesis",
+                    "seriesAbbrev": "NIC", "seriesFull": "NIC", "title": "Genesis",
+                ],
+                "book": "Gen", "bookNumber": 1, "chapters": [],
+            ],
+            sourceFilename: "whatever.json"
+        )
+        #expect(namedCommentary.issues.contains { $0.path == "/meta/id" && $0.severity == .warning })
+
+        // A safe filename says nothing, and no filename asks nothing.
+        #expect(!ModuleJSONInspector().inspect(
+            root: ["meta": ["schemaVersion": "2.2", "seriesAbbrev": "NIC", "seriesFull": "NIC", "title": "Genesis"],
+                   "book": "Gen", "bookNumber": 1, "chapters": []],
+            sourceFilename: "nic-genesis.json"
+        ).issues.contains { $0.path == "/" })
+        #expect(!ModuleJSONInspector().inspect(
+            root: ["meta": ["schemaVersion": "2.2", "seriesAbbrev": "NIC", "seriesFull": "NIC", "title": "Genesis"],
+                   "book": "Gen", "bookNumber": 1, "chapters": []]
+        ).issues.contains { $0.path == "/" })
+
         // And it compiles, warning and all.
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }

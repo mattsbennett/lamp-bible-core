@@ -34,7 +34,8 @@ public struct LampModuleCompiler: Sendable {
         if let destinationURL {
             resolvedDestinationURL = destinationURL
         } else {
-            let inspection = try ModuleJSONInspector().inspect(data)
+            let inspection = try ModuleJSONInspector()
+                .inspect(data, sourceFilename: sourceURL.lastPathComponent)
             let moduleID = inspection.metadata.id
                 ?? sourceURL.deletingPathExtension().lastPathComponent
             resolvedDestinationURL = sourceURL
@@ -73,7 +74,7 @@ public struct LampModuleCompiler: Sendable {
         sourceFilename: String,
         destinationURL requestedDestinationURL: URL? = nil
     ) throws -> ModuleCompilationResult {
-        let inspection = ModuleJSONInspector().inspect(root: root)
+        let inspection = ModuleJSONInspector().inspect(root: root, sourceFilename: sourceFilename)
         let errors = inspection.issues.filter { $0.severity == .error }
         guard errors.isEmpty else {
             throw ModuleCompilationError.validationFailed(inspection.issues)

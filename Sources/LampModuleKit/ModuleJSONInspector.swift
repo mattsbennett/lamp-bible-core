@@ -8,7 +8,11 @@ import Foundation
 public struct ModuleJSONInspector: Sendable {
     public init() {}
 
-    public func inspect(_ data: Data) throws -> ModuleInspection {
+    /// `sourceFilename` is the file the JSON came from, where there is one.
+    /// A module that declares no ID takes that filename's stem as its ID
+    /// (`LampModuleCompiler.compile`), so without it an inspection cannot
+    /// say what the module will be called, nor whether that is storable.
+    public func inspect(_ data: Data, sourceFilename: String? = nil) throws -> ModuleInspection {
         let json: Any
         do {
             json = try JSONSerialization.jsonObject(with: data)
@@ -19,10 +23,10 @@ public struct ModuleJSONInspector: Sendable {
         guard let root = json as? [String: Any] else {
             throw ModuleInspectionError.rootMustBeObject
         }
-        return inspect(root: root)
+        return inspect(root: root, sourceFilename: sourceFilename)
     }
 
-    func inspect(root: [String: Any]) -> ModuleInspection {
+    func inspect(root: [String: Any], sourceFilename: String? = nil) -> ModuleInspection {
         let meta = object(root["meta"]) ?? root
         let declaredType = string(meta["type"]) ?? string(root["type"])
         let kind = declaredType.flatMap(LampModuleKind.init(schemaValue:)) ?? inferKind(root: root, meta: meta)
@@ -45,7 +49,7 @@ public struct ModuleJSONInspector: Sendable {
 
         if let kind {
             validateRequiredStructure(kind: kind, root: root, meta: meta, issues: &issues)
-            validateIdentifier(metadata.id, kind: kind, issues: &issues)
+            validateIdentifier(metadata.id, sourceFilename: sourceFilename, issues: &issues)
             validateSemantics(kind: kind, root: root, issues: &issues)
         }
 
@@ -137,21 +141,42 @@ public struct ModuleJSONInspector: Sendable {
     }
 
     private func validateIdentifier(
-        _ id: String?,
-        kind: LampModuleKind,
+        _ declared: String?,
+        sourceFilename: String?,
         issues: inout [ModuleValidationIssue]
     ) {
-        // A commentary volume is identified by its series and book, so its
-        // `/meta/id` is not the module's ID; the compiler checks the
-        // effective one, which for such a volume is the source filename.
-        guard kind != .commentary, let id else { return }
-        if !LampModuleIdentifier.isValid(id) {
-            issues.append(.init(
-                severity: .warning,
-                path: "/meta/id",
-                message: "Use \(LampModuleIdentifier.advice)."
-            ))
+        // The ID the module will actually be built with, not the one it
+        // wrote. Two things this used to miss:
+        //
+        // `LampModuleCompiler.compile` uses `metadata.id ?? sourceStem`, so
+        // a module declaring no ID takes its filename — and that was checked
+        // nowhere, while the Mac's installer refused it. A commentary volume
+        // usually declares none, so its filename *is* its ID.
+        //
+        // And commentary was skipped outright, on the reasoning that its
+        // `/meta/id` is not the module's ID. But a commentary that declares
+        // one is built with it, like every other kind, so skipping it hid a
+        // real fault rather than avoiding a false one.
+        //
+        // A warning, not an error: the compiler deliberately does not refuse
+        // an unsafe ID, because the iPhone compiles a JSON book through it
+        // and a book whose ID holds "+" imports there today (core 978eb6a).
+        // This is where an author is told; the installer is where it stops.
+        let stem = sourceFilename.map {
+            URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent
         }
+        guard let effective = declared ?? stem,
+              !effective.isEmpty,
+              !LampModuleIdentifier.isValid(effective)
+        else { return }
+
+        issues.append(.init(
+            severity: .warning,
+            path: declared == nil ? "/" : "/meta/id",
+            message: declared == nil
+                ? "This module declares no ID, so it is built as ‘\(effective)’, after the file it came from. Name the file with \(LampModuleIdentifier.advice)."
+                : "Use \(LampModuleIdentifier.advice)."
+        ))
     }
 
     private func validateSemantics(

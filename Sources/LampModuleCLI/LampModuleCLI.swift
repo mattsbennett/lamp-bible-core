@@ -56,7 +56,8 @@ enum LampModuleCLI {
             let url = URL(fileURLWithPath: path)
             do {
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-                let inspection = try ModuleJSONInspector().inspect(data)
+                let inspection = try ModuleJSONInspector()
+                    .inspect(data, sourceFilename: url.lastPathComponent)
                 printInspection(inspection, url: url)
                 failed = failed || !inspection.canCompile
             } catch {

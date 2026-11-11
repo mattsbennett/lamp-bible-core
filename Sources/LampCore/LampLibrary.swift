@@ -3920,7 +3920,8 @@ public actor LampLibrary {
         }
 
         let jsonData = try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
-        let inspection = try ModuleJSONInspector().inspect(jsonData)
+        let inspection = try ModuleJSONInspector()
+            .inspect(jsonData, sourceFilename: sourceURL.lastPathComponent)
         guard inspection.canCompile,
               let kind = inspection.kind,
               kind == .notes || kind == .highlights else {
