@@ -2549,14 +2549,14 @@ public actor LampLibrary {
     ) throws -> [LampModuleSearchResult] {
         guard let found = try gatherModuleSearch(
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
-            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: min(limit, 500)
+            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: limit
         ) else { return [] }
         let merged = LampModuleSearch.ranked(found.results, by: found.query, limit: found.limit)
         listWordsIfNeeded(found)
         return try addingSnippets(to: merged, from: found.snippetSources, query: found.query)
     }
 
-    /// The same search, its places shared among the kinds that matched
+    /// The same search, at most 499 places shared among the kinds that matched
     /// (`LampModuleSearch.rankedByKind`), each kind's best, a kind's
     /// together: for a list that shows every kind that matched, rather than
     /// whichever won a merged list's ties. `limit` is the whole page, shared;
@@ -2575,7 +2575,9 @@ public actor LampLibrary {
         devotionalCriteria: LampDevotionalSearchCriteria = .init(),
         limit: Int = 200
     ) throws -> [LampModuleSearchKindResults] {
-        let page = min(max(limit, 1), 500)
+        // At most 499, so one past it fits under the 500 every kind's own
+        // search caps at (searchTranslations, searchDictionaries, ...).
+        let page = min(max(limit, 1), 499)
         guard let found = try gatherModuleSearch(
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
             highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: page + 1
@@ -2606,8 +2608,10 @@ public actor LampLibrary {
     }
 
     /// Every kind's results for a search, each kind's block asked for the
-    /// whole limit, unmerged and without their snippets: what
-    /// `searchModules` and `searchModulesByKind` each rank their own way.
+    /// whole limit, unmerged: what `searchModules` and `searchModulesByKind`
+    /// each rank their own way. Commentaries, books, notes and writing come
+    /// without snippets, cut once a ranking has kept them (`snippetSources`);
+    /// the other kinds carry theirs.
     /// Nil when there is nothing to search for.
     private func gatherModuleSearch(
         query: String,
@@ -2620,9 +2624,7 @@ public actor LampLibrary {
         limit: Int
     ) throws -> ModuleSearchGathering? {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Up to 501: searchModulesByKind asks one past its page, to know a
-        // kind had more even when it alone fills the page.
-        let resultLimit = min(max(limit, 1), 501)
+        let resultLimit = min(max(limit, 1), 500)
         let parsedQuery = LampSearchQuery(trimmedQuery)
         let searchableQuery = parsedQuery.plainText
         let normalizedStrongs = strongsKey?

@@ -982,7 +982,9 @@ public enum LampModuleSearch {
     /// evenly among their kinds as the kinds allow (`shares`, as `sharedEvenly`):
     /// each kind's first, and room a kind can't fill goes to the others. A
     /// common word's verses can't take every place from commentaries and
-    /// books that matched too. On its own for a search with nothing to rank
+    /// books that matched too. A page at least as long as the kinds that
+    /// matched gives every kind a place; a shorter one can leave the kinds
+    /// with fewest results out. On its own for a search with nothing to rank
     /// by (a key or a colour alone); `rankedByKind` ranks first.
     public static func sharedByKind<Result>(
         _ results: [Result],

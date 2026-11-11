@@ -104,7 +104,7 @@ struct LampModuleSearchTests {
     }
 
     /// Equals within a kind take turns by module, each in its own order; the
-    /// kinds keep the order they were found in, and a better match goes first.
+    /// kinds go in kindOrder, and a better match goes first.
     @Test func tiedResultsTakeTurnsByModuleWithinEachKind() {
         func result(_ id: String, _ kind: LampModuleKind, _ module: String, title: String = "Genesis 1:1") -> LampModuleSearchResult {
             LampModuleSearchResult(id: id, kind: kind, moduleID: module, moduleName: module, title: title, snippet: "of hope")
@@ -149,6 +149,29 @@ struct LampModuleSearchTests {
         #expect(plain.results == ["y:translation", "x:book", "z:mine"])
         #expect(plain.moreIn == ["translation"])
         #expect(LampModuleSearch.sharedByKind(results, limit: 0, kind: \.kind.rawValue).results.isEmpty)
+    }
+
+    /// A page at least as long as the kinds that matched gives every kind a
+    /// place, however lopsided their counts: what's left after the fewest
+    /// take theirs never falls below the kinds still to come.
+    @Test func aPageAsLongAsTheKindsStarvesNone() {
+        let kinds = LampModuleSearch.kindOrder.map(\.rawValue)
+        for counts in [[1, 1, 1, 1, 1, 1, 1, 1, 40], [40, 1, 40, 1, 40, 1, 40, 1, 40], [2, 3, 5, 7, 11, 13, 17, 19, 23]] {
+            let results = zip(kinds, counts).flatMap { kind, count in (0..<count).map { "\(kind):\($0)" } }
+            for limit in [kinds.count, kinds.count + 1, 20, 36] {
+                let kept = LampModuleSearch.sharedByKind(results, limit: limit, kind: { String($0.split(separator: ":")[0]) })
+                #expect(Set(kept.results.map { $0.split(separator: ":")[0] }).count == kinds.count, "\(counts) at \(limit)")
+                #expect(kept.results.count == min(limit, results.count), "no room left unused while rows remain")
+            }
+        }
+        // Below that, kinds are left out without a word: a page of one among
+        // three kinds keeps one kind. A compact list asking fewer than the
+        // kinds it may show must say so itself.
+        let short = LampModuleSearch.sharedByKind(["a:1", "a:2", "b:1", "b:2", "c:1", "c:2"], limit: 1) {
+            String($0.split(separator: ":")[0])
+        }
+        #expect(short.results.count == 1)
+        #expect(short.moreIn == ["a", "b", "c"])
     }
 
     /// Ties between kinds go by kindOrder, whatever order an app searched
