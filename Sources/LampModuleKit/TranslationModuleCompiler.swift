@@ -23,8 +23,8 @@ extension LampModuleCompiler {
                         id, name, abbreviation, description, language, language_name,
                         text_direction, translation_philosophy, year, publisher,
                         copyright, copyright_year, license, source_texts_json,
-                        features_json, versification
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        features_json, versification, versification_mappings
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     moduleID,
@@ -43,6 +43,13 @@ extension LampModuleCompiler {
                     try JSONSupport.jsonString(meta["sourceTexts"]),
                     try JSONSupport.jsonString(meta["features"]),
                     JSONSupport.string(meta["versification"]) ?? "standard",
+                    // Verses the translation places differently from its
+                    // scheme, as Paratext mapping lines. The bundle has
+                    // stored these all along and a standalone module did
+                    // not, so the WEB's Romans doxology moved in the bundled
+                    // copy and stayed put in an imported one — the same text
+                    // read two ways depending on where it came from.
+                    try JSONSupport.jsonString(meta["versificationMappings"]),
                 ]
             )
 
@@ -169,7 +176,8 @@ extension LampModuleCompiler {
                 license TEXT,
                 source_texts_json TEXT,
                 features_json TEXT,
-                versification TEXT DEFAULT 'standard'
+                versification TEXT DEFAULT 'standard',
+                versification_mappings TEXT
             )
             """)
         try db.execute(sql: """

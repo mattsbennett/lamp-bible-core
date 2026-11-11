@@ -151,11 +151,14 @@ public enum LampModuleCompiledSchema {
                     "language_name", "text_direction", "translation_philosophy",
                     "year", "publisher", "copyright", "copyright_year", "license",
                     "source_texts_json", "features_json", "versification",
+                    "versification_mappings",
                 ],
+                // Departures were the bundle's alone until core f5ff285.
+                mayBeAbsent: ["versification_mappings"],
                 mayBeNull: [
                     "description", "language_name", "translation_philosophy",
                     "year", "publisher", "copyright", "copyright_year", "license",
-                    "source_texts_json", "features_json",
+                    "source_texts_json", "features_json", "versification_mappings",
                 ]
             ),
             LampModuleTableShape(

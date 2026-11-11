@@ -157,12 +157,28 @@ struct LampStrongsAnalysisReaderTests {
         #expect(departing.original(of: 45_014_024) == 45_016_025)
         #expect(try shared.read { try LampVersification.declared(in: $0, translationID: "missing") }.scheme == .english)
 
+        // A module built before core f5ff285 has no departures column, and
+        // reading it must not fail — it declares a scheme and nothing more.
         let module = try DatabaseQueue()
         try module.write { db in
             try db.execute(sql: "CREATE TABLE translation_meta (versification TEXT)")
             try db.execute(sql: "INSERT INTO translation_meta VALUES ('vulgate')")
         }
         #expect(try module.read { try LampVersification.declared(in: $0, translationID: "V") }.scheme == .vulgate)
+
+        // A standalone module's own departures are read, as the bundle's
+        // are. They used to be stored only by the bundle writer, so the same
+        // translation moved a verse when it came from the bundle and left it
+        // where it was when the reader imported the file.
+        let standalone = try DatabaseQueue()
+        try standalone.write { db in
+            try db.execute(sql: "CREATE TABLE translation_meta (versification TEXT, versification_mappings TEXT)")
+            try db.execute(sql: "INSERT INTO translation_meta VALUES ('standard', ?)",
+                           arguments: [#"["ROM 14:24-26 = ROM 16:25-27"]"#])
+        }
+        let imported = try standalone.read { try LampVersification.declared(in: $0, translationID: "WEB") }
+        #expect(imported.scheme == .english)
+        #expect(imported.original(of: 45_014_024) == 45_016_025)
     }
 
     /// Read as the library reads a dictionary it opens.

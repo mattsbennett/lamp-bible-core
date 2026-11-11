@@ -139,7 +139,20 @@ extension LampVersification {
         var scheme: String?
         var departures: String?
         if tables.contains("translation_meta") {
-            scheme = try Row.fetchOne(db, sql: "SELECT versification FROM translation_meta LIMIT 1")?["versification"]
+            // Departures were stored only by the bundle until core f5ff285,
+            // so a standalone module built before it has no column and
+            // declares none — the same check the bundled branch makes.
+            let columns = try LampModuleText.columnNames(in: db, table: "translation_meta")
+            let hasDepartures = columns.contains("versification_mappings")
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT versification\(hasDepartures ? ", versification_mappings" : "") \
+                    FROM translation_meta LIMIT 1
+                    """
+            )
+            scheme = row?["versification"]
+            departures = hasDepartures ? row?["versification_mappings"] : nil
         } else if tables.contains("translations") {
             let columns = try LampModuleText.columnNames(in: db, table: "translations")
             if columns.contains("versification") {
