@@ -6,6 +6,8 @@ public enum LampSyncFileKind: Hashable, Sendable {
     case module(LampSyncContentKind)
     /// A file a writing embeds.
     case devotionalMedia
+    /// A file one of the reader's notes embeds.
+    case noteMedia
     /// An image a book shows.
     case bookMedia
     case deck
@@ -20,7 +22,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
     /// different copy on the server is a conflict to report.
     public var isMedia: Bool {
         switch self {
-        case .devotionalMedia, .bookMedia, .deckAsset: true
+        case .devotionalMedia, .noteMedia, .bookMedia, .deckAsset: true
         case .module, .deck, .workspaceFile: false
         }
     }
@@ -40,7 +42,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
     public var isListed: Bool {
         switch self {
         case .module, .deck: true
-        case .devotionalMedia, .bookMedia, .deckAsset, .workspaceFile: false
+        case .devotionalMedia, .noteMedia, .bookMedia, .deckAsset, .workspaceFile: false
         }
     }
 }
@@ -53,6 +55,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
 /// | Settings bundle | `lamp-bible.lampsync` |
 /// | A module | `<Kind>/<id>.lamp`, e.g. `Translations/kjv.lamp` |
 /// | Writing media | `DevotionalMedia/<module>/<writing>/<file>` |
+/// | Note media | `NoteMedia/<module>/<verse>/<file>` |
 /// | Book images | `BookMedia/<module>/<path>` |
 /// | A deck | `Workspaces/Presentations/<id>.lampdeck` |
 /// | A deck image | `Workspaces/Presentations/Assets/<file>` |
@@ -72,6 +75,7 @@ public enum LampSyncFolderLayout {
     public static let bundlePath = LampSyncLayout.archivePath
     public static let moduleExtension = "lamp"
     public static let devotionalMediaDirectory = "DevotionalMedia"
+    public static let noteMediaDirectory = "NoteMedia"
     public static let bookMediaDirectory = "BookMedia"
     public static let workspacesDirectory = LampPortableBackupLayout.workspacesDirectory
     public static let decksDirectory = "\(workspacesDirectory)/Presentations"
@@ -84,6 +88,15 @@ public enum LampSyncFolderLayout {
 
     public static func modulePath(kind: LampSyncContentKind, moduleID: String) throws -> String {
         try checked([kind.rawValue], "\(moduleID).\(moduleExtension)")
+    }
+
+    /// Where one of the reader's notes keeps a file on the server. The owner
+    /// is the verse, as it is in the library — a personal note is one per
+    /// verse and its id holds a colon.
+    public static func noteMediaPath(
+        moduleID: String, noteOwnerID: String, filename: String
+    ) throws -> String {
+        try checked([noteMediaDirectory, moduleID, noteOwnerID], filename)
     }
 
     public static func devotionalMediaPath(
@@ -126,6 +139,9 @@ public enum LampSyncFolderLayout {
         if head == devotionalMediaDirectory {
             return components.count == 4 ? .devotionalMedia : nil
         }
+        if head == noteMediaDirectory {
+            return components.count == 4 ? .noteMedia : nil
+        }
         if head == bookMediaDirectory {
             return components.count >= 3 ? .bookMedia : nil
         }
@@ -164,7 +180,7 @@ public enum LampSyncFolderLayout {
         let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         switch kind(of: path) {
         case .module: return String(components[1].dropLast(moduleExtension.count + 1))
-        case .devotionalMedia, .bookMedia: return components[1]
+        case .devotionalMedia, .noteMedia, .bookMedia: return components[1]
         default: return nil
         }
     }

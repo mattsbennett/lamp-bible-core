@@ -319,4 +319,62 @@ struct LampNoteMediaTests {
         let text = String(decoding: document.jsonData, as: UTF8.self)
         #expect(!text.contains("tomb.png"), "no media list in a shared document")
     }
+
+    /// A note's picture goes up and comes down again, under a path of its
+    /// own rather than among the writings'.
+    @Test func aNotesPictureSyncsBothWays() async throws {
+        let root = try scratch()
+        let other = try scratch()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: other)
+        }
+
+        // A note with a picture on disk, as attaching leaves it.
+        let folder = try #require(
+            LampLibrary.noteMediaFolderURL(rootURL: root, reference: 43_011_035)
+        )
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("a picture".utf8).write(to: folder.appendingPathComponent("tomb.png"))
+        let owner = LampSyncDevotionalMedia.Owner(
+            id: LampLibrary.noteMediaOwnerID(43_011_035), mediaJSON: mediaJSON
+        )
+
+        let outgoing = try LampSyncDevotionalMedia.outgoingFileURLs(
+            scope: .note, owners: [owner], to: "notes", from: root
+        )
+        #expect(outgoing.map(\.remotePath) == ["NoteMedia/notes/43011035/tomb.png"])
+        #expect(LampSyncFolderLayout.kind(of: outgoing[0].remotePath) == .noteMedia)
+        #expect(LampSyncFolderLayout.kind(of: outgoing[0].remotePath)?.isMedia == true)
+
+        // And the same path brings it down into another library.
+        var asked: [String] = []
+        try await LampSyncDevotionalMedia.downloadToLibrary(
+            scope: .note, owners: [owner], from: "notes", into: other
+        ) { path in
+            asked.append(path)
+            return try Data(contentsOf: outgoing[0].localURL)
+        }
+        #expect(asked == ["NoteMedia/notes/43011035/tomb.png"])
+        let arrived = try #require(
+            LampLibrary.noteMediaFolderURL(rootURL: other, reference: 43_011_035)
+        ).appendingPathComponent("tomb.png")
+        #expect(FileManager.default.fileExists(atPath: arrived.path))
+        #expect(try Data(contentsOf: arrived) == Data("a picture".utf8))
+    }
+
+    /// A writing's attachments still go where they always did, and the two
+    /// never land in each other's folders.
+    @Test func aWritingsMediaIsUnmovedByTheNoteScope() throws {
+        #expect(try LampSyncFolderLayout.devotionalMediaPath(
+            moduleID: "devotionals", devotionalID: "d-1", filename: "tomb.png"
+        ) == "DevotionalMedia/devotionals/d-1/tomb.png")
+        #expect(try LampSyncFolderLayout.noteMediaPath(
+            moduleID: "notes", noteOwnerID: "43011035", filename: "tomb.png"
+        ) == "NoteMedia/notes/43011035/tomb.png")
+        #expect(LampSyncFolderLayout.kind(of: "DevotionalMedia/d/1/x.png") == .devotionalMedia)
+        #expect(LampSyncFolderLayout.remoteModuleID(of: "NoteMedia/notes/43011035/x.png") == "notes")
+        // Not a path at all: media is three components under its directory.
+        #expect(LampSyncFolderLayout.kind(of: "NoteMedia/notes/x.png") == nil)
+    }
 }

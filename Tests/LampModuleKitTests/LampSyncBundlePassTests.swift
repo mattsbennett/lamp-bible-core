@@ -834,7 +834,7 @@ struct LampSyncBundlePassTests {
             gathering: { gathered([]) }, records: &records,
             plannedKinds: { kind in
                 switch kind {
-                case .module, .devotionalMedia, .bookMedia: true
+                case .module, .devotionalMedia, .noteMedia, .bookMedia: true
                 case .deck, .deckAsset, .workspaceFile: false
                 }
             },

@@ -3496,6 +3496,24 @@ public actor LampLibrary {
         }
     }
 
+    /// Every personal note that has media, for a sync pass planning files.
+    ///
+    /// Only the notes with attachments: a library of thousands of notes and
+    /// a handful of pictures should cost a sync the handful.
+    public func personalNotesWithMedia() throws -> [LampVerseNote] {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT id, module_id, verse_id, title, content,
+                       verse_refs_json, footnotes_json, media_json, last_modified
+                FROM personal_notes
+                WHERE module_id = 'personal-notes'
+                  AND media_json IS NOT NULL AND media_json != '[]'
+                ORDER BY verse_id, id
+                """).map(makeVerseNote)
+        }
+    }
+
     /// Which folder a verse's note keeps its media in.
     ///
     /// The verse, not the note's id: a personal note is one per verse and

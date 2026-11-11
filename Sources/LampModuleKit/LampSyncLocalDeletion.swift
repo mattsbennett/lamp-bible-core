@@ -49,7 +49,7 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
             return filename(of: path).map(Self.deck) ?? .unsupported
         case .deckAsset:
             return filename(of: path).map(Self.deckAsset) ?? .unsupported
-        case .devotionalMedia, .bookMedia, .workspaceFile:
+        case .devotionalMedia, .noteMedia, .bookMedia, .workspaceFile:
             return .unsupported
         }
     }
