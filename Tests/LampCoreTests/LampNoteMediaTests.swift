@@ -562,4 +562,83 @@ struct LampNoteMediaTests {
             )
         }
     }
+
+    /// A module's note keeps its pictures however the library is asked for it.
+    ///
+    /// Three readers of `note_entries` each worked out their own column list,
+    /// and the chapter's — the one a reader window actually loads — never
+    /// asked for `media_json`. So a module's pictures arrived, were named by
+    /// the notes that used them, and were dropped on the way back out: the
+    /// note drew with no picture and nothing to say why. One list for all
+    /// three now, and this holds it to every one of them.
+    @Test func aModulesNoteKeepsItsPictureInEveryRead() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        let compiled = root.appendingPathComponent("picture_notes.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {"schemaVersion": "1.0", "id": "picture_notes", "type": "notes"},
+              "book": "John", "bookNumber": 43,
+              "media": [
+                {"id": "TOMB", "type": "image", "filename": "tomb.png", "mimeType": "image/png"}
+              ],
+              "chapters": [{
+                "chapter": 11,
+                "verses": [
+                  {"sv": 43011035, "commentary": {
+                    "text": "He wept at the tomb.",
+                    "annotations": [
+                      {"type": "media", "start": 13, "end": 17,
+                       "data": {"mediaId": "TOMB", "mediaType": "image"}}
+                    ]
+                  }},
+                  {"sv": 43011043, "commentary": "Lazarus, come out."}
+                ]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "picture_notes.json",
+            destinationURL: compiled
+        )
+        _ = try await library.install(from: compiled)
+
+        let byVerse = try #require(
+            try await library.moduleVerseNotes(
+                moduleID: "picture_notes", reference: 43_011_035
+            ).first
+        )
+        let byChapter = try #require(
+            try await library.moduleVerseNotes(
+                moduleID: "picture_notes", bookNumber: 43, chapterNumber: 11
+            ).first { $0.reference == 43_011_035 }
+        )
+        #expect(byVerse.mediaJSON?.contains("tomb.png") == true)
+        #expect(
+            byChapter.mediaJSON == byVerse.mediaJSON,
+            "a chapter's read and a verse's read describe the same note"
+        )
+
+        // Which is the whole point of carrying it: the link in the text
+        // resolves to a file, under the module rather than under a verse.
+        let link = try #require(URL(string: "media/TOMB"))
+        let picture = try #require(
+            LampLibrary.noteMediaURL(for: link, in: byChapter, rootURL: root)
+        )
+        #expect(
+            picture.path.hasSuffix("Media/Notes/picture_notes/tomb.png"),
+            "resolved to \(picture.path)"
+        )
+
+        // And a note that uses no picture still says so in both reads.
+        let plain = try #require(
+            try await library.moduleVerseNotes(
+                moduleID: "picture_notes", bookNumber: 43, chapterNumber: 11
+            ).first { $0.reference == 43_011_043 }
+        )
+        #expect(plain.mediaJSON == nil)
+        #expect(LampLibrary.noteMediaURL(for: link, in: plain, rootURL: root) == nil)
+    }
 }

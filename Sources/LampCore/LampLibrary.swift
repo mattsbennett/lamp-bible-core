@@ -3298,23 +3298,11 @@ public actor LampLibrary {
             guard tables.contains("note_entries") else {
                 throw LampLibraryError.unsupportedModuleSchema
             }
-            let columns = try columnNames(in: db, table: "note_entries")
-            let references = columns.contains("verse_refs_json")
-                ? "verse_refs_json"
-                : columns.contains("verse_refs")
-                    ? "verse_refs AS verse_refs_json" : "NULL AS verse_refs_json"
-            let footnotes = columns.contains("footnotes_json")
-                ? "footnotes_json" : "NULL AS footnotes_json"
-            let title = columns.contains("title") ? "title" : "NULL AS title"
-            let modified = columns.contains("last_modified")
-                ? "last_modified" : "NULL AS last_modified"
-            // A module built before notes carried pictures has no column,
-            // and a note then simply has none.
-            let media = columns.contains("media_json")
-                ? "media_json" : "NULL AS media_json"
+            let selection = Self.noteEntrySelection(
+                columns: try columnNames(in: db, table: "note_entries")
+            )
             return try Row.fetchAll(db, sql: """
-                SELECT id, module_id, verse_id, \(title), content,
-                       \(references), \(footnotes), \(media), \(modified)
+                SELECT \(selection)
                 FROM note_entries
                 WHERE verse_id = ?
                 ORDER BY last_modified DESC, id
@@ -3337,18 +3325,8 @@ public actor LampLibrary {
             guard columns.contains("book"), columns.contains("chapter"), columns.contains("verse") else {
                 throw LampLibraryError.unsupportedModuleSchema
             }
-            let references = columns.contains("verse_refs_json")
-                ? "verse_refs_json"
-                : columns.contains("verse_refs")
-                    ? "verse_refs AS verse_refs_json" : "NULL AS verse_refs_json"
-            let footnotes = columns.contains("footnotes_json")
-                ? "footnotes_json" : "NULL AS footnotes_json"
-            let title = columns.contains("title") ? "title" : "NULL AS title"
-            let modified = columns.contains("last_modified")
-                ? "last_modified" : "NULL AS last_modified"
             return try Row.fetchAll(db, sql: """
-                SELECT id, module_id, verse_id, \(title), content,
-                       \(references), \(footnotes), \(modified)
+                SELECT \(Self.noteEntrySelection(columns: columns))
                 FROM note_entries
                 WHERE book = ? AND chapter = ?
                 ORDER BY verse, last_modified DESC, id
@@ -4339,27 +4317,8 @@ public actor LampLibrary {
                     verifyIntegrity: false
                 )
                 let columns = try columnNames(in: db, table: "note_entries")
-                let references = columns.contains("verse_refs_json")
-                    ? "verse_refs_json"
-                    : columns.contains("verse_refs")
-                        ? "verse_refs AS verse_refs_json"
-                        : "NULL AS verse_refs_json"
-                let footnotes = columns.contains("footnotes_json")
-                    ? "footnotes_json" : "NULL AS footnotes_json"
-                let title = columns.contains("title") ? "title" : "NULL AS title"
-                let modified = columns.contains("last_modified")
-                    ? "last_modified" : "NULL AS last_modified"
-                let module = columns.contains("module_id")
-                    ? "module_id" : "'\(moduleID.replacingOccurrences(of: "'", with: "''"))' AS module_id"
-                // A file written before notes carried media has no column,
-                // which is not the same as an empty list: see
-                // `mergeImportedNotes`, which keeps what is here in that
-                // case and takes what arrives in this one.
-                let media = columns.contains("media_json")
-                    ? "media_json" : "NULL AS media_json"
                 let notes = try Row.fetchAll(db, sql: """
-                    SELECT id, \(module), verse_id, \(title), content,
-                           \(references), \(footnotes), \(media), \(modified)
+                    SELECT \(Self.noteEntrySelection(columns: columns, moduleIDIfAbsent: moduleID))
                     FROM note_entries
                     ORDER BY verse_id, id
                     """).map(makeVerseNote)
@@ -5813,6 +5772,45 @@ public actor LampLibrary {
 
     private func tableNames(in db: Database) throws -> Set<String> {
         try LampModuleText.tableNames(in: db)
+    }
+
+    /// What to read a module's notes with, given the columns its
+    /// `note_entries` actually has.
+    ///
+    /// A notes module is read three ways — one verse, one chapter, and the
+    /// whole file on import — and each worked its own column list out. They
+    /// drifted: the chapter's, which is what a reader window loads, never
+    /// asked for `media_json`, so a module's pictures arrived in the library,
+    /// were named by the note that used them, and were never read back. The
+    /// reader saw a note with no picture and nothing to say why.
+    ///
+    /// One list for all three, so a column added for one reader is not
+    /// missing from the others. Absence is read as nothing rather than as an
+    /// error: a module built before a column existed is still a module, and
+    /// `NULL AS` gives `makeVerseNote` the shape it expects.
+    ///
+    /// `moduleIDIfAbsent` is for a file whose rows do not name their module —
+    /// on import the module is known from outside the table.
+    private static func noteEntrySelection(
+        columns: Set<String>, moduleIDIfAbsent moduleID: String? = nil
+    ) -> String {
+        func column(_ name: String, or substitute: String = "NULL") -> String {
+            columns.contains(name) ? name : "\(substitute) AS \(name)"
+        }
+        let module: String
+        if let moduleID, !columns.contains("module_id") {
+            module = "'\(moduleID.replacingOccurrences(of: "'", with: "''"))' AS module_id"
+        } else {
+            module = "module_id"
+        }
+        let references = columns.contains("verse_refs")
+            && !columns.contains("verse_refs_json")
+            ? "verse_refs AS verse_refs_json"
+            : column("verse_refs_json")
+        return """
+            id, \(module), verse_id, \(column("title")), content, \(references), \
+            \(column("footnotes_json")), \(column("media_json")), \(column("last_modified"))
+            """
     }
 
     private func columnNames(in db: Database, table: String) throws -> Set<String> {
