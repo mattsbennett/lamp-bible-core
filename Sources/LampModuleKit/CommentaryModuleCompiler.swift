@@ -31,9 +31,9 @@ extension LampModuleCompiler {
                 sql: """
                     INSERT INTO commentary_books (
                         id, module_id, book_number, series_full, series_abbrev,
-                        title, author, editor, publisher, year, abbreviations_json,
-                        front_matter_json, indices_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        title, description, author, editor, publisher, year,
+                        abbreviations_json, front_matter_json, indices_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     "\(moduleID):\(bookNumber)",
@@ -42,6 +42,11 @@ extension LampModuleCompiler {
                     JSONSupport.string(meta["seriesFull"]),
                     JSONSupport.string(meta["seriesAbbrev"]),
                     title,
+                    // The schema has asked for a description all along and
+                    // nothing stored it, while the series bundler did
+                    // (commentary_series_to_sqlite.py), so the two writers
+                    // disagreed on a volume's own words about itself.
+                    JSONSupport.string(meta["description"]),
                     JSONSupport.string(meta["author"]),
                     JSONSupport.string(meta["editor"]),
                     JSONSupport.string(meta["publisher"]),
@@ -99,6 +104,7 @@ extension LampModuleCompiler {
                 series_full TEXT,
                 series_abbrev TEXT,
                 title TEXT,
+                description TEXT,
                 author TEXT,
                 editor TEXT,
                 publisher TEXT,

@@ -95,11 +95,13 @@ public enum LampModuleCompiledSchema {
                 table: "commentary_books",
                 columns: [
                     "id", "module_id", "book_number", "series_full", "series_abbrev",
-                    "title", "author", "editor", "publisher", "year",
+                    "title", "description", "author", "editor", "publisher", "year",
                     "abbreviations_json", "front_matter_json", "indices_json",
                 ],
+                // Stored from 2026-11-11; a volume built before has none.
+                mayBeAbsent: ["description"],
                 mayBeNull: [
-                    "author", "editor", "publisher", "year",
+                    "description", "author", "editor", "publisher", "year",
                     "abbreviations_json", "front_matter_json", "indices_json",
                 ]
             ),

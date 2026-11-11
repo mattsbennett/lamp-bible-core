@@ -788,6 +788,44 @@ struct LampModuleCompilerTests {
         #expect(result.moduleID == "study+one")
     }
 
+    /// A commentary volume keeps the description it wrote about itself.
+    /// The schema asked for one all along, core's compiler stored nothing,
+    /// and the series bundler in lamp-bible-modules did — so the two writers
+    /// of a commentary database disagreed, which is what their agreement
+    /// test now catches.
+    @Test func aCommentaryVolumeKeepsItsDescription() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("described.lamp")
+
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {
+                "schemaVersion": "2.2", "id": "described",
+                "seriesAbbrev": "TST", "seriesFull": "Test", "title": "Genesis",
+                "description": "A volume on the beginnings."
+              },
+              "book": "Gen", "bookNumber": 1,
+              "chapters": [{"chapter": 1, "sections": [{
+                "title": "C", "sv": 1001001, "ev": 1001002,
+                "pericopae": [{"title": "B", "sv": 1001001, "ev": 1001002,
+                  "verses": [{"sv": 1001001, "commentary": [{"type": "paragraph", "text": "A note"}]}]}]
+              }]}]
+            }
+            """#.utf8),
+            sourceFilename: "described.json",
+            destinationURL: outputURL
+        )
+
+        let queue = try fixture.openLamp(outputURL)
+        try queue.read { db in
+            let row = try #require(try Row.fetchOne(db, sql: "SELECT title, description FROM commentary_books"))
+            #expect(row["title"] as String? == "Genesis")
+            #expect(row["description"] as String? == "A volume on the beginnings.")
+        }
+    }
+
     /// A plan keeps the source work and licence its author gave it. The
     /// schema has asked for both all along and nothing stored them, so a
     /// plan's attribution was dropped at compile time on both apps.
