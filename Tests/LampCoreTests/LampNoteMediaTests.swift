@@ -506,10 +506,29 @@ struct LampNoteMediaTests {
             id: "tske:43011035", moduleID: "tske", reference: 43_011_035,
             content: "![](media/8A1F)", mediaJSON: mediaJSON
         )
-        #expect(LampLibrary.noteMediaOwnerID(of: theirs) == "tske")
+        #expect(LampLibrary.noteMediaOwnerID(of: theirs) == "module-tske")
         #expect(
             LampLibrary.noteMediaURL(for: link, in: theirs, rootURL: root)?.path
-                == "/tmp/library/Media/Notes/tske/tomb.png"
+                == "/tmp/library/Media/Notes/module-tske/tomb.png"
+        )
+
+        // A module may be called anything a filename may be called, a verse
+        // reference included, and the reader's notes are keyed by exactly
+        // that number. Named together, receiving the module's picture would
+        // replace the reader's, and deleting the reader's last note on that
+        // verse would take the module's away with it.
+        let collider = LampVerseNote(
+            id: "43011035:43011035", moduleID: "43011035", reference: 43_011_035,
+            content: "![](media/8A1F)", mediaJSON: mediaJSON
+        )
+        #expect(LampModuleIdentifier.isValid("43011035"), "which is a module ID anyone may use")
+        #expect(
+            LampLibrary.noteMediaOwnerID(of: collider) != LampLibrary.noteMediaOwnerID(of: mine),
+            "a module never shares a verse's folder"
+        )
+        #expect(
+            LampLibrary.noteMediaURL(for: link, in: collider, rootURL: root)?.path
+                == "/tmp/library/Media/Notes/module-43011035/tomb.png"
         )
 
         // A link to something the note does not carry resolves to nothing
@@ -628,7 +647,7 @@ struct LampNoteMediaTests {
             LampLibrary.noteMediaURL(for: link, in: byChapter, rootURL: root)
         )
         #expect(
-            picture.path.hasSuffix("Media/Notes/picture_notes/tomb.png"),
+            picture.path.hasSuffix("Media/Notes/module-picture_notes/tomb.png"),
             "resolved to \(picture.path)"
         )
 
@@ -640,5 +659,102 @@ struct LampNoteMediaTests {
         )
         #expect(plain.mediaJSON == nil)
         #expect(LampLibrary.noteMediaURL(for: link, in: plain, rootURL: root) == nil)
+    }
+
+    /// A note set aside as a disagreement keeps its pictures.
+    ///
+    /// The payload was rebuilt from the incoming note without its media, so
+    /// choosing the other device later wrote a note whose text still said
+    /// `media/<id>` and whose list of what those ids are had been emptied.
+    /// The picture was on disk and unreachable, and nothing said so.
+    @Test func aNoteSetAsideKeepsItsPictures() async throws {
+        let here = try scratch()
+        let there = try scratch()
+        defer {
+            try? FileManager.default.removeItem(at: here)
+            try? FileManager.default.removeItem(at: there)
+        }
+        let mine = LampLibrary(rootURL: here)
+        let theirs = LampLibrary(rootURL: there)
+
+        // One timestamp, two texts: a disagreement neither side can date out
+        // of. Only the other device's note has a picture.
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        try await mine.saveVerseNote(LampVerseNote(
+            id: "personal-notes:43011035", reference: 43_011_035,
+            content: "Written here.", lastModified: moment
+        ))
+        try await theirs.saveVerseNote(LampVerseNote(
+            id: "personal-notes:43011035", reference: 43_011_035,
+            content: "He wept at the ![](media/8A1F) tomb.",
+            mediaJSON: mediaJSON, lastModified: moment
+        ))
+
+        let exported = there.appendingPathComponent("notes.lamp")
+        try await theirs.exportPersonalModule(.notes, format: .lamp, to: exported)
+        _ = try await mine.importPersonalStudyData(from: exported, forSync: true)
+
+        let conflict = try #require(try await mine.pendingSyncConflicts().first)
+        #expect(conflict.kind == .note)
+        _ = try #require(
+            try await mine.resolveSyncConflict(id: conflict.id, keeping: .otherDevice)
+        )
+
+        let kept = try #require(
+            try await mine.verseNotes(reference: 43_011_035)
+                .first { $0.moduleID == "personal-notes" }
+        )
+        #expect(kept.content.contains("media/8A1F"))
+        #expect(kept.mediaJSON == mediaJSON, "the text's link still has a filename behind it")
+        let link = try #require(URL(string: "media/8A1F"))
+        #expect(LampLibrary.noteMediaURL(for: link, in: kept, rootURL: here) != nil)
+    }
+
+    /// A picture of a kind this Lamp has no name for is still sent.
+    ///
+    /// The gather read each entry through the decoded view, which knows an
+    /// image and a recording and nothing else. An entry a newer Lamp wrote
+    /// as some third kind was dropped — its metadata carried to the other
+    /// device, its bytes never published — so the other device would hold a
+    /// reference to a file nobody had sent it.
+    @Test func aPictureOfAnUnknownKindIsStillPublished() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        let compiled = root.appendingPathComponent("odd_notes.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {"schemaVersion": "1.0", "id": "odd_notes", "type": "notes"},
+              "book": "John", "bookNumber": 43,
+              "media": [
+                {"id": "FILM", "type": "video", "filename": "tomb.mp4", "mimeType": "video/mp4"}
+              ],
+              "chapters": [{
+                "chapter": 11,
+                "verses": [{"sv": 43011035, "commentary": {
+                  "text": "He wept at the tomb.",
+                  "annotations": [
+                    {"type": "media", "start": 13, "end": 17,
+                     "data": {"mediaId": "FILM", "mediaType": "video"}}
+                  ]
+                }}]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "odd_notes.json",
+            destinationURL: compiled
+        )
+        _ = try await library.install(from: compiled)
+
+        let note = try #require(
+            try await library.moduleVerseNotes(moduleID: "odd_notes", reference: 43_011_035).first
+        )
+        try #require(note.mediaJSON?.contains("tomb.mp4") == true, "the module carries it")
+        #expect(
+            try await library.noteModuleMediaFilenames(moduleID: "odd_notes") == ["tomb.mp4"],
+            "and the file is asked for, whatever kind it says it is"
+        )
     }
 }

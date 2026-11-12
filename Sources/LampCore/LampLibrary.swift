@@ -3508,9 +3508,14 @@ public actor LampLibrary {
             for json in try String.fetchAll(db, sql: """
                 SELECT media_json FROM note_entries WHERE media_json IS NOT NULL
                 """) {
-                for reference in LampMediaReference.list(fromJSON: json)
-                where seen.insert(reference.filename).inserted {
-                    filenames.append(reference.filename)
+                // By filename alone, not through the decoded view: that view
+                // knows two kinds of media, and an entry written by a newer
+                // Lamp as some third kind would be dropped here — its
+                // metadata carried to the other device and its bytes never
+                // sent. What a file is called is all this needs to know.
+                for filename in (try? LampPortableDevotionalMedia.filenames(in: json)) ?? []
+                where seen.insert(filename).inserted {
+                    filenames.append(filename)
                 }
             }
             return filenames
@@ -3544,17 +3549,31 @@ public actor LampLibrary {
         String(reference)
     }
 
+    /// Which folder a notes **module** keeps its pictures in.
+    ///
+    /// Named apart from a verse rather than merely *expected* to differ. A
+    /// module ID may be any run of letters and digits, `43011035` among
+    /// them, and the reader's own notes are keyed by exactly that number —
+    /// so a module could have been handed the folder of a verse's pictures,
+    /// where receiving the module's copy replaces the reader's and deleting
+    /// the reader's last note on that verse takes the module's away. The
+    /// prefix makes the two sets of names disjoint, since a verse is all
+    /// digits. The *remote* path is unchanged: there the module's own
+    /// segment keeps them apart.
+    public nonisolated static func noteModuleMediaOwnerID(_ moduleID: String) -> String {
+        "module-\(moduleID)"
+    }
+
     /// Which folder a note's media sits in, personal or from a module.
     ///
     /// The reader's own notes are one per verse and keyed by it. A module's
     /// pictures belong to the module — it declares them once at its root and
     /// its notes refer to them by id — so they are keyed by the module, as a
-    /// book's are. The two cannot collide: a verse is a number and a module
-    /// id is not, and they are different lengths of path besides.
+    /// book's are.
     public nonisolated static func noteMediaOwnerID(of note: LampVerseNote) -> String {
         note.moduleID == LampPersonalModule.notes.id
             ? noteMediaOwnerID(note.reference)
-            : note.moduleID
+            : noteModuleMediaOwnerID(note.moduleID)
     }
 
     /// Where a note's picture is, for a `media/<id>` link in its text.
@@ -4454,6 +4473,16 @@ public actor LampLibrary {
                     && note.title == Self.defaultIntroductionTitle
                     && existingTitle?.nilIfBlank != nil
                     ? existingTitle : note.title
+                // What the incoming note's pictures are: a file that carries
+                // media is taken at its word, one that predates the column
+                // leaves this device's own alone — silence is not an empty
+                // list. Worked out before the merge because the conflict
+                // payload needs it as much as the write does: a note set
+                // aside without it came back, when the reader chose it, as a
+                // note whose pictures had been taken off.
+                let incomingMedia: String? = carriesMedia
+                    ? note.mediaJSON
+                    : existing?["media_json"]
                 if let existingTimestamp {
                     let existingContent: String? = existing?["content"]
                     let existingReferences: String? = existing?["verse_refs_json"]
@@ -4505,6 +4534,7 @@ public actor LampLibrary {
                                     content: note.content,
                                     verseReferences: note.verseReferences,
                                     footnotes: note.footnotes,
+                                    mediaJSON: incomingMedia,
                                     lastModified: note.lastModified
                                 )
                             )
@@ -4518,13 +4548,7 @@ public actor LampLibrary {
                     }
                 }
                 // This is INSERT OR REPLACE, so a column left out of it is a
-                // column emptied. What goes in depends on whether the file
-                // had anything to say: one that carries media is taken at
-                // its word, one that predates the column leaves this
-                // device's own alone.
-                let keptMedia: String? = carriesMedia
-                    ? note.mediaJSON
-                    : existing?["media_json"]
+                // column emptied; `incomingMedia` above is what goes in.
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO personal_notes (
                         id, module_id, verse_id, book, chapter, verse,
@@ -4541,7 +4565,7 @@ public actor LampLibrary {
                         note.content,
                         referencesJSON,
                         footnotesJSON,
-                        keptMedia,
+                        incomingMedia,
                         incomingTimestamp > 0 ? incomingTimestamp : importTimestamp,
                     ])
                 if !forSync { try Self.recordPresence(db, .note, id) }
