@@ -36,9 +36,16 @@ public enum LampPersonalWritingFile {
     /// `personal-writing`), or a module of the reader's own making. Writing
     /// it in from the start is what lets a file be published without being
     /// decompressed, rewritten and compressed again afterwards.
+    ///
+    /// `name` goes with it, and defaults apart from it on purpose. A
+    /// receiving app takes `module_meta.name` as what to call the module, so
+    /// a file published under its own id and the collection's *name* would
+    /// show the reader every module of their own making renamed "My Notes"
+    /// on their other device. Caught by ios-56 while adopting this.
     public static func archive(
         _ writings: [LampDevotional],
         moduleID: String = LampPersonalModule.writing.id,
+        name: String = LampPersonalModule.writing.name,
         fileManager: FileManager = .default
     ) throws -> Data {
         try LampPersonalFile.archive(
@@ -50,19 +57,22 @@ public enum LampPersonalWritingFile {
                 """,
             fileManager: fileManager
         ) { db in
-            try write(writings, moduleID: moduleID, into: db)
+            try write(writings, moduleID: moduleID, name: name, into: db)
         }
     }
 
     public static func write(
-        _ writings: [LampDevotional], moduleID: String = LampPersonalModule.writing.id, into db: Database
+        _ writings: [LampDevotional],
+        moduleID: String = LampPersonalModule.writing.id,
+        name: String = LampPersonalModule.writing.name,
+        into db: Database
     ) throws {
         try db.execute(sql: """
             INSERT INTO module_meta (id, name, version, is_editable)
             VALUES (?, ?, ?, 1)
             """, arguments: [
                 moduleID,
-                LampPersonalModule.writing.name,
+                name,
                 LampModuleCompiler.formatVersion,
             ])
         for writing in writings {
