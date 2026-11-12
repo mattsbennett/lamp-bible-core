@@ -78,9 +78,9 @@ public enum LampPersonalNotesFile {
                 components.verse,
                 note.title,
                 note.content,
-                try jsonFragment(note.verseReferences),
+                try LampPersonalFile.jsonFragment(note.verseReferences),
                 Int(note.lastModified.timeIntervalSince1970),
-                try jsonFragment(footnotes),
+                try LampPersonalFile.jsonFragment(footnotes),
                 searchText(for: note),
                 // Without this the file that syncs says a note has a
                 // picture — its text holds `media/<id>` — and nothing says
@@ -94,20 +94,5 @@ public enum LampPersonalNotesFile {
     /// What a search of the file matches on.
     public static func searchText(for note: LampVerseNote) -> String {
         [note.title, note.content].compactMap { $0 }.joined(separator: " ")
-    }
-
-    /// JSON written the one way, since the bytes are compared across
-    /// devices: keys sorted, slashes unescaped, a bare value allowed.
-    ///
-    /// Two apps spelling the same record differently is not a cosmetic
-    /// difference here — it is each of them deciding the other's file is new
-    /// and uploading its own in reply.
-    public static func jsonFragment(_ value: Any?) throws -> String? {
-        guard let value else { return nil }
-        let data = try JSONSerialization.data(
-            withJSONObject: value,
-            options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]
-        )
-        return String(decoding: data, as: UTF8.self)
     }
 }

@@ -6072,6 +6072,9 @@ public actor LampLibrary {
     }
 
     private func createPersonalWritingDatabase(at databaseURL: URL) throws {
+        // As with notes: the rows are `LampPersonalWritingFile`'s, so the
+        // phone writes the same file from its own writings. What this still
+        // decides is which writings go in and in what order.
         let entries = try personalDevotionals()
         try createPersonalExportDatabase(
             at: databaseURL,
@@ -6081,85 +6084,10 @@ public actor LampLibrary {
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
                     author TEXT, version TEXT, is_editable INTEGER NOT NULL DEFAULT 1
                 );
-                CREATE TABLE devotional_entries (
-                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL,
-                    title TEXT NOT NULL, subtitle TEXT, author TEXT, date TEXT,
-                    tags TEXT, category TEXT, series_id TEXT, series_name TEXT,
-                    series_order INTEGER, key_scriptures_json TEXT,
-                    summary_json TEXT, content_json TEXT NOT NULL,
-                    footnotes_json TEXT, related_ids TEXT, created INTEGER NOT NULL,
-                    last_modified INTEGER, search_text TEXT, record_change_tag TEXT,
-                    subscription_id TEXT, is_read_only INTEGER, media_json TEXT
-                );
-                CREATE INDEX idx_dev_module ON devotional_entries(module_id);
-                CREATE INDEX idx_dev_date ON devotional_entries(date);
-                CREATE INDEX idx_dev_series ON devotional_entries(series_id, series_order);
+                \(LampPersonalWritingFile.schema)
                 """
         ) { db in
-            try db.execute(sql: """
-                INSERT INTO module_meta (id, name, version, is_editable)
-                VALUES (?, ?, ?, 1)
-                """, arguments: [
-                    LampPersonalModule.writing.id,
-                    LampPersonalModule.writing.name,
-                    LampModuleCompiler.formatVersion,
-                ])
-            for devotional in entries {
-                let scriptureValues = devotional.keyScriptures.map { scripture -> [String: Any] in
-                    var value: [String: Any] = ["sv": scripture.startReference]
-                    if let endReference = scripture.endReference { value["ev"] = endReference }
-                    if let text = scripture.text { value["label"] = text }
-                    return value
-                }
-                let contentJSON: String
-                if let stored = devotional.contentJSON {
-                    contentJSON = stored
-                } else {
-                    let blocks: [[String: Any]] = [[
-                        "type": "paragraph", "content": ["text": devotional.content],
-                    ]]
-                    contentJSON = String(decoding: try JSONSerialization.data(
-                        withJSONObject: blocks, options: [.sortedKeys]
-                    ), as: UTF8.self)
-                }
-                let searchText = [
-                    devotional.title,
-                    devotional.subtitle,
-                    devotional.summary,
-                    devotional.content,
-                    devotional.footnotes,
-                ].compactMap { $0 }.joined(separator: " ")
-                try db.execute(sql: """
-                    INSERT INTO devotional_entries (
-                        id, module_id, title, subtitle, author, date, tags, category,
-                        series_id, series_name, series_order, key_scriptures_json,
-                        summary_json, content_json, footnotes_json, related_ids,
-                        created, last_modified, search_text, record_change_tag,
-                        subscription_id, is_read_only, media_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL,
-                              ?, ?, ?, NULL, NULL, 0, ?)
-                    """, arguments: [
-                        devotional.id,
-                        LampPersonalModule.writing.id,
-                        devotional.title,
-                        devotional.subtitle,
-                        devotional.author,
-                        devotional.date,
-                        devotional.tags.joined(separator: ","),
-                        devotional.category,
-                        devotional.seriesName,
-                        devotional.seriesName,
-                        devotional.seriesOrder,
-                        try jsonFragmentString(scriptureValues),
-                        try jsonFragmentString(devotional.summary),
-                        contentJSON,
-                        try jsonFragmentString(devotional.footnotes),
-                        Int((devotional.created ?? Date()).timeIntervalSince1970),
-                        Int((devotional.lastModified ?? Date()).timeIntervalSince1970),
-                        searchText,
-                        devotional.mediaJSON,
-                    ])
-            }
+            try LampPersonalWritingFile.write(entries, into: db)
         }
     }
 
