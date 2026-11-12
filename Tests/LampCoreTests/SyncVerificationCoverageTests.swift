@@ -246,8 +246,18 @@ struct SyncVerificationCoverageTests {
     /// mentions the model or puts the name in parentheses. A conformance
     /// table's name is one; a Swift name of that spelling in the sources or
     /// the tests is not one.
+    ///
+    /// **It needs the app checkouts beside this one.** A comment here may
+    /// name a call in the Mac's or the phone's code — that is what half of
+    /// them are for — and whether a name is a Swift name or a stale rule is
+    /// answered by reading those sources. Without them the answer is "not
+    /// found", which is not the same as "not a Swift name", and the check
+    /// reported citations as stale that are nothing of the kind. Run from a
+    /// git worktree, where there is no sibling to find, it failed on a
+    /// comment that had been right for days.
     @Test func everyCitedRuleIsInTheModel() throws {
         let manifest = try manifest()
+        guard manifest.platformSources.keys.allSatisfy(siblingIsPresent) else { return }
         let names = try Set(modelDeclarations().declarations.map(\.name)).union(modelNames())
             .union(SyncModelConformanceTests.checkedRules)
         var paths = Set(manifest.sources.keys)
