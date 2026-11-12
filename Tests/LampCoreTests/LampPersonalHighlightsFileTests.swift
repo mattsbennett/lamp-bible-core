@@ -138,16 +138,24 @@ struct LampPersonalHighlightsFileTests {
         ))
         #expect(try compiledSetID(from: document) == "personal-highlights:ESV")
 
-        // A file from before the change: the module ID stands in, as it did.
+        // A file from before the change said nothing, and spelled the set
+        // with the module's name. Read back it gives the same answer, since
+        // the reader makes the guess itself: a caller that had to make it
+        // afterwards would be a caller that could forget, and the one which
+        // maps a set to the module it is published under did forget — it
+        // keyed the mapping by a name no set had, so a Mac that had lost
+        // its records minted a second module and published the same
+        // highlights twice.
         var meta = object(document, "meta")
         meta.removeValue(forKey: "setId")
         document["meta"] = meta
-        #expect(try compiledSetID(from: document) == "personal-highlights-ESV")
-        #expect(
-            LampLibrary.canonicalHighlightSetID("personal-highlights-ESV", translationID: "ESV")
-                == "personal-highlights:ESV",
-            "which is the guess both apps now share for an older file"
-        )
+        #expect(try compiledSetID(from: document) == "personal-highlights:ESV")
+
+        // Where the stated set id and the module's are the *same* string
+        // the file is genuinely ambiguous — it is exactly what the old
+        // flattening produced — and the old reading stands. A set that
+        // names itself differently is taken at its word, which
+        // `aSetThatNamesItselfIsNotGuessedAt` holds.
     }
 
     /// Nothing that is not in the file decides what the file says.

@@ -30,23 +30,33 @@ public struct LampPersonalDeletionLedger: Equatable, Sendable {
         /// records it), when known.
         public func isDeleted(itemModified: Int?) -> Bool {
             guard let deletedAt else { return false }
-            // The times here are milliseconds; `itemModified` comes from the
+            // These times are milliseconds; `itemModified` comes from the
             // file in **seconds**, so the two are not comparable as they
-            // stand. Multiplying by a thousand reads the copy as saved at
-            // the *start* of its second, which lets a deletion recorded
-            // earlier in that same second win over a later save — an
-            // earlier deletion beating a later edit, out of nothing but the
-            // rounding.
+            // stand.
             //
-            // The copy was saved somewhere inside that second and nothing
-            // says where, so a deletion is known to be later only once the
-            // second has passed. That errs towards keeping the copy, which
-            // is the side to err on: a note kept that should have gone can
-            // be deleted again, and a note deleted that should have been
-            // kept is gone. `presentSince` is exact and is still compared
-            // exactly. Modelled as `tombstoneDeletesSecondsCopy`.
-            let modified = itemModified.map { (Int64($0) + 1) * 1_000 }
-            let presence = max(presentSince ?? .min, modified ?? .min)
+            // A `presentSince` at or after the start of that second **is**
+            // the record of that save, so it is compared exactly — there is
+            // no ambiguity left to resolve, and resolving it anyway made a
+            // note deleted moments after it was written come back on every
+            // device, for good.
+            //
+            // Without one, nothing says where in the second the save
+            // happened, so the end of it is assumed: a deletion counts only
+            // once the second has passed. That errs towards keeping the
+            // copy, which is the side to err on — one kept that should have
+            // gone can be deleted again; one deleted that should have been
+            // kept is gone.
+            //
+            // Modelled as `tombstoneDeletesSecondsCopy`.
+            let presence: Int64
+            switch (presentSince, itemModified) {
+            case let (saved?, modified?) where saved >= Int64(modified) * 1_000:
+                presence = saved
+            case let (saved, modified?):
+                presence = max(saved ?? .min, (Int64(modified) + 1) * 1_000)
+            case let (saved, nil):
+                presence = saved ?? .min
+            }
             return deletedAt >= presence
         }
 

@@ -106,7 +106,7 @@ public enum LampWebDAVPersonalArchiveAdapter {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
             database,
-            "SELECT id FROM highlight_meta LIMIT 1",
+            "SELECT id, translation_id FROM highlight_meta LIMIT 1",
             -1,
             &statement,
             nil
@@ -114,7 +114,49 @@ public enum LampWebDAVPersonalArchiveAdapter {
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW,
               let value = sqlite3_column_text(statement, 0) else { return nil }
+        let id = String(cString: value)
+        let translationID = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+
+        // A file written before a set could say who it was carries the
+        // **module's** id here, and the default set's real id holds a colon
+        // no module id can. Read as the set's name, that mapping names a set
+        // nothing has — so a Mac that had lost its records would mint a
+        // second module and publish the same highlights twice, which is the
+        // one thing the mapping exists to prevent.
+        //
+        // Only where the file did not say: a set id that differs from the
+        // module's was stated, and is taken as it stands.
+        guard let translationID, id == moduleID(in: database) else { return id }
+        return canonicalDefaultSetID(id, translationID: translationID)
+    }
+
+    /// What the file says it is, from `module_format`.
+    private static func moduleID(in database: OpaquePointer) -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database, "SELECT module_id FROM module_format LIMIT 1", -1, &statement, nil
+        ) == SQLITE_OK, let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0) else { return nil }
         return String(cString: value)
+    }
+
+    /// The default set's real id, for a file that spelled it as a module id.
+    ///
+    /// The same rule as `LampLibrary.canonicalHighlightSetID`, which reads
+    /// the file's contents; this reads its metadata, and the two must agree
+    /// or one device names a set what the other does not.
+    public static func canonicalDefaultSetID(
+        _ setID: String, translationID: String
+    ) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        let safe = String(translationID.unicodeScalars.map {
+            allowed.contains($0) ? Character(String($0)) : "-"
+        })
+        return setID == "personal-highlights-\(safe)"
+            ? "personal-highlights:\(translationID)"
+            : setID
     }
 
     private static func updateModuleID(

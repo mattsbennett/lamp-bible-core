@@ -1718,24 +1718,49 @@ have been kept is gone.
 -/
 
 def tombstoneDeletesSecondsCopy (t : Tombstone) (copySeconds : Option Nat) : Bool :=
-  tombstoneDeletes t (copySeconds.map (fun s => (s + 1) * 1000))
+  match copySeconds with
+  | none => tombstoneDeletes t none
+  | some s =>
+    match t.presentSince with
+    -- A presence at or after the start of that second is the record of
+    -- that very save: exact, so compared exactly.
+    | some p => if s * 1000 ≤ p then tombstoneDeletes ⟨some p, t.deletedAt⟩ none
+                else tombstoneDeletes t (some ((s + 1) * 1000))
+    -- Nothing exact to go on, so the end of the second is assumed.
+    | none => tombstoneDeletes t (some ((s + 1) * 1000))
 
--- A deletion anywhere inside the second the copy was saved in leaves it
--- alone, including one recorded before the save.
+-- Where the ledger recorded the save itself, a deletion after it counts,
+-- even inside the same second. Without this a note deleted moments after
+-- it was written came back on every device, for good.
+theorem anExactSaveIsComparedExactly (s p d : Nat) (hp : s * 1000 ≤ p) (h : p ≤ d) :
+    tombstoneDeletesSecondsCopy ⟨some p, some d⟩ (some s) = true := by
+  simp [tombstoneDeletesSecondsCopy, hp, tombstoneDeletes, later, h]
+
+-- And a deletion before that exact save still loses to it.
+theorem anExactSaveBeatsAnEarlierDeletion (s p d : Nat) (hp : s * 1000 ≤ p) (h : d < p) :
+    tombstoneDeletesSecondsCopy ⟨some p, some d⟩ (some s) = false := by
+  simp only [tombstoneDeletesSecondsCopy]
+  split
+  case isTrue =>
+    show Decidable.decide ((later (some p) none).getD 0 ≤ d) = false
+    apply decide_eq_false
+    simp [later]; omega
+  case isFalse notExact => exact absurd hp notExact
+
+-- With nothing exact recorded, a deletion anywhere inside the second the
+-- copy was saved in leaves it alone, including one recorded before it.
 theorem deletionInsideTheSavesSecondKeepsTheCopy (s ms : Nat) (h : ms < 1000) :
     tombstoneDeletesSecondsCopy ⟨none, some (s * 1000 + ms)⟩ (some s) = false := by
   show Decidable.decide ((later none (some ((s + 1) * 1000))).getD 0 ≤ s * 1000 + ms) = false
   apply decide_eq_false
   simp [later]; omega
 
--- Once the second has passed, it deletes as before.
+-- Once the second has passed, it deletes.
 theorem deletionAfterTheSavesSecondDeletes (s : Nat) :
     tombstoneDeletesSecondsCopy ⟨none, some ((s + 1) * 1000)⟩ (some s) = true := by
   simp [tombstoneDeletesSecondsCopy, tombstoneDeletes, later]
 
--- A save recorded to the millisecond still speaks for itself: `presentSince`
--- is exact, so it is compared exactly, and the rounding above only ever
--- widens what survives.
+-- A save with no copy to compare against speaks for itself, as before.
 theorem anExactSaveStillCounts (p d : Nat) (h : d < p) :
     tombstoneDeletesSecondsCopy ⟨some p, some d⟩ none = false := by
   show Decidable.decide ((later (some p) none).getD 0 ≤ d) = false

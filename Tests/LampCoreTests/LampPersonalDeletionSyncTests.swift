@@ -361,12 +361,30 @@ struct LampPersonalDeletionSyncTests {
         // While a deletion from before the save loses to it, as it should.
         #expect(deleted(at: Int64(saved - 5) * 1_000) == false)
 
-        // A save recorded to the millisecond speaks for itself: exact, and
-        // compared exactly, so the widening above never loses a deletion
-        // that a precise save would have lost to.
+        // **Where the ledger recorded the save itself, there is nothing to
+        // assume.** A presence at or after the start of that second is the
+        // record of that very save, so it is compared exactly. Without
+        // this, a note deleted moments after it was written came back on
+        // every device, for good — which is what
+        // `deletedNotesStayDeletedAndANewNoteOnTheVerseIsKept` was telling
+        // me while I read the end of a test log instead of its exit code.
+        func withSave(at saveMilliseconds: Int64, deletedAt: Int64) -> Bool {
+            LampPersonalDeletionLedger.Entry(
+                presentSince: saveMilliseconds, deletedAt: deletedAt
+            ).isDeleted(itemModified: saved)
+        }
+        let second = Int64(saved) * 1_000
+        #expect(withSave(at: second + 100, deletedAt: second + 300))
+        #expect(withSave(at: second + 100, deletedAt: second + 100), "at the same instant")
+        #expect(withSave(at: second + 300, deletedAt: second + 100) == false, "before the save")
+
+        // A presence from before that second says nothing about this save,
+        // so the end of the second is assumed, as above.
+        #expect(withSave(at: second - 5_000, deletedAt: second + 900) == false)
+
+        // And a save with no copy to compare against speaks for itself.
         let exact = LampPersonalDeletionLedger.Entry(
-            presentSince: Int64(saved) * 1_000 + 900,
-            deletedAt: Int64(saved) * 1_000 + 100
+            presentSince: second + 900, deletedAt: second + 100
         )
         #expect(exact.isDeleted(itemModified: nil) == false)
     }
