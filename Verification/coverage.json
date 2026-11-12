@@ -5,7 +5,7 @@
     "Sources/LampModuleKit/LampShared*.swift",
     "Sources/LampModuleKit/LampWebDAV*.swift",
     "Sources/LampCore/LampSync*.swift",
-    "Sources/LampCore/LampPersonalDeletionLedger.swift",
+    "Sources/LampCore/LampPersonal*.swift",
     "Sources/LampCore/LampPresentationDeckPortable.swift"
   ],
   "sources": {
@@ -21,6 +21,30 @@
         "macStructuredContentAfterSave"
       ],
       "boundary": "Only the library's sync paths are modelled: personal import and the deletion ledger. SQLite and filesystem behaviour are assumed."
+    },
+    "Sources/LampCore/LampPersonalExportSchema.swift": {
+      "boundary": "Declares the shape each personal kind is written as, apart from what a *compiler* writes. It decides nothing at sync time; it is what both apps' writers are pinned against — LampPersonalExportShapeTests here, and the phone's own pins against the same declarations."
+    },
+    "Sources/LampCore/LampPersonalFile.swift": {
+      "boundary": "The container every personal file shares — journal mode, module_format, module_meta, ANALYZE, VACUUM, zlib — and the one spelling of JSON and of search_text. No merge decision, so no rule: what it owns is **bytes**, which the model does not describe and should not. Held instead by digests taken from the old writer before each move and unchanged by it, and by writing the same records twice from libraries that share nothing."
+    },
+    "Sources/LampCore/LampPersonalHighlightsFile.swift": {
+      "boundary": "Builds the document one highlight set travels as, which the compiler turns into the file. The set's own identity is in it (`meta.setId`); what that identity is used *for* — matching a deletion to a highlight — belongs to the ledger and is modelled there."
+    },
+    "Sources/LampCore/LampPersonalMarkdownDocument.swift": {
+      "boundary": "The framing shared by the Markdown a person exports and imports by hand. Not what syncs: a sync publishes the SQLite file. No merge decision."
+    },
+    "Sources/LampCore/LampPersonalMarkdownImport.swift": {
+      "boundary": "Reads that Markdown back. What it produces goes through the same merge as anything else, so the decisions are `decide` and `importOutcome`, reached from LampLibrary, not here."
+    },
+    "Sources/LampCore/LampPersonalMarkdownWriter.swift": {
+      "boundary": "Writes it, and the footnote definitions the readers that number them share. No merge decision."
+    },
+    "Sources/LampCore/LampPersonalNotesFile.swift": {
+      "boundary": "Writes the notes file both apps publish, from records. Carries no merge decision — which note wins is `tombstoneDeletesSecondsCopy` and `decide`. What must hold is that the same records give the same bytes on either app, which is a property of an encoder rather than a rule, and is pinned by digest in LampPersonalNotesFileTests."
+    },
+    "Sources/LampCore/LampPersonalWritingFile.swift": {
+      "boundary": "As the notes file, for writings, plus making one ready to travel: unwrapping a plain-text content wrapper and gathering the media its Markdown names. Still no merge decision. Its row type exists so that neither app's model of a writing decides what the file may hold."
     },
     "Sources/LampCore/LampPersonalDeletionLedger.swift": {
       "rules": [
