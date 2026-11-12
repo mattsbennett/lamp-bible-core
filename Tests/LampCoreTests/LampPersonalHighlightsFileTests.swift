@@ -82,4 +82,98 @@ struct LampPersonalHighlightsFileTests {
         let spans = verses[0]["highlights"] as? [[String: Any]] ?? []
         #expect(spans[0]["color"] == nil, "a span with no colour of its own takes the theme's")
     }
+
+    /// A set says who it is, apart from the module it travels in.
+    ///
+    /// A module ID holds only letters, digits and `._-`, and the Mac's
+    /// default set is `personal-highlights:<translation>` — a colon no
+    /// module ID can carry. The set travelled as a flattened module ID and
+    /// each app guessed its way back: the Mac put the colon in again, the
+    /// phone did not. The deletion ledger keys a highlight by its set, so a
+    /// highlight deleted on the Mac was never matched on the phone and
+    /// stayed there for good. Owner approved the format change.
+    @Test func theSetSaysWhoItIs() throws {
+        let document = try LampPersonalHighlightsFile.document(for: .init(
+            id: "personal-highlights:ESV",
+            moduleID: "personal-highlights-ESV",
+            name: "Mine", translationID: "ESV",
+            highlights: [highlight(43_003_016, 0, 3)]
+        ))
+        let meta = object(document, "meta")
+        #expect(meta["setId"] as? String == "personal-highlights:ESV", "colon and all")
+        #expect(meta["id"] as? String == "personal-highlights-ESV", "the module is still named")
+    }
+
+    /// Compiled, the set's own name is what a reader finds — and a document
+    /// written before sets said who they were still reads as it always did.
+    @Test func aCompiledSetCarriesItsOwnName() throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("highlights-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        func compiledSetID(from document: [String: Any]) throws -> String? {
+            let json = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+            // Named for the module: the compiler checks that the output
+            // carries the ID the document declares.
+            let out = fixture
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                .appendingPathComponent("personal-highlights-ESV.lamp")
+            try FileManager.default.createDirectory(
+                at: out.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            _ = try LampModuleCompiler().compile(
+                data: json, sourceFilename: "personal-highlights-ESV.json", destinationURL: out
+            )
+            return try LampWebDAVPersonalArchiveAdapter.highlightSetID(
+                in: try Data(contentsOf: out)
+            )
+        }
+
+        var document = try LampPersonalHighlightsFile.document(for: .init(
+            id: "personal-highlights:ESV",
+            moduleID: "personal-highlights-ESV",
+            name: "Mine", translationID: "ESV",
+            highlights: [highlight(43_003_016, 0, 3)]
+        ))
+        #expect(try compiledSetID(from: document) == "personal-highlights:ESV")
+
+        // A file from before the change: the module ID stands in, as it did.
+        var meta = object(document, "meta")
+        meta.removeValue(forKey: "setId")
+        document["meta"] = meta
+        #expect(try compiledSetID(from: document) == "personal-highlights-ESV")
+        #expect(
+            LampLibrary.canonicalHighlightSetID("personal-highlights-ESV", translationID: "ESV")
+                == "personal-highlights:ESV",
+            "which is the guess both apps now share for an older file"
+        )
+    }
+
+    /// Nothing that is not in the file decides what the file says.
+    ///
+    /// The caller's order ended in a **local row id**, so two devices that
+    /// had merged to the same highlights could write them in different
+    /// orders and publish different files from identical content.
+    @Test func theOrderTheyArrivedInDoesNotReachTheFile() throws {
+        func spans(_ highlights: [LampVerseHighlight]) throws -> [[String: Any]] {
+            let document = try LampPersonalHighlightsFile.document(for: .init(
+                id: "set", moduleID: "m", name: "Mine", translationID: "ESV",
+                highlights: highlights
+            ))
+            let verses = document["verses"] as? [[String: Any]] ?? []
+            return verses[0]["highlights"] as? [[String: Any]] ?? []
+        }
+
+        let a = highlight(43_003_016, 0, 3, color: "#ffcc00")
+        let b = highlight(43_003_016, 0, 3, color: "#00ccff")
+        let c = highlight(43_003_016, 4, 9)
+        let one = try spans([a, b, c])
+        let other = try spans([c, b, a])
+        #expect(
+            one.map { $0["color"] as? String } == other.map { $0["color"] as? String },
+            "the same highlights, whichever order this device happened to store them in"
+        )
+        #expect(one.map { $0["sc"] as? Int } == [0, 0, 4])
+    }
 }

@@ -68,6 +68,20 @@ public enum LampPersonalHighlightsFile {
         var meta: [String: Any] = [
             "schemaVersion": "1.0",
             "id": set.moduleID,
+            // **The set's own identity, apart from the module's.** A module
+            // ID may hold only letters, digits and `._-`, and the Mac's
+            // default set is `personal-highlights:<translation>` — a colon
+            // no module ID can carry. So the set travelled as a flattened
+            // module ID and each app guessed its way back: the Mac put the
+            // colon in again, the phone did not, and the two then named the
+            // same set differently. The deletion ledger keys a highlight by
+            // its set, so a highlight deleted on the Mac was never matched
+            // on the phone and stayed there for good.
+            //
+            // Written plainly instead. A file without it is read as before —
+            // the module ID, with the Mac's canonicalisation — so nothing
+            // already published changes meaning.
+            "setId": set.id,
             "type": "highlights",
             "name": set.name,
             "translationId": set.translationID,
@@ -88,7 +102,17 @@ public enum LampPersonalHighlightsFile {
         }
         let grouped = Dictionary(grouping: set.highlights, by: \.reference)
         let verses: [[String: Any]] = grouped.keys.sorted().map { reference in
-            let spans: [[String: Any]] = (grouped[reference] ?? []).map { highlight in
+            // Ordered by what the file carries, never by the order they
+            // arrived in. The caller's order ends in a **local row id**, so
+            // two devices that had merged to the same set of highlights
+            // could still write them in different orders and publish
+            // different files — from identical content. Nothing that is not
+            // in the file decides what the file says.
+            let ordered = (grouped[reference] ?? []).sorted { left, right in
+                (left.startOffset, left.endOffset, left.style.rawValue, left.color ?? "")
+                    < (right.startOffset, right.endOffset, right.style.rawValue, right.color ?? "")
+            }
+            let spans: [[String: Any]] = ordered.map { highlight in
                 var span: [String: Any] = [
                     "sc": highlight.startOffset,
                     "ec": highlight.endOffset,

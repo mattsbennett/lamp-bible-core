@@ -26,7 +26,12 @@ extension LampModuleCompiler {
                     id, name, description, translation_id, created, last_modified
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """, arguments: [
-                    moduleID,
+                    // The set's own identity when the document gives one.
+                    // A module ID cannot hold the colon the Mac's default
+                    // set has in its name, so a file without `setId` is one
+                    // written before sets said who they were, and the
+                    // module ID stands in as it always did.
+                    JSONSupport.string(meta["setId"]) ?? moduleID,
                     JSONSupport.string(meta["name"]) ?? "Highlights",
                     JSONSupport.string(meta["description"]),
                     translationID,

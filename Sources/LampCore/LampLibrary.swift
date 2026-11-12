@@ -4257,7 +4257,13 @@ public actor LampLibrary {
 
     /// The default set a translation's highlights belong to, for a set ID as
     /// it may come back from an export.
-    static func canonicalHighlightSetID(_ setID: String, translationID: String) -> String {
+    ///
+    /// Only for a file that does not say which set it is: one written
+    /// before `meta.setId` existed, where the set's name had to be guessed
+    /// back out of a flattened module ID. Public so the phone can read
+    /// those older files the same way rather than guessing differently,
+    /// which is how the two apps came to name one set two things.
+    public static func canonicalHighlightSetID(_ setID: String, translationID: String) -> String {
         setID == "personal-highlights-\(safeExportIdentifier(translationID))"
             ? "personal-highlights:\(translationID)"
             : setID
@@ -6054,13 +6060,21 @@ public actor LampLibrary {
                 fileManager: fileManager
             )
         case .highlights:
-            // Last of the three to move, behind the ruling that highlights
-            // merge as a per-highlight union. Until then its file is still
-            // written under its own name and renamed afterwards.
-            try LampWebDAVPersonalArchiveAdapter.archive(
-                try highlightsArchive(),
-                replacingModuleIDWith: moduleID,
-                kind: .notes
+            // There is no such file. Notes and writings travel as the whole
+            // collection in one archive; highlights travel as **one file
+            // per set**, built by `personalHighlightsDocument` and compiled.
+            // This branch was written as though they were alike and sent a
+            // highlights database through the notes adapter, which updates
+            // `note_entries` — a table it does not have. It threw
+            // "could not prepare personal content", which says nothing
+            // about the real mistake, and it threw every time. Said plainly
+            // instead, and nothing calls it: found by a Codex review.
+            throw LampLibraryError.invalidPersonalContent(
+                """
+                \(LampPersonalModule.highlights.name) is not published as one \
+                archive. Each set travels as its own file: build it with \
+                personalHighlightsDocument(translationID:moduleID:name:setID:).
+                """
             )
         }
     }
