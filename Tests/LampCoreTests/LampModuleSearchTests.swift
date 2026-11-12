@@ -117,6 +117,39 @@ struct LampModuleSearchTests {
         #expect(merged.map(\.id) == ["b3", "a1", "b1", "a2", "b2", "a3", "c1"])
     }
 
+    /// The rule both apps take Scripture by: the preferred translation where
+    /// it matched, else the one with the most, ties to the earlier, with the
+    /// others named. Only whether the others matched is asked of them.
+    @Test func scriptureChoiceTakesThePreferredElseTheFullest() throws {
+        let hits = ["AAA": [1, 2], "BBB": [1, 2, 3], "CCC": [Int](), "DDD": [7, 8, 9]]
+        var asked: [String: Int] = [:]
+        func verses(_ id: String, _ limit: Int) -> [Int] {
+            asked[id] = limit
+            return Array((hits[id] ?? []).prefix(limit))
+        }
+        let order = ["AAA", "BBB", "CCC", "DDD"]
+
+        let own = try #require(LampScriptureChoice.choose(preferred: "AAA", order: order, limit: 50, verses: verses))
+        #expect(own.choice == LampScriptureChoice(translationID: "AAA", alsoIn: ["BBB", "DDD"]))
+        #expect(own.matches == [1, 2])
+        #expect(asked == ["AAA": 50, "BBB": 1, "CCC": 1, "DDD": 1], "the others only asked whether they matched")
+
+        // None in the preferred: the fullest, and BBB and DDD tie at three,
+        // so the earlier.
+        asked = [:]
+        let fallback = try #require(LampScriptureChoice.choose(preferred: "CCC", order: order, limit: 50, verses: verses))
+        #expect(fallback.choice == LampScriptureChoice(translationID: "BBB", alsoIn: ["AAA", "DDD"]))
+        #expect(fallback.matches == [1, 2, 3])
+        #expect(asked["CCC"] == 50)
+
+        // A preferred translation not searched counts as having none.
+        let absent = try #require(LampScriptureChoice.choose(preferred: "ZZZ", order: ["AAA", "DDD"], limit: 50, verses: verses))
+        #expect(absent.choice == LampScriptureChoice(translationID: "DDD", alsoIn: ["AAA"]))
+
+        // Nothing matched anywhere.
+        #expect(LampScriptureChoice.choose(preferred: "AAA", order: ["CCC"], limit: 50, verses: verses) == nil)
+    }
+
     /// Shared by kind, a page goes evenly to the kinds that matched, each
     /// kind's first in the order given, room a kind can't use going to the
     /// rest, and the kinds cut are named. Seven tied commentaries can't keep

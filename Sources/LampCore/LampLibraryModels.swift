@@ -267,6 +267,68 @@ public struct LampModuleSearchKindResults: Equatable, Sendable {
     }
 }
 
+/// The one translation Scripture is shown from where a search prefers one,
+/// and the others that matched too.
+///
+/// Both apps decide it here. The Mac's page of every kind searched all
+/// translations together and put the same verse on the page once per
+/// translation; the phone searches only the chosen translation, and showed
+/// no verses at all for a word it lacks ("charity" is KJV's).
+public struct LampScriptureChoice: Equatable, Sendable {
+    /// The translation whose verses are shown.
+    public let translationID: String
+    /// The other translations that matched, in `order`.
+    public let alsoIn: [String]
+
+    public init(translationID: String, alsoIn: [String]) {
+        self.translationID = translationID
+        self.alsoIn = alsoIn
+    }
+
+    /// The preferred translation where it has any match. Where it has none,
+    /// the translation with the most, ties going to the earlier in `order`,
+    /// so the search never looks empty when another translation has the
+    /// words. Nil when no translation matched.
+    ///
+    /// `order` is the translations searched, in the order they are listed;
+    /// the preferred one need not be among them. `verses` searches one
+    /// translation for at most `limit` matches: asked for `limit` where its
+    /// matches may be shown or counted, and for 1 where only whether it
+    /// matched at all is wanted.
+    public static func choose<Match>(
+        preferred: String,
+        order: [String],
+        limit: Int,
+        verses: (_ translationID: String, _ limit: Int) throws -> [Match]
+    ) rethrows -> (choice: LampScriptureChoice, matches: [Match])? {
+        var found: [String: [Match]] = [:]
+        if order.contains(preferred) {
+            found[preferred] = try verses(preferred, limit)
+        }
+        var shown: String?
+        if found[preferred]?.isEmpty == false {
+            shown = preferred
+        } else {
+            for id in order where id != preferred {
+                let hits = try verses(id, limit)
+                found[id] = hits
+                // Ties go to the earlier translation: `>` keeps it.
+                if hits.count > (shown.flatMap { found[$0]?.count } ?? 0) { shown = id }
+            }
+        }
+        guard let shown else { return nil }
+        var others: [String] = []
+        for id in order where id != shown {
+            if let hits = found[id] {
+                if !hits.isEmpty { others.append(id) }
+            } else if try !verses(id, 1).isEmpty {
+                others.append(id)
+            }
+        }
+        return (LampScriptureChoice(translationID: shown, alsoIn: others), found[shown] ?? [])
+    }
+}
+
 public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
     public let id: String
     public let kind: LampModuleKind

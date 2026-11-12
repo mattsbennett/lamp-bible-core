@@ -2697,35 +2697,17 @@ public actor LampLibrary {
             }
             var matches: [(LampTranslationSearchResult, String)] = []
             if let preferred = preferredTranslationID, translationIDs.count > 1 {
-                // Scripture from one translation: the reader's own, or — when
-                // it has no match, as a word only older translations use —
-                // the one with the most, so the search never looks empty
-                // when it isn't. Every translation searched together put the
-                // same verse on the page once per translation.
-                var found: [String: [(LampTranslationSearchResult, String)]] = [:]
-                if translationIDs.contains(preferred) {
-                    found[preferred] = try verses(in: [preferred], limit: resultLimit)
-                }
-                var shown: String?
-                if found[preferred]?.isEmpty == false {
-                    shown = preferred
-                } else {
-                    for id in translationOrder where id != preferred {
+                // Scripture from one translation (`LampScriptureChoice.choose`,
+                // which the phone's search calls too).
+                if let chosen = try LampScriptureChoice.choose(
+                    preferred: preferred, order: translationOrder, limit: resultLimit,
+                    verses: { id, limit in
                         try Task.checkCancellation()
-                        let hits = try verses(in: [id], limit: resultLimit)
-                        found[id] = hits
-                        // Ties go to the earlier translation: `>` keeps it.
-                        if hits.count > (shown.flatMap { found[$0]?.count } ?? 0) { shown = id }
+                        return try verses(in: [id], limit: limit)
                     }
-                }
-                if let shown {
-                    matches = found[shown] ?? []
-                    let others = try translationOrder.filter { id in
-                        guard id != shown else { return false }
-                        if let hits = found[id] { return !hits.isEmpty }
-                        return try !verses(in: [id], limit: 1).isEmpty
-                    }
-                    scripture = LampScriptureChoice(translationID: shown, alsoIn: others)
+                ) {
+                    matches = chosen.matches
+                    scripture = chosen.choice
                 }
             } else if !translationIDs.isEmpty {
                 matches = try verses(in: translationIDs, limit: resultLimit - countForKind(.translation))
@@ -6995,9 +6977,3 @@ struct ModuleSearchGathering {
     var scripture: LampScriptureChoice?
 }
 
-/// The one translation a shared page took Scripture from, and the others
-/// that matched too, in the order they are installed.
-struct LampScriptureChoice: Equatable {
-    var translationID: String
-    var alsoIn: [String]
-}
