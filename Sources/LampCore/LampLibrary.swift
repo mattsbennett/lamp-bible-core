@@ -6164,6 +6164,12 @@ public actor LampLibrary {
     }
 
     private func createPersonalNotesDatabase(at databaseURL: URL) throws {
+        // The rows themselves are `LampPersonalNotesFile`'s, not this
+        // library's: the phone writes the same file from its own notes, and
+        // a file whose bytes depend on which device wrote it is re-uploaded
+        // by the other device on every pass. One writer is what makes them
+        // agree; what this still decides is which notes go in and in what
+        // order.
         let notes = try allPersonalNotes()
         try createPersonalExportDatabase(
             at: databaseURL,
@@ -6173,61 +6179,10 @@ public actor LampLibrary {
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
                     author TEXT, version TEXT, is_editable INTEGER NOT NULL DEFAULT 1
                 );
-                CREATE TABLE note_entries (
-                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, verse_id INTEGER NOT NULL,
-                    book INTEGER NOT NULL, chapter INTEGER NOT NULL, verse INTEGER NOT NULL,
-                    title TEXT, content TEXT NOT NULL, verse_refs_json TEXT,
-                    last_modified INTEGER, footnotes_json TEXT, search_text TEXT,
-                    record_change_tag TEXT, media_json TEXT
-                );
-                CREATE INDEX idx_note_module ON note_entries(module_id);
-                CREATE INDEX idx_note_verse ON note_entries(verse_id);
-                CREATE INDEX idx_note_chapter ON note_entries(book, chapter, verse);
+                \(LampPersonalNotesFile.schema)
                 """
         ) { db in
-            try db.execute(sql: """
-                INSERT INTO module_meta (id, name, version, is_editable)
-                VALUES (?, ?, ?, 1)
-                """, arguments: [
-                    LampPersonalModule.notes.id,
-                    LampPersonalModule.notes.name,
-                    LampModuleCompiler.formatVersion,
-                ])
-            for note in notes {
-                let components = LampBibleReferenceFormatter.components(of: note.reference)
-                let footnotes = note.footnotes.map { footnote -> [String: String] in
-                    var value = ["id": footnote.id, "content": footnote.content]
-                    if let kind = footnote.kind { value["type"] = kind }
-                    return value
-                }
-                try db.execute(sql: """
-                    INSERT INTO note_entries (
-                        id, module_id, verse_id, book, chapter, verse, title, content,
-                        verse_refs_json, last_modified, footnotes_json, search_text,
-                        record_change_tag, media_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-                    """, arguments: [
-                        note.id,
-                        LampPersonalModule.notes.id,
-                        note.reference,
-                        components.book,
-                        components.chapter,
-                        components.verse,
-                        note.title,
-                        note.content,
-                        try jsonFragmentString(note.verseReferences),
-                        Int(note.lastModified.timeIntervalSince1970),
-                        try jsonFragmentString(footnotes),
-                        [note.title, note.content].compactMap { $0 }.joined(separator: " "),
-                        // Without this the file that syncs says a note has a
-                        // picture — its text holds `media/<id>` — and nothing
-                        // says which file that is. The other device then had
-                        // no way to ask for it, so a note's pictures only
-                        // ever showed on the device they were attached on
-                        // (found by ios-56).
-                        note.mediaJSON,
-                    ])
-            }
+            try LampPersonalNotesFile.write(notes, into: db)
         }
     }
 
