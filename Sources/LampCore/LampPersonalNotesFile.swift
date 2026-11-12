@@ -41,22 +41,53 @@ public enum LampPersonalNotesFile {
     /// same bytes twice hands them over in the same order twice. The Mac
     /// reads them `ORDER BY book, chapter, verse, last_modified, id`, which
     /// a second device can sort by without having read anything.
-    public static func write(_ notes: [LampVerseNote], into db: Database) throws {
+    /// The whole published file, compressed, under the name it travels as.
+    ///
+    /// `moduleID` is the reader's collection on the server (`notes` /
+    /// `devotionals`), the local backup's name (`personal-notes` /
+    /// `personal-writing`), or a module of the reader's own making. Writing
+    /// it in from the start is what lets a file be published without being
+    /// decompressed, rewritten and compressed again afterwards.
+    public static func archive(
+        _ notes: [LampVerseNote],
+        moduleID: String = LampPersonalModule.notes.id,
+        fileManager: FileManager = .default
+    ) throws -> Data {
+        try LampPersonalFile.archive(
+            kind: LampPersonalModule.notes.kind,
+            moduleID: moduleID,
+            schema: """
+                \(LampPersonalFile.metaSchema)
+                \(schema)
+                """,
+            fileManager: fileManager
+        ) { db in
+            try write(notes, moduleID: moduleID, into: db)
+        }
+    }
+
+    public static func write(
+        _ notes: [LampVerseNote], moduleID: String = LampPersonalModule.notes.id, into db: Database
+    ) throws {
         try db.execute(sql: """
             INSERT INTO module_meta (id, name, version, is_editable)
             VALUES (?, ?, ?, 1)
             """, arguments: [
-                LampPersonalModule.notes.id,
+                moduleID,
                 LampPersonalModule.notes.name,
                 LampModuleCompiler.formatVersion,
             ])
         for note in notes {
-            try write(note, into: db)
+            try write(note, moduleID: moduleID, into: db)
         }
     }
 
     /// One note's row, which is the unit the two apps have to agree on.
-    public static func write(_ note: LampVerseNote, into db: Database) throws {
+    public static func write(
+        _ note: LampVerseNote,
+        moduleID: String = LampPersonalModule.notes.id,
+        into db: Database
+    ) throws {
         let components = LampBibleReferenceFormatter.components(of: note.reference)
         let footnotes = note.footnotes.map { footnote -> [String: String] in
             var value = ["id": footnote.id, "content": footnote.content]
@@ -71,7 +102,7 @@ public enum LampPersonalNotesFile {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             """, arguments: [
                 note.id,
-                LampPersonalModule.notes.id,
+                moduleID,
                 note.reference,
                 components.book,
                 components.chapter,

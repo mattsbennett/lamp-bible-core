@@ -6041,7 +6041,68 @@ public actor LampLibrary {
         }
     }
 
+    /// The reader's own content as the file that travels, under the name it
+    /// travels as.
+    ///
+    /// A local export is `personal-notes`; a sync publishes `notes`, and a
+    /// device that receives it merges the rows into its own collection. The
+    /// name used to be put on afterwards, by decompressing the exported
+    /// file, updating three tables and compressing it again. Written in from
+    /// the start it is one pass, and it is something the phone can produce
+    /// too — the rewrite was this app's own step, so no other writer could
+    /// ever have matched it.
+    public func personalArchive(
+        _ module: LampPersonalModule, moduleID: String
+    ) throws -> Data {
+        switch module {
+        case .notes:
+            try LampPersonalNotesFile.archive(
+                try allPersonalNotes(), moduleID: moduleID, fileManager: fileManager
+            )
+        case .writing:
+            try LampPersonalWritingFile.archive(
+                try personalDevotionals(), moduleID: moduleID, fileManager: fileManager
+            )
+        case .highlights:
+            // Last of the three to move, behind the ruling that highlights
+            // merge as a per-highlight union. Until then its file is still
+            // written under its own name and renamed afterwards.
+            try LampWebDAVPersonalArchiveAdapter.archive(
+                try highlightsArchive(),
+                replacingModuleIDWith: moduleID,
+                kind: .notes
+            )
+        }
+    }
+
+    /// The exported archive, for a test that compares it with the published
+    /// one. Not a way to publish: `personalArchive(_:moduleID:)` is.
+    func exportedPersonalArchiveForTesting(_ module: LampPersonalModule) throws -> Data {
+        try personalModuleArchive(for: module)
+    }
+
     private func personalModuleArchive(for module: LampPersonalModule) throws -> Data {
+        switch module {
+        case .writing:
+            // The whole file is `LampPersonalWritingFile`'s, container and
+            // all: the rows are not the only thing in the bytes, and a
+            // second app that reproduced the rows alone would publish a
+            // different file from the same writings.
+            return try LampPersonalWritingFile.archive(
+                try personalDevotionals(), fileManager: fileManager
+            )
+        case .notes:
+            return try LampPersonalNotesFile.archive(
+                try allPersonalNotes(), fileManager: fileManager
+            )
+        case .highlights:
+            return try highlightsArchive()
+        }
+    }
+
+    /// Still written here: highlights are the last of the three to move, and
+    /// move behind the ruling that they merge as a per-highlight union.
+    private func highlightsArchive() throws -> Data {
         let databaseURL = fileManager.temporaryDirectory
             .appendingPathComponent("lamp-personal-export-\(UUID().uuidString)")
             .appendingPathExtension("sqlite")
@@ -6050,68 +6111,16 @@ public actor LampLibrary {
             try? fileManager.removeItem(atPath: databaseURL.path + "-shm")
             try? fileManager.removeItem(atPath: databaseURL.path + "-wal")
         }
-
-        switch module {
-        case .writing:
-            try createPersonalWritingDatabase(at: databaseURL)
-        case .notes:
-            try createPersonalNotesDatabase(at: databaseURL)
-        case .highlights:
-            try createPersonalHighlightsDatabase(at: databaseURL)
-        }
-
+        try createPersonalHighlightsDatabase(at: databaseURL)
         let databaseData = try Data(contentsOf: databaseURL, options: [.mappedIfSafe])
         guard let compressedData = try? (databaseData as NSData).compressed(using: .zlib) as Data,
               let verification = try? (compressedData as NSData).decompressed(using: .zlib) as Data,
               verification == databaseData else {
             throw LampLibraryError.invalidPersonalContent(
-                "Lamp Bible could not create the portable \(module.name) archive."
+                "Lamp Bible could not create the portable \(LampPersonalModule.highlights.name) archive."
             )
         }
         return compressedData
-    }
-
-    private func createPersonalWritingDatabase(at databaseURL: URL) throws {
-        // As with notes: the rows are `LampPersonalWritingFile`'s, so the
-        // phone writes the same file from its own writings. What this still
-        // decides is which writings go in and in what order.
-        let entries = try personalDevotionals()
-        try createPersonalExportDatabase(
-            at: databaseURL,
-            module: .writing,
-            schema: """
-                CREATE TABLE module_meta (
-                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
-                    author TEXT, version TEXT, is_editable INTEGER NOT NULL DEFAULT 1
-                );
-                \(LampPersonalWritingFile.schema)
-                """
-        ) { db in
-            try LampPersonalWritingFile.write(entries, into: db)
-        }
-    }
-
-    private func createPersonalNotesDatabase(at databaseURL: URL) throws {
-        // The rows themselves are `LampPersonalNotesFile`'s, not this
-        // library's: the phone writes the same file from its own notes, and
-        // a file whose bytes depend on which device wrote it is re-uploaded
-        // by the other device on every pass. One writer is what makes them
-        // agree; what this still decides is which notes go in and in what
-        // order.
-        let notes = try allPersonalNotes()
-        try createPersonalExportDatabase(
-            at: databaseURL,
-            module: .notes,
-            schema: """
-                CREATE TABLE module_meta (
-                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
-                    author TEXT, version TEXT, is_editable INTEGER NOT NULL DEFAULT 1
-                );
-                \(LampPersonalNotesFile.schema)
-                """
-        ) { db in
-            try LampPersonalNotesFile.write(notes, into: db)
-        }
     }
 
     private func createPersonalHighlightsDatabase(at databaseURL: URL) throws {

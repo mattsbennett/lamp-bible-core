@@ -29,17 +29,44 @@ public enum LampPersonalWritingFile {
         CREATE INDEX idx_dev_series ON devotional_entries(series_id, series_order);
         """
 
-    public static func write(_ writings: [LampDevotional], into db: Database) throws {
+    /// The whole published file, compressed, under the name it travels as.
+    ///
+    /// `moduleID` is the reader's collection on the server (`notes` /
+    /// `devotionals`), the local backup's name (`personal-notes` /
+    /// `personal-writing`), or a module of the reader's own making. Writing
+    /// it in from the start is what lets a file be published without being
+    /// decompressed, rewritten and compressed again afterwards.
+    public static func archive(
+        _ writings: [LampDevotional],
+        moduleID: String = LampPersonalModule.writing.id,
+        fileManager: FileManager = .default
+    ) throws -> Data {
+        try LampPersonalFile.archive(
+            kind: LampPersonalModule.writing.kind,
+            moduleID: moduleID,
+            schema: """
+                \(LampPersonalFile.metaSchema)
+                \(schema)
+                """,
+            fileManager: fileManager
+        ) { db in
+            try write(writings, moduleID: moduleID, into: db)
+        }
+    }
+
+    public static func write(
+        _ writings: [LampDevotional], moduleID: String = LampPersonalModule.writing.id, into db: Database
+    ) throws {
         try db.execute(sql: """
             INSERT INTO module_meta (id, name, version, is_editable)
             VALUES (?, ?, ?, 1)
             """, arguments: [
-                LampPersonalModule.writing.id,
+                moduleID,
                 LampPersonalModule.writing.name,
                 LampModuleCompiler.formatVersion,
             ])
         for writing in writings {
-            try write(writing, into: db)
+            try write(writing, moduleID: moduleID, into: db)
         }
     }
 
@@ -50,7 +77,11 @@ public enum LampPersonalWritingFile {
     /// carries a name and an order and nothing else. It round-trips, which
     /// is what matters here, but a reader of this file should not take that
     /// column for an identifier it can resolve elsewhere.
-    public static func write(_ writing: LampDevotional, into db: Database) throws {
+    public static func write(
+        _ writing: LampDevotional,
+        moduleID: String = LampPersonalModule.writing.id,
+        into db: Database
+    ) throws {
         let scriptureValues = writing.keyScriptures.map { scripture -> [String: Any] in
             var value: [String: Any] = ["sv": scripture.startReference]
             if let endReference = scripture.endReference { value["ev"] = endReference }
@@ -68,7 +99,7 @@ public enum LampPersonalWritingFile {
                       ?, ?, ?, NULL, NULL, 0, ?)
             """, arguments: [
                 writing.id,
-                LampPersonalModule.writing.id,
+                moduleID,
                 writing.title,
                 writing.subtitle,
                 writing.author,
