@@ -108,6 +108,17 @@ public struct LampModuleSearchDatabase {
     }
 }
 
+extension LampModuleSearch {
+    /// An app's `results` that didn't make one result for each of core's
+    /// hits from a database.
+    public struct ResultsNotOneForEachHit: Error, Equatable {
+        public let database: String
+        public let kind: LampModuleKind
+        public let hits: Int
+        public let results: Int
+    }
+}
+
 /// What a search needs of an app's kind of result: where it came from, what
 /// it is ranked by, and how its snippet is set once cut.
 public struct LampModuleSearchResultShape<Result> {
@@ -405,6 +416,13 @@ extension LampModuleSearch {
                     }
                     guard !hits.isEmpty else { return [] }
                     let results = try sources.results(hits, kind, database, db)
+                    // Each snippet is cut for the hit beside its result: one
+                    // missing would move every snippet after it.
+                    guard results.count == hits.count else {
+                        throw ResultsNotOneForEachHit(
+                            database: database.id, kind: kind, hits: hits.count, results: results.count
+                        )
+                    }
                     // Quizzes carry their snippets; the rest wait for the cut.
                     return zip(results, hits).map { result, hit in
                         .init(result: result, deferred: kind == .quiz ? nil : (index, kind, hit))

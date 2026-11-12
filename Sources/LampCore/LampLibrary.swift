@@ -2566,6 +2566,8 @@ public actor LampLibrary {
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
             highlightColors: highlightColors, devotionalCriteria: devotionalCriteria
         )
+        // Nothing to look for: the library isn't read.
+        guard request.asksForAnything else { return [] }
         let resultLimit = min(max(limit, 1), 500)
         let reads = ModuleSearchReads()
         guard let found = try LampModuleSearch.gather(
@@ -2610,6 +2612,7 @@ public actor LampLibrary {
             highlightColors: highlightColors, devotionalCriteria: devotionalCriteria,
             preferredTranslationID: preferredTranslationID
         )
+        guard request.asksForAnything else { return [] }
         let reads = ModuleSearchReads()
         guard let found = try LampModuleSearch.gather(
             request, perKind: page + 1, from: moduleSearchSources(for: request, reads: reads)

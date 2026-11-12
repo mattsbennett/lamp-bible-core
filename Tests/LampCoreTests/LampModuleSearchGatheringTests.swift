@@ -197,5 +197,27 @@ struct LampModuleSearchGatheringTests {
             #expect(result.snippet == atOnce.first { $0.id == result.id }?.snippet)
         }
         #expect(try found.ranked(limit: 10).map(\.snippet).allSatisfy { $0 != standIn })
+
+        // A result short of the hits would move every snippet after it.
+        let short = LampModuleSearchSources<LampModuleSearchResult>(
+            shape: .core,
+            databases: { _ in [database] },
+            results: { hits, _, _, _ in Array(hits.dropFirst()) },
+            translations: { [] }, verses: nil, dictionaries: nil, plans: nil, highlights: nil
+        )
+        #expect(throws: LampModuleSearch.ResultsNotOneForEachHit(database: "one", kind: .commentary, hits: 3, results: 2)) {
+            try LampModuleSearch.gather(request, perKind: 10, from: short)
+        }
+    }
+
+    /// A request for nothing doesn't read the library: one not made yet
+    /// isn't made, and one that can't be read doesn't fail.
+    @Test func aRequestForNothingLeavesTheLibraryAlone() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LampModuleSearchGatheringTests-\(UUID().uuidString)", isDirectory: true)
+        let library = LampLibrary(rootURL: root)
+        #expect(try await library.searchModules(query: "  ").isEmpty)
+        #expect(try await library.searchModulesByKind(query: "", strongsKey: " ", highlightColors: []).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: root.path))
     }
 }
