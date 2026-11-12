@@ -96,6 +96,61 @@ public enum LampPersonalFile {
         return compressed
     }
 
+    /// What a file's `search_text` holds, derived from the row rather than
+    /// taken from whoever sent it.
+    ///
+    /// It is a **derived** column: each app rebuilds it for its own index
+    /// on the way in, so what the sender put there is nobody's business but
+    /// the file's. Taken from the sender it is the one column two apps can
+    /// disagree about while holding identical content — which is enough to
+    /// make each publish its own file in reply to the other for ever.
+    ///
+    /// It is not dead weight either. An installed module is searched
+    /// through this column (`LampModuleSearch`), so a module one device
+    /// publishes and another installs is findable only by what is written
+    /// here. So: everything a reader would search for, joined, from the row.
+    /// ios-56 asked for the rule; this is it.
+    public static func searchText(_ parts: [String?]) -> String {
+        parts
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// The words inside a JSON value, in the order they are written.
+    ///
+    /// For a column that holds structured text — a note's footnotes, a
+    /// writing's summary — where what a reader searches for is the text and
+    /// not the shape around it. A value that is not JSON at all is itself
+    /// the text, which is what a writing's content column holds once it has
+    /// been unwrapped to Markdown.
+    public static func searchableText(in value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        guard let data = value.data(using: .utf8),
+              let decoded = try? JSONSerialization.jsonObject(
+                  with: data, options: [.fragmentsAllowed]
+              )
+        else { return value }
+        var words: [String] = []
+        func walk(_ item: Any) {
+            switch item {
+            case let text as String: words.append(text)
+            case let list as [Any]: list.forEach(walk)
+            case let object as [String: Any]:
+                // Sorted, so one device's dictionary order cannot reach the
+                // bytes: Swift seeds that per process.
+                for key in object.keys.sorted() { walk(object[key] as Any) }
+            default: break
+            }
+        }
+        walk(decoded)
+        let joined = words
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return joined.isEmpty ? nil : joined
+    }
+
     /// JSON written the one way: keys sorted, slashes unescaped, a bare
     /// value allowed.
     public static func jsonFragment(_ value: Any?) throws -> String? {

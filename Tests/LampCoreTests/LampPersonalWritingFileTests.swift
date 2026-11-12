@@ -41,17 +41,22 @@ struct LampPersonalWritingFileTests {
         return try Data(contentsOf: out)
     }
 
-    /// Taken from the old writer before the move, and unchanged by it. If a
-    /// deliberate format change breaks this, read the new digest off the
-    /// failure, say in the commit why the file changed, and tell the phone —
-    /// its copy must change with it.
+    /// **Changed once, deliberately, when `search_text` stopped being taken
+    /// from the sender.** It is a derived column that each app rebuilds for
+    /// its own index, and the one column two apps can spell differently
+    /// while holding identical content — enough, by itself, to make each
+    /// publish its file in reply to the other for ever. It is derived from
+    /// the row now, structured summaries and footnotes read for their text.
+    /// Before that it was taken from the old writer and unchanged by the
+    /// move. If a deliberate format change breaks this again, read the new
+    /// digest off the failure, say in the commit why, and tell the phone.
     @Test func theFileIsTheSameOneTheLibraryUsedToWrite() async throws {
         let root = try scratch()
         defer { try? FileManager.default.removeItem(at: root) }
         let data = try await export(from: LampLibrary(rootURL: root), at: root)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         #expect(
-            digest == "41bfe0a7673c7982e2043080d40cf47b0ce1082ffbdccfa87297928c4464e1b7",
+            digest == "e1225cfc85f9750d792a8126cf3bc53b5c3e48afda163448af89e1f3310c5a7d",
             "the writings file changed; see this test's note before accepting it"
         )
     }
@@ -105,7 +110,9 @@ struct LampPersonalWritingFileTests {
         return library
     }
 
-    private func rows(of archive: Data, at url: URL) async throws -> [String] {
+    private func rows(
+        of archive: Data, at url: URL, without ignored: Swift.Set<String> = []
+    ) async throws -> [String] {
         let body = try (archive as NSData).decompressed(using: .zlib) as Data
         try body.write(to: url)
         var configuration = Configuration()
@@ -113,7 +120,12 @@ struct LampPersonalWritingFileTests {
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         return try await queue.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM devotional_entries ORDER BY id")
-                .map { $0.description }
+                .map { row in
+                    row.columnNames
+                        .filter { !ignored.contains($0) }
+                        .map { "\($0)=\(row[$0] ?? "nil")" }
+                        .joined(separator: "|")
+                }
         }
     }
 
@@ -135,9 +147,20 @@ struct LampPersonalWritingFileTests {
             kind: .devotionals,
             mediaRootURL: root
         )
+        // Every column but `search_text`, which is deliberately not what
+        // the old route wrote: it is derived here now, and from the row's
+        // structured fields rather than this app's flattened ones. Nothing
+        // reads the sender's copy of it — each app rebuilds the column for
+        // its own index — so a difference there is not a difference about
+        // the writing.
         #expect(
-            try await rows(of: published, at: root.appendingPathComponent("new.sqlite"))
-                == (try await rows(of: rewritten, at: root.appendingPathComponent("old.sqlite")))
+            try await rows(
+                of: published, at: root.appendingPathComponent("new.sqlite"),
+                without: ["search_text"]
+            ) == (try await rows(
+                of: rewritten, at: root.appendingPathComponent("old.sqlite"),
+                without: ["search_text"]
+            ))
         )
 
         // The unwrapping is the point of it: the column carries Markdown.

@@ -43,8 +43,17 @@ struct LampPersonalNotesFileTests {
         return try Data(contentsOf: out)
     }
 
-    /// The digest of that file, taken before the writer moved out of
-    /// `LampLibrary` and unchanged by the move.
+    /// The digest of that file.
+    ///
+    /// **Changed once, deliberately, when `search_text` began carrying a
+    /// note's footnotes.** It had held the title and the body, so the phone
+    /// could find a note by its footnote and this app could not — the same
+    /// note findable on one device and not the other. It is also derived in
+    /// the writer now rather than taken from whoever sent the row, because
+    /// it is the one column two apps can spell differently while holding
+    /// identical content, which is enough to make each publish its file in
+    /// reply to the other for ever. Before that it was taken from the old
+    /// writer and unchanged by the move out of `LampLibrary`.
     ///
     /// It is not here to be precious about bytes. It is here because the
     /// move's whole promise is that the file did not change: a Mac that
@@ -61,7 +70,7 @@ struct LampPersonalNotesFileTests {
 
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         #expect(
-            digest == "0e47f547a11ce9d01b5a0b7b7494582e8313af61686a714694af54bd4faddf9b",
+            digest == "65c7db408ff697b4863128d44bd039a78e1d4fe88ec8bdce2da7904d7ac0990b",
             "the notes file changed; see this test's note before accepting it"
         )
     }
@@ -132,7 +141,7 @@ struct LampPersonalNotesFileTests {
 
         let digest = SHA256.hash(data: published).map { String(format: "%02x", $0) }.joined()
         #expect(
-            digest == "2a07a6f0b2ebbe8ab26134f7e605289969e5a935a562eb98f55f0a0d675f8c32",
+            digest == "b0d90830bec81bed381cc023b22b3d6e07471f892630ca7f9628e7a286f58358",
             "the published notes file changed; see this test's note before accepting it"
         )
 
@@ -163,5 +172,60 @@ struct LampPersonalNotesFileTests {
                 .map { $0.description }
         }
         #expect(before == after, "same rows, differently packed")
+    }
+
+    /// Rows in and the model in give the same file, and a row's footnotes
+    /// reach the file as written.
+    ///
+    /// `LampVerseNote` flattens a footnote to plain text, so a footnote
+    /// carrying scripture links or Strong's annotations lost them on the
+    /// way through — they reached the file as text and never came back.
+    /// Rows are the unit so that an app whose footnotes are richer than
+    /// this app's model can hand them over whole.
+    @Test func rowsAndTheModelProduceOneFile() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+        _ = try await export(from: library, at: root)
+
+        let notes = try await library.verseNotes(bookNumber: 43, chapterNumber: 3)
+            + (try await library.verseNotes(bookNumber: 43, chapterNumber: 11))
+        let mine = notes.filter { $0.moduleID == "personal-notes" }
+        #expect(mine.count == 2)
+        let fromModel = try LampPersonalNotesFile.archive(mine)
+        let fromRows = try LampPersonalNotesFile.archive(
+            rows: try mine.map { try LampPersonalNotesFile.row(for: $0) }
+        )
+        #expect(fromModel == fromRows)
+    }
+
+    @Test func aFootnotesStructureSurvivesARow() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let annotated = #"[{"id":"a","content":"See ","links":[{"ref":43003016}]}]"#
+        let archive = try LampPersonalNotesFile.archive(rows: [
+            LampPersonalNotesFile.Row(
+                id: "personal-notes:43003016", moduleID: "notes",
+                reference: 43_003_016, title: "Loved", content: "The world.",
+                footnotesJSON: annotated, lastModified: 1_700_000_000
+            ),
+        ], moduleID: "notes")
+
+        let body = try (archive as NSData).decompressed(using: .zlib) as Data
+        let file = root.appendingPathComponent("rows.sqlite")
+        try body.write(to: file)
+        var configuration = Configuration()
+        configuration.readonly = true
+        let queue = try DatabaseQueue(path: file.path, configuration: configuration)
+        let row = try #require(try await queue.read { db in
+            try Row.fetchOne(db, sql: "SELECT * FROM note_entries")
+        })
+        #expect(row["footnotes_json"] as String? == annotated, "word for word")
+        // And the footnote's words are searchable, which they were not
+        // before: the phone searched a note's footnotes and this app did
+        // not, so one note was findable on one device and not the other.
+        let searchText = try #require(row["search_text"] as String?)
+        #expect(searchText.contains("See"))
+        #expect(searchText.contains("The world."))
     }
 }

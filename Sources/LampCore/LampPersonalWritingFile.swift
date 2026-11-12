@@ -51,6 +51,8 @@ public enum LampPersonalWritingFile {
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
         description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
         normalizingMediaIn mediaRootURL: URL? = nil,
         fileManager: FileManager = .default
     ) throws -> Data {
@@ -64,7 +66,7 @@ public enum LampPersonalWritingFile {
             fileManager: fileManager
         ) { db in
             try write(
-                writings, moduleID: moduleID, name: name, description: description,
+                writings, moduleID: moduleID, name: name, description: description, author: author, version: version,
                 normalizingMediaIn: mediaRootURL, fileManager: fileManager, into: db
             )
         }
@@ -84,6 +86,8 @@ public enum LampPersonalWritingFile {
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
         description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
         fileManager: FileManager = .default
     ) throws -> Data {
         try LampPersonalFile.archive(
@@ -95,7 +99,7 @@ public enum LampPersonalWritingFile {
                 """,
             fileManager: fileManager
         ) { db in
-            try writeMetadata(moduleID: moduleID, name: name, description: description, into: db)
+            try writeMetadata(moduleID: moduleID, name: name, description: description, author: author, version: version, into: db)
             for row in rows { try write(row, into: db) }
         }
     }
@@ -105,11 +109,13 @@ public enum LampPersonalWritingFile {
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
         description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
         normalizingMediaIn mediaRootURL: URL? = nil,
         fileManager: FileManager = .default,
         into db: Database
     ) throws {
-        try writeMetadata(moduleID: moduleID, name: name, description: description, into: db)
+        try writeMetadata(moduleID: moduleID, name: name, description: description, author: author, version: version, into: db)
         for writing in writings {
             try write(
                 writing, moduleID: moduleID,
@@ -154,7 +160,6 @@ public enum LampPersonalWritingFile {
         /// Seconds.
         public var created: Int
         public var lastModified: Int?
-        public var searchText: String?
         public var recordChangeTag: String?
         public var subscriptionID: String?
         public var isReadOnly: Int?
@@ -179,7 +184,6 @@ public enum LampPersonalWritingFile {
             relatedIDs: String? = nil,
             created: Int,
             lastModified: Int? = nil,
-            searchText: String? = nil,
             recordChangeTag: String? = nil,
             subscriptionID: String? = nil,
             isReadOnly: Int? = nil,
@@ -203,7 +207,6 @@ public enum LampPersonalWritingFile {
             self.relatedIDs = relatedIDs
             self.created = created
             self.lastModified = lastModified
-            self.searchText = searchText
             self.recordChangeTag = recordChangeTag
             self.subscriptionID = subscriptionID
             self.isReadOnly = isReadOnly
@@ -216,20 +219,27 @@ public enum LampPersonalWritingFile {
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
         description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
         into db: Database
     ) throws {
         try db.execute(sql: """
-            INSERT INTO module_meta (id, name, description, version, is_editable)
-            VALUES (?, ?, ?, ?, 1)
+            INSERT INTO module_meta (id, name, description, author, version, is_editable)
+            VALUES (?, ?, ?, ?, ?, 1)
             """, arguments: [
                 moduleID,
                 name,
                 description,
-                LampModuleCompiler.formatVersion,
+                author,
+                // A module of the reader's own making carries the version
+                // they gave it; the collection has none of its own and
+                // takes the format's, as it always did.
+                version ?? LampModuleCompiler.formatVersion,
             ])
     }
 
-    /// Writes a row exactly as given, inventing nothing.
+    /// Writes a row as given, except `search_text`, which is derived
+     /// here so that no sender can disagree about it.
     public static func write(_ row: Row, into db: Database) throws {
         try db.execute(sql: """
             INSERT INTO devotional_entries (
@@ -245,7 +255,18 @@ public enum LampPersonalWritingFile {
                 row.date, row.tags, row.category, row.seriesID, row.seriesName,
                 row.seriesOrder, row.keyScripturesJSON, row.summaryJSON,
                 row.contentJSON, row.footnotesJSON, row.relatedIDs,
-                row.created, row.lastModified, row.searchText,
+                row.created, row.lastModified,
+                // Derived here, never taken from the sender: it is the one
+                // column two apps can spell differently while holding
+                // identical content, and that alone would make each
+                // publish its file in reply to the other for ever.
+                LampPersonalFile.searchText([
+                    row.title,
+                    row.subtitle,
+                    LampPersonalFile.searchableText(in: row.summaryJSON),
+                    LampPersonalFile.searchableText(in: row.contentJSON),
+                    LampPersonalFile.searchableText(in: row.footnotesJSON),
+                ]),
                 row.recordChangeTag, row.subscriptionID, row.isReadOnly,
                 row.mediaJSON,
             ])
@@ -316,7 +337,6 @@ public enum LampPersonalWritingFile {
             relatedIDs: nil,
             created: Int(stamp(writing.created).timeIntervalSince1970),
             lastModified: Int(stamp(writing.lastModified).timeIntervalSince1970),
-            searchText: searchText(for: writing),
             recordChangeTag: nil,
             subscriptionID: nil,
             isReadOnly: 0,

@@ -63,6 +63,8 @@ public enum LampPersonalNotesFile {
         moduleID: String = LampPersonalModule.notes.id,
         name: String = LampPersonalModule.notes.name,
         description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
         fileManager: FileManager = .default
     ) throws -> Data {
         try LampPersonalFile.archive(
@@ -81,64 +83,188 @@ public enum LampPersonalNotesFile {
         }
     }
 
+    /// The whole published file from rows, for an app whose notes this
+    /// app's model cannot hold.
+    ///
+    /// One entry point rather than a container and a row writer a second
+    /// app composes itself, for the same reason as writings: core's code in
+    /// that app's sequence drifts the first time a step is added here.
+    public static func archive(
+        rows: [Row],
+        moduleID: String = LampPersonalModule.notes.id,
+        name: String = LampPersonalModule.notes.name,
+        description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
+        fileManager: FileManager = .default
+    ) throws -> Data {
+        try LampPersonalFile.archive(
+            kind: LampPersonalModule.notes.kind,
+            moduleID: moduleID,
+            schema: """
+                \(LampPersonalFile.metaSchema)
+                \(schema)
+                """,
+            fileManager: fileManager
+        ) { db in
+            try writeMetadata(moduleID: moduleID, name: name, description: description, author: author, version: version, into: db)
+            for row in rows { try write(row, into: db) }
+        }
+    }
+
     public static func write(
         _ notes: [LampVerseNote],
         moduleID: String = LampPersonalModule.notes.id,
         name: String = LampPersonalModule.notes.name,
         description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
         into db: Database
     ) throws {
-        try db.execute(sql: """
-            INSERT INTO module_meta (id, name, description, version, is_editable)
-            VALUES (?, ?, ?, ?, 1)
-            """, arguments: [
-                moduleID,
-                name,
-                description,
-                LampModuleCompiler.formatVersion,
-            ])
+        try writeMetadata(moduleID: moduleID, name: name, description: description, author: author, version: version, into: db)
         for note in notes {
             try write(note, moduleID: moduleID, into: db)
         }
     }
 
-    /// One note's row, which is the unit the two apps have to agree on.
-    public static func write(
-        _ note: LampVerseNote,
-        moduleID: String = LampPersonalModule.notes.id,
-        into db: Database
-    ) throws {
-        let components = LampBibleReferenceFormatter.components(of: note.reference)
-        let footnotes = note.footnotes.map { footnote -> [String: String] in
-            var value = ["id": footnote.id, "content": footnote.content]
-            if let kind = footnote.kind { value["type"] = kind }
-            return value
+    /// One row of the file, as stored values.
+    ///
+    /// The unit the two apps agree on is **the row**, not either app's
+    /// model of a note. `LampVerseNote` flattens a footnote to plain text,
+    /// so a note whose footnote carries scripture links or Strong's
+    /// annotations lost them on the way through — the phone's annotations
+    /// reached the file as text and never came back. Writings learned this
+    /// first; notes should have learned it at the same time rather than
+    /// waiting for the second instance.
+    public struct Row: Sendable {
+        public var id: String
+        public var moduleID: String
+        public var reference: Int
+        public var title: String?
+        public var content: String
+        /// JSON written as JSON, verbatim — this writes what it is given.
+        public var verseReferencesJSON: String?
+        public var footnotesJSON: String?
+        public var mediaJSON: String?
+        /// Seconds.
+        public var lastModified: Int?
+        public var recordChangeTag: String?
+
+        public init(
+            id: String,
+            moduleID: String,
+            reference: Int,
+            title: String? = nil,
+            content: String,
+            verseReferencesJSON: String? = nil,
+            footnotesJSON: String? = nil,
+            mediaJSON: String? = nil,
+            lastModified: Int? = nil,
+            recordChangeTag: String? = nil
+        ) {
+            self.id = id
+            self.moduleID = moduleID
+            self.reference = reference
+            self.title = title
+            self.content = content
+            self.verseReferencesJSON = verseReferencesJSON
+            self.footnotesJSON = footnotesJSON
+            self.mediaJSON = mediaJSON
+            self.lastModified = lastModified
+            self.recordChangeTag = recordChangeTag
         }
+    }
+
+    /// Writes a row exactly as given, except `search_text`, which is
+    /// derived here so that no sender can disagree about it.
+    public static func write(_ row: Row, into db: Database) throws {
+        let components = LampBibleReferenceFormatter.components(of: row.reference)
         try db.execute(sql: """
             INSERT INTO note_entries (
                 id, module_id, verse_id, book, chapter, verse, title, content,
                 verse_refs_json, last_modified, footnotes_json, search_text,
                 record_change_tag, media_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, arguments: [
-                note.id,
-                moduleID,
-                note.reference,
+                row.id,
+                row.moduleID,
+                row.reference,
                 components.book,
                 components.chapter,
                 components.verse,
-                note.title,
-                note.content,
-                try LampPersonalFile.jsonFragment(note.verseReferences),
-                Int(note.lastModified.timeIntervalSince1970),
-                try LampPersonalFile.jsonFragment(footnotes),
-                searchText(for: note),
-                // Without this the file that syncs says a note has a
-                // picture — its text holds `media/<id>` — and nothing says
-                // which file that is. The other device then had no way to
-                // ask for it, so a note's pictures only ever showed on the
-                // device they were attached on (found by ios-56).
-                note.mediaJSON,
+                row.title,
+                row.content,
+                row.verseReferencesJSON,
+                row.lastModified,
+                row.footnotesJSON,
+                LampPersonalFile.searchText([
+                    row.title,
+                    row.content,
+                    // A note's footnotes are searchable, which they were
+                    // not here before: the phone searched them and this app
+                    // did not, so the same note was findable on one device
+                    // and not the other.
+                    LampPersonalFile.searchableText(in: row.footnotesJSON),
+                ]),
+                row.recordChangeTag,
+                row.mediaJSON,
+            ])
+    }
+
+    /// This app's note as a row of the file.
+    public static func row(
+        for note: LampVerseNote,
+        moduleID: String = LampPersonalModule.notes.id
+    ) throws -> Row {
+        let footnotes = note.footnotes.map { footnote -> [String: String] in
+            var value = ["id": footnote.id, "content": footnote.content]
+            if let kind = footnote.kind { value["type"] = kind }
+            return value
+        }
+        return Row(
+            id: note.id,
+            moduleID: moduleID,
+            reference: note.reference,
+            title: note.title,
+            content: note.content,
+            verseReferencesJSON: try LampPersonalFile.jsonFragment(note.verseReferences),
+            footnotesJSON: try LampPersonalFile.jsonFragment(footnotes),
+            mediaJSON: note.mediaJSON,
+            lastModified: Int(note.lastModified.timeIntervalSince1970),
+            recordChangeTag: nil
+        )
+    }
+
+    /// One note, through the row above.
+    public static func write(
+        _ note: LampVerseNote,
+        moduleID: String = LampPersonalModule.notes.id,
+        into db: Database
+    ) throws {
+        try write(try row(for: note, moduleID: moduleID), into: db)
+    }
+
+    /// The one metadata row, which every way of writing this file shares.
+    public static func writeMetadata(
+        moduleID: String = LampPersonalModule.notes.id,
+        name: String = LampPersonalModule.notes.name,
+        description: String? = nil,
+        author: String? = nil,
+        version: String? = nil,
+        into db: Database
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO module_meta (id, name, description, author, version, is_editable)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """, arguments: [
+                moduleID,
+                name,
+                description,
+                author,
+                // A module of the reader's own making carries the version
+                // they gave it; the collection has none of its own and
+                // takes the format's, as it always did.
+                version ?? LampModuleCompiler.formatVersion,
             ])
     }
 
