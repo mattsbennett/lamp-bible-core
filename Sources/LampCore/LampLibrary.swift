@@ -6060,8 +6060,17 @@ public actor LampLibrary {
                 try allPersonalNotes(), moduleID: moduleID, fileManager: fileManager
             )
         case .writing:
+            // Normalised as it goes out, which the old route did afterwards
+            // by rewriting the published file: a plain-text wrapper
+            // unwrapped to the Markdown the other app reads, the media that
+            // Markdown names gathered beside what the writing already
+            // listed, and the whole file refused if a picture it refers to
+            // is not on this device.
             try LampPersonalWritingFile.archive(
-                try personalDevotionals(), moduleID: moduleID, fileManager: fileManager
+                try personalDevotionals(),
+                moduleID: moduleID,
+                normalizingMediaIn: rootURL,
+                fileManager: fileManager
             )
         case .highlights:
             // Last of the three to move, behind the ruling that highlights

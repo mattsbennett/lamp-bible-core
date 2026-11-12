@@ -46,6 +46,7 @@ public enum LampPersonalWritingFile {
         _ writings: [LampDevotional],
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
+        normalizingMediaIn mediaRootURL: URL? = nil,
         fileManager: FileManager = .default
     ) throws -> Data {
         try LampPersonalFile.archive(
@@ -57,7 +58,10 @@ public enum LampPersonalWritingFile {
                 """,
             fileManager: fileManager
         ) { db in
-            try write(writings, moduleID: moduleID, name: name, into: db)
+            try write(
+                writings, moduleID: moduleID, name: name,
+                normalizingMediaIn: mediaRootURL, fileManager: fileManager, into: db
+            )
         }
     }
 
@@ -65,6 +69,8 @@ public enum LampPersonalWritingFile {
         _ writings: [LampDevotional],
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
+        normalizingMediaIn mediaRootURL: URL? = nil,
+        fileManager: FileManager = .default,
         into db: Database
     ) throws {
         try db.execute(sql: """
@@ -76,7 +82,10 @@ public enum LampPersonalWritingFile {
                 LampModuleCompiler.formatVersion,
             ])
         for writing in writings {
-            try write(writing, moduleID: moduleID, into: db)
+            try write(
+                writing, moduleID: moduleID,
+                normalizingMediaIn: mediaRootURL, fileManager: fileManager, into: db
+            )
         }
     }
 
@@ -90,8 +99,13 @@ public enum LampPersonalWritingFile {
     public static func write(
         _ writing: LampDevotional,
         moduleID: String = LampPersonalModule.writing.id,
+        normalizingMediaIn mediaRootURL: URL? = nil,
+        fileManager: FileManager = .default,
         into db: Database
     ) throws {
+        let normalized = try normalized(
+            writing, mediaRootURL: mediaRootURL, fileManager: fileManager
+        )
         let scriptureValues = writing.keyScriptures.map { scripture -> [String: Any] in
             var value: [String: Any] = ["sv": scripture.startReference]
             if let endReference = scripture.endReference { value["ev"] = endReference }
@@ -121,13 +135,96 @@ public enum LampPersonalWritingFile {
                 writing.seriesOrder,
                 try LampPersonalFile.jsonFragment(scriptureValues),
                 try LampPersonalFile.jsonFragment(writing.summary),
-                contentJSON(for: writing),
+                normalized.content,
                 try LampPersonalFile.jsonFragment(writing.footnotes),
                 Int(stamp(writing.created).timeIntervalSince1970),
                 Int(stamp(writing.lastModified).timeIntervalSince1970),
                 searchText(for: writing),
-                writing.mediaJSON,
+                normalized.mediaJSON,
             ])
+    }
+
+    /// A writing's content and media as the file carries them.
+    ///
+    /// With no root given — a local backup — they are left as stored. With
+    /// one, the writing is made ready to travel, which is what a receiving
+    /// device needs and what used to be done afterwards by decompressing the
+    /// published file and rewriting it in place:
+    ///
+    /// - A content wrapper that holds nothing but one paragraph of plain
+    ///   text is **unwrapped**, so the column carries the Markdown the other
+    ///   app reads rather than a JSON box around it. Anything richer is left
+    ///   alone.
+    /// - The pictures and recordings that Markdown refers to are **gathered
+    ///   into `media_json`**, beside whatever the writing already listed,
+    ///   first-listed winning for a repeated id.
+    /// - Every file named, listed or referred to, must **be on this device**.
+    ///   Publishing a writing whose picture is missing would send the other
+    ///   device a reference to bytes nobody has, so it is refused outright.
+    static func normalized(
+        _ writing: LampDevotional,
+        mediaRootURL: URL?,
+        fileManager: FileManager
+    ) throws -> (content: String, mediaJSON: String?) {
+        let stored = try contentJSON(for: writing)
+        guard let mediaRootURL else { return (stored, writing.mediaJSON) }
+        let markdown = LampPortableDevotionalMedia.plainMarkdown(from: stored) ?? stored
+        let references = try LampPortableDevotionalMedia.references(
+            in: markdown, devotionalID: writing.id
+        )
+        for reference in references {
+            try requireFile(at: mediaRootURL.appendingPathComponent(reference.archivePath),
+                            named: reference.archivePath, fileManager: fileManager)
+        }
+
+        let existing: [[String: Any]]
+        if let mediaJSON = writing.mediaJSON {
+            guard let decoded = try JSONSerialization.jsonObject(
+                with: Data(mediaJSON.utf8)
+            ) as? [[String: Any]] else {
+                throw LampWebDAVCompatibilityError.archiveConversionFailed
+            }
+            existing = decoded
+        } else {
+            existing = []
+        }
+        for entry in existing {
+            guard let filename = entry["filename"] as? String,
+                  LampPortableDevotionalMedia.isSafePathComponent(writing.id),
+                  LampPortableDevotionalMedia.isSafePathComponent(filename) else {
+                throw LampWebDAVCompatibilityError.archiveConversionFailed
+            }
+            let path = "Media/\(LampMediaScope.devotional.folder)/\(writing.id)/\(filename)"
+            try requireFile(at: mediaRootURL.appendingPathComponent(path),
+                            named: path, fileManager: fileManager)
+        }
+
+        guard !references.isEmpty else { return (markdown, writing.mediaJSON) }
+        let generated: [[String: Any]] = references.map { reference in
+            [
+                "id": reference.id,
+                "type": reference.kind.rawValue,
+                "filename": reference.filename,
+                "mimeType": reference.mimeType,
+            ]
+        }
+        let known = Set(existing.compactMap { $0["id"] as? String })
+        let combined = existing + generated.filter { !known.contains($0["id"] as? String ?? "") }
+        let data = try JSONSerialization.data(withJSONObject: combined, options: [.sortedKeys])
+        return (markdown, String(decoding: data, as: UTF8.self))
+    }
+
+    /// A regular file, present and not a symbolic link pointing elsewhere.
+    private static func requireFile(
+        at url: URL, named path: String, fileManager: FileManager
+    ) throws {
+        guard fileManager.fileExists(atPath: url.path) else {
+            throw LampWebDAVCompatibilityError.missingDevotionalMedia(path)
+        }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            throw LampWebDAVCompatibilityError.missingDevotionalMedia(path)
+        }
     }
 
     /// The blocks a writing is stored as, or one paragraph standing for its
