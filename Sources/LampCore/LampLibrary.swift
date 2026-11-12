@@ -5168,9 +5168,11 @@ public actor LampLibrary {
     /// later deletion are kept.
     public func mergePersonalDeletionLedger(_ incoming: LampPersonalDeletionLedger) throws {
         let queue = try openUserDatabase()
+        let renamed = try highlightSetRenamings()
         try queue.write { db in
             for (kind, entries) in incoming.entries {
                 for (key, entry) in entries {
+                    let key = Self.renamingSet(in: key, kind: kind, by: renamed)
                     try db.execute(sql: """
                         INSERT INTO personal_sync_ledger (kind, item_key, present_since, deleted_at)
                         VALUES (?, ?, ?, ?)
@@ -5240,6 +5242,62 @@ public actor LampLibrary {
 
     private static func nowMilliseconds() -> Int64 {
         Int64((Date().timeIntervalSince1970 * 1_000).rounded(.down))
+    }
+
+    /// Old spellings of a set's id that this device can safely read as its
+    /// own, for a ledger entry written before a set could say who it was.
+    ///
+    /// A ledger key names the set and nothing else — no module — so a key
+    /// saying `personal-highlights-ESV` could be the default set under its
+    /// flattened module name, or a set the reader genuinely called that in
+    /// a module of its own. Translating blindly would merge the two, which
+    /// is the merge `canonicalHighlightSetID`'s condition was narrowed to
+    /// stop.
+    ///
+    /// This device's own sets settle it. Where it holds
+    /// `personal-highlights:<translation>` and holds nothing literally
+    /// named the flattened form, there is only one set the key can mean.
+    /// Where it holds both, or neither, the key is left exactly as it came.
+    ///
+    /// Without this, a highlight deleted on a device that had not yet
+    /// learned a set's real name is never deleted here — and this Mac then
+    /// publishes it back, so it returns there too. ios-56 raised it and
+    /// left it, for the ambiguity above; the ambiguity is answerable from
+    /// what this device holds.
+    private func highlightSetRenamings() throws -> [String: String] {
+        let sets = try highlightSets()
+        let present = Set(sets.map(\.id))
+        var renamings: [String: String] = [:]
+        for set in sets {
+            let prefix = "personal-highlights:"
+            guard set.id.hasPrefix(prefix) else { continue }
+            let translation = String(set.id.dropFirst(prefix.count))
+            let flattened = "personal-highlights-\(Self.safeExportIdentifier(translation))"
+            guard !present.contains(flattened) else { continue }
+            renamings[flattened] = set.id
+        }
+        return renamings
+    }
+
+    /// A ledger key with its set renamed, where the key names one.
+    ///
+    /// A highlight's key and a theme's both begin with the set, separated
+    /// from the rest by the unit separator; a set's key is the id itself.
+    private static func renamingSet(
+        in key: String, kind: LampPersonalItemKind, by renamings: [String: String]
+    ) -> String {
+        guard !renamings.isEmpty else { return key }
+        switch kind {
+        case .highlightSet:
+            return renamings[key] ?? key
+        case .highlight, .highlightTheme:
+            let separator: Character = "\u{1F}"
+            guard let end = key.firstIndex(of: separator) else { return key }
+            guard let renamed = renamings[String(key[key.startIndex..<end])] else { return key }
+            return renamed + String(key[end...])
+        case .note, .devotional:
+            return key
+        }
     }
 
     private static func recordPresence(

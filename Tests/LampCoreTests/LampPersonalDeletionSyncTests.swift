@@ -434,4 +434,49 @@ struct LampPersonalDeletionSyncTests {
             "and it is still there after the ledger is applied"
         )
     }
+
+    /// A highlight deleted on a device that had not yet learned a set's
+    /// real name is still deleted here.
+    ///
+    /// A ledger key names the set and no module, so `personal-highlights-ESV`
+    /// could be the default set under its old flattened name or a set the
+    /// reader genuinely called that. This device's own sets settle it:
+    /// holding the colon form and nothing named the flattened one, there is
+    /// only one set the key can mean. Holding both, it is left alone.
+    @Test func anOldSpellingOfASetIsReadWhereThisDeviceCanTell() async throws {
+        func library(at name: String) throws -> (LampLibrary, URL) {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            return (LampLibrary(rootURL: root), root)
+        }
+
+        let (mine, root) = try library(at: "spelling")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let saved = try await mine.saveVerseHighlight(
+            translationID: "ESV", reference: verse, startOffset: 0, endOffset: 3,
+            color: "#FFCC00"
+        )
+        #expect(saved.setID == "personal-highlights:ESV", "the set this device holds")
+
+        // A deletion recorded by a device that knew the set only as the
+        // flattened module name.
+        let flattened = LampLibrary.highlightKey(
+            setID: "personal-highlights-ESV", reference: verse,
+            start: saved.startOffset, end: saved.endOffset,
+            style: saved.style.rawValue, color: saved.color
+        )
+        var incoming = LampPersonalDeletionLedger()
+        incoming.recordDeletion(
+            .highlight, flattened,
+            at: Int64(Date().timeIntervalSince1970 * 1_000) + 60 * 60 * 1_000
+        )
+        try await mine.mergePersonalDeletionLedger(incoming)
+        try await mine.applyPersonalDeletionLedger()
+
+        #expect(
+            try await mine.verseHighlights(translationID: "ESV", reference: verse).isEmpty,
+            "the deletion lands, rather than naming a set this device does not have"
+        )
+    }
 }
