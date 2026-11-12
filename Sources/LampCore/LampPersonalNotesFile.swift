@@ -78,7 +78,7 @@ public enum LampPersonalNotesFile {
         ) { db in
             try write(
                 notes, moduleID: moduleID, name: name,
-                description: description, into: db
+                description: description, author: author, version: version, into: db
             )
         }
     }

@@ -108,10 +108,14 @@ public enum LampPersonalHighlightsFile {
             // could still write them in different orders and publish
             // different files — from identical content. Nothing that is not
             // in the file decides what the file says.
-            let ordered = (grouped[reference] ?? []).sorted { left, right in
-                (left.startOffset, left.endOffset, left.style.rawValue, left.color ?? "")
-                    < (right.startOffset, right.endOffset, right.style.rawValue, right.color ?? "")
+            // A missing colour and an empty one are kept apart: the
+            // compiler stores them as different values, so sorting them
+            // together would leave two otherwise identical spans in
+            // whichever order this device happened to hold them.
+            func key(_ h: LampVerseHighlight) -> (Int, Int, Int, Int, String) {
+                (h.startOffset, h.endOffset, h.style.rawValue, h.color == nil ? 0 : 1, h.color ?? "")
             }
+            let ordered = (grouped[reference] ?? []).sorted { key($0) < key($1) }
             let spans: [[String: Any]] = ordered.map { highlight in
                 var span: [String: Any] = [
                     "sc": highlight.startOffset,

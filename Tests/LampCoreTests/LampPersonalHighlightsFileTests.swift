@@ -176,4 +176,98 @@ struct LampPersonalHighlightsFileTests {
         )
         #expect(one.map { $0["sc"] as? Int } == [0, 0, 4])
     }
+
+    /// Compiles a document and takes it into a library, as a sync does.
+    private func install(
+        _ document: [String: Any], moduleID: String, into library: LampLibrary, at root: URL
+    ) async throws {
+        let folder = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let out = folder.appendingPathComponent("\(moduleID).lamp")
+        _ = try LampModuleCompiler().compile(
+            data: try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]),
+            sourceFilename: "\(moduleID).json",
+            destinationURL: out
+        )
+        _ = try await library.importPersonalStudyData(from: out, forSync: true)
+    }
+
+    /// A set's themes arrive with it.
+    ///
+    /// Once a set could say who it was, the highlights in a compact file
+    /// took the set's id and the themes were still given the **module's**.
+    /// They then matched no set and were dropped without a word — on an
+    /// ordinary default set, with nothing malformed about the file. Found
+    /// by a Codex review of the change that introduced it.
+    @Test func aSetsThemesArriveWithIt() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("themes-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        try await install(try LampPersonalHighlightsFile.document(for: .init(
+            id: "personal-highlights:ESV",
+            moduleID: "personal-highlights-ESV",
+            name: "Mine", translationID: "ESV",
+            highlights: [highlight(43_003_016, 0, 3)],
+            themes: [LampHighlightTheme(
+                setID: "personal-highlights:ESV", color: "#ffcc00",
+                style: .highlight, name: "Promise", description: nil
+            )]
+        )), moduleID: "personal-highlights-ESV", into: library, at: root)
+
+        let themes = try await library.highlightThemes(setID: "personal-highlights:ESV")
+        #expect(themes.map(\.name) == ["Promise"], "the theme belongs to the set it arrived with")
+    }
+
+    /// A set that says its own name is taken at its word.
+    ///
+    /// The old flattening is guessed back only where the file did not say.
+    /// Guessing at a set the reader deliberately called
+    /// `personal-highlights-<translation>` would merge it into the default
+    /// one and lose it.
+    @Test func aSetThatNamesItselfIsNotGuessedAt() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("named-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        // A set of the reader's own that happens to be *named* the way the
+        // old flattening spelled the default set, travelling in a module of
+        // its own. Guessed at, it would be merged into the default set and
+        // lost. The set id differing from the module id is what says it was
+        // stated rather than flattened.
+        try await install(try LampPersonalHighlightsFile.document(for: .init(
+            id: "personal-highlights-ESV", moduleID: "my-esv-set",
+            name: "My own", translationID: "ESV",
+            highlights: [highlight(43_003_016, 0, 3)]
+        )), moduleID: "my-esv-set", into: library, at: root)
+
+        let ids = try await library.highlightSets().map(\.id)
+        #expect(ids.contains("personal-highlights-ESV"), "taken at its word")
+        #expect(
+            !ids.contains("personal-highlights:ESV"),
+            "and not folded into the default set"
+        )
+    }
+
+    /// A missing colour and an empty one are different values, so they sort
+    /// apart; otherwise two identical spans keep whichever order this
+    /// device happened to hold them in.
+    @Test func aMissingColourAndAnEmptyOneAreNotTheSame() throws {
+        func colours(_ highlights: [LampVerseHighlight]) throws -> [String?] {
+            let document = try LampPersonalHighlightsFile.document(for: .init(
+                id: "set", moduleID: "m", name: "Mine", translationID: "ESV",
+                highlights: highlights
+            ))
+            let verses = document["verses"] as? [[String: Any]] ?? []
+            let spans = verses[0]["highlights"] as? [[String: Any]] ?? []
+            return spans.map { $0["color"] as? String }
+        }
+        let none = highlight(43_003_016, 0, 3, color: nil)
+        let empty = highlight(43_003_016, 0, 3, color: "")
+        #expect(try colours([none, empty]) == (try colours([empty, none])))
+    }
 }

@@ -4379,10 +4379,17 @@ public actor LampLibrary {
                             FROM highlight_themes ORDER BY set_id, name, color, style
                             """).compactMap(makeHighlightTheme)
                     } else {
+                        // The set's own id, as the highlights take it — not
+                        // the module's. They were the same string until a
+                        // set could say who it was; once it could, every
+                        // theme in a compact file was being given the
+                        // module's name, matching no set, and was dropped
+                        // without a word. Found by a Codex review.
+                        let setID: String? = metadata?["id"]
                         themes = try Row.fetchAll(db, sql: """
                             SELECT ? AS set_id, color, style, name, description
                             FROM highlight_themes ORDER BY name, color, style
-                            """, arguments: [moduleID]).compactMap(makeHighlightTheme)
+                            """, arguments: [setID ?? moduleID]).compactMap(makeHighlightTheme)
                     }
                 } else {
                     themes = []
@@ -4578,10 +4585,19 @@ public actor LampLibrary {
         setMetadata: [String: ImportedHighlightSetMetadata] = [:],
         forSync: Bool
     ) throws -> LampStudyImportResult {
-        // A translation's default set is exported under its module name, which
-        // can't hold the default set's colon. Read back, it's the same set.
+        // A translation's default set used to be exported under its module
+        // name, which cannot hold the colon in that set's id. Read back, it
+        // is the same set — so the name is guessed back.
+        //
+        // Only where the file did not say. A file that carries `meta.setId`
+        // names the set itself, and a set whose id differs from the
+        // module's was stated rather than flattened. Guessing at one of
+        // those would take a set the reader deliberately named
+        // `personal-highlights-<translation>` and merge it into the default
+        // one.
         var canonical: [String: String] = [:]
-        for highlight in highlights where canonical[highlight.setID] == nil {
+        for highlight in highlights
+        where canonical[highlight.setID] == nil && highlight.setID == moduleID {
             canonical[highlight.setID] = Self.canonicalHighlightSetID(
                 highlight.setID, translationID: highlight.translationID
             )

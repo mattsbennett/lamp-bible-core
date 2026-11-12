@@ -228,4 +228,49 @@ struct LampPersonalNotesFileTests {
         #expect(searchText.contains("See"))
         #expect(searchText.contains("The world."))
     }
+
+    /// What the caller says about the module reaches the file, whichever
+    /// way it is written.
+    ///
+    /// The model-shaped archive took `author` and `version` and passed on
+    /// neither, so a reader-made module published that way lost its author
+    /// and had its version replaced by the format's — while the row-shaped
+    /// one kept both. Found by a Codex review.
+    @Test func aModulesOwnMetadataReachesTheFileEitherWay() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func metadata(of archive: Data, named name: String) async throws -> (String?, String?, String?) {
+            let body = try (archive as NSData).decompressed(using: .zlib) as Data
+            let file = root.appendingPathComponent("\(name).sqlite")
+            try body.write(to: file)
+            var configuration = Configuration()
+            configuration.readonly = true
+            let queue = try DatabaseQueue(path: file.path, configuration: configuration)
+            return try await queue.read { db in
+                let row = try Row.fetchOne(db, sql: "SELECT * FROM module_meta")
+                return (row?["description"], row?["author"], row?["version"])
+            }
+        }
+
+        let note = LampVerseNote(
+            id: "mine:43003016", moduleID: "mine", reference: 43_003_016,
+            content: "Written.", lastModified: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let fromModel = try LampPersonalNotesFile.archive(
+            [note], moduleID: "mine", name: "My Module",
+            description: "A description", author: "A Reader", version: "2"
+        )
+        let fromRows = try LampPersonalNotesFile.archive(
+            rows: [try LampPersonalNotesFile.row(for: note, moduleID: "mine")],
+            moduleID: "mine", name: "My Module",
+            description: "A description", author: "A Reader", version: "2"
+        )
+        #expect(fromModel == fromRows)
+
+        let read = try await metadata(of: fromModel, named: "model")
+        #expect(read.0 == "A description")
+        #expect(read.1 == "A Reader")
+        #expect(read.2 == "2")
+    }
 }
