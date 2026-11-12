@@ -1700,6 +1700,48 @@ theorem equalTimeFavoursDeletion (t : Nat) :
     tombstoneDeletes ⟨some t, some t⟩ (some t) = true := by
   simp [tombstoneDeletes, later]
 
+/-! #### A copy whose time is known only to the second
+
+The personal ledger keeps `presentSince` and `deletedAt` in **milliseconds**,
+and the item's own modification time comes from the file in **seconds**. So
+the two are not comparable as they stand. Multiplying the seconds by a
+thousand silently reads the copy as having been saved at the *start* of its
+second, which lets a deletion recorded earlier in that same second win over a
+later save — an earlier deletion beating a later edit, purely from the
+rounding.
+
+The copy was saved somewhere inside that second, and nothing in the file says
+where. So a deletion is known to be later only once the second has passed.
+That errs towards keeping the copy, which is the side to err on: a note kept
+that should have gone can be deleted again, and a note deleted that should
+have been kept is gone.
+-/
+
+def tombstoneDeletesSecondsCopy (t : Tombstone) (copySeconds : Option Nat) : Bool :=
+  tombstoneDeletes t (copySeconds.map (fun s => (s + 1) * 1000))
+
+-- A deletion anywhere inside the second the copy was saved in leaves it
+-- alone, including one recorded before the save.
+theorem deletionInsideTheSavesSecondKeepsTheCopy (s ms : Nat) (h : ms < 1000) :
+    tombstoneDeletesSecondsCopy ⟨none, some (s * 1000 + ms)⟩ (some s) = false := by
+  show Decidable.decide ((later none (some ((s + 1) * 1000))).getD 0 ≤ s * 1000 + ms) = false
+  apply decide_eq_false
+  simp [later]; omega
+
+-- Once the second has passed, it deletes as before.
+theorem deletionAfterTheSavesSecondDeletes (s : Nat) :
+    tombstoneDeletesSecondsCopy ⟨none, some ((s + 1) * 1000)⟩ (some s) = true := by
+  simp [tombstoneDeletesSecondsCopy, tombstoneDeletes, later]
+
+-- A save recorded to the millisecond still speaks for itself: `presentSince`
+-- is exact, so it is compared exactly, and the rounding above only ever
+-- widens what survives.
+theorem anExactSaveStillCounts (p d : Nat) (h : d < p) :
+    tombstoneDeletesSecondsCopy ⟨some p, some d⟩ none = false := by
+  show Decidable.decide ((later (some p) none).getD 0 ≤ d) = false
+  apply decide_eq_false
+  simp [later]; omega
+
 -- A workspace document's deletion is stamped with the last version this Mac
 -- had, so an edit made elsewhere after that survives it. A context file's
 -- times are not comparable across Macs, so its deletion is stamped when the
@@ -4410,6 +4452,15 @@ def fieldName (fresh : Nat) : Option PrefField → String
       for c in times do
         IO.println <| conformanceLine "tombstone"
           [optNat p, optNat d, optNat c, toString (tombstoneDeletes ⟨p, d⟩ c)]
+  -- The personal ledger's shape: times in milliseconds, the copy's own
+  -- modification known only to the second.
+  let ms := [none, some 0, some 999, some 1000, some 1999, some 2000]
+  let seconds := [none, some 0, some 1]
+  for p in ms do
+    for d in ms do
+      for c in seconds do
+        IO.println <| conformanceLine "tombstoneSecondsCopy"
+          [optNat p, optNat d, optNat c, toString (tombstoneDeletesSecondsCopy ⟨p, d⟩ c)]
   let few := [none, some 1, some 2]
   for ap in few do
     for ad in few do

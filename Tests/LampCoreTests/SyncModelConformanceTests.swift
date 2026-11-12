@@ -95,7 +95,7 @@ enum SyncModel {
 struct SyncModelConformanceTests {
     /// Every rule the model prints, with the Swift decision it describes.
     static let checkedRules: Set<String> = [
-        "decide", "importOutcome", "landing", "tombstone", "tombstoneMerge", "baselessReading",
+        "decide", "importOutcome", "landing", "tombstone", "tombstoneSecondsCopy", "tombstoneMerge", "baselessReading",
         "namesSameRevision", "needsImport", "preferenceMerge", "replaceFile", "deckPull",
         "mergeMembership", "chooseWholeValue", "chooseReading", "folderSealAccepts",
         "confirmWrite", "webDAVPresence", "webDAVDirectoryReady",
@@ -225,15 +225,9 @@ struct SyncModelConformanceTests {
     // MARK: - Deletion ledgers
 
     @Test func deletionLedgers() throws {
-        func milliseconds(_ field: String) -> Int64? { Int64(field).map { $0 * 1_000 } }
+        // Decks keep no saves of their own; the copy's date stands in, and
+        // both times are whole seconds, so the two are directly comparable.
         try conform("tombstone") { f in
-            // Personal content: save and deletion in milliseconds, the copy's
-            // modification in seconds, as the database records each.
-            let personal = LampPersonalDeletionLedger.Entry(
-                presentSince: milliseconds(f[0]), deletedAt: milliseconds(f[1])
-            ).isDeleted(itemModified: Int(f[2]))
-            guard personal == (f[3] == "true") else { return false }
-            // Decks keep no saves of their own; the copy's date stands in.
             guard f[0] == "-", let copy = Int(f[2]) else { return true }
             var ledger = LampPresentationDeckDeletionLedger()
             if let deleted = Int(f[1]) {
@@ -241,6 +235,16 @@ struct SyncModelConformanceTests {
             }
             return ledger.deletes("deck", modifiedAt: Date(timeIntervalSince1970: TimeInterval(copy)))
                 == (f[3] == "true")
+        }
+        // Personal content is the other shape, and it had to stop sharing
+        // this table: its saves and deletions are milliseconds while the
+        // copy's own modification comes from the file in seconds. Read as
+        // the start of that second, a deletion recorded earlier in it beat
+        // a later save.
+        try conform("tombstoneSecondsCopy") { f in
+            LampPersonalDeletionLedger.Entry(
+                presentSince: Int64(f[0]), deletedAt: Int64(f[1])
+            ).isDeleted(itemModified: Int(f[2])) == (f[3] == "true")
         }
         try conform("tombstoneMerge") { f in
             let merged = LampPersonalDeletionLedger.Entry(presentSince: Int64(f[0]), deletedAt: Int64(f[1]))

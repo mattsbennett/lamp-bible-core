@@ -30,7 +30,22 @@ public struct LampPersonalDeletionLedger: Equatable, Sendable {
         /// records it), when known.
         public func isDeleted(itemModified: Int?) -> Bool {
             guard let deletedAt else { return false }
-            let modified = itemModified.map { Int64($0) * 1_000 }
+            // The times here are milliseconds; `itemModified` comes from the
+            // file in **seconds**, so the two are not comparable as they
+            // stand. Multiplying by a thousand reads the copy as saved at
+            // the *start* of its second, which lets a deletion recorded
+            // earlier in that same second win over a later save — an
+            // earlier deletion beating a later edit, out of nothing but the
+            // rounding.
+            //
+            // The copy was saved somewhere inside that second and nothing
+            // says where, so a deletion is known to be later only once the
+            // second has passed. That errs towards keeping the copy, which
+            // is the side to err on: a note kept that should have gone can
+            // be deleted again, and a note deleted that should have been
+            // kept is gone. `presentSince` is exact and is still compared
+            // exactly. Modelled as `tombstoneDeletesSecondsCopy`.
+            let modified = itemModified.map { (Int64($0) + 1) * 1_000 }
             let presence = max(presentSince ?? .min, modified ?? .min)
             return deletedAt >= presence
         }

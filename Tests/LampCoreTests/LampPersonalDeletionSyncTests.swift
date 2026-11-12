@@ -331,4 +331,43 @@ struct LampPersonalDeletionSyncTests {
         #expect(!LampPersonalDeletionLedger.Entry(presentSince: 9_000, deletedAt: 7_000).isDeleted(itemModified: nil))
         #expect(!LampPersonalDeletionLedger.Entry(presentSince: 9_000).isDeleted(itemModified: nil))
     }
+
+    /// A deletion recorded inside the second a note was saved in does not
+    /// beat the save.
+    ///
+    /// The ledger's times are milliseconds; a note's own modification time
+    /// comes from the file in seconds. Read as the start of that second, a
+    /// deletion recorded *earlier* in it beat a *later* save — an earlier
+    /// deletion winning over a later edit, out of nothing but the rounding.
+    /// Since nothing says where in the second the save happened, a deletion
+    /// counts only once the second has passed. That errs towards keeping
+    /// the note, which is the side to err on: one kept that should have
+    /// gone can be deleted again, one deleted that should have been kept is
+    /// gone. Modelled as `tombstoneDeletesSecondsCopy`.
+    @Test func aDeletionInsideTheSavesOwnSecondDoesNotCount() {
+        let saved = 1_700_000_010      // seconds, as the file records it
+        func deleted(at milliseconds: Int64) -> Bool {
+            LampPersonalDeletionLedger.Entry(presentSince: nil, deletedAt: milliseconds)
+                .isDeleted(itemModified: saved)
+        }
+
+        // Anywhere inside that second, before the save or after it.
+        #expect(deleted(at: Int64(saved) * 1_000) == false)
+        #expect(deleted(at: Int64(saved) * 1_000 + 100) == false)
+        #expect(deleted(at: Int64(saved) * 1_000 + 999) == false)
+        // Once it has passed, it deletes, as it always did.
+        #expect(deleted(at: Int64(saved + 1) * 1_000))
+        #expect(deleted(at: Int64(saved + 5) * 1_000))
+        // While a deletion from before the save loses to it, as it should.
+        #expect(deleted(at: Int64(saved - 5) * 1_000) == false)
+
+        // A save recorded to the millisecond speaks for itself: exact, and
+        // compared exactly, so the widening above never loses a deletion
+        // that a precise save would have lost to.
+        let exact = LampPersonalDeletionLedger.Entry(
+            presentSince: Int64(saved) * 1_000 + 900,
+            deletedAt: Int64(saved) * 1_000 + 100
+        )
+        #expect(exact.isDeleted(itemModified: nil) == false)
+    }
 }

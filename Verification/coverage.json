@@ -25,6 +25,10 @@
     "Sources/LampCore/LampPersonalDeletionLedger.swift": {
       "rules": [
         "tombstoneDeletes",
+        "tombstoneDeletesSecondsCopy",
+        "deletionInsideTheSavesSecondKeepsTheCopy",
+        "deletionAfterTheSavesSecondDeletes",
+        "anExactSaveStillCounts",
         "mergeTombstone",
         "mergeTombstone_comm",
         "mergeTombstone_assoc",
@@ -34,10 +38,10 @@
         "later"
       ],
       "conformance": [
-        "tombstone",
+        "tombstoneSecondsCopy",
         "tombstoneMerge"
       ],
-      "boundary": "Its item keys are spelled here once, for both clients. Recording a save or a deletion keeps the later time, as `later`."
+      "boundary": "Its item keys are spelled here once, for both clients. Recording a save or a deletion keeps the later time, as `later`. Its own times are milliseconds while the item's modification comes from a file in seconds, so a deletion counts only once the second the copy was saved in has passed."
     },
     "Sources/LampCore/LampPresentationDeckPortable.swift": {
       "rules": [
