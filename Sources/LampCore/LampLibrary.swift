@@ -2580,6 +2580,13 @@ public actor LampLibrary {
     /// `hasMore` says a kind found more than it kept, not how many more. Each
     /// kind is asked for one past the whole page, so it says so truly even
     /// when one kind alone fills the page.
+    ///
+    /// `preferredTranslationID` takes Scripture from that one translation —
+    /// the reader's — or, where it has no match, from the translation with
+    /// the most, and names the others that matched (`translationID`,
+    /// `alsoInTranslationIDs`). Searched together, every translation put the
+    /// same verse on the page once each. For a page of every kind; a page of
+    /// Scripture alone wants every translation, and passes nil.
     public func searchModulesByKind(
         query: String,
         kinds: Set<LampModuleKind>? = nil,
@@ -2588,6 +2595,7 @@ public actor LampLibrary {
         strongsKey: String? = nil,
         highlightColors: Set<String>? = nil,
         devotionalCriteria: LampDevotionalSearchCriteria = .init(),
+        preferredTranslationID: String? = nil,
         limit: Int = 200
     ) throws -> [LampModuleSearchKindResults] {
         // At most 499, so one past it fits under the 500 every kind's own
@@ -2595,7 +2603,8 @@ public actor LampLibrary {
         let page = min(max(limit, 1), 499)
         guard let found = try gatherModuleSearch(
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
-            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: page + 1
+            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: page + 1,
+            preferredTranslationID: preferredTranslationID
         ) else { return [] }
         let share = LampModuleSearch.rankedByKind(found.results, by: found.query, limit: page)
         listWordsIfNeeded(found)
@@ -2605,8 +2614,12 @@ public actor LampLibrary {
             if groups.last?.kind == result.kind {
                 groups[groups.count - 1].results.append(result)
             } else {
+                let scripture = result.kind == .translation ? found.scripture : nil
                 groups.append(LampModuleSearchKindResults(
-                    kind: result.kind, results: [result], hasMore: share.moreIn.contains(result.kind.rawValue)
+                    kind: result.kind, results: [result],
+                    hasMore: share.moreIn.contains(result.kind.rawValue),
+                    translationID: scripture?.translationID,
+                    alsoInTranslationIDs: scripture?.alsoIn ?? []
                 ))
             }
         }
@@ -2636,7 +2649,8 @@ public actor LampLibrary {
         strongsKey: String?,
         highlightColors: Set<String>?,
         devotionalCriteria: LampDevotionalSearchCriteria,
-        limit: Int
+        limit: Int,
+        preferredTranslationID: String? = nil
     ) throws -> ModuleSearchGathering? {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let resultLimit = min(max(limit, 1), 500)
@@ -2665,34 +2679,69 @@ public actor LampLibrary {
             results.count { $0.kind == kind }
         }
 
+        var scripture: LampScriptureChoice?
         if (hasTextQuery || normalizedStrongs != nil) && wants(.translation) {
-            let translationIDs = Set(installed.filter {
+            let translationOrder = installed.filter {
                 $0.kind == .translation && includesModule($0.id)
-            }.map(\.id))
-            if !translationIDs.isEmpty {
-                // A verse is shown whole, with what the search found marked.
-                let matches = try hasTextQuery
+            }.map(\.id)
+            let translationIDs = Set(translationOrder)
+            // A verse is shown whole, with what the search found marked.
+            func verses(in ids: Set<String>, limit: Int) throws -> [(LampTranslationSearchResult, String)] {
+                try hasTextQuery
                     ? searchTranslations(
-                        query: trimmedQuery, moduleIDs: translationIDs,
-                        bookRange: bookRange, limit: resultLimit - countForKind(.translation)
+                        query: trimmedQuery, moduleIDs: ids, bookRange: bookRange, limit: limit
                     ).map { ($0, parsedQuery.markedSnippet($0.text, limit: 2_000)) }
                     : strongsVerses(
-                        key: normalizedStrongs ?? "", moduleIDs: translationIDs,
-                        bookRange: bookRange, limit: resultLimit - countForKind(.translation)
+                        key: normalizedStrongs ?? "", moduleIDs: ids, bookRange: bookRange, limit: limit
                     ).map { ($0.result, $0.marked) }
-                results += matches.map { match, marked in
-                    LampModuleSearchResult(
-                        id: "translation:\(match.id)",
-                        kind: .translation,
-                        moduleID: match.translationID,
-                        moduleName: match.translationName,
-                        title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
-                        subtitle: match.translationAbbreviation,
-                        snippet: marked,
-                        startReference: match.reference,
-                        holdsPhrase: parsedQuery.holdsPhrase(match.text)
-                    )
+            }
+            var matches: [(LampTranslationSearchResult, String)] = []
+            if let preferred = preferredTranslationID, translationIDs.count > 1 {
+                // Scripture from one translation: the reader's own, or — when
+                // it has no match, as a word only older translations use —
+                // the one with the most, so the search never looks empty
+                // when it isn't. Every translation searched together put the
+                // same verse on the page once per translation.
+                var found: [String: [(LampTranslationSearchResult, String)]] = [:]
+                if translationIDs.contains(preferred) {
+                    found[preferred] = try verses(in: [preferred], limit: resultLimit)
                 }
+                var shown: String?
+                if found[preferred]?.isEmpty == false {
+                    shown = preferred
+                } else {
+                    for id in translationOrder where id != preferred {
+                        try Task.checkCancellation()
+                        let hits = try verses(in: [id], limit: resultLimit)
+                        found[id] = hits
+                        // Ties go to the earlier translation: `>` keeps it.
+                        if hits.count > (shown.flatMap { found[$0]?.count } ?? 0) { shown = id }
+                    }
+                }
+                if let shown {
+                    matches = found[shown] ?? []
+                    let others = try translationOrder.filter { id in
+                        guard id != shown else { return false }
+                        if let hits = found[id] { return !hits.isEmpty }
+                        return try !verses(in: [id], limit: 1).isEmpty
+                    }
+                    scripture = LampScriptureChoice(translationID: shown, alsoIn: others)
+                }
+            } else if !translationIDs.isEmpty {
+                matches = try verses(in: translationIDs, limit: resultLimit - countForKind(.translation))
+            }
+            results += matches.map { match, marked in
+                LampModuleSearchResult(
+                    id: "translation:\(match.id)",
+                    kind: .translation,
+                    moduleID: match.translationID,
+                    moduleName: match.translationName,
+                    title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
+                    subtitle: match.translationAbbreviation,
+                    snippet: marked,
+                    startReference: match.reference,
+                    holdsPhrase: parsedQuery.holdsPhrase(match.text)
+                )
             }
         }
 
@@ -2850,7 +2899,8 @@ public actor LampLibrary {
         }
 
         return ModuleSearchGathering(
-            results: results, snippetSources: snippetSources, query: parsedQuery, limit: resultLimit
+            results: results, snippetSources: snippetSources, query: parsedQuery, limit: resultLimit,
+            scripture: scripture
         )
     }
 
@@ -6941,4 +6991,13 @@ struct ModuleSearchGathering {
     var snippetSources: [LampModuleKind: [String: URL]]
     var query: LampSearchQuery
     var limit: Int
+    /// Which translation Scripture came from, where one was preferred.
+    var scripture: LampScriptureChoice?
+}
+
+/// The one translation a shared page took Scripture from, and the others
+/// that matched too, in the order they are installed.
+struct LampScriptureChoice: Equatable {
+    var translationID: String
+    var alsoIn: [String]
 }

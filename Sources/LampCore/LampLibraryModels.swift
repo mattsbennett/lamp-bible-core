@@ -242,11 +242,28 @@ public struct LampModuleSearchKindResults: Equatable, Sendable {
     /// It found more than `results` holds. Not how many: the count stops at
     /// the search's limit.
     public var hasMore: Bool
+    /// For Scripture searched preferring a translation: the one its verses
+    /// came from, and the other translations that matched too, in installed
+    /// order. Nil and empty otherwise.
+    ///
+    /// Apart from `hasMore`, which stays about the translation shown: a
+    /// "+" on its count would otherwise claim more of it than there is. A
+    /// list offering the rest of Scripture offers it for either.
+    public var translationID: String?
+    public var alsoInTranslationIDs: [String]
 
-    public init(kind: LampModuleKind, results: [LampModuleSearchResult], hasMore: Bool) {
+    public init(
+        kind: LampModuleKind,
+        results: [LampModuleSearchResult],
+        hasMore: Bool,
+        translationID: String? = nil,
+        alsoInTranslationIDs: [String] = []
+    ) {
         self.kind = kind
         self.results = results
         self.hasMore = hasMore
+        self.translationID = translationID
+        self.alsoInTranslationIDs = alsoInTranslationIDs
     }
 }
 

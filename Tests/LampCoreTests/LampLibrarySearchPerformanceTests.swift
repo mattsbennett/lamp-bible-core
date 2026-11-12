@@ -172,6 +172,69 @@ struct LampLibrarySearchPerformanceTests {
         #expect(try await library.searchModulesByKind(query: "neverpresent").isEmpty)
     }
 
+    /// On a page of every kind, Scripture comes from the reader's
+    /// translation, or from the one with the most matches where the
+    /// reader's has none, and names the others that matched. Searched
+    /// together, nine translations put John 1:16 on the page nine times.
+    @Test func scriptureOnASharedPageComesFromOneTranslation() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        // AAA: "light" twice. BBB: "light" three times, "lamp" once. CCC: neither.
+        for (id, texts) in [
+            ("AAA", ["light", "light", "dark", "dark"]),
+            ("BBB", ["light", "light", "light", "lamp"]),
+            ("CCC", ["dark", "dark", "dark", "dark"]),
+        ] {
+            let verses = texts.enumerated().map { index, word in
+                #"{"v":\#(index + 1),"content":{"text":"the \#(word) shines"}}"#
+            }.joined(separator: ",")
+            _ = try await install(#"""
+                {"meta":{"schemaVersion":"1.0","id":"\#(id)","type":"translation","name":"\#(id)","abbreviation":"\#(id)","language":"en"},
+                 "books":[{"id":"John","name":"John","number":43,"testament":"NT","chapters":[{"chapter":1,"verses":[\#(verses)]}]}]}
+                """#, id: id, in: root, library: library)
+        }
+        func scripture(_ query: String, preferring id: String?, among ids: Set<String>? = nil) async throws
+            -> LampModuleSearchKindResults? {
+            try await library.searchModulesByKind(
+                query: query, moduleIDs: ids, preferredTranslationID: id, limit: 20
+            ).first { $0.kind == .translation }
+        }
+
+        // The reader's own, and the other that matched named.
+        let own = try #require(try await scripture("light", preferring: "AAA"))
+        #expect(Set(own.results.map(\.moduleID)) == ["AAA"])
+        #expect(own.results.count == 2)
+        #expect(own.translationID == "AAA")
+        #expect(own.alsoInTranslationIDs == ["BBB"])
+        #expect(own.hasMore == false, "all of AAA's are shown; the rest are BBB's, named apart")
+
+        // None in the reader's: the one with the most, not the first.
+        let fallback = try #require(try await scripture("light", preferring: "CCC"))
+        #expect(fallback.translationID == "BBB")
+        #expect(fallback.results.count == 3)
+        #expect(fallback.alsoInTranslationIDs == ["AAA"])
+
+        // A word only one translation has: that one, and nothing else named.
+        let only = try #require(try await scripture("lamp", preferring: "AAA"))
+        #expect(only.translationID == "BBB")
+        #expect(only.alsoInTranslationIDs.isEmpty)
+        #expect(only.hasMore == false)
+
+        // No preference: every translation, as a page of Scripture alone wants.
+        let every = try #require(try await scripture("light", preferring: nil))
+        #expect(Set(every.results.map(\.moduleID)) == ["AAA", "BBB"])
+        #expect(every.translationID == nil)
+        #expect(every.alsoInTranslationIDs.isEmpty)
+
+        // One translation chosen to search: nothing to prefer between.
+        let chosen = try #require(try await scripture("light", preferring: "AAA", among: ["BBB"]))
+        #expect(Set(chosen.results.map(\.moduleID)) == ["BBB"])
+        #expect(chosen.translationID == nil)
+
+        #expect(try await scripture("nowhere", preferring: "AAA") == nil)
+    }
+
     /// My Notes and a notes module are each asked for the whole limit: my own
     /// notes holding the word can't keep out the module's note titled with it.
     @Test func myNotesAndANotesModuleEachGetTheWholeLimit() async throws {
