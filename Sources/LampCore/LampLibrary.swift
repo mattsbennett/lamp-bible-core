@@ -4052,41 +4052,22 @@ public actor LampLibrary {
             ? "personal-highlights-\(safeTranslationID)"
             : safeExportIdentifier(setID))
         let name = requestedName ?? export.name ?? "My Highlights — \(translationID)"
-        var meta: [String: Any] = [
-            "schemaVersion": "1.0",
-            "id": moduleID,
-            "type": "highlights",
-            "name": name,
-            "translationId": translationID,
-        ]
-        if let created = export.created { meta["created"] = created }
-        if let modified = export.modified { meta["lastModified"] = modified }
-        if let description = export.description { meta["description"] = description }
-        if !export.themes.isEmpty {
-            meta["themes"] = export.themes.map { theme -> [String: Any] in
-                var value: [String: Any] = [
-                    "color": theme.color,
-                    "style": theme.style.rawValue,
-                    "name": theme.name,
-                ]
-                if let description = theme.description { value["description"] = description }
-                return value
-            }
-        }
-        let groupedHighlights = Dictionary(grouping: export.highlights, by: \.reference)
-        let verses: [[String: Any]] = groupedHighlights.keys.sorted().map { reference in
-            let spans: [[String: Any]] = (groupedHighlights[reference] ?? []).map { highlight in
-                var span: [String: Any] = [
-                    "sc": highlight.startOffset,
-                    "ec": highlight.endOffset,
-                    "style": highlight.style.rawValue,
-                ]
-                if let color = highlight.color { span["color"] = color }
-                return span
-            }
-            return ["ref": reference, "highlights": spans]
-        }
-        let root: [String: Any] = ["meta": meta, "verses": verses]
+        // What goes in the document, and under what names, is
+        // `LampPersonalHighlightsFile`'s: the phone builds the same
+        // document from its own records, and the compiler turns either into
+        // the same file. What this still decides is which set, and the
+        // order its highlights and themes are read in.
+        let root = try LampPersonalHighlightsFile.document(for: .init(
+            id: setID,
+            moduleID: moduleID,
+            name: name,
+            translationID: translationID,
+            description: export.description,
+            created: export.created,
+            lastModified: export.modified,
+            highlights: export.highlights,
+            themes: export.themes
+        ))
         return LampPortableStudyDocument(
             moduleID: moduleID,
             kind: .highlights,
