@@ -26,6 +26,8 @@
       "rules": [
         "tombstoneDeletes",
         "tombstoneDeletesSecondsCopy",
+        "stampSet",
+        "stampCleared",
         "deletionInsideTheSavesSecondKeepsTheCopy",
         "deletionAfterTheSavesSecondDeletes",
         "anExactSaveStillCounts",

@@ -5247,10 +5247,22 @@ public actor LampLibrary {
         _ kind: LampPersonalItemKind,
         _ key: String
     ) throws {
+        // Stamped now, but never at or before the deletion it undoes. A
+        // device that receives a deletion and then writes the item again
+        // must have its writing win — and it will not, if its clock is
+        // behind the clock that recorded the deletion. The item is then
+        // taken away again on the next pass, on every device, and the
+        // person's second attempt is lost as quietly as the first.
+        //
+        // `stampSet` in the model, which plan progress already followed and
+        // this did not. Found by a Codex review.
         try db.execute(sql: """
             INSERT INTO personal_sync_ledger (kind, item_key, present_since) VALUES (?, ?, ?)
             ON CONFLICT(kind, item_key) DO UPDATE SET
-                present_since = MAX(COALESCE(present_since, 0), excluded.present_since)
+                present_since = MAX(
+                    COALESCE(present_since, 0), excluded.present_since,
+                    COALESCE(deleted_at, 0) + 1
+                )
             """, arguments: [kind.rawValue, key, nowMilliseconds()])
     }
 
@@ -5259,10 +5271,14 @@ public actor LampLibrary {
         _ kind: LampPersonalItemKind,
         _ key: String
     ) throws {
+        // And the other way round, for the same reason: `stampCleared`.
         try db.execute(sql: """
             INSERT INTO personal_sync_ledger (kind, item_key, deleted_at) VALUES (?, ?, ?)
             ON CONFLICT(kind, item_key) DO UPDATE SET
-                deleted_at = MAX(COALESCE(deleted_at, 0), excluded.deleted_at)
+                deleted_at = MAX(
+                    COALESCE(deleted_at, 0), excluded.deleted_at,
+                    COALESCE(present_since, 0) + 1
+                )
             """, arguments: [kind.rawValue, key, nowMilliseconds()])
     }
 

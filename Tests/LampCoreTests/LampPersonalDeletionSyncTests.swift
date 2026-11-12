@@ -388,4 +388,50 @@ struct LampPersonalDeletionSyncTests {
         )
         #expect(exact.isDeleted(itemModified: nil) == false)
     }
+
+    /// A note written again after its deletion arrives stays written, even
+    /// on a device whose clock is behind.
+    ///
+    /// Presence was stamped with the wall clock alone. A device that
+    /// receives a deletion made at `s+.900` and then writes the note again
+    /// records presence at its own `s+.600`, and the deletion — now the
+    /// later time — takes the note away on the next pass. On every device,
+    /// and the person's second attempt is lost as quietly as the first.
+    ///
+    /// The rule the model already carried for plan progress, `stampSet`: a
+    /// change is stamped now, but never at or before the time it overrides.
+    @Test func writingANoteAgainAfterItsDeletionHolds() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("recreate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+
+        _ = try await library.setPersonalVerseNote(reference: verse, content: "First thought")
+        _ = try await library.setPersonalVerseNote(reference: verse, content: "")
+
+        // A deletion from a device whose clock runs ahead — far enough that
+        // this device's own clock cannot overtake it.
+        let ahead = Int64(Date().timeIntervalSince1970 * 1_000) + 60 * 60 * 1_000
+        var incoming = LampPersonalDeletionLedger()
+        incoming.recordDeletion(.note, "personal-notes:\(verse)", at: ahead)
+        try await library.mergePersonalDeletionLedger(incoming)
+
+        // Written again here, now.
+        _ = try await library.setPersonalVerseNote(reference: verse, content: "Second thought")
+
+        let ledger = try await library.personalDeletionLedger()
+        let entry = try #require(ledger.entry(.note, "personal-notes:\(verse)"))
+        #expect(
+            (entry.presentSince ?? 0) > ahead,
+            "the writing is stamped past the deletion it undoes, not at this clock's now"
+        )
+        #expect(entry.isDeleted(itemModified: Int(Date().timeIntervalSince1970)) == false)
+
+        try await library.applyPersonalDeletionLedger()
+        #expect(
+            try await library.verseNotes(reference: verse).map(\.content) == ["Second thought"],
+            "and it is still there after the ledger is applied"
+        )
+    }
 }

@@ -103,18 +103,33 @@ public struct LampPersonalDeletionLedger: Equatable, Sendable {
     }
 
     /// Records a save of the item at `time`, keeping the later of it and any
-    /// save already recorded.
+    /// save already recorded — and never at or before the deletion it
+    /// undoes.
+    ///
+    /// A device that receives a deletion and then writes the item again
+    /// must have its writing win. Stamped with the wall clock alone it does
+    /// not, if that clock is behind the one that recorded the deletion: the
+    /// item is taken away again on the next pass, on every device, and the
+    /// person's second attempt is lost as quietly as the first.
+    ///
+    /// `stampSet` in the model, which plan progress already followed and
+    /// this did not. Found by a Codex review.
     public mutating func recordPresence(_ kind: LampPersonalItemKind, _ key: String, at time: Int64) {
         var entry = entry(kind, key) ?? Entry()
-        entry.presentSince = Entry.later(entry.presentSince, time)
+        entry.presentSince = Entry.later(
+            entry.presentSince, max(time, entry.deletedAt.map { $0 + 1 } ?? time)
+        )
         set(entry, kind: kind, key: key)
     }
 
     /// Records a deletion of the item at `time`, keeping the later of it and
-    /// any deletion already recorded.
+    /// any deletion already recorded — and never at or before the save it
+    /// undoes, for the same reason. `stampCleared` in the model.
     public mutating func recordDeletion(_ kind: LampPersonalItemKind, _ key: String, at time: Int64) {
         var entry = entry(kind, key) ?? Entry()
-        entry.deletedAt = Entry.later(entry.deletedAt, time)
+        entry.deletedAt = Entry.later(
+            entry.deletedAt, max(time, entry.presentSince.map { $0 + 1 } ?? time)
+        )
         set(entry, kind: kind, key: key)
     }
 
