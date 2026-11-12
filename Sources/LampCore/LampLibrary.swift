@@ -5188,6 +5188,52 @@ public actor LampLibrary {
                         """, arguments: [kind.rawValue, key, entry.presentSince, entry.deletedAt])
                 }
             }
+            // And the ones already here under the old spelling. Rewriting
+            // only what arrives would leave those rows matching nothing and
+            // **republished every pass**, since this device publishes its
+            // whole ledger — so the old names would never die, on any
+            // device. Moved once, they go. ios-56 did the same on the
+            // phone, for the same reason.
+            try Self.moveRenamedSetKeys(db, by: renamed)
+        }
+    }
+
+    /// Moves a ledger row to its set's real name, joining whatever is
+    /// already there by keeping the later of each time.
+    private static func moveRenamedSetKeys(
+        _ db: Database, by renamings: [String: String]
+    ) throws {
+        guard !renamings.isEmpty else { return }
+        let kinds: [LampPersonalItemKind] = [.highlightSet, .highlight, .highlightTheme]
+        for kind in kinds {
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT item_key, present_since, deleted_at FROM personal_sync_ledger
+                WHERE kind = ?
+                """, arguments: [kind.rawValue])
+            for row in rows {
+                let key: String = row["item_key"]
+                let moved = renamingSet(in: key, kind: kind, by: renamings)
+                guard moved != key else { continue }
+                try db.execute(sql: """
+                    INSERT INTO personal_sync_ledger (kind, item_key, present_since, deleted_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(kind, item_key) DO UPDATE SET
+                        present_since = CASE
+                            WHEN present_since IS NULL THEN excluded.present_since
+                            WHEN excluded.present_since IS NULL THEN present_since
+                            ELSE MAX(present_since, excluded.present_since) END,
+                        deleted_at = CASE
+                            WHEN deleted_at IS NULL THEN excluded.deleted_at
+                            WHEN excluded.deleted_at IS NULL THEN deleted_at
+                            ELSE MAX(deleted_at, excluded.deleted_at) END
+                    """, arguments: [
+                        kind.rawValue, moved,
+                        row["present_since"] as Int64?, row["deleted_at"] as Int64?,
+                    ])
+                try db.execute(sql: """
+                    DELETE FROM personal_sync_ledger WHERE kind = ? AND item_key = ?
+                    """, arguments: [kind.rawValue, key])
+            }
         }
     }
 

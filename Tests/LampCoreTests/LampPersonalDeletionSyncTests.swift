@@ -478,5 +478,18 @@ struct LampPersonalDeletionSyncTests {
             try await mine.verseHighlights(translationID: "ESV", reference: verse).isEmpty,
             "the deletion lands, rather than naming a set this device does not have"
         )
+
+        // And the old name is gone from the ledger rather than kept beside
+        // the real one. This device publishes its whole ledger, so a row
+        // left under the old spelling would go back into the bundle on
+        // every pass and the old names would never die, on any device.
+        let ledger = try await mine.personalDeletionLedger()
+        #expect(ledger.entry(.highlight, flattened) == nil, "moved, not copied")
+        #expect(
+            ledger.entries(of: .highlight).keys.contains {
+                $0.hasPrefix("personal-highlights:ESV\u{1F}")
+            },
+            "and it is there under the set's real name"
+        )
     }
 }
