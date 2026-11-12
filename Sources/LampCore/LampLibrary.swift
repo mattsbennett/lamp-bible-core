@@ -2562,13 +2562,17 @@ public actor LampLibrary {
         devotionalCriteria: LampDevotionalSearchCriteria = .init(),
         limit: Int = 200
     ) throws -> [LampModuleSearchResult] {
-        guard let found = try gatherModuleSearch(
+        let request = LampModuleSearchRequest(
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
-            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: limit
+            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria
+        )
+        let resultLimit = min(max(limit, 1), 500)
+        let reads = ModuleSearchReads()
+        guard let found = try LampModuleSearch.gather(
+            request, perKind: resultLimit, from: moduleSearchSources(for: request, reads: reads)
         ) else { return [] }
-        let merged = LampModuleSearch.ranked(found.results, by: found.query, limit: found.limit)
-        listWordsIfNeeded(found)
-        return try addingSnippets(to: merged, from: found.snippetSources, query: found.query)
+        listWordsIfNeeded(request, reads)
+        return try found.ranked(limit: resultLimit)
     }
 
     /// The same search, at most 499 places shared among the kinds that matched
@@ -2601,23 +2605,26 @@ public actor LampLibrary {
         // At most 499, so one past it fits under the 500 every kind's own
         // search caps at (searchTranslations, searchDictionaries, ...).
         let page = min(max(limit, 1), 499)
-        guard let found = try gatherModuleSearch(
+        let request = LampModuleSearchRequest(
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
-            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria, limit: page + 1,
+            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria,
             preferredTranslationID: preferredTranslationID
+        )
+        let reads = ModuleSearchReads()
+        guard let found = try LampModuleSearch.gather(
+            request, perKind: page + 1, from: moduleSearchSources(for: request, reads: reads)
         ) else { return [] }
-        let share = LampModuleSearch.rankedByKind(found.results, by: found.query, limit: page)
-        listWordsIfNeeded(found)
-        let filled = try addingSnippets(to: share.results, from: found.snippetSources, query: found.query)
+        listWordsIfNeeded(request, reads)
+        let share = try found.rankedByKind(limit: page)
         var groups: [LampModuleSearchKindResults] = []
-        for result in filled {
+        for result in share.results {
             if groups.last?.kind == result.kind {
                 groups[groups.count - 1].results.append(result)
             } else {
-                let scripture = result.kind == .translation ? found.scripture : nil
+                let scripture = result.kind == .translation ? share.scripture : nil
                 groups.append(LampModuleSearchKindResults(
                     kind: result.kind, results: [result],
-                    hasMore: share.moreIn.contains(result.kind.rawValue),
+                    hasMore: share.moreIn.contains(result.kind),
                     translationID: scripture?.translationID,
                     alsoInTranslationIDs: scripture?.alsoIn ?? []
                 ))
@@ -2629,122 +2636,104 @@ public actor LampLibrary {
     /// After a search for part of a word, the words of the indexes it read
     /// are listed in the background, so the next such search asks the list
     /// (`listWordsInBackground`).
-    private func listWordsIfNeeded(_ found: ModuleSearchGathering) {
-        if found.query.hasWithinWordTerms {
-            listWordsInBackground(of: Set(found.snippetSources.values.flatMap(\.values)))
+    private func listWordsIfNeeded(_ request: LampModuleSearchRequest, _ reads: ModuleSearchReads) {
+        if request.parsedQuery.hasWithinWordTerms {
+            listWordsInBackground(of: Set(reads.databases))
         }
     }
 
-    /// Every kind's results for a search, each kind's block asked for the
-    /// whole limit, unmerged: what `searchModules` and `searchModulesByKind`
-    /// each rank their own way. Commentaries, books, notes and writing come
-    /// without snippets, cut once a ranking has kept them (`snippetSources`);
-    /// the other kinds carry theirs.
-    /// Nil when there is nothing to search for.
-    private func gatherModuleSearch(
-        query: String,
-        kinds: Set<LampModuleKind>?,
-        moduleIDs: Set<String>?,
-        bookRange: ClosedRange<Int>?,
-        strongsKey: String?,
-        highlightColors: Set<String>?,
-        devotionalCriteria: LampDevotionalSearchCriteria,
-        limit: Int,
-        preferredTranslationID: String? = nil
-    ) throws -> ModuleSearchGathering? {
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resultLimit = min(max(limit, 1), 500)
-        let parsedQuery = LampSearchQuery(trimmedQuery)
-        let searchableQuery = parsedQuery.plainText
-        let normalizedStrongs = strongsKey?
-            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
-        let hasTextQuery = !parsedQuery.isEmpty && !searchableQuery.isEmpty
-        let hasColorFilter = highlightColors?.isEmpty == false
-        let wants: (LampModuleKind) -> Bool = { kinds == nil || kinds?.contains($0) == true }
-        // Writing found by its date, tag or category alone, as the facets ask.
-        let hasDevotionalCriteria = !devotionalCriteria.isEmpty && wants(.devotional)
-        guard hasTextQuery || normalizedStrongs != nil || hasColorFilter || hasDevotionalCriteria else { return nil }
+    /// The library's modules as a search of every kind reads them
+    /// (`LampModuleSearch.gather`): each module's own database, the bundled
+    /// ones together, and My Notes' and My Writing's indexes, brought up to
+    /// date as they are searched. `reads` collects the databases whose
+    /// snippets a search may cut, whose words a search for part of a word
+    /// lists afterwards.
+    private func moduleSearchSources(
+        for request: LampModuleSearchRequest,
+        reads: ModuleSearchReads
+    ) throws -> LampModuleSearchSources<LampModuleSearchResult> {
         let installed = try installedModules()
+        let parsedQuery = request.parsedQuery
+        let hasTextQuery = request.hasWords
+        let includesModule = request.includes(moduleID:)
         /// A result's text cut around what the query found, the found words
         /// marked; without a text query, its opening.
         func snippet(_ text: String) -> String {
             hasTextQuery ? parsedQuery.markedSnippet(text) : searchSnippet(text)
         }
-        let includesModule: (String) -> Bool = { moduleIDs == nil || moduleIDs?.contains($0) == true }
-        var results: [LampModuleSearchResult] = []
-        // Where each commentary, book, note and devotional result was found,
-        // to cut its snippet from once the merge has kept it.
-        var snippetSources: [LampModuleKind: [String: URL]] = [:]
-        let countForKind: (LampModuleKind) -> Int = { kind in
-            results.count { $0.kind == kind }
-        }
-
-        var scripture: LampScriptureChoice?
-        if (hasTextQuery || normalizedStrongs != nil) && wants(.translation) {
-            let translationOrder = installed.filter {
-                $0.kind == .translation && includesModule($0.id)
-            }.map(\.id)
-            let translationIDs = Set(translationOrder)
-            // A verse is shown whole, with what the search found marked.
-            func verses(in ids: Set<String>, limit: Int) throws -> [(LampTranslationSearchResult, String)] {
-                try hasTextQuery
-                    ? searchTranslations(
-                        query: trimmedQuery, moduleIDs: ids, bookRange: bookRange, limit: limit
-                    ).map { ($0, parsedQuery.markedSnippet($0.text, limit: 2_000)) }
-                    : strongsVerses(
-                        key: normalizedStrongs ?? "", moduleIDs: ids, bookRange: bookRange, limit: limit
-                    ).map { ($0.result, $0.marked) }
-            }
-            var matches: [(LampTranslationSearchResult, String)] = []
-            if let preferred = preferredTranslationID, translationIDs.count > 1 {
-                // Scripture from one translation (`LampScriptureChoice.choose`,
-                // which the phone's search calls too).
-                if let chosen = try LampScriptureChoice.choose(
-                    preferred: preferred, order: translationOrder, limit: resultLimit,
-                    verses: { id, limit in
-                        try Task.checkCancellation()
-                        return try verses(in: [id], limit: limit)
-                    }
-                ) {
-                    matches = chosen.matches
-                    scripture = chosen.choice
+        let translationOrder = installed.filter { $0.kind == .translation }.map(\.id)
+        return LampModuleSearchSources(
+            shape: .core,
+            databases: { kind in
+                // My Notes and My Writing through their indexes, then each
+                // database of the kind.
+                var searched: [(url: URL, modules: [LampSearchedModule])] = []
+                if kind == .notes && includesModule("personal-notes") {
+                    _ = try self.personalNoteIndex()
+                    searched.append((
+                        self.personalIndexURL(Self.noteIndex), [LampSearchedModule(id: "personal-notes", name: "My Notes")]
+                    ))
                 }
-            } else if !translationIDs.isEmpty {
-                matches = try verses(in: translationIDs, limit: resultLimit - countForKind(.translation))
-            }
-            results += matches.map { match, marked in
-                LampModuleSearchResult(
-                    id: "translation:\(match.id)",
-                    kind: .translation,
-                    moduleID: match.translationID,
-                    moduleName: match.translationName,
-                    title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
-                    subtitle: match.translationAbbreviation,
-                    snippet: marked,
-                    startReference: match.reference,
-                    holdsPhrase: parsedQuery.holdsPhrase(match.text)
-                )
-            }
-        }
-
-        if (hasTextQuery || normalizedStrongs != nil) && wants(.dictionary) {
-            let dictionaryIDs = Set(installed.filter {
-                $0.kind == .dictionary && includesModule($0.id)
-            }.map(\.id))
-            if !dictionaryIDs.isEmpty {
-                let matches = try normalizedStrongs.map { key in
-                    try dictionaryEntries(keys: [key], moduleIDs: dictionaryIDs).filter { entry in
+                if kind == .devotional && includesModule("personal-devotionals") {
+                    try Task.checkCancellation()
+                    _ = try self.personalDevotionalIndex()
+                    searched.append((
+                        self.personalIndexURL(Self.writingIndex),
+                        [LampSearchedModule(id: "personal-devotionals", name: "My Writing")]
+                    ))
+                }
+                searched += try self.searchedDatabases(of: kind, in: installed, including: includesModule)
+                // Quizzes carry their snippets.
+                if kind != .quiz { reads.databases += searched.map(\.url) }
+                return searched.map { url, modules in
+                    LampModuleSearchDatabase(id: url.path, modules: modules) { body in
+                        // My writing's and My Notes' indexes are this
+                        // library's own, already brought up to date.
+                        try (self.personalIndexQueues[url.path] ?? self.openReadOnlyDatabase(at: url)).read(body)
+                    }
+                }
+            },
+            results: { hits, _, _, _ in hits },
+            translations: { translationOrder },
+            verses: { ids, limit in
+                let ids = Set(ids ?? translationOrder)
+                // A verse is shown whole, with what the search found marked.
+                let matches: [(LampTranslationSearchResult, String)] = try hasTextQuery
+                    ? self.searchTranslations(
+                        query: request.query, moduleIDs: ids, bookRange: request.bookRange, limit: limit
+                    ).map { ($0, parsedQuery.markedSnippet($0.text, limit: 2_000)) }
+                    : self.strongsVerses(
+                        key: request.strongsKey ?? "", moduleIDs: ids, bookRange: request.bookRange, limit: limit
+                    ).map { ($0.result, $0.marked) }
+                return matches.map { match, marked in
+                    LampModuleSearchResult(
+                        id: "translation:\(match.id)",
+                        kind: .translation,
+                        moduleID: match.translationID,
+                        moduleName: match.translationName,
+                        title: "\(match.bookName) \(match.chapterNumber):\(match.verseNumber)",
+                        subtitle: match.translationAbbreviation,
+                        snippet: marked,
+                        startReference: match.reference,
+                        holdsPhrase: parsedQuery.holdsPhrase(match.text)
+                    )
+                }
+            },
+            dictionaries: { limit in
+                let dictionaryIDs = Set(installed.filter {
+                    $0.kind == .dictionary && includesModule($0.id)
+                }.map(\.id))
+                guard !dictionaryIDs.isEmpty else { return [] }
+                let matches = try request.strongsKey.map { key in
+                    try self.dictionaryEntries(keys: [key], moduleIDs: dictionaryIDs).filter { entry in
                         !hasTextQuery || parsedQuery.matches([
                             entry.key, entry.lemma, entry.transliteration,
                             entry.senses.map { [$0.gloss, $0.definition].compactMap { $0 }.joined(separator: " ") }
                                 .joined(separator: " "),
                         ].compactMap { $0 }.joined(separator: " "))
                     }
-                } ?? searchDictionaries(
-                    query: trimmedQuery, moduleIDs: dictionaryIDs,
-                    limit: resultLimit - countForKind(.dictionary)
-                )
-                results += matches.map { match in
+                } ?? self.searchDictionaries(query: request.query, moduleIDs: dictionaryIDs, limit: limit)
+                return matches.map { match in
                     let definition = match.senses
                         .map { [$0.partOfSpeech, $0.gloss, $0.definition].compactMap { $0 }.joined(separator: ": ") }
                         .joined(separator: " • ")
@@ -2760,164 +2749,28 @@ public actor LampLibrary {
                         entryKey: match.key
                     )
                 }
+            },
+            plans: { limit in
+                LampModuleSearch.plans(
+                    try self.readingPlans().filter { includesModule($0.id) }.map { plan in
+                        LampSearchedPlan(
+                            id: plan.id, name: plan.name, description: plan.description,
+                            fullDescription: plan.fullDescription, author: plan.author, duration: plan.duration
+                        )
+                    },
+                    query: parsedQuery, limit: limit
+                )
+            },
+            highlights: { limit in
+                try self.searchHighlights(
+                    colors: request.highlightColors,
+                    query: hasTextQuery ? parsedQuery : nil,
+                    moduleIDs: request.moduleIDs,
+                    bookRange: request.bookRange,
+                    limit: limit
+                )
             }
-        }
-
-        if hasTextQuery && wants(.commentary) {
-            // Each database is asked for the whole limit and the merge below
-            // makes the cut. A database's units come best first, so giving the
-            // first module by name every place would leave the rest unsearched.
-            // Snippets wait for the cut: most of the units offered are dropped.
-            for database in try searchedDatabases(of: .commentary, in: installed, including: includesModule) {
-                try Task.checkCancellation()
-                let queue = try openReadOnlyDatabase(at: database.url)
-                results += try queue.read { db in
-                    try LampModuleSearch.commentary(
-                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit, snippets: false
-                    )
-                }
-                for module in database.modules { snippetSources[.commentary, default: [:]][module.id] = database.url }
-            }
-        }
-
-        if hasTextQuery && wants(.book) {
-            // As commentaries are: each database asked for the whole limit,
-            // its snippets cut once the merge has chosen.
-            for database in try searchedDatabases(of: .book, in: installed, including: includesModule) {
-                try Task.checkCancellation()
-                let queue = try openReadOnlyDatabase(at: database.url)
-                results += try queue.read { db in
-                    try LampModuleSearch.books(
-                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit, snippets: false
-                    )
-                }
-                for module in database.modules { snippetSources[.book, default: [:]][module.id] = database.url }
-            }
-        }
-
-        if hasTextQuery && wants(.notes) {
-            // My Notes, through their index, and each notes database are asked
-            // for the whole limit and the merge makes the cut, as for
-            // commentary: asked in turn, the first answered for every place.
-            if includesModule("personal-notes") {
-                results += try personalNoteIndex().read { db in
-                    try LampModuleSearch.notes(
-                        in: db, modules: [LampSearchedModule(id: "personal-notes", name: "My Notes")],
-                        query: parsedQuery, limit: resultLimit, snippets: false
-                    )
-                }
-                snippetSources[.notes, default: [:]]["personal-notes"] = personalIndexURL(Self.noteIndex)
-            }
-            for database in try searchedDatabases(of: .notes, in: installed, including: includesModule) {
-                try Task.checkCancellation()
-                let queue = try openReadOnlyDatabase(at: database.url)
-                results += try queue.read { db in
-                    try LampModuleSearch.notes(
-                        in: db, modules: database.modules, query: parsedQuery, limit: resultLimit, snippets: false
-                    )
-                }
-                for module in database.modules { snippetSources[.notes, default: [:]][module.id] = database.url }
-            }
-        }
-
-        if (hasTextQuery || hasDevotionalCriteria) && wants(.devotional) {
-            try Task.checkCancellation()
-            // My writing, through its index, and each devotional database are
-            // asked for the whole limit and the merge makes the cut, as for
-            // commentary.
-            if includesModule("personal-devotionals") {
-                results += try personalDevotionalIndex().read { db in
-                    try LampModuleSearch.devotionals(
-                        in: db, modules: [LampSearchedModule(id: "personal-devotionals", name: "My Writing")],
-                        query: parsedQuery, criteria: devotionalCriteria, limit: resultLimit, snippets: false
-                    )
-                }
-                snippetSources[.devotional, default: [:]]["personal-devotionals"] = personalIndexURL(Self.writingIndex)
-            }
-            for database in try searchedDatabases(of: .devotional, in: installed, including: includesModule) {
-                try Task.checkCancellation()
-                let queue = try openReadOnlyDatabase(at: database.url)
-                results += try queue.read { db in
-                    try LampModuleSearch.devotionals(
-                        in: db, modules: database.modules, query: parsedQuery, criteria: devotionalCriteria,
-                        limit: resultLimit, snippets: false
-                    )
-                }
-                for module in database.modules { snippetSources[.devotional, default: [:]][module.id] = database.url }
-            }
-        }
-
-        if hasTextQuery && wants(.plan) {
-            results += LampModuleSearch.plans(
-                try readingPlans().filter { includesModule($0.id) }.map { plan in
-                    LampSearchedPlan(
-                        id: plan.id, name: plan.name, description: plan.description,
-                        fullDescription: plan.fullDescription, author: plan.author, duration: plan.duration
-                    )
-                },
-                query: parsedQuery, limit: resultLimit
-            )
-        }
-
-        if hasTextQuery && wants(.quiz) {
-            // As for commentary: each database asked for the whole limit.
-            for database in try searchedDatabases(of: .quiz, in: installed, including: includesModule) {
-                try Task.checkCancellation()
-                let queue = try openReadOnlyDatabase(at: database.url)
-                results += try queue.read { db in
-                    try LampModuleSearch.quizzes(in: db, modules: database.modules, query: parsedQuery, limit: resultLimit)
-                }
-            }
-        }
-
-        if (hasTextQuery || hasColorFilter) && wants(.highlights) {
-            results += try searchHighlights(
-                colors: highlightColors,
-                query: hasTextQuery ? parsedQuery : nil,
-                moduleIDs: moduleIDs,
-                bookRange: bookRange,
-                limit: resultLimit - countForKind(.highlights)
-            )
-        }
-
-        return ModuleSearchGathering(
-            results: results, snippetSources: snippetSources, query: parsedQuery, limit: resultLimit,
-            scripture: scripture
         )
-    }
-
-    /// The commentary, book, note and devotional results the merge kept,
-    /// with their snippets cut from the databases they were found in.
-    private func addingSnippets(
-        to results: [LampModuleSearchResult],
-        from sources: [LampModuleKind: [String: URL]],
-        query: LampSearchQuery
-    ) throws -> [LampModuleSearchResult] {
-        var filled = results
-        var waiting: [URL: [LampModuleKind: [Int]]] = [:]
-        for (index, result) in results.enumerated() {
-            guard let url = sources[result.kind]?[result.moduleID] else { continue }
-            waiting[url, default: [:]][result.kind, default: []].append(index)
-        }
-        for (url, kinds) in waiting {
-            try Task.checkCancellation()
-            // My writing's and My Notes' indexes are this library's own,
-            // already brought up to date by the search.
-            let queue = try personalIndexQueues[url.path] ?? openReadOnlyDatabase(at: url)
-            for (kind, indices) in kinds {
-                let found = indices.map { results[$0] }
-                let snipped = try queue.read { db in
-                    switch kind {
-                    case .commentary: try LampModuleSearch.commentarySnippets(for: found, in: db, query: query)
-                    case .notes: try LampModuleSearch.noteSnippets(for: found, in: db, query: query)
-                    case .devotional: try LampModuleSearch.devotionalSnippets(for: found, in: db, query: query)
-                    default: try LampModuleSearch.bookSnippets(for: found, in: db, query: query)
-                    }
-                }
-                for (index, result) in zip(indices, snipped) { filled[index] = result }
-            }
-        }
-        return filled
     }
 
     /// The installed modules of `kind` a search covers, by the database each
@@ -6964,16 +6817,9 @@ private extension String {
     }
 }
 
-/// What a module search found before it is ranked: see
-/// `LampLibrary.gatherModuleSearch`.
-struct ModuleSearchGathering {
-    var results: [LampModuleSearchResult]
-    /// Where each commentary, book, note and devotional result was found,
-    /// to cut its snippet from once a ranking has kept it.
-    var snippetSources: [LampModuleKind: [String: URL]]
-    var query: LampSearchQuery
-    var limit: Int
-    /// Which translation Scripture came from, where one was preferred.
-    var scripture: LampScriptureChoice?
+/// The databases a search of every kind read whose snippets it may cut:
+/// what a search for part of a word lists the words of afterwards.
+final class ModuleSearchReads {
+    var databases: [URL] = []
 }
 
