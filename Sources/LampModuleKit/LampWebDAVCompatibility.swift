@@ -103,19 +103,29 @@ public enum LampWebDAVPersonalArchiveAdapter {
         }
         defer { sqlite3_close(database) }
 
+        // The translation is asked for alongside, and separately: a file
+        // whose `highlight_meta` has no such column must still give up its
+        // set id, or this reads as a module with no set at all — which is
+        // worse than the guess it was added to make.
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(
-            database,
-            "SELECT id, translation_id FROM highlight_meta LIMIT 1",
-            -1,
-            &statement,
-            nil
-        ) == SQLITE_OK, let statement else { return nil }
+        var translationID: String?
+        if sqlite3_prepare_v2(
+            database, "SELECT id, translation_id FROM highlight_meta LIMIT 1", -1, &statement, nil
+        ) != SQLITE_OK {
+            if statement != nil { sqlite3_finalize(statement) }
+            statement = nil
+            guard sqlite3_prepare_v2(
+                database, "SELECT id FROM highlight_meta LIMIT 1", -1, &statement, nil
+            ) == SQLITE_OK else { return nil }
+        }
+        guard let statement else { return nil }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW,
               let value = sqlite3_column_text(statement, 0) else { return nil }
         let id = String(cString: value)
-        let translationID = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+        if sqlite3_column_count(statement) > 1 {
+            translationID = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+        }
 
         // A file written before a set could say who it was carries the
         // **module's** id here, and the default set's real id holds a colon
