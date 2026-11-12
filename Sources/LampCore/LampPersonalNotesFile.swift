@@ -49,6 +49,10 @@ public enum LampPersonalNotesFile {
     /// it in from the start is what lets a file be published without being
     /// decompressed, rewritten and compressed again afterwards.
     ///
+    /// `description` goes with it, and travels for the same reason: a
+    /// reader-made module's description was staying on the device that set
+    /// it, because this wrote `module_meta` without the column.
+    ///
     /// `name` goes with it, and defaults apart from it on purpose. A
     /// receiving app takes `module_meta.name` as what to call the module, so
     /// a file published under its own id and the collection's *name* would
@@ -58,6 +62,7 @@ public enum LampPersonalNotesFile {
         _ notes: [LampVerseNote],
         moduleID: String = LampPersonalModule.notes.id,
         name: String = LampPersonalModule.notes.name,
+        description: String? = nil,
         fileManager: FileManager = .default
     ) throws -> Data {
         try LampPersonalFile.archive(
@@ -69,7 +74,10 @@ public enum LampPersonalNotesFile {
                 """,
             fileManager: fileManager
         ) { db in
-            try write(notes, moduleID: moduleID, name: name, into: db)
+            try write(
+                notes, moduleID: moduleID, name: name,
+                description: description, into: db
+            )
         }
     }
 
@@ -77,14 +85,16 @@ public enum LampPersonalNotesFile {
         _ notes: [LampVerseNote],
         moduleID: String = LampPersonalModule.notes.id,
         name: String = LampPersonalModule.notes.name,
+        description: String? = nil,
         into db: Database
     ) throws {
         try db.execute(sql: """
-            INSERT INTO module_meta (id, name, version, is_editable)
-            VALUES (?, ?, ?, 1)
+            INSERT INTO module_meta (id, name, description, version, is_editable)
+            VALUES (?, ?, ?, ?, 1)
             """, arguments: [
                 moduleID,
                 name,
+                description,
                 LampModuleCompiler.formatVersion,
             ])
         for note in notes {

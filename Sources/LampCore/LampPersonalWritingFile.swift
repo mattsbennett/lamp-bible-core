@@ -37,6 +37,10 @@ public enum LampPersonalWritingFile {
     /// it in from the start is what lets a file be published without being
     /// decompressed, rewritten and compressed again afterwards.
     ///
+    /// `description` goes with it, and travels for the same reason: a
+    /// reader-made module's description was staying on the device that set
+    /// it, because this wrote `module_meta` without the column.
+    ///
     /// `name` goes with it, and defaults apart from it on purpose. A
     /// receiving app takes `module_meta.name` as what to call the module, so
     /// a file published under its own id and the collection's *name* would
@@ -46,6 +50,7 @@ public enum LampPersonalWritingFile {
         _ writings: [LampDevotional],
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
+        description: String? = nil,
         normalizingMediaIn mediaRootURL: URL? = nil,
         fileManager: FileManager = .default
     ) throws -> Data {
@@ -59,7 +64,7 @@ public enum LampPersonalWritingFile {
             fileManager: fileManager
         ) { db in
             try write(
-                writings, moduleID: moduleID, name: name,
+                writings, moduleID: moduleID, name: name, description: description,
                 normalizingMediaIn: mediaRootURL, fileManager: fileManager, into: db
             )
         }
@@ -69,16 +74,18 @@ public enum LampPersonalWritingFile {
         _ writings: [LampDevotional],
         moduleID: String = LampPersonalModule.writing.id,
         name: String = LampPersonalModule.writing.name,
+        description: String? = nil,
         normalizingMediaIn mediaRootURL: URL? = nil,
         fileManager: FileManager = .default,
         into db: Database
     ) throws {
         try db.execute(sql: """
-            INSERT INTO module_meta (id, name, version, is_editable)
-            VALUES (?, ?, ?, 1)
+            INSERT INTO module_meta (id, name, description, version, is_editable)
+            VALUES (?, ?, ?, ?, 1)
             """, arguments: [
                 moduleID,
                 name,
+                description,
                 LampModuleCompiler.formatVersion,
             ])
         for writing in writings {
@@ -87,6 +94,121 @@ public enum LampPersonalWritingFile {
                 normalizingMediaIn: mediaRootURL, fileManager: fileManager, into: db
             )
         }
+    }
+
+    /// One row of the file, as stored values.
+    ///
+    /// The unit the two apps agree on is **the row**, not either app's
+    /// model of a writing. `LampDevotional` cannot carry everything this
+    /// file holds — it flattens the summary and footnotes to plain strings,
+    /// has no series id of its own, and knows nothing of `related_ids`,
+    /// `subscription_id` or `is_read_only`. Writing the phone's writings
+    /// through it would lose all of that between the reader's own iPhone
+    /// and iPad, which sync through this same file. ios-56 caught that
+    /// before adopting it.
+    ///
+    /// So each app maps its own record to a row: the Mac from
+    /// `LampDevotional`, exactly as it wrote before, and the phone from
+    /// what it holds, losing nothing.
+    public struct Row: Sendable {
+        public var id: String
+        public var moduleID: String
+        public var title: String
+        public var subtitle: String?
+        public var author: String?
+        public var date: String?
+        /// Comma-separated, as the column has always held them.
+        public var tags: String?
+        public var category: String?
+        public var seriesID: String?
+        public var seriesName: String?
+        public var seriesOrder: Int?
+        /// JSON written as JSON, verbatim — this writes what it is given.
+        public var keyScripturesJSON: String?
+        public var summaryJSON: String?
+        public var contentJSON: String
+        public var footnotesJSON: String?
+        public var relatedIDs: String?
+        /// Seconds.
+        public var created: Int
+        public var lastModified: Int?
+        public var searchText: String?
+        public var recordChangeTag: String?
+        public var subscriptionID: String?
+        public var isReadOnly: Int?
+        public var mediaJSON: String?
+
+        public init(
+            id: String,
+            moduleID: String,
+            title: String,
+            subtitle: String? = nil,
+            author: String? = nil,
+            date: String? = nil,
+            tags: String? = nil,
+            category: String? = nil,
+            seriesID: String? = nil,
+            seriesName: String? = nil,
+            seriesOrder: Int? = nil,
+            keyScripturesJSON: String? = nil,
+            summaryJSON: String? = nil,
+            contentJSON: String,
+            footnotesJSON: String? = nil,
+            relatedIDs: String? = nil,
+            created: Int,
+            lastModified: Int? = nil,
+            searchText: String? = nil,
+            recordChangeTag: String? = nil,
+            subscriptionID: String? = nil,
+            isReadOnly: Int? = nil,
+            mediaJSON: String? = nil
+        ) {
+            self.id = id
+            self.moduleID = moduleID
+            self.title = title
+            self.subtitle = subtitle
+            self.author = author
+            self.date = date
+            self.tags = tags
+            self.category = category
+            self.seriesID = seriesID
+            self.seriesName = seriesName
+            self.seriesOrder = seriesOrder
+            self.keyScripturesJSON = keyScripturesJSON
+            self.summaryJSON = summaryJSON
+            self.contentJSON = contentJSON
+            self.footnotesJSON = footnotesJSON
+            self.relatedIDs = relatedIDs
+            self.created = created
+            self.lastModified = lastModified
+            self.searchText = searchText
+            self.recordChangeTag = recordChangeTag
+            self.subscriptionID = subscriptionID
+            self.isReadOnly = isReadOnly
+            self.mediaJSON = mediaJSON
+        }
+    }
+
+    /// Writes a row exactly as given, inventing nothing.
+    public static func write(_ row: Row, into db: Database) throws {
+        try db.execute(sql: """
+            INSERT INTO devotional_entries (
+                id, module_id, title, subtitle, author, date, tags, category,
+                series_id, series_name, series_order, key_scriptures_json,
+                summary_json, content_json, footnotes_json, related_ids,
+                created, last_modified, search_text, record_change_tag,
+                subscription_id, is_read_only, media_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                row.id, row.moduleID, row.title, row.subtitle, row.author,
+                row.date, row.tags, row.category, row.seriesID, row.seriesName,
+                row.seriesOrder, row.keyScripturesJSON, row.summaryJSON,
+                row.contentJSON, row.footnotesJSON, row.relatedIDs,
+                row.created, row.lastModified, row.searchText,
+                row.recordChangeTag, row.subscriptionID, row.isReadOnly,
+                row.mediaJSON,
+            ])
     }
 
     /// One writing's row, which is the unit the two apps have to agree on.
@@ -103,45 +225,63 @@ public enum LampPersonalWritingFile {
         fileManager: FileManager = .default,
         into db: Database
     ) throws {
-        let normalized = try normalized(
-            writing, mediaRootURL: mediaRootURL, fileManager: fileManager
+        try write(
+            try row(
+                for: writing, moduleID: moduleID,
+                normalizingMediaIn: mediaRootURL, fileManager: fileManager
+            ),
+            into: db
         )
+    }
+
+    /// This app's writing as a row of the file.
+    ///
+    /// `series_id` is given the series' *name*, because a writing of the
+    /// reader's own has no separate id for its series — `LampDevotional`
+    /// carries a name and an order and nothing else. It round-trips, which
+    /// is what matters here, but a reader of this file should not take that
+    /// column for an identifier it can resolve elsewhere. The phone, whose
+    /// writings do have one, maps its own row and keeps it.
+    public static func row(
+        for writing: LampDevotional,
+        moduleID: String = LampPersonalModule.writing.id,
+        normalizingMediaIn mediaRootURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> Row {
         let scriptureValues = writing.keyScriptures.map { scripture -> [String: Any] in
             var value: [String: Any] = ["sv": scripture.startReference]
             if let endReference = scripture.endReference { value["ev"] = endReference }
             if let text = scripture.text { value["label"] = text }
             return value
         }
-        try db.execute(sql: """
-            INSERT INTO devotional_entries (
-                id, module_id, title, subtitle, author, date, tags, category,
-                series_id, series_name, series_order, key_scriptures_json,
-                summary_json, content_json, footnotes_json, related_ids,
-                created, last_modified, search_text, record_change_tag,
-                subscription_id, is_read_only, media_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL,
-                      ?, ?, ?, NULL, NULL, 0, ?)
-            """, arguments: [
-                writing.id,
-                moduleID,
-                writing.title,
-                writing.subtitle,
-                writing.author,
-                writing.date,
-                writing.tags.joined(separator: ","),
-                writing.category,
-                writing.seriesName,
-                writing.seriesName,
-                writing.seriesOrder,
-                try LampPersonalFile.jsonFragment(scriptureValues),
-                try LampPersonalFile.jsonFragment(writing.summary),
-                normalized.content,
-                try LampPersonalFile.jsonFragment(writing.footnotes),
-                Int(stamp(writing.created).timeIntervalSince1970),
-                Int(stamp(writing.lastModified).timeIntervalSince1970),
-                searchText(for: writing),
-                normalized.mediaJSON,
-            ])
+        let normalized = try normalized(
+            writing, mediaRootURL: mediaRootURL, fileManager: fileManager
+        )
+        return Row(
+            id: writing.id,
+            moduleID: moduleID,
+            title: writing.title,
+            subtitle: writing.subtitle,
+            author: writing.author,
+            date: writing.date,
+            tags: writing.tags.joined(separator: ","),
+            category: writing.category,
+            seriesID: writing.seriesName,
+            seriesName: writing.seriesName,
+            seriesOrder: writing.seriesOrder,
+            keyScripturesJSON: try LampPersonalFile.jsonFragment(scriptureValues),
+            summaryJSON: try LampPersonalFile.jsonFragment(writing.summary),
+            contentJSON: normalized.content,
+            footnotesJSON: try LampPersonalFile.jsonFragment(writing.footnotes),
+            relatedIDs: nil,
+            created: Int(stamp(writing.created).timeIntervalSince1970),
+            lastModified: Int(stamp(writing.lastModified).timeIntervalSince1970),
+            searchText: searchText(for: writing),
+            recordChangeTag: nil,
+            subscriptionID: nil,
+            isReadOnly: 0,
+            mediaJSON: normalized.mediaJSON
+        )
     }
 
     /// A writing's content and media as the file carries them.
