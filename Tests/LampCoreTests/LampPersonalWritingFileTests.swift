@@ -176,4 +176,61 @@ struct LampPersonalWritingFileTests {
         // for files for.
         _ = try await library.exportedPersonalArchiveForTesting(.writing)
     }
+
+    /// Rows in and the model in give the same file.
+    ///
+    /// The phone writes from rows because this app's model cannot hold
+    /// everything the file does. That only helps if the two routes go
+    /// through one sequence — the metadata row, the rows, the container, in
+    /// that order — so this holds them byte for byte.
+    @Test func rowsAndTheModelProduceOneFile() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root)
+        _ = try await export(from: library, at: root)
+
+        let writings = try await library.personalDevotionals()
+        let fromModel = try LampPersonalWritingFile.archive(writings)
+        let fromRows = try LampPersonalWritingFile.archive(
+            rows: try writings.map { try LampPersonalWritingFile.row(for: $0) }
+        )
+        #expect(fromModel == fromRows)
+    }
+
+    /// A row is written as given. Everything this app's model flattens —
+    /// a structured summary, structured footnotes, a real series id,
+    /// `related_ids`, a subscription — survives when an app that has them
+    /// hands over a row.
+    @Test func aRowIsWrittenWordForWord() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archive = try LampPersonalWritingFile.archive(rows: [
+            LampPersonalWritingFile.Row(
+                id: "w1", moduleID: "devotionals", title: "Kept whole",
+                seriesID: "series-7", seriesName: "Lent", seriesOrder: 2,
+                summaryJSON: #"{"text":"A summary","spans":[{"start":0}]}"#,
+                contentJSON: "Body.",
+                footnotesJSON: #"[{"id":"a","content":"Chrysostom"}]"#,
+                relatedIDs: "w2,w3",
+                created: 1_700_000_000, lastModified: 1_700_000_001,
+                subscriptionID: "sub-1", isReadOnly: 1
+            ),
+        ], moduleID: "devotionals")
+
+        let body = try (archive as NSData).decompressed(using: .zlib) as Data
+        let file = root.appendingPathComponent("rows.sqlite")
+        try body.write(to: file)
+        var configuration = Configuration()
+        configuration.readonly = true
+        let queue = try DatabaseQueue(path: file.path, configuration: configuration)
+        let row = try #require(try await queue.read { db in
+            try Row.fetchOne(db, sql: "SELECT * FROM devotional_entries")
+        })
+        #expect(row["series_id"] as String? == "series-7", "a real id, not the name")
+        #expect(row["summary_json"] as String? == #"{"text":"A summary","spans":[{"start":0}]}"#)
+        #expect(row["footnotes_json"] as String? == #"[{"id":"a","content":"Chrysostom"}]"#)
+        #expect(row["related_ids"] as String? == "w2,w3")
+        #expect(row["subscription_id"] as String? == "sub-1")
+        #expect(row["is_read_only"] as Int? == 1)
+    }
 }

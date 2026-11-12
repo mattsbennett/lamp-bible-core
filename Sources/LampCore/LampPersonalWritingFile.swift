@@ -70,6 +70,36 @@ public enum LampPersonalWritingFile {
         }
     }
 
+    /// The whole published file from rows, for an app whose writings this
+    /// app's model cannot hold.
+    ///
+    /// The sequence is the point. Given only `LampPersonalFile.archive` and
+    /// a row writer, a second app would have to compose the metadata row,
+    /// the rows and the container itself in the right order — core's code,
+    /// but that app's sequence, which drifts the first time a step is added
+    /// here. One entry point, so both apps provably go through the same
+    /// one. Asked for by ios-56.
+    public static func archive(
+        rows: [Row],
+        moduleID: String = LampPersonalModule.writing.id,
+        name: String = LampPersonalModule.writing.name,
+        description: String? = nil,
+        fileManager: FileManager = .default
+    ) throws -> Data {
+        try LampPersonalFile.archive(
+            kind: LampPersonalModule.writing.kind,
+            moduleID: moduleID,
+            schema: """
+                \(LampPersonalFile.metaSchema)
+                \(schema)
+                """,
+            fileManager: fileManager
+        ) { db in
+            try writeMetadata(moduleID: moduleID, name: name, description: description, into: db)
+            for row in rows { try write(row, into: db) }
+        }
+    }
+
     public static func write(
         _ writings: [LampDevotional],
         moduleID: String = LampPersonalModule.writing.id,
@@ -79,15 +109,7 @@ public enum LampPersonalWritingFile {
         fileManager: FileManager = .default,
         into db: Database
     ) throws {
-        try db.execute(sql: """
-            INSERT INTO module_meta (id, name, description, version, is_editable)
-            VALUES (?, ?, ?, ?, 1)
-            """, arguments: [
-                moduleID,
-                name,
-                description,
-                LampModuleCompiler.formatVersion,
-            ])
+        try writeMetadata(moduleID: moduleID, name: name, description: description, into: db)
         for writing in writings {
             try write(
                 writing, moduleID: moduleID,
@@ -187,6 +209,24 @@ public enum LampPersonalWritingFile {
             self.isReadOnly = isReadOnly
             self.mediaJSON = mediaJSON
         }
+    }
+
+    /// The one metadata row, which every way of writing this file shares.
+    public static func writeMetadata(
+        moduleID: String = LampPersonalModule.writing.id,
+        name: String = LampPersonalModule.writing.name,
+        description: String? = nil,
+        into db: Database
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO module_meta (id, name, description, version, is_editable)
+            VALUES (?, ?, ?, ?, 1)
+            """, arguments: [
+                moduleID,
+                name,
+                description,
+                LampModuleCompiler.formatVersion,
+            ])
     }
 
     /// Writes a row exactly as given, inventing nothing.
