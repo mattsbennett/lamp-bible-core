@@ -787,6 +787,35 @@ struct LampModuleSearchTests {
         }
     }
 
+    /// A range of books is searched through the index first. With an index
+    /// on the books, SQLite took the verses in range first and asked the
+    /// index about each in turn, reading every match of the query again for
+    /// each verse: minutes on the phone for "the" in the New Testament.
+    @Test func aRangeOfBooksIsSearchedThroughTheIndexFirst() throws {
+        let queue = try translations(indexed: true)
+        try queue.write { db in
+            try db.execute(sql: "CREATE INDEX verses_by_book ON translation_verses(translation_id, book, chapter)")
+        }
+        final class Searched: @unchecked Sendable { var sql: String? }
+        let searched = Searched()
+        let plan = try queue.writeWithoutTransaction { db -> [String] in
+            db.trace(options: .statement) { event in
+                if case let .statement(statement) = event, statement.sql.contains("bm25") {
+                    searched.sql = statement.expandedSQL
+                }
+            }
+            let hits = try LampModuleSearch.verses(
+                in: db, translations: ["A"], query: LampSearchQuery("faith"), bookRange: 40...66, limit: 10
+            )
+            db.trace(options: .statement, nil)
+            #expect(hits.map(\.reference).sorted() == [43_001_001, 43_001_002])
+            let sql = try #require(searched.sql)
+            return try Row.fetchAll(db, sql: "EXPLAIN QUERY PLAN " + sql).map { $0["detail"] as String }
+        }
+        let first = plan.first { $0.hasPrefix("SCAN") || $0.hasPrefix("SEARCH") }
+        #expect(first?.contains("translation_verses_fts") == true, "\(plan)")
+    }
+
     /// A shared database's words are read apart from the write that keeps
     /// them, and kept only if the index is still as they were read from.
     @Test func wordsReadFromAnIndexWrittenSinceAreNotKept() throws {

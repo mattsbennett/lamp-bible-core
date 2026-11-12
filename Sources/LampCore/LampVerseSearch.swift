@@ -93,7 +93,10 @@ extension LampModuleSearch {
         if case .nothing = asked { return [] }
         if let match = asked?.match {
             // Every match is ranked either way; numbered within its
-            // translation, each keeps its best.
+            // translation, each keeps its best. The index is read first
+            // (CROSS JOIN): with a range of books, SQLite would otherwise
+            // take the verses in range first and ask the index about each,
+            // reading every match again for each verse.
             arguments += [match]
             arguments += filters
             arguments += [limit]
@@ -102,7 +105,7 @@ extension LampModuleSearch {
                     SELECT *, ROW_NUMBER() OVER (PARTITION BY translation_id ORDER BY rank, ref) AS place
                     FROM (
                         SELECT \(columns), bm25(\(index)) AS rank
-                        FROM \(index) JOIN \(table) v ON v.id = \(index).rowid \(books)
+                        FROM \(index) CROSS JOIN \(table) v ON v.id = \(index).rowid \(books)
                         WHERE \(([index + " MATCH ?"] + conditions).joined(separator: " AND "))
                     )
                 )
