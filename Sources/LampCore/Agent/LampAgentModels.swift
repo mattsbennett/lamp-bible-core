@@ -297,12 +297,13 @@ public struct LampAgentDictionaryEntry: Codable, Equatable, Identifiable, Sendab
     public let transliteration: String?
     public let pronunciation: String?
     public let senses: [LampAgentDictionarySense]
-    /// The key that was asked for, where this entry was reached through a
-    /// lexicon's own numbering rather than by that key: a Strong's Hebrew
-    /// number leads to the BDB entries it maps to, often more than one.
-    public let mappedFrom: String?
+    /// The keys asked for that lead to this entry through a lexicon's own
+    /// numbering: a Strong's Hebrew number leads to the BDB entries it maps
+    /// to, often more than one, and two numbers can lead to one entry.
+    /// Absent for an entry found only by the key itself.
+    public let mappedFrom: [String]?
 
-    public init(_ entry: LampDictionaryResult, mappedFrom: String? = nil) {
+    public init(_ entry: LampDictionaryResult, mappedFrom: [String]? = nil) {
         self.mappedFrom = mappedFrom
         entryID = entry.entryID
         moduleID = entry.moduleID

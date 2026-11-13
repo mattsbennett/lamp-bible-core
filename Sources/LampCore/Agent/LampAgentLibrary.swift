@@ -360,31 +360,28 @@ public actor LampAgentLibrary {
         let requested = Array(keys.prefix(50))
         let moduleIDs = Set(modules.map(\.id))
         let direct = try await library.dictionaryEntries(keys: requested, moduleIDs: moduleIDs)
-            .map { LampAgentDictionaryEntry($0) }
 
         // BDB keeps its own numbers, so a Strong's key finds it only through
         // the mapping, as the app's dictionary pane does. Without this an
-        // agent asking `bdb` for H2617 got nothing, and no sign why.
-        var sourceByTarget: [String: String] = [:]
+        // agent asking `bdb` for H2617 got nothing, and no sign why. Every
+        // key asked that leads to an entry is kept: H12 and H13 both lead to
+        // BDB10.
+        var sourcesByTarget: [String: [String]] = [:]
         var targets: [String] = []
         for key in requested {
-            for target in try await library.lexiconMappings(sourceKey: key)
-            where sourceByTarget[target] == nil {
-                sourceByTarget[target] = key
-                targets.append(target)
+            for target in try await library.lexiconMappings(sourceKey: key) {
+                if sourcesByTarget[target] == nil { targets.append(target) }
+                if sourcesByTarget[target]?.contains(key) != true { sourcesByTarget[target, default: []].append(key) }
             }
         }
-        guard !targets.isEmpty else { return direct }
-        var seen = Set(direct.map(\.id))
-        let mapped = try await library.dictionaryEntries(keys: targets, moduleIDs: moduleIDs)
-            .compactMap { entry -> LampAgentDictionaryEntry? in
-                let result = LampAgentDictionaryEntry(
-                    entry,
-                    mappedFrom: sourceByTarget[entry.key.uppercased()]
-                )
-                return seen.insert(result.id).inserted ? result : nil
-            }
-        return direct + mapped
+        let directIDs = Set(direct.map { "\($0.moduleID):\($0.entryID)" })
+        let mapped = targets.isEmpty ? [] : try await library.dictionaryEntries(keys: targets, moduleIDs: moduleIDs)
+            .filter { !directIDs.contains("\($0.moduleID):\($0.entryID)") }
+        var seen = Set<String>()
+        return (direct + mapped).compactMap { entry -> LampAgentDictionaryEntry? in
+            let result = LampAgentDictionaryEntry(entry, mappedFrom: sourcesByTarget[entry.key.uppercased()])
+            return seen.insert(result.id).inserted ? result : nil
+        }
     }
 
     public func listReadingPlans() async throws -> [LampAgentReadingPlan] {

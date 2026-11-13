@@ -441,8 +441,16 @@ struct LampAgentLibraryTests {
                         '[{"gloss":"love","septuagintHebrew":[{"text":"אַהֲבָה","strongs":"H0160"}]},{"gloss":"love feasts"}]',
                         NULL, 'love'
                     );
+                    INSERT INTO dictionary_entries VALUES (
+                        4, 'bdb', 'BDB10', 'אֲבַגְתָא', NULL, NULL,
+                        '[{"definition":"a eunuch of Ahasuerus"}]', NULL, 'eunuch'
+                    );
                     INSERT INTO lexicon_mappings (mapping_id, source_key, target_keys_json)
                     VALUES ('strongs_hebrew_to_bdb', 'H2617', '["BDB2965","BDB2970"]');
+                    INSERT INTO lexicon_mappings (mapping_id, source_key, target_keys_json)
+                    VALUES ('strongs_hebrew_to_bdb', 'H12', '["BDB10"]');
+                    INSERT INTO lexicon_mappings (mapping_id, source_key, target_keys_json)
+                    VALUES ('strongs_hebrew_to_bdb', 'H13', '["BDB10"]');
                     """#)
             }
         }
@@ -459,7 +467,15 @@ struct LampAgentLibraryTests {
 
         let hebrew = try await agent.lookupDictionaryKeys(["H02617"], moduleIDs: ["bdb"])
         #expect(hebrew.map(\.key) == ["BDB2965", "BDB2970"])
-        #expect(hebrew.map(\.mappedFrom) == ["H02617", "H02617"])
+        #expect(hebrew.map(\.mappedFrom) == [["H02617"], ["H02617"]])
+
+        // Two keys that lead to one entry both name it, either way round,
+        // and an entry asked for by its own key as well keeps both.
+        let shared = try await agent.lookupDictionaryKeys(["H12", "H13", "BDB10"], moduleIDs: ["bdb"])
+        #expect(shared.map(\.key) == ["BDB10"])
+        #expect(shared.first?.mappedFrom == ["H12", "H13"])
+        let reversed = try await agent.lookupDictionaryKeys(["H13", "H12"], moduleIDs: ["bdb"])
+        #expect(reversed.first?.mappedFrom == ["H13", "H12"])
 
         let greek = try await agent.lookupDictionaryKeys(["G26"])
         #expect(greek.map(\.key) == ["G26"])
