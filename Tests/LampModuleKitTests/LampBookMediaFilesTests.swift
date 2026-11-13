@@ -217,6 +217,82 @@ struct LampBookMediaFilesTests {
         #expect(LampBookMediaFiles.outgoing(forBookModuleIDs: ["a"], folders: folders).files.isEmpty)
     }
 
+    /// A link above a book's folder — `Media/Books` itself linked to another
+    /// library's — must not send a download there, even for a book whose
+    /// folder does not exist yet.
+    @Test func aLinkAboveABooksFolderIsRefused() throws {
+        let library = try makeDirectory()
+        let other = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: library)
+            try? FileManager.default.removeItem(at: other)
+        }
+        try write("theirs", at: "Media/Books/a/map.jpg", in: other)
+        try FileManager.default.createDirectory(
+            at: library.appendingPathComponent("Media"), withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: library.appendingPathComponent("Media/Books"),
+            withDestinationURL: other.appendingPathComponent("Media/Books")
+        )
+        let folders: (String) -> LampBookMediaFiles.Folders = {
+            LampBookMediaFiles.libraryFolders(libraryRootURL: library, moduleID: $0)
+        }
+        #expect(LampBookMediaFiles.installURL(forRemotePath: "BookMedia/a/map.jpg", folders: folders) == nil)
+        #expect(LampBookMediaFiles.installURL(forRemotePath: "BookMedia/new/map.jpg", folders: folders) == nil)
+        #expect(LampBookMediaFiles.url(for: "map.jpg", in: folders("a")) == nil)
+        #expect(LampBookMediaFiles.outgoing(forBookModuleIDs: ["a"], folders: folders).files.isEmpty)
+    }
+
+    /// The library folder itself may be reached through a link — a library
+    /// moved to another disk and linked back — and its pictures still work.
+    @Test func aLibraryReachedThroughALinkStillWorks() throws {
+        let real = try makeDirectory()
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("book-media-link-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: real)
+            try? FileManager.default.removeItem(at: link)
+        }
+        try write("plate", at: "Media/Books/a/plate.jpg", in: real)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let folders = LampBookMediaFiles.libraryFolders(libraryRootURL: link, moduleID: "a")
+        #expect(LampBookMediaFiles.url(for: "plate.jpg", in: folders) != nil)
+        #expect(LampBookMediaFiles.installURL(forFilename: "new.jpg", in: folders) != nil)
+    }
+
+    /// An old copy under the metadata's escaped spelling, in a folder the
+    /// reader checks first, does not hide the current file under the decoded
+    /// name in a later one.
+    @Test func theDecodedNameWinsInEveryFolderBeforeTheEscapedOne() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        try write("old", at: "Media/Modules/a/Figure%201.png", in: library)
+        try write("current", at: "Media/Books/a/Figure 1.png", in: library)
+        let folders = LampBookMediaFiles.libraryFolders(libraryRootURL: library, moduleID: "a")
+        #expect(LampBookMediaFiles.url(for: "Figure%201.png", in: folders)
+            == library.appendingPathComponent("Media/Books/a/Figure 1.png"))
+    }
+
+    /// A name an import refuses is not shown either, under any spelling.
+    @Test func aNameAnImportRefusesIsNotShown() throws {
+        let cache = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: cache) }
+        try write("hidden", at: "a/%2Ecover.png", in: cache)
+        #expect(LampBookMediaFiles.url(for: "%2Ecover.png", in: phoneFolders(cache)("a")) == nil)
+    }
+
+    /// Folder names as the volume compares them: `Bookſ` is `Books`, and a
+    /// commentary `study` shares a book `Study`'s folder.
+    @Test func idsAreComparedAsTheVolumeComparesFolders() {
+        let root = URL(fileURLWithPath: "/library", isDirectory: true)
+        #expect(!LampBookMediaFiles.libraryFolders(libraryRootURL: root, moduleID: "Bookſ").read
+            .map(\.path).contains("/library/Media/Bookſ"))
+        #expect(LampBookMediaFiles.publishedBookModuleIDs(
+            books: [], otherModules: ["study"], remotePaths: ["BookMedia/Study/map.png"]
+        ).isEmpty)
+    }
+
     @Test func theServerSaysWhichBooksItHoldsPicturesFor() {
         #expect(LampBookMediaFiles.bookModuleIDs(inRemotePaths: [
             "BookMedia/atonement/plates/one.jpg",

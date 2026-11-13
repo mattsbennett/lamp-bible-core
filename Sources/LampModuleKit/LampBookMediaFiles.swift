@@ -47,10 +47,16 @@ public enum LampBookMediaFiles {
         /// Where a picture that arrives is put. One of `read`, so that what
         /// arrives is what the reader finds.
         public let install: URL
+        /// The device's own folder these all lie in — the library, or the
+        /// phone's module media cache. Nothing from here down to a picture
+        /// may be a link, so a link above a book's folder cannot send its
+        /// pictures somewhere else. Nil checks from each book folder down.
+        public let anchor: URL?
 
-        public init(read: [URL], install: URL) {
+        public init(read: [URL], install: URL, anchor: URL? = nil) {
             self.read = read
             self.install = install
+            self.anchor = anchor
         }
     }
 
@@ -64,17 +70,24 @@ public enum LampBookMediaFiles {
     /// note's.
     public static func libraryFolders(libraryRootURL: URL, moduleID: String) -> Folders {
         var paths = ["Media/Modules/\(moduleID)", "Media/Books/\(moduleID)"]
-        if !reservedMediaFolders.contains(moduleID.lowercased()) {
+        if !reservedMediaFolders.contains(fileSystemKey(moduleID)) {
             paths.append("Media/\(moduleID)")
         }
         paths.append("Modules/\(moduleID)/media")
         let read = paths.map { libraryRootURL.appendingPathComponent($0, isDirectory: true) }
-        return Folders(read: read, install: read[1])
+        return Folders(read: read, install: read[1], anchor: libraryRootURL)
     }
 
     /// The folders under a library's `Media` that are not one book's.
     private static let reservedMediaFolders: Set<String> =
-        Set(["books", "modules"] + LampMediaScope.allCases.map { $0.folder.lowercased() })
+        Set((["Books", "Modules"] + LampMediaScope.allCases.map(\.folder)).map(fileSystemKey))
+
+    /// A name as a case-insensitive, normalization-insensitive volume — the
+    /// Mac's and the phone's — tells names apart: `Bookſ` is `Books` there,
+    /// and `Study` is `study`.
+    static func fileSystemKey(_ name: String) -> String {
+        name.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive], locale: nil)
+    }
 
     /// Where, inside a book's folder, the picture a book names is kept, or
     /// nil for a name no device can keep and publish.
@@ -100,7 +113,8 @@ public enum LampBookMediaFiles {
     ) -> URL? {
         guard let relative = relativePath(forFilename: filename) else { return nil }
         let url = folders.install.appendingPathComponent(relative)
-        return isReachedWithoutLinks(url, from: folders.install, fileManager: fileManager) ? url : nil
+        return isReachedWithoutLinks(url, from: folders.install, anchor: folders.anchor, fileManager: fileManager)
+            ? url : nil
     }
 
     /// Where a picture a book names is, or nil when it is nowhere here.
@@ -111,9 +125,12 @@ public enum LampBookMediaFiles {
     /// not show what a sync would not publish.
     ///
     /// The name decoded is looked for first, as `relativePath(forFilename:)`
-    /// keeps it. Then the name as written: a phone kept its pictures under
-    /// the metadata's own spelling, escapes and all, before the name was
-    /// decoded, and those files are its only copy.
+    /// keeps it, in every folder before the name as written in any: a phone
+    /// kept its pictures under the metadata's own spelling, escapes and all,
+    /// before the name was decoded, and those files are its only copy, but an
+    /// old copy under that spelling must not hide the current one. A name
+    /// `relativePath(forFilename:)` refuses is no picture under either
+    /// spelling, so that what is shown is what an import accepts.
     public static func url(
         for filename: String,
         in folders: Folders,
@@ -124,14 +141,15 @@ public enum LampBookMediaFiles {
            scheme == "https" || scheme == "http" {
             return remote
         }
-        var names: [String] = []
-        if let decoded = relativePath(forFilename: filename) { names.append(decoded) }
-        if let literal = literalRelativePath(filename), !names.contains(literal) { names.append(literal) }
-        for root in folders.read {
-            for name in names {
+        guard let decoded = relativePath(forFilename: filename) else { return nil }
+        var names = [decoded]
+        if let literal = literalRelativePath(filename), literal != decoded { names.append(literal) }
+        for name in names {
+            for root in folders.read {
                 let url = root.appendingPathComponent(name)
                 guard fileManager.fileExists(atPath: url.path),
-                      isReachedWithoutLinks(url, from: root, fileManager: fileManager) else { continue }
+                      isReachedWithoutLinks(url, from: root, anchor: folders.anchor, fileManager: fileManager)
+                else { continue }
                 return url
             }
         }
@@ -156,8 +174,9 @@ public enum LampBookMediaFiles {
         var unplaceable: [Unplaceable] = []
         for moduleID in moduleIDs.sorted() {
             var taken = Set<String>()
-            for root in folders(moduleID).read
-            where isReachedWithoutLinks(root, from: root, fileManager: fileManager) {
+            let bookFolders = folders(moduleID)
+            for root in bookFolders.read
+            where isReachedWithoutLinks(root, from: root, anchor: bookFolders.anchor, fileManager: fileManager) {
                 for (relative, url) in regularFiles(under: root, fileManager: fileManager) {
                     guard taken.insert(relative).inserted else { continue }
                     do {
@@ -183,16 +202,20 @@ public enum LampBookMediaFiles {
     /// those the server already holds pictures for, so a picture already
     /// there keeps its book.
     ///
-    /// Less any ID this device holds as another kind of module. A book
-    /// deleted elsewhere can leave its pictures on the server, and a
-    /// commentary here under the same ID would otherwise have its own
-    /// pictures published as that book's.
+    /// Less any ID this device holds as another kind of module, compared as
+    /// the volume compares folder names. A book deleted elsewhere can leave
+    /// its pictures on the server, and a commentary here under the same ID —
+    /// or under `study` for a book `Study`, which is the same folder — would
+    /// otherwise have its own pictures published as that book's.
     public static func publishedBookModuleIDs(
         books: Set<String>,
         otherModules: Set<String>,
         remotePaths: some Sequence<String>
     ) -> Set<String> {
-        books.union(bookModuleIDs(inRemotePaths: remotePaths).subtracting(otherModules))
+        let others = Set(otherModules.map(fileSystemKey))
+        return books.union(bookModuleIDs(inRemotePaths: remotePaths).filter {
+            !others.contains(fileSystemKey($0))
+        })
     }
 
     /// The books a set of server paths holds pictures for.
@@ -220,9 +243,10 @@ public enum LampBookMediaFiles {
         guard LampSyncFolderLayout.kind(of: remotePath) == .bookMedia else { return nil }
         let components = remotePath.split(separator: "/").map(String.init)
         guard components.count >= 3 else { return nil }
-        let install = folders(components[1]).install
-        let url = install.appendingPathComponent(components.dropFirst(2).joined(separator: "/"))
-        return isReachedWithoutLinks(url, from: install, fileManager: fileManager) ? url : nil
+        let bookFolders = folders(components[1])
+        let url = bookFolders.install.appendingPathComponent(components.dropFirst(2).joined(separator: "/"))
+        return isReachedWithoutLinks(url, from: bookFolders.install, anchor: bookFolders.anchor, fileManager: fileManager)
+            ? url : nil
     }
 
     /// A name as written, if it is a safe, publishable path without decoding.
@@ -239,20 +263,32 @@ public enum LampBookMediaFiles {
         (try? LampSyncFolderLayout.bookMediaPath(moduleID: "book", path: relative)) != nil
     }
 
-    /// Whether `url` lies under `root` through real folders alone: neither
-    /// the root nor anything between it and `url` (`url` included) a link. A
-    /// link could have a picture shown from, or written into, a folder that
-    /// is not this book's.
-    static func isReachedWithoutLinks(_ url: URL, from root: URL, fileManager: FileManager) -> Bool {
+    /// Whether `url` lies under `root` through real folders alone: nothing
+    /// below `anchor` (or from `root`, without one) down to `url`, `url`
+    /// included, a link. A link could have a picture shown from, or written into, a
+    /// folder that is not this book's. A part that does not exist yet is no
+    /// link, and is made under the real folders checked above it.
+    static func isReachedWithoutLinks(
+        _ url: URL, from root: URL, anchor: URL? = nil, fileManager: FileManager
+    ) -> Bool {
         let rootPath = root.standardizedFileURL.path
         let path = url.standardizedFileURL.path
         guard path == rootPath || path.hasPrefix(rootPath + "/") else { return false }
+        var start = rootPath
+        if let anchor {
+            let anchorPath = anchor.standardizedFileURL.path
+            guard rootPath == anchorPath || rootPath.hasPrefix(anchorPath + "/") else { return false }
+            start = anchorPath
+        }
         func isLink(_ path: String) -> Bool {
             (try? fileManager.attributesOfItem(atPath: path)[.type] as? FileAttributeType) == .typeSymbolicLink
         }
-        var current = rootPath
-        if isLink(current) { return false }
-        for component in path.dropFirst(rootPath.count).split(separator: "/") {
+        // The anchor is the device's own folder, and may itself be reached
+        // through a link — a library moved to another disk and linked back.
+        // Below it, nothing may be.
+        var current = start
+        if anchor == nil, isLink(current) { return false }
+        for component in path.dropFirst(start.count).split(separator: "/") {
             current += "/" + component
             if isLink(current) { return false }
         }
