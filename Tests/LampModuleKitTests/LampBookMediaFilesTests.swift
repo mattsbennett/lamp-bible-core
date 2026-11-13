@@ -330,6 +330,31 @@ struct LampBookMediaFilesTests {
             == cache.appendingPathComponent("a/Figure%201.png"))
     }
 
+    /// A book `Study` beside a commentary `study`: in a folder both claim,
+    /// nothing goes up as the book's, but the Mac's `Media/Books/Study` holds
+    /// books' pictures alone, so those still do. On a phone, whose cache is
+    /// shared by every module, nothing does.
+    @Test func aContestedIDStillPublishesFromFoldersOnlyBooksUse() throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        try write("the book's", at: "Media/Books/Study/map.png", in: library)
+        try write("the commentary's", at: "Media/Modules/study/notes.png", in: library)
+        let mac = LampBookMediaFiles.outgoing(
+            books: ["Study"], otherModules: ["study"], remotePaths: [],
+            folders: { LampBookMediaFiles.libraryFolders(libraryRootURL: library, moduleID: $0) }
+        )
+        #expect(mac.files.map(\.remotePath) == ["BookMedia/Study/map.png"])
+
+        let cache = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: cache) }
+        try write("the commentary's", at: "study/map.png", in: cache)
+        let phone = LampBookMediaFiles.outgoing(
+            books: [], otherModules: ["study"], remotePaths: ["BookMedia/Study/map.png"],
+            folders: phoneFolders(cache)
+        )
+        #expect(phone.files.isEmpty)
+    }
+
     @Test func theServerSaysWhichBooksItHoldsPicturesFor() {
         #expect(LampBookMediaFiles.bookModuleIDs(inRemotePaths: [
             "BookMedia/atonement/plates/one.jpg",

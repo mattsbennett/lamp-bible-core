@@ -52,11 +52,17 @@ public enum LampBookMediaFiles {
         /// may be a link, so a link above a book's folder cannot send its
         /// pictures somewhere else. Nil checks from each book folder down.
         public let anchor: URL?
+        /// The folders among `read` that hold books' pictures alone, which
+        /// no other kind of module writes to: the Mac's `Media/Books/<book>`.
+        /// Where two kinds of module claim one ID, these are still a book's.
+        /// None on a phone, whose cache holds every module's pictures.
+        public let bookOnly: [URL]
 
-        public init(read: [URL], install: URL, anchor: URL? = nil) {
+        public init(read: [URL], install: URL, anchor: URL? = nil, bookOnly: [URL] = []) {
             self.read = read
             self.install = install
             self.anchor = anchor
+            self.bookOnly = bookOnly
         }
     }
 
@@ -75,7 +81,7 @@ public enum LampBookMediaFiles {
         }
         paths.append("Modules/\(moduleID)/media")
         let read = paths.map { libraryRootURL.appendingPathComponent($0, isDirectory: true) }
-        return Folders(read: read, install: read[1], anchor: libraryRootURL)
+        return Folders(read: read, install: read[1], anchor: libraryRootURL, bookOnly: [read[1]])
     }
 
     /// The folders under a library's `Media` that are not one book's.
@@ -198,6 +204,34 @@ public enum LampBookMediaFiles {
             }
         }
         return (files, unplaceable)
+    }
+
+    /// The pictures a pass publishes: those of the device's own books and of
+    /// any book the server already holds pictures for.
+    ///
+    /// Where an ID is also held here as another kind of module, compared as
+    /// the volume compares folder names, only its `bookOnly` folders are
+    /// gathered: in a folder both claim, whose a file is cannot be told, but
+    /// in one only books write to it is the book's.
+    public static func outgoing(
+        books: Set<String>,
+        otherModules: Set<String>,
+        remotePaths: some Sequence<String>,
+        folders: (String) -> Folders,
+        fileManager: FileManager = .default
+    ) -> (files: [File], unplaceable: [Unplaceable]) {
+        let others = Set(otherModules.map(fileSystemKey))
+        let ids = books.union(bookModuleIDs(inRemotePaths: remotePaths))
+        return outgoing(forBookModuleIDs: ids, fileManager: fileManager) { moduleID in
+            let bookFolders = folders(moduleID)
+            guard others.contains(fileSystemKey(moduleID)) else { return bookFolders }
+            return Folders(
+                read: bookFolders.read.filter(bookFolders.bookOnly.contains),
+                install: bookFolders.install,
+                anchor: bookFolders.anchor,
+                bookOnly: bookFolders.bookOnly
+            )
+        }
     }
 
     /// The books whose pictures a pass publishes: the device's own books, and
