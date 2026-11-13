@@ -343,7 +343,7 @@ public actor LampAgentLibrary {
             query: query,
             moduleIDs: Set(modules.map(\.id)),
             limit: min(max(limit, 1), policy.maximumSearchResults)
-        ).map(LampAgentDictionaryEntry.init)
+        ).map { LampAgentDictionaryEntry($0) }
     }
 
     public func lookupDictionaryKeys(
@@ -357,10 +357,34 @@ public actor LampAgentLibrary {
             defaultLimit: nil
         )
         guard !modules.isEmpty else { throw LampAgentError.noMatchingModule(.dictionary) }
-        return try await library.dictionaryEntries(
-            keys: Array(keys.prefix(50)),
-            moduleIDs: Set(modules.map(\.id))
-        ).map(LampAgentDictionaryEntry.init)
+        let requested = Array(keys.prefix(50))
+        let moduleIDs = Set(modules.map(\.id))
+        let direct = try await library.dictionaryEntries(keys: requested, moduleIDs: moduleIDs)
+            .map { LampAgentDictionaryEntry($0) }
+
+        // BDB keeps its own numbers, so a Strong's key finds it only through
+        // the mapping, as the app's dictionary pane does. Without this an
+        // agent asking `bdb` for H2617 got nothing, and no sign why.
+        var sourceByTarget: [String: String] = [:]
+        var targets: [String] = []
+        for key in requested {
+            for target in try await library.lexiconMappings(sourceKey: key)
+            where sourceByTarget[target] == nil {
+                sourceByTarget[target] = key
+                targets.append(target)
+            }
+        }
+        guard !targets.isEmpty else { return direct }
+        var seen = Set(direct.map(\.id))
+        let mapped = try await library.dictionaryEntries(keys: targets, moduleIDs: moduleIDs)
+            .compactMap { entry -> LampAgentDictionaryEntry? in
+                let result = LampAgentDictionaryEntry(
+                    entry,
+                    mappedFrom: sourceByTarget[entry.key.uppercased()]
+                )
+                return seen.insert(result.id).inserted ? result : nil
+            }
+        return direct + mapped
     }
 
     public func listReadingPlans() async throws -> [LampAgentReadingPlan] {
@@ -737,7 +761,8 @@ public actor LampAgentLibrary {
             name: module.name,
             abbreviation: module.abbreviation,
             language: module.language,
-            isBundled: module.isBundled
+            isBundled: module.isBundled,
+            tagsStrongs: module.kind == .translation ? module.tagsStrongs : nil
         )
     }
 

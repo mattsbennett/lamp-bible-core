@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import LampCore
 import LampModuleKit
 import Testing
@@ -34,7 +35,8 @@ struct LampAgentLibraryTests {
             {
               "meta": {
                 "schemaVersion": "1.0", "id": "AGENT_TEST", "type": "translation",
-                "name": "Agent Test Bible", "abbreviation": "ATB", "language": "en"
+                "name": "Agent Test Bible", "abbreviation": "ATB", "language": "en",
+                "features": {"strongs": true}
               },
               "books": [{
                 "id": "John", "name": "John", "number": 43, "testament": "NT",
@@ -60,6 +62,7 @@ struct LampAgentLibraryTests {
 
         let catalog = try await agent.listModules()
         #expect(catalog.map(\.id) == ["AGENT_TEST"])
+        #expect(catalog.first?.tagsStrongs == true)
         let passage = try #require(try await agent.readPassage(
             reference: "John 1:2-2:1",
             translationIDs: ["AGENT_TEST"]
@@ -399,6 +402,70 @@ struct LampAgentLibraryTests {
         let limited = try await agent.readCommentary(reference: "John 1:1", limit: 2)
         #expect(limited.units.count == 2)
         #expect(limited.nextOffset == 2)
+    }
+
+    /// BDB keeps its own numbers, so a Strong's Hebrew key reaches it only
+    /// through the bundled mapping, and each entry it leads to says which key
+    /// it was asked for. A Greek lexicon's Septuagint Hebrew comes with it.
+    @Test func aStrongsKeyFindsTheBDBEntriesItMapsTo() async throws {
+        let fixture = try temporaryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let databaseURL = fixture.appendingPathComponent("bundled.sqlite")
+        do {
+            let queue = try DatabaseQueue(path: databaseURL.path)
+            try await queue.writeWithoutTransaction { db in
+                try db.execute(sql: "PRAGMA journal_mode = DELETE")
+                try db.execute(sql: #"""
+                    CREATE TABLE lexicons (id TEXT PRIMARY KEY, name TEXT, language TEXT);
+                    CREATE TABLE dictionary_entries (
+                        id INTEGER PRIMARY KEY, module_id TEXT, key TEXT, lemma TEXT,
+                        transliteration TEXT, pronunciation TEXT, senses_json TEXT,
+                        metadata_json TEXT, search_text TEXT
+                    );
+                    CREATE TABLE lexicon_mappings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, mapping_id TEXT,
+                        source_key TEXT, target_keys_json TEXT
+                    );
+                    INSERT INTO lexicons VALUES ('bdb', 'Brown-Driver-Briggs', 'he');
+                    INSERT INTO lexicons VALUES ('tbesg', 'TBESG', 'el');
+                    INSERT INTO dictionary_entries VALUES (
+                        1, 'bdb', 'BDB2965', 'חֶסֶד', NULL, NULL,
+                        '[{"definition":"goodness, kindness"}]', NULL, 'kindness'
+                    );
+                    INSERT INTO dictionary_entries VALUES (
+                        2, 'bdb', 'BDB2970', 'חֶסֶד', NULL, NULL,
+                        '[{"definition":"shame, reproach"}]', NULL, 'shame'
+                    );
+                    INSERT INTO dictionary_entries VALUES (
+                        3, 'tbesg', 'G26', 'ἀγάπη', NULL, NULL,
+                        '[{"gloss":"love","septuagintHebrew":[{"text":"אַהֲבָה","strongs":"H0160"}]},{"gloss":"love feasts"}]',
+                        NULL, 'love'
+                    );
+                    INSERT INTO lexicon_mappings (mapping_id, source_key, target_keys_json)
+                    VALUES ('strongs_hebrew_to_bdb', 'H2617', '["BDB2965","BDB2970"]');
+                    """#)
+            }
+        }
+        let archiveURL = fixture.appendingPathComponent("bundled_modules.db.zlib")
+        try ((try Data(contentsOf: databaseURL)) as NSData).compressed(using: .zlib)
+            .write(to: archiveURL)
+        let agent = LampAgentLibrary(library: LampLibrary(
+            rootURL: fixture.appendingPathComponent("Library"),
+            bundledModulesArchiveURL: archiveURL
+        ))
+
+        // Only a translation says whether it is tagged.
+        #expect(try await agent.listModules().allSatisfy { $0.tagsStrongs == nil })
+
+        let hebrew = try await agent.lookupDictionaryKeys(["H02617"], moduleIDs: ["bdb"])
+        #expect(hebrew.map(\.key) == ["BDB2965", "BDB2970"])
+        #expect(hebrew.map(\.mappedFrom) == ["H02617", "H02617"])
+
+        let greek = try await agent.lookupDictionaryKeys(["G26"])
+        #expect(greek.map(\.key) == ["G26"])
+        #expect(greek.first?.mappedFrom == nil)
+        #expect(greek.first?.senses.first?.septuagintHebrew?.map(\.strongs) == ["H160"])
+        #expect(greek.first?.senses.last?.septuagintHebrew == nil)
     }
 
     private func temporaryFixture() throws -> URL {

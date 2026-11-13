@@ -9,6 +9,10 @@ public struct LampAgentModule: Codable, Equatable, Identifiable, Sendable {
     public let language: String?
     public let isBundled: Bool
     public let isPersonal: Bool
+    /// For a translation, whether its words are tagged with Strong's numbers,
+    /// which `analyze_strongs` and a `strongs_key` search need. Absent for
+    /// every other kind.
+    public let tagsStrongs: Bool?
 
     public init(
         id: String,
@@ -17,7 +21,8 @@ public struct LampAgentModule: Codable, Equatable, Identifiable, Sendable {
         abbreviation: String? = nil,
         language: String? = nil,
         isBundled: Bool = false,
-        isPersonal: Bool = false
+        isPersonal: Bool = false,
+        tagsStrongs: Bool? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -26,6 +31,7 @@ public struct LampAgentModule: Codable, Equatable, Identifiable, Sendable {
         self.language = language
         self.isBundled = isBundled
         self.isPersonal = isPersonal
+        self.tagsStrongs = tagsStrongs
     }
 }
 
@@ -251,6 +257,10 @@ public struct LampAgentDictionarySense: Codable, Equatable, Sendable {
     public let derivation: String?
     public let usage: String?
     public let relatedEntries: [String]
+    /// The Hebrew words the lexicon says the Septuagint renders with this
+    /// word, each with its Strong's number where one fits. Absent, rather
+    /// than empty, for the lexicons that carry no such note.
+    public let septuagintHebrew: [LampAgentSeptuagintHebrew]?
 
     public init(_ sense: LampDictionarySense) {
         partOfSpeech = sense.partOfSpeech
@@ -260,6 +270,20 @@ public struct LampAgentDictionarySense: Codable, Equatable, Sendable {
         derivation = sense.derivation
         usage = sense.usage
         relatedEntries = sense.dictionaryLinks.map(\.key)
+        let hebrew = sense.septuagintHebrew.map(LampAgentSeptuagintHebrew.init)
+        septuagintHebrew = hebrew.isEmpty ? nil : hebrew
+    }
+}
+
+public struct LampAgentSeptuagintHebrew: Codable, Equatable, Sendable {
+    public let text: String
+    public let stem: String?
+    public let strongs: String?
+
+    public init(_ hebrew: LampSeptuagintHebrew) {
+        text = hebrew.text
+        stem = hebrew.stem
+        strongs = hebrew.strongs
     }
 }
 
@@ -273,8 +297,13 @@ public struct LampAgentDictionaryEntry: Codable, Equatable, Identifiable, Sendab
     public let transliteration: String?
     public let pronunciation: String?
     public let senses: [LampAgentDictionarySense]
+    /// The key that was asked for, where this entry was reached through a
+    /// lexicon's own numbering rather than by that key: a Strong's Hebrew
+    /// number leads to the BDB entries it maps to, often more than one.
+    public let mappedFrom: String?
 
-    public init(_ entry: LampDictionaryResult) {
+    public init(_ entry: LampDictionaryResult, mappedFrom: String? = nil) {
+        self.mappedFrom = mappedFrom
         entryID = entry.entryID
         moduleID = entry.moduleID
         moduleName = entry.moduleName
