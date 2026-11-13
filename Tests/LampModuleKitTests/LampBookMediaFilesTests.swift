@@ -293,6 +293,43 @@ struct LampBookMediaFilesTests {
         ).isEmpty)
     }
 
+    /// On the phone a deleted book `Study`'s picture would land in the
+    /// commentary `study`'s folder, over its own picture of that name.
+    @Test func aPictureForAnotherModulesFolderIsNotInstalled() {
+        let cache = URL(fileURLWithPath: "/cache", isDirectory: true)
+        let folders: (String) -> LampBookMediaFiles.Folders = {
+            let folder = cache.appendingPathComponent($0, isDirectory: true)
+            return LampBookMediaFiles.Folders(read: [folder], install: folder, anchor: cache)
+        }
+        #expect(LampBookMediaFiles.installURL(
+            forRemotePath: "BookMedia/Study/map.png", folders: folders, otherModules: ["study"]
+        ) == nil)
+        #expect(LampBookMediaFiles.installURL(
+            forRemotePath: "BookMedia/creeds/map.png", folders: folders, otherModules: ["study"]
+        )?.path == "/cache/creeds/map.png")
+    }
+
+    /// A book here and a commentary here whose IDs name one folder: whose a
+    /// file is cannot be told, so none of it is published as the book's.
+    @Test func aBookSharingAFolderWithAnotherModuleIsNotPublished() {
+        #expect(LampBookMediaFiles.publishedBookModuleIDs(
+            books: ["Study", "creeds"], otherModules: ["study"], remotePaths: []
+        ) == ["creeds"])
+    }
+
+    /// A folder with a picture's name is not that picture: the reader moves
+    /// on to the next folder, or to the name as written.
+    @Test func aFolderNamedLikeAPictureIsNotThePicture() throws {
+        let cache = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: cache) }
+        try FileManager.default.createDirectory(
+            at: cache.appendingPathComponent("a/Figure 1.png/inside"), withIntermediateDirectories: true
+        )
+        try write("the picture", at: "a/Figure%201.png", in: cache)
+        #expect(LampBookMediaFiles.url(for: "Figure%201.png", in: phoneFolders(cache)("a"))
+            == cache.appendingPathComponent("a/Figure%201.png"))
+    }
+
     @Test func theServerSaysWhichBooksItHoldsPicturesFor() {
         #expect(LampBookMediaFiles.bookModuleIDs(inRemotePaths: [
             "BookMedia/atonement/plates/one.jpg",

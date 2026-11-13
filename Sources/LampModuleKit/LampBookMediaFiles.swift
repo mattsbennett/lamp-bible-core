@@ -147,7 +147,9 @@ public enum LampBookMediaFiles {
         for name in names {
             for root in folders.read {
                 let url = root.appendingPathComponent(name)
-                guard fileManager.fileExists(atPath: url.path),
+                // A file, not a folder of that name: a folder would be shown
+                // as nothing, and copied whole by an import.
+                guard isRegularFile(url, fileManager: fileManager),
                       isReachedWithoutLinks(url, from: root, anchor: folders.anchor, fileManager: fileManager)
                 else { continue }
                 return url
@@ -203,19 +205,21 @@ public enum LampBookMediaFiles {
     /// there keeps its book.
     ///
     /// Less any ID this device holds as another kind of module, compared as
-    /// the volume compares folder names. A book deleted elsewhere can leave
-    /// its pictures on the server, and a commentary here under the same ID —
-    /// or under `study` for a book `Study`, which is the same folder — would
-    /// otherwise have its own pictures published as that book's.
+    /// the volume compares folder names — the device's own books included. A
+    /// book deleted elsewhere can leave its pictures on the server, and a book
+    /// `Study` here beside a commentary `study` shares its folder: either way
+    /// the commentary's own pictures would be published as the book's. Where
+    /// two kinds of module claim one folder, whose a file is cannot be told,
+    /// so none of it goes up as a book's.
     public static func publishedBookModuleIDs(
         books: Set<String>,
         otherModules: Set<String>,
         remotePaths: some Sequence<String>
     ) -> Set<String> {
         let others = Set(otherModules.map(fileSystemKey))
-        return books.union(bookModuleIDs(inRemotePaths: remotePaths).filter {
+        return books.union(bookModuleIDs(inRemotePaths: remotePaths)).filter {
             !others.contains(fileSystemKey($0))
-        })
+        }
     }
 
     /// The books a set of server paths holds pictures for.
@@ -233,16 +237,25 @@ public enum LampBookMediaFiles {
     /// The path is taken as it is, not decoded: it is the name the file had
     /// where it was gathered, and two files whose names differ only by an
     /// escape (`Figure%20A.png` and `Figure A.png`) are two files.
+    ///
+    /// `otherModules`: the IDs this device holds as other kinds of module,
+    /// for a device that keeps every module's pictures in one folder per ID,
+    /// as the phone does. A picture for a book whose folder is one of theirs
+    /// — a deleted book `Study`'s, beside a commentary `study` — is refused
+    /// rather than written over the commentary's own.
     public static func installURL(
         forRemotePath remotePath: String,
         folders: (String) -> Folders,
+        otherModules: Set<String> = [],
         fileManager: FileManager = .default
     ) -> URL? {
         // `kind(of:)` has checked every component already: none empty, none
         // hidden or climbing (`..` is hidden), none with a backslash.
         guard LampSyncFolderLayout.kind(of: remotePath) == .bookMedia else { return nil }
         let components = remotePath.split(separator: "/").map(String.init)
-        guard components.count >= 3 else { return nil }
+        guard components.count >= 3,
+              !Set(otherModules.map(fileSystemKey)).contains(fileSystemKey(components[1]))
+        else { return nil }
         let bookFolders = folders(components[1])
         let url = bookFolders.install.appendingPathComponent(components.dropFirst(2).joined(separator: "/"))
         return isReachedWithoutLinks(url, from: bookFolders.install, anchor: bookFolders.anchor, fileManager: fileManager)
@@ -256,6 +269,11 @@ public enum LampBookMediaFiles {
               !components.contains(".."), !components.contains(".") else { return nil }
         let relative = components.joined(separator: "/")
         return isPublishable(relative) ? relative : nil
+    }
+
+    /// Whether `url` is a file of its own, not a folder or a link.
+    private static func isRegularFile(_ url: URL, fileManager: FileManager) -> Bool {
+        (try? fileManager.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeRegular
     }
 
     /// Whether sync can carry a file at this path inside a book's folder.
