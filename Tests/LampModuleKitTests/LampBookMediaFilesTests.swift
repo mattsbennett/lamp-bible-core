@@ -130,6 +130,93 @@ struct LampBookMediaFilesTests {
         #expect(LampBookMediaFiles.installURL(forRemotePath: "BookMedia/atonement", folders: folders) == nil)
     }
 
+    /// A server path is the name the file had where it was gathered. Two
+    /// files whose names differ by an escape are two files, and installing
+    /// one must not replace the other.
+    @Test func aServerPathIsInstalledAsItIsNotDecoded() {
+        let library = URL(fileURLWithPath: "/library", isDirectory: true)
+        let folders: (String) -> LampBookMediaFiles.Folders = {
+            LampBookMediaFiles.libraryFolders(libraryRootURL: library, moduleID: $0)
+        }
+        #expect(LampBookMediaFiles.installURL(forRemotePath: "BookMedia/a/Figure%20A.png", folders: folders)?.path
+            == "/library/Media/Books/a/Figure%20A.png")
+        #expect(LampBookMediaFiles.installURL(forRemotePath: "BookMedia/a/Figure A.png", folders: folders)?.path
+            == "/library/Media/Books/a/Figure A.png")
+    }
+
+    /// The phone kept a picture under the metadata's own spelling before the
+    /// name was decoded. That file is its only copy, so it is still found.
+    @Test func aPictureKeptUnderItsEscapedNameIsStillFound() throws {
+        let cache = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: cache) }
+        try write("old", at: "a/plates/Figure%201.png", in: cache)
+        let folders = phoneFolders(cache)("a")
+        #expect(LampBookMediaFiles.url(for: "plates/Figure%201.png", in: folders)
+            == cache.appendingPathComponent("a/plates/Figure%201.png"))
+        // The decoded name wins where both are kept.
+        try write("new", at: "a/plates/Figure 1.png", in: cache)
+        #expect(LampBookMediaFiles.url(for: "plates/Figure%201.png", in: folders)
+            == cache.appendingPathComponent("a/plates/Figure 1.png"))
+    }
+
+    /// A book whose ID names one of the library's own media folders must not
+    /// read that folder, every book's or every note's pictures, as its own.
+    @Test(arguments: ["Books", "books", "Modules", "Notes", "Devotionals"])
+    func aBookNamedAfterAMediaFolderDoesNotTakeItOver(_ moduleID: String) {
+        let root = URL(fileURLWithPath: "/library", isDirectory: true)
+        let folders = LampBookMediaFiles.libraryFolders(libraryRootURL: root, moduleID: moduleID)
+        #expect(!folders.read.map(\.path).contains("/library/Media/\(moduleID)"))
+        #expect(folders.install.path == "/library/Media/Books/\(moduleID)")
+    }
+
+    /// A book deleted elsewhere can leave its pictures on the server. A
+    /// commentary here under the same ID does not publish its own as that
+    /// book's.
+    @Test func anotherKindOfModuleIsNotTakenForABookTheServerNames() {
+        let ids = LampBookMediaFiles.publishedBookModuleIDs(
+            books: ["atonement"],
+            otherModules: ["study"],
+            remotePaths: ["BookMedia/study/map.png", "BookMedia/creeds/cover.png"]
+        )
+        #expect(ids == ["atonement", "creeds"])
+    }
+
+    /// A name sync cannot carry is refused when the book is brought in, not
+    /// kept as a picture that never reaches another device.
+    @Test func aNameSyncCannotCarryIsRefusedOnTheWayIn() {
+        let folders = LampBookMediaFiles.Folders(
+            read: [URL(fileURLWithPath: "/cache/a", isDirectory: true)],
+            install: URL(fileURLWithPath: "/cache/a", isDirectory: true)
+        )
+        #expect(LampBookMediaFiles.installURL(forFilename: "plates/Figure%201.png", in: folders)?.path
+            == "/cache/a/plates/Figure 1.png")
+        #expect(LampBookMediaFiles.installURL(forFilename: "%2Ecover.png", in: folders) == nil)
+        #expect(LampBookMediaFiles.installURL(forFilename: ".cover.png", in: folders) == nil)
+        #expect(LampBookMediaFiles.installURL(forFilename: "../x.png", in: folders) == nil)
+        #expect(LampBookMediaFiles.relativePath(forFilename: "plates/a\\b.png") == nil)
+    }
+
+    /// Gathering skips links, so the reader and an install do not go through
+    /// one either: a link could have one book's folder show, or receive,
+    /// another's pictures.
+    @Test func neitherTheReaderNorAnInstallGoesThroughALink() throws {
+        let cache = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: cache) }
+        try write("other book", at: "other/plates/map.jpg", in: cache)
+        try FileManager.default.createDirectory(
+            at: cache.appendingPathComponent("a"), withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: cache.appendingPathComponent("a/plates"),
+            withDestinationURL: cache.appendingPathComponent("other/plates")
+        )
+        let folders = phoneFolders(cache)
+        #expect(LampBookMediaFiles.url(for: "plates/map.jpg", in: folders("a")) == nil)
+        #expect(LampBookMediaFiles.installURL(forRemotePath: "BookMedia/a/plates/map.jpg", folders: folders) == nil)
+        #expect(LampBookMediaFiles.installURL(forFilename: "plates/map.jpg", in: folders("a")) == nil)
+        #expect(LampBookMediaFiles.outgoing(forBookModuleIDs: ["a"], folders: folders).files.isEmpty)
+    }
+
     @Test func theServerSaysWhichBooksItHoldsPicturesFor() {
         #expect(LampBookMediaFiles.bookModuleIDs(inRemotePaths: [
             "BookMedia/atonement/plates/one.jpg",
