@@ -832,6 +832,21 @@ public enum LampSeptuagintSection {
         + "readers knew, so the same Greek word here shows what it was already "
         + "used to say."
 
+    /// What to say under figures a text's own machine-made tags produced.
+    ///
+    /// Shown where the text declares that its Strong's numbers were matched
+    /// rather than printed, and only there: a published tagged text says
+    /// nothing of the sort. The order of the sentence is the order of the
+    /// certainty — which word it is, then its dictionary form, then the
+    /// parse, which is where a tagger's mistakes gather, and which is what
+    /// the case, number and gender figures above it are made of. The full
+    /// statement, with its source, is in the tagging's own disclosure
+    /// beside the forms.
+    public static let ownUseCaution =
+        "These figures are read from that text’s own tags, which Lamp made by "
+        + "machine rather than finding them printed. Which word each one is, "
+        + "and its dictionary form, are surer than its case, number and gender."
+
     /// What the Greek word's own use in the Septuagint comes to, in one line.
     ///
     /// Verses rather than words, because a verse is what a reader goes and
