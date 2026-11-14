@@ -64,6 +64,49 @@ public enum LampTranslationLanguages {
         primary(code).map(biblicalCodes.contains) ?? false
     }
 
+    /// A declared language's name as a reader knows it: Greek and Hebrew
+    /// for the biblical languages, where the locale says "Ancient Greek"
+    /// and has no name at all for biblical Hebrew's code; the locale's
+    /// name for any other, or the code itself where it has none. Nil for
+    /// none declared.
+    public static func name(of code: String?, locale: Locale = .current) -> String? {
+        guard let primary = primary(code) else { return nil }
+        switch primary {
+        case "grc": return "Greek"
+        case "hbo": return "Hebrew"
+        case "arc": return "Aramaic"
+        default: return locale.localizedString(forLanguageCode: primary) ?? primary
+        }
+    }
+
+    /// The side of Strong's a text or a lexicon in an original language
+    /// keys by.
+    public enum StrongsSide: Sendable, Equatable {
+        /// Greek: the New Testament and the Septuagint.
+        case greek
+        /// Hebrew and Aramaic, which Strong's numbers together.
+        case hebrew
+    }
+
+    /// Which side of Strong's a declared language is on, read loosely:
+    /// codes or English names, ancient or modern ("grc", "el", "Koine
+    /// Greek"; "hbo", "he", "Aramaic"), since modules declare all of
+    /// these. Nil for any other language, or none.
+    public static func strongsSide(of declared: String?) -> StrongsSide? {
+        guard let declared = declared?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !declared.isEmpty else { return nil }
+        switch declared {
+        case "greek", "ancient greek", "koine greek": return .greek
+        case "hebrew", "aramaic", "biblical hebrew": return .hebrew
+        default: break
+        }
+        switch primary(declared) {
+        case "grc", "el", "ell", "gre": return .greek
+        case "hbo", "he", "heb", "arc": return .hebrew
+        default: return nil
+        }
+    }
+
     /// `items` grouped by language, each group keeping the order it was
     /// given in, and within it whole Bibles before parts where
     /// `holdsWholeBible` says which is which.

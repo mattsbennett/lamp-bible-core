@@ -55,6 +55,72 @@ public enum LampTranslationCoverage {
         return byTranslation
     }
 
+    /// Book number to the translation's own name for each book, from the
+    /// same lists as `chapterCounts`: "Génesis" in a Spanish translation.
+    /// A book listed without a name is left out, for the caller to name.
+    public static func bookNames(in db: Database, translationID: String?) throws -> [Int: String] {
+        let tables = Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'table'"))
+        let rows: [Row]
+        if tables.contains("translation_books"), let translationID {
+            rows = try Row.fetchAll(
+                db,
+                sql: "SELECT book_number AS book, name FROM translation_books WHERE translation_id = ?",
+                arguments: [translationID]
+            )
+        } else if tables.contains("books"),
+                  try LampModuleText.columnNames(in: db, table: "books").contains("chapter_count") {
+            rows = try Row.fetchAll(db, sql: "SELECT id AS book, name FROM books")
+        } else {
+            return [:]
+        }
+        var names: [Int: String] = [:]
+        for row in rows {
+            guard let name: String = row["name"],
+                  !name.trimmingCharacters(in: .whitespaces).isEmpty,
+                  names[row["book"]] == nil else { continue }
+            names[row["book"]] = name
+        }
+        return names
+    }
+
+    /// Where a translation reads a place from, given its `chapterCounts`:
+    /// the place itself where it has the book, at its last chapter where it
+    /// numbers fewer; else the first book it has in the same testament, or
+    /// its first book at all, at chapter 1. So switching to the Brenton
+    /// Septuagint in Matthew 5 opens Genesis 1. Nil when it holds no book.
+    public static func landing(
+        book: Int,
+        chapter: Int,
+        chapterCounts: [Int: Int]
+    ) -> (book: Int, chapter: Int)? {
+        if let count = chapterCounts[book] {
+            return (book, min(max(chapter, 1), max(count, 1)))
+        }
+        let held = chapterCounts.keys.sorted()
+        let isNewTestament = book >= 40
+        guard let fallback = held.first(where: { ($0 >= 40) == isNewTestament }) ?? held.first else {
+            return nil
+        }
+        return (fallback, 1)
+    }
+
+    /// The translation to offer a place in, for a reader sent to it in one
+    /// that lacks the book: one of `candidates` that `covers` it, in the
+    /// same language as `language` first (by primary subtag, so "es" is
+    /// "es-ES"), else the first in the order given.
+    public static func alternative<Translation>(
+        having book: Int,
+        near language: String?,
+        among candidates: [Translation],
+        language languageOf: (Translation) -> String?,
+        covers: (Translation) -> Bool
+    ) -> Translation? {
+        let having = candidates.filter(covers)
+        let own = LampTranslationLanguages.primary(language)
+        return having.first { own != nil && LampTranslationLanguages.primary(languageOf($0)) == own }
+            ?? having.first
+    }
+
     private static func counts(_ rows: [Row]) -> [Int: Int] {
         var counts: [Int: Int] = [:]
         for row in rows {
