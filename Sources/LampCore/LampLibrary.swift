@@ -6489,7 +6489,7 @@ public actor LampLibrary {
 
     private func verseAnnotations(from json: String?, verseText: String) -> [LampVerseAnnotation] {
         guard let values = jsonArray(from: json) else { return [] }
-        var offsets: CharacterOffsets?
+        var offsets: ScalarOffsets?
         return values.compactMap { value in
             guard let object = value as? [String: Any],
                   let kind = stringValue(object["type"] ?? object["kind"]),
@@ -6500,7 +6500,7 @@ public actor LampLibrary {
             let data = object["data"] as? [String: Any]
             var text = stringValue(object["text"])
             if text == nil {
-                let verseOffsets = offsets ?? CharacterOffsets(verseText)
+                let verseOffsets = offsets ?? ScalarOffsets(verseText)
                 offsets = verseOffsets
                 text = verseOffsets.substring(from: start, to: end)
             }
@@ -6532,6 +6532,11 @@ public actor LampLibrary {
     ///
     /// Built on demand, because an annotation that carries its own text needs
     /// nothing from the parent.
+    /// A dictionary entry's own text, addressed the way its annotations
+    /// address it: by `Character`. That is what Lamp's module compiler writes
+    /// for a lexicon entry, and `LampDictionaryAnnotationOffsetTests` holds
+    /// it to that. **Verse** tags are a different source and count code
+    /// points — see `ScalarOffsets`, and do not merge the two.
     private struct CharacterOffsets {
         private let characters: [Character]
 
@@ -6542,6 +6547,25 @@ public actor LampLibrary {
         func substring(from start: Int, to end: Int) -> String? {
             guard start >= 0, end > start, end <= characters.count else { return nil }
             return String(characters[start..<end])
+        }
+    }
+
+    /// A verse addressed the way its annotations address it: by code point.
+    ///
+    /// It counted Characters and was named for it, so a Hebrew annotation
+    /// without its own `text` — a pointed word is more code points than
+    /// Characters — fell outside the verse and came back nil, and the study
+    /// pane showed the lemma where the word should have been.
+    private struct ScalarOffsets {
+        private let scalars: [Unicode.Scalar]
+
+        init(_ text: String) {
+            scalars = Array(text.unicodeScalars)
+        }
+
+        func substring(from start: Int, to end: Int) -> String? {
+            guard start >= 0, end > start, end <= scalars.count else { return nil }
+            return String(String.UnicodeScalarView(scalars[start..<end]))
         }
     }
 

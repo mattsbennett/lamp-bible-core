@@ -549,19 +549,49 @@ struct StrongsContextTests {
         #expect(!snippet.isTrimmedAtEnd)
     }
 
-    /// Offsets count Characters, not Unicode scalars. A decomposed accent
-    /// earlier in the verse makes the two disagree, and slicing by scalars
-    /// moves the highlight off the word — the same mistake the book readers
-    /// made in the other direction.
+    /// A pointed Hebrew word, as TAHOT actually writes it: the unit the
+    /// offsets count is the one that gets the whole word.
+    ///
+    /// The fixture above proves the rule on a made-up verse. This proves it
+    /// on the shape of the real thing, which is where it bit: a Hebrew word
+    /// with points is far more code points than Characters, so the two units
+    /// disagree about where it ends by several places.
+    @Test func aPointedHebrewWordIsCountedInCodePoints() {
+        let word = "\u{05D0}\u{05B7}\u{05D4}\u{05B2}\u{05D1}\u{05B8}\u{05D4}"   // אַהֲבָה
+        let verse = "\(word) \u{05D5}"
+        #expect(word.unicodeScalars.count == 7)
+        #expect(Array(word).count == 4, "the two units disagree by three")
+
+        // Sliced by the unit the tags count, the whole word comes back.
+        let whole = LampStrongsContext.snippet(of: verse, from: 0, to: word.unicodeScalars.count)
+        #expect(whole.word == word)
+        // Sliced by Characters, as the old note said, it is cut short.
+        let cut = LampStrongsContext.snippet(of: verse, from: 0, to: Array(word).count)
+        #expect(cut.word != word, "four of seven code points is not the word")
+    }
+
+    /// Offsets count code points, not Characters. A decomposed accent
+    /// earlier in the verse makes the two disagree, and slicing by Character
+    /// moves the highlight off the word.
+    ///
+    /// This test asserted the opposite, on a fixture that counted its own
+    /// offsets in Characters, and so agreed with itself and with nothing
+    /// else. Measured over the bundled texts, in verses where the units
+    /// differ, every tag lands by code point and none by grapheme — TAHOT
+    /// 54,198 of them, TAGNT 11,252.
     @Test func adecomposedAccentEarlierInTheVerseDoesNotMoveTheWord() {
         // "Café" with a combining acute: five scalars, four characters.
         let verse = "Cafe\u{301} and love abide"
         #expect(verse.unicodeScalars.count != Array(verse).count, "the two must disagree here")
 
-        let characters = Array(verse)
-        let start = 9
-        let end = 13
-        #expect(String(characters[start..<end]) == "love", "the fixture's own offsets")
+        let scalars = Array(verse.unicodeScalars)
+        let start = 10
+        let end = 14
+        #expect(String(String.UnicodeScalarView(scalars[start..<end])) == "love",
+            "the offsets a tagger writes")
+        // The Character offsets the old note recommended, which land a place
+        // early and would cut "e love" out of the middle of the verse.
+        #expect(String(Array(verse)[9..<13]) == "love", "and why the two were confused")
 
         let snippet = LampStrongsContext.snippet(of: verse, from: start, to: end)
         #expect(snippet.word == "love")
@@ -1781,7 +1811,10 @@ struct StrongsFormReadingTests {
         var analyzer = LampStrongsAnalyzer(key: key, translationID: "O", translationName: "Original", language: language)
         for (index, row) in words.enumerated() {
             let text = row.word + " x"
-            let json = #"[{"start":0,"end":\#(row.word.count),"data":{"strongs":"\#(key)","lemma":"lemma","morphology":"\#(row.code)"}}]"#
+            // Code points, as a real tagger writes them: a pointed Hebrew
+            // word is seven of them and four Characters, and counting the
+            // wrong one here made the fixture agree with a bug.
+            let json = #"[{"start":0,"end":\#(row.word.unicodeScalars.count),"data":{"strongs":"\#(key)","lemma":"lemma","morphology":"\#(row.code)"}}]"#
             analyzer.add(reference: 19_001_001 + index, text: text, annotationsJSON: json)
         }
         return analyzer.analysis()

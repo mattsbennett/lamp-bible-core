@@ -80,7 +80,11 @@ public enum LampStrongsSearch {
         } else {
             return text
         }
-        let length = text.count
+        // Code points, which is what a tag's offsets count. Measured by
+        // Characters this dropped every Hebrew range as out of bounds — a
+        // pointed word is far more code points than Characters — and shifted
+        // the marks in decomposed Greek.
+        let length = text.unicodeScalars.count
         let ranges = annotations.compactMap { annotation -> (start: Int, end: Int)? in
             let value = (annotation["data"] as? [String: Any])?["strongs"]
                 ?? annotation["strongs"]
@@ -103,8 +107,10 @@ public enum LampStrongsSearch {
         }
         var result = text
         for range in merged.reversed() {
-            let start = result.index(result.startIndex, offsetBy: range.start)
-            let end = result.index(result.startIndex, offsetBy: range.end)
+            let scalars = result.unicodeScalars
+            guard range.end <= scalars.count else { continue }
+            let start = scalars.index(scalars.startIndex, offsetBy: range.start)
+            let end = scalars.index(scalars.startIndex, offsetBy: range.end)
             result.insert(contentsOf: "</mark>", at: end)
             result.insert(contentsOf: "<mark>", at: start)
         }

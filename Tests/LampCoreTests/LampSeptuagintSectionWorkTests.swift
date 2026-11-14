@@ -167,6 +167,41 @@ import LampModuleKit
         ).isEmpty)
     }
 
+    /// Each English reading is named by the text it is.
+    @Test func theEnglishChoiceIsNamedByItsModule() {
+        let named = LampSeptuagintSection.EnglishChoice.titles(
+            septuagintInEnglish: "ABP", readersBible: "BSB"
+        )
+        #expect(named.direct == "ABP")
+        #expect(named.indirect == "BSB")
+        // Without a name there is still something to press.
+        let unnamed = LampSeptuagintSection.EnglishChoice.titles(
+            septuagintInEnglish: nil, readersBible: "  "
+        )
+        #expect(unnamed.direct == "Septuagint in English")
+        #expect(unnamed.indirect == "Your Bible")
+    }
+
+    /// An interlinear's word-order numbers are told apart from numbers the
+    /// verse means, by whether a letter follows them with no space.
+    @Test func interlinearMarkersAreToldApartFromRealNumbers() {
+        let runs = LampSeptuagintSection.interlinearRuns(in: "And [2said 3to her 1Amnon], Rise")
+        #expect(runs.filter(\.isMarker).map(\.text) == ["2", "3", "1"])
+        // Put back together it is the verse again, marker or not.
+        #expect(runs.map(\.text).joined() == "And [2said 3to her 1Amnon], Rise")
+
+        // A number the verse means keeps its place in the prose.
+        let plain = LampSeptuagintSection.interlinearRuns(in: "after 70 years in 1 Samuel 18")
+        #expect(plain.filter(\.isMarker).isEmpty)
+        #expect(plain.map(\.text).joined() == "after 70 years in 1 Samuel 18")
+
+        // A verse with no numbers at all is one run.
+        let none = LampSeptuagintSection.interlinearRuns(in: "Bring me into the house of wine")
+        #expect(none.count == 1 && none[0].isMarker == false)
+        // And nothing at all is nothing.
+        #expect(LampSeptuagintSection.interlinearRuns(in: "").isEmpty)
+    }
+
     /// The Septuagint in English is found by what it tags, and asked of each
     /// key on its own.
     @Test func theSeptuagintInEnglishIsFoundByWhatItTags() async {

@@ -98,8 +98,18 @@ public struct LampStrongsAnalysis: Equatable, Sendable {
     /// one occurrence here.
     public struct Occurrence: Equatable, Sendable {
         public let reference: Int
-        /// Offsets into the verse's text counted in `Character`s, as Lamp
-        /// reads every annotation's offsets: slice `Array(text)`, never its
+        /// Offsets into the verse's text counted in **code points**, which is
+        /// what every annotation in Lamp counts: slice `unicodeScalars`, never
+        /// `Array(text)`. A Swift `Character` is a grapheme cluster, so a
+        /// pointed Hebrew word is twelve code points and about six of them.
+        ///
+        /// This doc said `Character` and was believed. Measured over the
+        /// bundled texts, in verses where the two units differ, **every** tag
+        /// lands by code point and none by grapheme — TAHOT 54,198 of them,
+        /// TAGNT 11,252. Two apps followed the old note and marked the wrong
+        /// word; `ios-56` caught it on the phone.
+        ///
+        /// Old note, for anyone who remembers it: slice `Array(text)`, never its
         /// Unicode scalars or UTF-16 units, or a word after a combining mark
         /// is cut in the wrong place.
         public let startOffset: Int
@@ -639,10 +649,11 @@ public struct LampStrongsAnalyzer {
         let annotations = json as? [[String: Any]]
             ?? (json as? [String: Any])?["annotations"] as? [[String: Any]]
             ?? []
-        let characters = Array(text)
+        // Code points, which is what the offsets count.
+        let scalars = Array(text.unicodeScalars)
         func substring(_ start: Int, _ end: Int) -> String? {
-            guard start >= 0, end > start, end <= characters.count else { return nil }
-            return String(characters[start..<end])
+            guard start >= 0, end > start, end <= scalars.count else { return nil }
+            return String(String.UnicodeScalarView(scalars[start..<end]))
         }
 
         var tagged: [LampStrongsAnalysis.Occurrence] = []
@@ -677,8 +688,9 @@ public struct LampStrongsAnalyzer {
             }
             guard last.endOffset >= 0,
                   last.endOffset <= next.startOffset,
-                  next.startOffset <= characters.count,
-                  characters[last.endOffset..<next.startOffset].allSatisfy(\.isWhitespace),
+                  next.startOffset <= scalars.count,
+                  scalars[last.endOffset..<next.startOffset]
+                      .allSatisfy({ Character($0).isWhitespace }),
                   last.form == nil || next.form == nil || last.form == next.form,
                   last.morphology == nil || next.morphology == nil || last.morphology == next.morphology
             else {

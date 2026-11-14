@@ -350,10 +350,16 @@ public enum LampStrongsContext {
     /// The verse split around `startOffset..<endOffset`, trimmed to `window`
     /// characters either side.
     ///
-    /// Offsets count `Character`s, as every annotation offset in Lamp does.
-    /// Slicing `Array(verse)` rather than the scalars is the whole point: a
-    /// verse with a decomposed accent earlier in it has more scalars than
-    /// characters, and cutting by scalars moves the highlight off the word.
+    /// Offsets count **code points**, as every annotation offset in Lamp
+    /// does. Slicing the scalars rather than `Array(verse)` is the whole
+    /// point: a verse with a decomposed accent earlier in it has more scalars
+    /// than Characters, and cutting by Character moves the highlight off the
+    /// word — which is what this comment used to recommend, and what it did.
+    /// Measured over the bundled texts, in verses where the two units differ,
+    /// every tag lands by code point and none by grapheme.
+    ///
+    /// `window` is counted the same way, so a long verse is trimmed by the
+    /// unit it is sliced by.
     ///
     /// Out-of-range offsets are clamped rather than trusted. They have been
     /// wrong before — the book readers indexed characters while the converters
@@ -366,17 +372,20 @@ public enum LampStrongsContext {
         to endOffset: Int,
         window: Int = 72
     ) -> Snippet {
-        let characters = Array(verse)
-        let start = min(max(0, startOffset), characters.count)
-        let end = min(max(start, endOffset), characters.count)
+        let scalars = Array(verse.unicodeScalars)
+        let start = min(max(0, startOffset), scalars.count)
+        let end = min(max(start, endOffset), scalars.count)
+        func text(_ slice: ArraySlice<Unicode.Scalar>) -> String {
+            String(String.UnicodeScalarView(slice))
+        }
 
-        var before = String(characters[..<start])
-        var after = String(characters[end...])
-        let word = String(characters[start..<end])
+        var before = text(scalars[..<start])
+        var after = text(scalars[end...])
+        let word = text(scalars[start..<end])
 
         var trimmedStart = false
-        if before.count > window {
-            before = String(before.suffix(window))
+        if before.unicodeScalars.count > window {
+            before = text(Array(before.unicodeScalars).suffix(window)[...])
             // Not mid-word: start at the next space, so a row never opens on
             // half of a word.
             if let space = before.firstIndex(of: " ") {
@@ -385,8 +394,8 @@ public enum LampStrongsContext {
             trimmedStart = true
         }
         var trimmedEnd = false
-        if after.count > window {
-            after = String(after.prefix(window))
+        if after.unicodeScalars.count > window {
+            after = text(Array(after.unicodeScalars).prefix(window)[...])
             if let space = after.lastIndex(of: " ") {
                 after = String(after[..<space])
             }
@@ -1430,14 +1439,77 @@ public enum LampSeptuagintSection {
     }
 
     /// What the two English readings are called where a reader picks between
-    /// them, and what is true of each.
+    /// them.
+    ///
+    /// Each is named by the text it is, because "Septuagint in English" and
+    /// "Your Bible" told a reader nothing they could check: the owner, seeing
+    /// them, could not tell which module either stood for. A module's own
+    /// abbreviation is the name it wears everywhere else in the app.
     public enum EnglishChoice {
-        /// The Septuagint in English: an English rendering of the Greek word
-        /// itself.
-        public static let direct = "Septuagint in English"
-        /// The reader's own Bible: an English rendering of the Hebrew word.
-        public static let indirect = "Your Bible"
         public static let title = "English from"
+        /// Used only where a module has no name to give, which no installed
+        /// module should be.
+        public static let direct = "Septuagint in English"
+        public static let indirect = "Your Bible"
+
+        /// The two labels, each named for its text.
+        public static func titles(
+            septuagintInEnglish: String?,
+            readersBible: String?
+        ) -> (direct: String, indirect: String) {
+            func named(_ name: String?, or fallback: String) -> String {
+                guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !name.isEmpty
+                else { return fallback }
+                return name
+            }
+            return (
+                direct: named(septuagintInEnglish, or: direct),
+                indirect: named(readersBible, or: indirect)
+            )
+        }
+    }
+
+    /// An English text split into its ordinary words and the word-order
+    /// markers an interlinear prints among them.
+    ///
+    /// The Apostolic Bible Polyglot writes the Greek word order as numbers
+    /// against the English words — "[2detested 3her 1Amnon]" — which its
+    /// readers expect, but as superscripts, not as digits run into the words.
+    /// In plain text they read as damage.
+    ///
+    /// A marker is a run of digits with a letter immediately after it and no
+    /// space between. A real number is never written that way: over 4,000
+    /// verses of ABP there are 11,263 markers and 7 free-standing numbers,
+    /// and the rule separates them exactly.
+    public static func interlinearRuns(in text: String) -> [(text: String, isMarker: Bool)] {
+        var runs: [(text: String, isMarker: Bool)] = []
+        var plain = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            guard text[index].isNumber else {
+                plain.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+            var digits = ""
+            var cursor = index
+            while cursor < text.endIndex, text[cursor].isNumber {
+                digits.append(text[cursor])
+                cursor = text.index(after: cursor)
+            }
+            // Glued to a word, so a marker; otherwise it is a number the
+            // verse means.
+            if cursor < text.endIndex, text[cursor].isLetter {
+                if !plain.isEmpty { runs.append((plain, false)); plain = "" }
+                runs.append((digits, true))
+            } else {
+                plain += digits
+            }
+            index = cursor
+        }
+        if !plain.isEmpty { runs.append((plain, false)) }
+        return runs
     }
 
     /// What each reading gives and what it costs, said where the choice is
