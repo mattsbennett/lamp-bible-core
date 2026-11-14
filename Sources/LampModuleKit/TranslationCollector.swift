@@ -239,6 +239,15 @@ struct TranslationCollector {
         var paragraph: Bool
         var poetryIndent: Int
         var stanzaBreak: Bool
+        /// A psalm's title the source writes inside its first verse
+        /// (`\d \v 1 A Psalm of David.`): open while it is being read, and
+        /// then where in the verse's text it ends.
+        var titleIsOpen = false
+        var titleEnd: Int?
+
+        /// Whether nothing but the title has been written: a paragraph or
+        /// line marked now opens the verse.
+        var isAtStart: Bool { text.isEmpty || titleEnd == text.length }
     }
 
     private struct ActiveSpan {
@@ -353,9 +362,14 @@ struct TranslationCollector {
             pendingHeadings.append((level: 2, text: text, midVerse: false))
             return
         }
+        if let titleEnd = finished.titleEnd, let split = Self.splittingTitle(off: finished, at: titleEnd) {
+            // The title is a heading, as a verse 0 is; the verse is what follows it.
+            appendHeading(split.title, level: 2, beforeVerse: finished.number)
+            finished = split.verse
+        }
         chapters[bookNumber, default: [:]][chapterNumber, default: Chapter()].verses[finished.number] = ImportedVerse(
             number: finished.number,
-            text: text,
+            text: finished.text.text,
             annotations: Self.joiningAdjacentSpans(finished.annotations),
             footnotes: finished.footnotes,
             paragraph: finished.paragraph,
@@ -391,7 +405,7 @@ struct TranslationCollector {
     }
 
     mutating func markParagraph() {
-        if verse?.text.isEmpty == true {
+        if verse?.isAtStart == true {
             verse?.paragraph = true
         } else {
             breakLine()
@@ -401,7 +415,7 @@ struct TranslationCollector {
 
     mutating func markPoetryLine(indent: Int) {
         let indent = max(1, indent)
-        if verse?.text.isEmpty == true {
+        if verse?.isAtStart == true {
             verse?.poetryIndent = indent
         } else {
             breakLine()
@@ -420,6 +434,19 @@ struct TranslationCollector {
             breakLine()
             pendingStanzaBreak = true
         }
+    }
+
+    /// The open verse starts with a psalm's title, read as its text until
+    /// `endTitle`.
+    mutating func beginTitle() {
+        verse?.titleIsOpen = true
+    }
+
+    mutating func endTitle() {
+        guard var open = verse, open.titleIsOpen else { return }
+        open.titleIsOpen = false
+        open.titleEnd = open.text.length
+        verse = open
     }
 
     /// A heading goes before `beforeVerse` when the source says which verse;
@@ -557,6 +584,36 @@ struct TranslationCollector {
 
     private func reference(_ verse: Int) -> Int {
         (bookNumber ?? 0) * 1_000_000 + (chapterNumber ?? 0) * 1_000 + verse
+    }
+
+    /// A verse's title and the verse without it, where words follow the
+    /// title; nil where the title is all there is, as where a source numbers
+    /// the title as the verse.
+    private static func splittingTitle(off verse: OpenVerse, at end: Int) -> (title: String, verse: OpenVerse)? {
+        let characters = verse.text.characters
+        guard end > 0, end <= characters.count else { return nil }
+        var cut = end
+        while cut < characters.count, characters[cut] == " " { cut += 1 }
+        guard cut < characters.count else { return nil }
+        let title = collapsingWhitespace(String(characters[..<end]))
+        guard !title.isEmpty else { return nil }
+        var rest = VerseTextBuilder()
+        rest.append(String(characters[cut...]))
+        var split = verse
+        split.text = rest
+        split.titleEnd = nil
+        split.annotations = verse.annotations.compactMap { annotation in
+            guard annotation.end > cut else { return nil }
+            return ImportedAnnotation(
+                kind: annotation.kind, start: max(annotation.start - cut, 0), end: annotation.end - cut,
+                strongs: annotation.strongs, morphology: annotation.morphology, lemma: annotation.lemma
+            )
+        }
+        // A note on the title stays with the verse, at its start.
+        split.footnotes = verse.footnotes.map { note in
+            ImportedFootnote(id: note.id, kind: note.kind, content: note.content, offset: max(note.offset - cut, 0))
+        }
+        return (title, split)
     }
 
     private mutating func appendHeading(_ text: String, level: Int, beforeVerse: Int) {

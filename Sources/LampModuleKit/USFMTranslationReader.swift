@@ -77,6 +77,10 @@ struct USFMTranslationReader {
     /// After a `|` in a heading or note, the rest up to the next marker is the
     /// attributes of the marker it is in (`\ref Mark 1:3|MRK 1:3\ref*`).
     private var skippingAttributes = false
+    /// A note's part began, or its verse number ended, where the source has no
+    /// space (`transgressors.”\ft See`, `\fv 21\fv*But`): a word coming next
+    /// needs one.
+    private var noteWordNeedsSpace = false
 
     mutating func read(_ text: String) {
         var tokenizer = Tokenizer(text)
@@ -141,6 +145,13 @@ struct USFMTranslationReader {
                 collector.noteUnrecognized("\\c \(number)")
             }
         case .verse(let number):
+            // `\d \v 1 A Psalm of David.`: a psalm's title written in its first verse.
+            // Only a psalm's: Zech 12:1's "This is the burden…" is the verse's own.
+            var opensTitle = false
+            if case .heading(_, let text) = block, headingMarker == "d", text.allSatisfy(\.isWhitespace),
+               collector.bookNumber == Self.psalms {
+                opensTitle = true
+            }
             endBlock()
             note = nil
             closeContentSpans()
@@ -150,6 +161,9 @@ struct USFMTranslationReader {
             let isPart = number.drop(while: \.isNumber).first?.isLetter == true
             collector.startVerse(first, through: Int(afterDash.prefix(while: \.isNumber)), continuing: isPart)
             block = .text
+            if opensTitle {
+                collector.beginTitle()
+            }
         case .marker(let name, let closing):
             closing ? close(name) : open(name)
         case .milestoneEnd, .milestone, .text:
@@ -212,9 +226,22 @@ struct USFMTranslationReader {
             // Inside a note every marker is a part of the note; only the
             // origin reference (\fr 3:16) repeats what the reader shows.
             note = .footnote(text: text, awaitingCaller: false, skippingReference: name == "fr" || name == "xo")
+            noteWordNeedsSpace = name != "fr" && name != "xo"
             return
         }
         if note != nil { return }
+        if Self.headingLevels[name] != nil || Self.paragraphMarkers.contains(name) || Self.poetryMarkers[name] != nil
+            || Self.lineBreakMarkers.contains(name) || name == "b" || name == "nb" {
+            // A new block ends a psalm's title written in its first verse.
+            collector.endTitle()
+        }
+        if name == "d", collector.lastCharacter != nil {
+            // A `\d` after a verse's words is not a title but the verse's own
+            // last line, a subscription: Hab 3:19 "For the choirmaster."
+            endBlock()
+            collector.breakLine()
+            return
+        }
 
         if let level = Self.headingLevels[name] {
             if name == "qa", headingMarker == "qa", case .heading(let level, let text) = block {
@@ -296,6 +323,7 @@ struct USFMTranslationReader {
         }
         if case .footnote(let text, _, _) = note {
             note = .footnote(text: text, awaitingCaller: false, skippingReference: false)
+            noteWordNeedsSpace = name == "fv"
             return
         }
         if note != nil { return }
@@ -360,6 +388,11 @@ struct USFMTranslationReader {
                 skippingAttributes = true
             }
             if !skippingReference {
+                if noteWordNeedsSpace, let first = text.first, first.isLetter || first.isNumber || "“‘\"'(".contains(first),
+                   let last = noteText.last, !last.isWhitespace {
+                    noteText += " "
+                }
+                noteWordNeedsSpace = false
                 noteText += text
             }
             note = .footnote(text: noteText, awaitingCaller: false, skippingReference: skippingReference)
@@ -430,6 +463,8 @@ struct USFMTranslationReader {
     }
 
     // MARK: - Marker tables
+
+    private static let psalms = 19
 
     private static let headingLevels: [String: Int] = [
         "s": 1, "s1": 1, "s2": 2, "s3": 3, "s4": 4,

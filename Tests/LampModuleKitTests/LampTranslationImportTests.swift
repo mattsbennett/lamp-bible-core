@@ -76,6 +76,70 @@ struct LampTranslationImportTests {
         #expect(verse(imported, 19_004_001)?.poetryIndent == 1)
     }
 
+    @Test func usfmPsalmTitleWrittenInItsFirstVerseIsAHeading() throws {
+        let imported = try read(#"""
+            \id PSA
+            \c 3
+            \s1 Deliver Me, O LORD!
+            \d \v 1 \w A Psalm|strong="H4210"\w* of David.\f + \fr 3:1 \ft Or for David\f*
+            \q1 \w O LORD|strong="H3068"\w*, how my foes have increased!
+            \q2 How many rise up against me!
+            \c 4
+            \d \v 1 For the choirmaster.
+            \c 5
+            \q1
+            \v 1 Give ear to my words.
+            """#)
+
+        #expect(headings(imported, book: 19, chapter: 3) == [
+            ImportedHeading(beforeVerse: 1, level: 1, text: "Deliver Me, O LORD!"),
+            ImportedHeading(beforeVerse: 1, level: 2, text: "A Psalm of David."),
+        ])
+        let first = try #require(verse(imported, 19_003_001))
+        #expect(first.text == "O LORD, how my foes have increased! How many rise up against me!")
+        #expect(first.poetryIndent == 1)
+        #expect(spans(first, "strongs") == ["O LORD"])
+        // A note on the title stays with the verse, at its start.
+        #expect(first.footnotes.map(\.offset) == [0])
+        // A title that is the whole verse, as where a source numbers it so, is the verse.
+        #expect(verse(imported, 19_004_001)?.text == "For the choirmaster.")
+        #expect(headings(imported, book: 19, chapter: 4) == [])
+    }
+
+    @Test func usfmASuperscriptionOutsideThePsalmsAndASubscriptionStayVerseText() throws {
+        let imported = try read(#"""
+            \id ZEC
+            \c 12
+            \d \v 1 This is the burden of the word of the LORD concerning Israel.
+            \p Thus declares the LORD, who stretches out the heavens.
+            \id HAB
+            \c 3
+            \q1 \v 19 He makes me walk upon the heights!
+            \d For the choirmaster. With stringed instruments.
+            """#)
+
+        #expect(verse(imported, 38_012_001)?.text
+            == "This is the burden of the word of the LORD concerning Israel. Thus declares the LORD, who stretches out the heavens.")
+        #expect(headings(imported, book: 38, chapter: 12) == [])
+        #expect(verse(imported, 35_003_019)?.text
+            == "He makes me walk upon the heights! For the choirmaster. With stringed instruments.")
+        #expect(headings(imported, book: 35, chapter: 3) == [])
+    }
+
+    @Test func usfmNoteWordsKeepTheirSpaceAfterAVerseNumberOrPart() throws {
+        let imported = try read(#"""
+            \id MAT
+            \c 17
+            \p
+            \v 20 It will move.\f + \fr 17:20 \ft BYZ and TR include \fqa \fv 21\fv*But this kind does not go out\fqa*, they say.\f*
+            \v 22 He said, “He was numbered with the transgressors.”\f + \fr 17:22 \fq transgressors.”\ft See Isaiah 53:12\f*
+            """#)
+
+        #expect(verse(imported, 40_017_020)?.footnotes.map(\.content)
+            == ["BYZ and TR include 21 But this kind does not go out, they say."])
+        #expect(verse(imported, 40_017_022)?.footnotes.map(\.content) == ["transgressors.” See Isaiah 53:12"])
+    }
+
     @Test func usfmWordsOfChristRunAcrossVersesAndAroundNotes() throws {
         let imported = try read(#"""
             \id MRK
