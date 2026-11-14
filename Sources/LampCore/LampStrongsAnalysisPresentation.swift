@@ -1154,7 +1154,7 @@ public enum LampSeptuagintSection {
         let word = word.trimmingCharacters(in: .whitespacesAndNewlines)
         var doubts: [String] = []
         if hebrewOccurrences > 1 {
-            doubts.append("\(word.isEmpty ? "the Hebrew word" : word) stands "
+            doubts.append("\(word.isEmpty ? "the Hebrew word" : Self.isolated(word)) stands "
                 + "\(Self.times(hebrewOccurrences)) in this verse")
         }
         if greekOccurrences > 1 {
@@ -1164,16 +1164,31 @@ public enum LampSeptuagintSection {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         if !competing.isEmpty {
-            doubts.append("\(lemma) also renders \(Self.joined(competing)), "
+            doubts.append("\(lemma) also renders \(Self.joined(competing.map(Self.isolated))), "
                 + "which stands here too")
         }
         guard !doubts.isEmpty else { return nil }
-        return doubts.joined(separator: "; ") + "."
+        // Read as an English sentence, whatever it opens with. A sentence
+        // beginning with a Hebrew word takes that word's direction for the
+        // whole paragraph, which threw the full stop to the front and left
+        // the Hebrew stranded at the end — a design panel read the result as
+        // a rendering fault, in four separate reports.
+        return "\u{200E}" + doubts.joined(separator: "; ") + "."
     }
 
-    /// "a", "a and b", "a, b and c" — the Hebrew words read left to right
-    /// whichever way their own script runs, since each is marked for it
-    /// where it is drawn.
+    /// A word of another script set inside an English sentence, isolated so
+    /// neither the sentence's punctuation nor the word's own order moves.
+    ///
+    /// First-strong isolate rather than a left-to-right mark: the mark fixes
+    /// the direction around the word, the isolate keeps the word itself from
+    /// joining what is beside it.
+    private static func isolated(_ text: String) -> String {
+        "\u{2068}\(text)\u{2069}"
+    }
+
+    /// "a", "a and b", "a, b and c". Callers isolate each item that is not
+    /// English before handing it in, so the list reads left to right
+    /// whichever way an item's own script runs.
     private static func joined(_ items: [String]) -> String {
         guard let last = items.last else { return "" }
         guard items.count > 1 else { return last }
