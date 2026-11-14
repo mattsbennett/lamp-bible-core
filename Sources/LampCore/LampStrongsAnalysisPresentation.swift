@@ -1468,6 +1468,21 @@ public enum LampSeptuagintSection {
         public static let direct = "Septuagint in English"
         public static let indirect = "Your Bible"
 
+        /// Whether there are two readings to choose between.
+        ///
+        /// A reader whose own Bible *is* the Septuagint in English — someone
+        /// reading the ABP — has one text, and the control offered it twice
+        /// under one name. The indirect reading would ask that same module
+        /// for the Hebrew word, which it does not tag, so the rows would go
+        /// blank. One reading, and the note under it already says which.
+        public static func isOffered(
+            septuagintInEnglish: String?,
+            readersTranslationID: String?
+        ) -> Bool {
+            guard let septuagintInEnglish, !septuagintInEnglish.isEmpty else { return false }
+            return septuagintInEnglish != readersTranslationID
+        }
+
         /// The two labels, each named for its text.
         public static func titles(
             septuagintInEnglish: String?,
@@ -1484,6 +1499,18 @@ public enum LampSeptuagintSection {
                 indirect: named(readersBible, or: indirect)
             )
         }
+    }
+
+    /// The Septuagint's own Greek under each verse of the section's lists.
+    ///
+    /// Hidden to begin with. It is the evidence for the row — the Greek word
+    /// marked where the tagging says it stands — but it doubles the height of
+    /// every row, and a reader who does not read Greek never wants it. So it
+    /// is offered rather than given, and the control says what it would add.
+    public enum OriginalLanguage {
+        public static let title = "Greek"
+        public static let note =
+            "The Septuagint's own words under each verse, marked where this Greek word stands."
     }
 
     /// An English text split into its ordinary words and the word-order

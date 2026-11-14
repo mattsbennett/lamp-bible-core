@@ -167,6 +167,25 @@ import LampModuleKit
         ).isEmpty)
     }
 
+    /// Two readings are offered only where there are two texts.
+    @Test func theEnglishChoiceNeedsTwoTexts() {
+        #expect(LampSeptuagintSection.EnglishChoice.isOffered(
+            septuagintInEnglish: "ABPs", readersTranslationID: "BSBs"
+        ))
+        // The reader's own Bible is the Septuagint in English: one text, and
+        // asking it for the Hebrew word would empty the rows.
+        #expect(!LampSeptuagintSection.EnglishChoice.isOffered(
+            septuagintInEnglish: "ABPs", readersTranslationID: "ABPs"
+        ))
+        // None installed, so nothing to choose between.
+        #expect(!LampSeptuagintSection.EnglishChoice.isOffered(
+            septuagintInEnglish: nil, readersTranslationID: "BSBs"
+        ))
+        #expect(!LampSeptuagintSection.EnglishChoice.isOffered(
+            septuagintInEnglish: "", readersTranslationID: "BSBs"
+        ))
+    }
+
     /// Each English reading is named by the text it is.
     @Test func theEnglishChoiceIsNamedByItsModule() {
         let named = LampSeptuagintSection.EnglishChoice.titles(
