@@ -765,11 +765,38 @@ public enum LampSeptuagintSection {
         septuagintNumbering: LampVersification,
         readChapter: (_ book: Int, _ chapter: Int) async throws -> [Int: String]
     ) async throws -> [Int: String] {
+        try await verses(
+            for: references,
+            numbering: hebrewNumbering,
+            textNumbering: septuagintNumbering,
+            readChapter: readChapter
+        )
+    }
+
+    /// One text's verses for references given in another text's numbering,
+    /// read a chapter at a time.
+    ///
+    /// The same walk `greek(for:…)` is named for, which the Septuagint's own
+    /// verses need in the other direction: their English companion is read
+    /// for references the Greek text numbers. Each chapter is read once
+    /// however many references fall in it, a reference the conversion has no
+    /// counterpart for is left out, and a chapter that cannot be read costs
+    /// only its own verses.
+    ///
+    /// Cancelled, it throws rather than return what it has: a verse it never
+    /// reached would be absent too, and absence is read as the text not
+    /// having the verse, which for an unread verse is false.
+    public static func verses(
+        for references: [Int],
+        numbering: LampVersification,
+        textNumbering: LampVersification,
+        readChapter: (_ book: Int, _ chapter: Int) async throws -> [Int: String]
+    ) async throws -> [Int: String] {
         var chapters: [Int: [Int: String]] = [:]
-        var greek: [Int: String] = [:]
+        var read: [Int: String] = [:]
         for reference in references {
             try Task.checkCancellation()
-            guard let mapped = hebrewNumbering.convert(reference, to: septuagintNumbering)
+            guard let mapped = numbering.convert(reference, to: textNumbering)
             else { continue }
             let parts = LampBibleReferenceFormatter.components(of: mapped)
             let chapterKey = parts.book * 1_000 + parts.chapter
@@ -784,10 +811,90 @@ public enum LampSeptuagintSection {
                 }
             }
             if let text = chapters[chapterKey]?[parts.verse] {
-                greek[reference] = text
+                read[reference] = text
             }
         }
-        return greek
+        return read
+    }
+
+    /// The whole section's title, with the Greek word's own use in the
+    /// Septuagint above and the Hebrew words it translates below.
+    ///
+    /// `title` stays the heading of the lower half, which is what it has
+    /// always named, so nothing that draws it has to change.
+    public static let ownUseTitle = "In the Septuagint"
+
+    /// Why the Greek word's own Septuagint verses are worth a reader's time,
+    /// said for someone who does not read Greek and will not be reading them
+    /// in Greek.
+    public static let ownUseAbout =
+        "The Septuagint is the Greek Old Testament the New Testament’s first "
+        + "readers knew, so the same Greek word here shows what it was already "
+        + "used to say."
+
+    /// What the Greek word's own use in the Septuagint comes to, in one line.
+    ///
+    /// Verses rather than words, because a verse is what a reader goes and
+    /// reads, and because the two Testaments' counts are then in the same
+    /// unit as everything else the pane says. The New Testament's count is
+    /// given beside it only when that text is installed and analysed: a
+    /// missing half would otherwise read as a count of nothing.
+    ///
+    /// The counts stand side by side and are never added, nor divided into
+    /// one another. The Septuagint is the longer text by far, so a bare
+    /// multiple would flatter it, and "as often for its length" is a claim
+    /// about rates this line does not make — the spread below carries that.
+    public static func ownUseHeadline(
+        greek lemma: String?,
+        septuagint: LampStrongsAnalysis,
+        newTestament: LampStrongsAnalysis?
+    ) -> String {
+        let lemma = lemma.flatMap { $0.isEmpty ? nil : $0 } ?? "This word"
+        let greek = septuagint.references.count
+        func verses(_ count: Int) -> String {
+            "\(count) \(count == 1 ? "verse" : "verses")"
+        }
+        let opening = "\(lemma) stands in \(verses(greek)) of the Greek Old Testament"
+        guard let newTestament, !newTestament.references.isEmpty else { return opening + "." }
+        return opening + ", and in \(verses(newTestament.references.count)) "
+            + "of the New Testament."
+    }
+
+    /// The number a reader looks one of those verses up by: their own
+    /// translation's, where it has the verse, and the Septuagint's own where
+    /// it does not.
+    ///
+    /// The Septuagint numbers Psalm 51:5 as 50:7, and a reader sent to 50:7
+    /// finds another psalm in the Bible they own. Where the conversion has no
+    /// counterpart the Septuagint's own number is all there is — the verse
+    /// exists only there — and `isTheSeptuagintsOwn` says so, rather than
+    /// leaving the row to imply a verse the reader's Bible has.
+    public struct Numbering: Equatable, Sendable {
+        public var reference: Int
+        public var isTheSeptuagintsOwn: Bool
+
+        public init(reference: Int, isTheSeptuagintsOwn: Bool) {
+            self.reference = reference
+            self.isTheSeptuagintsOwn = isTheSeptuagintsOwn
+        }
+    }
+
+    /// Each Septuagint reference as the reader looks it up, keyed by the
+    /// reference the Greek text numbers it.
+    public static func readerNumbering(
+        of references: [Int],
+        septuagintNumbering: LampVersification,
+        readerNumbering: LampVersification
+    ) -> [Int: Numbering] {
+        var numbered: [Int: Numbering] = [:]
+        for reference in references {
+            if let mapped = septuagintNumbering.convert(reference, to: readerNumbering) {
+                numbered[reference] = Numbering(reference: mapped, isTheSeptuagintsOwn: false)
+            } else {
+                numbered[reference] = Numbering(reference: reference, isTheSeptuagintsOwn: true)
+            }
+        }
+        return numbered
     }
 
     /// A Hebrew word's heading, naming whose verses they are.
@@ -820,15 +927,63 @@ public enum LampSeptuagintSection {
     /// own verses through the Old Testament.
     public static let title = "Hebrew It Translates"
 
+    /// What the installed Septuagint can say about the Greek word itself, as
+    /// far as that has been looked up.
+    ///
+    /// Four cases rather than an optional name, on the rule the verses
+    /// themselves keep: "not looked up yet", "none installed" and "installed,
+    /// and prints no tags" are three different things to say, and an optional
+    /// name said all three in the same words. Unknown, the note says nothing
+    /// about tagging at all, rather than say one of the others and be wrong.
+    public enum Tagging: Equatable, Sendable {
+        /// Not looked up yet.
+        case unknown
+        /// No Septuagint installed. The verses say so themselves
+        /// (`withoutSeptuagint`), so the note does not say it twice. Not
+        /// spelt `none`, which would read as `Optional.none` wherever a
+        /// `Tagging?` is written.
+        case notInstalled
+        /// A Septuagint that prints no Strong's numbers, named as installed.
+        case untagged(String)
+        /// A Septuagint that tags its own words, named as installed.
+        case tagged(String)
+    }
+
     /// What the section is, said once at its top: the lexicon's link from the
     /// Greek word to these Hebrew words, and why the verses are the Hebrew
     /// word's rather than the Greek word's.
-    public static func note(greek lemma: String?) -> String {
+    ///
+    /// The verses are the Hebrew word's whichever way `septuagint` falls:
+    /// they come from the lexicon's link between the words, not from the
+    /// Greek text's tags. What changes is what can be said about the Greek
+    /// word itself. Untagged, nothing in that text can count it, which the
+    /// note says of that text by name rather than of the Septuagint at
+    /// large. Tagged, saying it would be false — the text is analysed like
+    /// any other translation, with this word's own verses and counts — so
+    /// the note sends the reader to it instead.
+    public static func note(greek lemma: String?, septuagint: Tagging = .unknown) -> String {
         let lemma = lemma.flatMap { $0.isEmpty ? nil : $0 } ?? "this word"
-        return "The Septuagint, the Greek Old Testament, uses \(lemma) mostly "
+        let whose = "The Septuagint, the Greek Old Testament, uses \(lemma) mostly "
             + "for these Hebrew words. The verses are each Hebrew word’s, not "
-            + "\(lemma)’s: the Septuagint installed isn’t tagged word by word, "
-            + "so its Greek, under each verse, may use another word."
+            + "\(lemma)’s"
+        func named(_ name: String, or fallback: String) -> String {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? fallback : trimmed
+        }
+        switch septuagint {
+        case .unknown, .notInstalled:
+            return whose + "."
+        case .untagged(let name):
+            return whose + ": \(named(name, or: "the Septuagint installed")) "
+                + "isn’t tagged word by word, so its Greek, under each verse, "
+                + "may use another word."
+        case .tagged(let name):
+            let may = whose + ", so the Greek under a verse may use another word."
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return may }
+            return may + " \(lemma)’s own verses in \(trimmed) are listed "
+                + "above, counted from that text’s own tags."
+        }
     }
 
     /// What a Hebrew word is most often rendered by in an English

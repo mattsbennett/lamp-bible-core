@@ -1174,12 +1174,99 @@ struct SeptuagintEnglishTests {
     }
 
     /// The note says whose verses these are: the Hebrew word's, not the
-    /// Greek word's, which no tag in the installed Septuagint can show.
+    /// Greek word's, whatever the installed Septuagint can show.
     @Test func theNoteSaysTheVersesAreTheHebrewWords() {
-        let note = LampSeptuagintSection.note(greek: "ἀγάπη")
+        let note = LampSeptuagintSection.note(greek: "ἀγάπη", septuagint: .untagged("Brenton Greek Septuagint"))
         #expect(note.contains("not ἀγάπη’s"))
-        #expect(note.contains("isn’t tagged word by word"))
-        #expect(LampSeptuagintSection.note(greek: nil).contains("not this word’s"))
+        #expect(note.contains("Brenton Greek Septuagint isn’t tagged word by word"))
+        #expect(LampSeptuagintSection.note(greek: nil, septuagint: .untagged("Brenton"))
+            .contains("not this word’s"))
+        // Unnamed, it still says there is nothing to count the Greek word by.
+        #expect(LampSeptuagintSection.note(greek: "λόγος", septuagint: .untagged(" "))
+            .contains("the Septuagint installed isn’t tagged word by word"))
+    }
+
+    /// Looked up and tagged, the note must not say the text cannot count the
+    /// Greek word: it can, and the note says where those verses are.
+    @Test func aTaggedSeptuagintIsNotSaidToBeUntagged() {
+        let note = LampSeptuagintSection.note(
+            greek: "λόγος", septuagint: .tagged("Brenton Greek Septuagint")
+        )
+        #expect(!note.contains("tagged word by word"))
+        #expect(note.contains("not λόγος’s"))
+        #expect(note.contains("λόγος’s own verses in Brenton Greek Septuagint are listed above"))
+        // The Greek under a verse is still another word's as often as not.
+        #expect(note.contains("may use another word"))
+        // Tagged but unnamed: the fact holds, the pointer cannot be given.
+        let unnamed = LampSeptuagintSection.note(greek: "λόγος", septuagint: .tagged(""))
+        #expect(unnamed.contains("may use another word"))
+        #expect(!unnamed.contains("are listed above"))
+    }
+
+    /// The headline counts verses in both Testaments, and never adds them.
+    @Test func theHeadlineCountsVersesInBothTestaments() {
+        func analysis(_ id: String, references: [Int]) -> LampStrongsAnalysis {
+            LampStrongsAnalysis(
+                key: "G3056", translationID: id, translationName: id,
+                translationAbbreviation: id, wordCount: 1_000, taggedVerseCount: 10,
+                occurrences: [], references: references, renderings: [], forms: [],
+                parsings: [], grammar: [], books: [], sections: [], companions: []
+            )
+        }
+        let septuagint = analysis("LXX", references: Array(1...1_238))
+        let newTestament = analysis("TAGNT", references: Array(1...330))
+        let line = LampSeptuagintSection.ownUseHeadline(
+            greek: "λόγος", septuagint: septuagint, newTestament: newTestament
+        )
+        #expect(line == "λόγος stands in 1238 verses of the Greek Old Testament, "
+            + "and in 330 verses of the New Testament.")
+        // No Greek New Testament analysed: the half that is known is said,
+        // and the other is not given as a count of nothing.
+        let alone = LampSeptuagintSection.ownUseHeadline(
+            greek: "λόγος", septuagint: septuagint, newTestament: nil
+        )
+        #expect(alone == "λόγος stands in 1238 verses of the Greek Old Testament.")
+        #expect(LampSeptuagintSection.ownUseHeadline(
+            greek: "λόγος", septuagint: septuagint, newTestament: analysis("TAGNT", references: [])
+        ) == alone, "an analysis with no verses is no count to give")
+        // One verse is a verse.
+        #expect(LampSeptuagintSection.ownUseHeadline(
+            greek: nil, septuagint: analysis("LXX", references: [1]), newTestament: nil
+        ) == "This word stands in 1 verse of the Greek Old Testament.")
+    }
+
+    /// A reader is sent to the verse their own Bible numbers, and told when
+    /// the verse is the Septuagint's own.
+    @Test func versesAreNumberedTheReadersWay() {
+        let septuagint = LampVersification.standard(.septuagint)
+        let reader = LampVersification.standard(.english)
+        let psalm = 19_050_007
+        let numbered = LampSeptuagintSection.readerNumbering(
+            of: [psalm], septuagintNumbering: septuagint, readerNumbering: reader
+        )
+        let found = try! #require(numbered[psalm])
+        #expect(!found.isTheSeptuagintsOwn)
+        #expect((found.reference / 1_000) % 1_000 == 51, "the reader’s Bible numbers this psalm 51")
+        // Its own numbering either way, when the two agree.
+        let same = LampSeptuagintSection.readerNumbering(
+            of: [1_001_001], septuagintNumbering: reader, readerNumbering: reader
+        )
+        #expect(same[1_001_001] == .init(reference: 1_001_001, isTheSeptuagintsOwn: false))
+    }
+
+    /// Before the lookup, and with nothing installed, the note says nothing
+    /// about tagging at all — the trap an optional name would have set.
+    @Test func theNoteClaimsNothingItHasNotLookedUp() {
+        for septuagint in [LampSeptuagintSection.Tagging.unknown, .notInstalled] {
+            let note = LampSeptuagintSection.note(greek: "λόγος", septuagint: septuagint)
+            #expect(note.contains("not λόγος’s"))
+            #expect(!note.contains("tagged"))
+            #expect(!note.contains("counted in"))
+            #expect(!note.contains("may use another word"))
+        }
+        // The default is the state that claims nothing.
+        #expect(LampSeptuagintSection.note(greek: "λόγος")
+            == LampSeptuagintSection.note(greek: "λόγος", septuagint: .unknown))
     }
 }
 
