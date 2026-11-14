@@ -1235,6 +1235,59 @@ struct SeptuagintEnglishTests {
         ) == "This word stands in 1 verse of the Greek Old Testament.")
     }
 
+    /// The contrast needs both sides, draws each bar against the larger, and
+    /// gives the rate the counts alone would mislead about.
+    @Test func theTestamentContrastIsTwoTextsNotTwoHalves() {
+        func analysis(
+            _ id: String, verses: Int, occurrences: Int, words: Int
+        ) -> LampStrongsAnalysis {
+            LampStrongsAnalysis(
+                key: "G3056", translationID: id, translationName: id,
+                translationAbbreviation: id, wordCount: words, taggedVerseCount: verses,
+                occurrences: (0..<occurrences).map {
+                    LampStrongsAnalysis.Occurrence(
+                        reference: $0 + 1, startOffset: 0, endOffset: 1, text: "λ",
+                        renderingID: "", form: nil, morphology: nil
+                    )
+                },
+                references: Array(1...max(verses, 1)).prefix(verses).map { $0 },
+                renderings: [], forms: [], parsings: [], grammar: [],
+                books: [], sections: [], companions: []
+            )
+        }
+        let newTestament = analysis("TAGNT", verses: 330, occurrences: 330, words: 138_000)
+        let septuagint = analysis("LXX", verses: 1_238, occurrences: 1_400, words: 465_550)
+        let contrast = try! #require(LampSeptuagintSection.contrast(
+            newTestament: newTestament, septuagint: septuagint
+        ))
+        #expect(contrast.septuagint.source == "LXX")
+        #expect(contrast.newTestament.label == "New Testament")
+        // Against the larger side, never against the sum: the longer bar is
+        // full, and nothing reads as a share of one whole.
+        #expect(contrast.share(of: contrast.septuagint) == 1)
+        #expect(abs(contrast.share(of: contrast.newTestament) - 330.0 / 1_238.0) < 0.000_1)
+        // The rate is the part the bars cannot carry.
+        let caption = LampSeptuagintSection.contrastCaption(contrast)
+        #expect(caption.contains("Counted apart, never added"))
+        #expect(caption.contains("2.4 in the New Testament"))
+        #expect(caption.contains("3.0 in the Septuagint"))
+        // One side alone is not a contrast; the headline covers that case.
+        #expect(LampSeptuagintSection.contrast(newTestament: nil, septuagint: septuagint) == nil)
+        #expect(LampSeptuagintSection.contrast(
+            newTestament: analysis("TAGNT", verses: 0, occurrences: 0, words: 138_000),
+            septuagint: septuagint
+        ) == nil)
+        // Nothing tagged on a side: no rate is given rather than a rate of
+        // none.
+        let untagged = try! #require(LampSeptuagintSection.contrast(
+            newTestament: analysis("TAGNT", verses: 330, occurrences: 330, words: 0),
+            septuagint: septuagint
+        ))
+        #expect(untagged.newTestament.perThousandWords == 0)
+        #expect(LampSeptuagintSection.contrastCaption(untagged)
+            == "Counted apart, never added: they are two texts, not two halves of one.")
+    }
+
     /// A reader is sent to the verse their own Bible numbers, and told when
     /// the verse is the Septuagint's own.
     @Test func versesAreNumberedTheReadersWay() {

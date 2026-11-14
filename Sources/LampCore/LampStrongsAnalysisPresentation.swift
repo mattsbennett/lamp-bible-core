@@ -860,6 +860,117 @@ public enum LampSeptuagintSection {
             + "of the New Testament."
     }
 
+    /// One Greek word's use in the two Testaments, side by side.
+    ///
+    /// For a reader with no Greek this is what a tagged Septuagint is for:
+    /// whether the word they are reading in the New Testament was already a
+    /// word of the Greek Old Testament, and how much of one.
+    ///
+    /// The counts stand apart and are never added — they are two texts, not
+    /// two halves of one — and each bar is drawn against the larger side
+    /// rather than against their sum, so neither can be read as a share of a
+    /// whole. The rate per thousand tagged words is given beside them,
+    /// because 1,238 against 330 is in good part the Septuagint being the
+    /// longer book, and a reader who is told only the counts will conclude
+    /// something the counts do not say.
+    public struct Contrast: Equatable, Sendable {
+        public struct Side: Equatable, Sendable {
+            /// What a reader knows the text as.
+            public var label: String
+            /// The module the count was read from, for saying where it came
+            /// from and whose tagging stands behind it.
+            public var source: String
+            /// Verses holding the word — what a reader goes and reads.
+            public var verseCount: Int
+            public var occurrenceCount: Int
+            /// The text's tagged words of the key's language: the rate's own
+            /// denominator, not a count of the text's words.
+            public var wordCount: Int
+
+            public init(
+                label: String, source: String, verseCount: Int,
+                occurrenceCount: Int, wordCount: Int
+            ) {
+                self.label = label
+                self.source = source
+                self.verseCount = verseCount
+                self.occurrenceCount = occurrenceCount
+                self.wordCount = wordCount
+            }
+
+            /// Occurrences per thousand tagged words. Zero where nothing is
+            /// tagged, which is no rate at all rather than a rate of none.
+            public var perThousandWords: Double {
+                wordCount > 0 ? Double(occurrenceCount) * 1_000 / Double(wordCount) : 0
+            }
+        }
+
+        public var newTestament: Side
+        public var septuagint: Side
+
+        public init(newTestament: Side, septuagint: Side) {
+            self.newTestament = newTestament
+            self.septuagint = septuagint
+        }
+
+        /// Each side's bar as a fraction of the larger side's verses, so the
+        /// longer bar is full and the shorter is read against it.
+        public func share(of side: Side) -> Double {
+            let largest = max(newTestament.verseCount, septuagint.verseCount)
+            guard largest > 0 else { return 0 }
+            return Double(side.verseCount) / Double(largest)
+        }
+    }
+
+    /// The two Testaments side by side, when both have something to show.
+    ///
+    /// Nil unless both sides hold the word: one side alone is not a contrast,
+    /// and `ownUseHeadline(greek:septuagint:newTestament:)` says what there is
+    /// to say in that case. The Septuagint is named as installed, since which
+    /// Greek Old Testament it is matters to every count under it.
+    public static func contrast(
+        newTestament: LampStrongsAnalysis?,
+        septuagint: LampStrongsAnalysis?
+    ) -> Contrast? {
+        guard let newTestament, let septuagint,
+              !newTestament.references.isEmpty, !septuagint.references.isEmpty
+        else { return nil }
+        return Contrast(
+            newTestament: Contrast.Side(
+                label: "New Testament",
+                source: newTestament.translationName,
+                verseCount: newTestament.references.count,
+                occurrenceCount: newTestament.occurrenceCount,
+                wordCount: newTestament.wordCount
+            ),
+            septuagint: Contrast.Side(
+                label: "Septuagint",
+                source: septuagint.translationName,
+                verseCount: septuagint.references.count,
+                occurrenceCount: septuagint.occurrenceCount,
+                wordCount: septuagint.wordCount
+            )
+        )
+    }
+
+    /// How to read the two bars, said once under them.
+    ///
+    /// The rate carries the part the bars cannot: a word can stand in four
+    /// times as many Septuagint verses and still be the rarer word there.
+    public static func contrastCaption(_ contrast: Contrast) -> String {
+        func rate(_ side: Contrast.Side) -> String {
+            String(format: "%.1f", side.perThousandWords)
+        }
+        let sides = [contrast.newTestament, contrast.septuagint]
+        guard sides.allSatisfy({ $0.wordCount > 0 }) else {
+            return "Counted apart, never added: they are two texts, not two "
+                + "halves of one."
+        }
+        return "Counted apart, never added. Per thousand tagged words: "
+            + "\(rate(contrast.newTestament)) in the New Testament, "
+            + "\(rate(contrast.septuagint)) in the Septuagint."
+    }
+
     /// The number a reader looks one of those verses up by: their own
     /// translation's, where it has the verse, and the Septuagint's own where
     /// it does not.
