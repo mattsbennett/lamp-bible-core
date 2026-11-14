@@ -214,15 +214,15 @@ Text fields can be plain strings or `annotatedText` objects with inline annotati
   "annotations": [
     {
       "type": "strongs",
-      "start": 14,
-      "end": 19,
+      "start": 16,
+      "end": 21,
       "text": "G3056",
       "data": { "strongs": "G3056" }
     },
     {
       "type": "scripture",
-      "start": 24,
-      "end": 32,
+      "start": 26,
+      "end": 34,
       "text": "John 1:1",
       "data": { "sv": 43001001 }
     }
@@ -783,8 +783,8 @@ Maps to markdown:
         "annotations": [
           {
             "type": "scripture",
-            "start": 20,
-            "end": 36,
+            "start": 17,
+            "end": 32,
             "text": "Ephesians 2:8-9",
             "data": { "sv": 49002008, "ev": 49002009 }
           }
@@ -1174,18 +1174,18 @@ Used in: translations, lexicons, commentaries, notes, devotionals
 
 ```json
 {
-  "text": "Plain text content for searching",
+  "text": "God's love for the world is the theme of John 3:16.",
   "annotations": [
     {
       "type": "scripture",
-      "start": 10,
-      "end": 18,
+      "start": 41,
+      "end": 50,
       "text": "John 3:16",
       "data": { "sv": 43003016 }
     }
   ],
   "footnote_refs": [
-    { "id": "1", "offset": 25 }
+    { "id": "1", "offset": 51 }
   ]
 }
 ```

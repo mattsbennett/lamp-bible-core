@@ -73,6 +73,30 @@ struct SchemaFilesTests {
         #expect((result.tableCounts["commentary_units"] ?? 0) > 0)
     }
 
+    /// The schema's fixed choices hold of each example, at the top and in
+    /// `meta`, so a value the schema stops allowing shows here even though
+    /// nothing in this package runs a JSON Schema validator.
+    @Test(arguments: examples)
+    func examplesKeepToTheCommentarySchemasChoices(_ name: String) throws {
+        let schema = try Self.object("commentary_schema.json")
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let meta = try #require(properties["meta"] as? [String: Any])
+        let metaProperties = try #require(meta["properties"] as? [String: Any])
+        let example = try Self.object(name)
+        let exampleMeta = try #require(example["meta"] as? [String: Any])
+
+        var checked = 0
+        for (values, declared) in [(example, properties), (exampleMeta, metaProperties)] {
+            for (key, value) in values {
+                let property = try #require(declared[key] as? [String: Any], "\(name): \(key) is not in the schema")
+                guard let choices = property["enum"] as? [Any] else { continue }
+                #expect(choices.contains { "\($0)" == "\(value)" }, "\(name): \(key) \(value) is not one of \(choices)")
+                checked += 1
+            }
+        }
+        #expect(checked > 0, "\(name) has no value the schema limits, so nothing was checked")
+    }
+
     /// A commentary missing a field its schema requires, at the top or in
     /// `meta`, is one the inspector refuses.
     @Test(arguments: examples)
@@ -81,7 +105,26 @@ struct SchemaFilesTests {
         let topRequired = try #require(schema["required"] as? [String])
         let meta = try #require((schema["properties"] as? [String: Any])?["meta"] as? [String: Any])
         let metaRequired = try #require(meta["required"] as? [String])
+        // `anyOf` alternatives: a volume needs a title or a name.
+        let metaAlternatives = try #require(meta["anyOf"] as? [[String: Any]])
+            .compactMap { $0["required"] as? [String] }
         let example = try Self.object(name)
+        let exampleMeta = try #require(example["meta"] as? [String: Any])
+
+        // An empty list would check nothing, and a field the example
+        // doesn't have can't be taken away from it.
+        #expect(!topRequired.isEmpty && !metaRequired.isEmpty && !metaAlternatives.isEmpty)
+        for key in topRequired { #expect(example[key] != nil, "\(name) has no \(key)") }
+        for key in metaRequired { #expect(exampleMeta[key] != nil, "\(name) has no meta.\(key)") }
+
+        var withoutAlternatives = example
+        var strippedMeta = exampleMeta
+        for key in metaAlternatives.joined() { strippedMeta.removeValue(forKey: key) }
+        withoutAlternatives["meta"] = strippedMeta
+        #expect(
+            !ModuleJSONInspector().inspect(root: withoutAlternatives, sourceFilename: name).canCompile,
+            "\(name) with none of meta's alternatives (\(metaAlternatives)) still compiles"
+        )
 
         for key in topRequired {
             var root = example
