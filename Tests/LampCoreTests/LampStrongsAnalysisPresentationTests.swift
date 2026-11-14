@@ -1128,12 +1128,14 @@ struct SeptuagintEnglishTests {
         )
         let line = try #require(found[hebrewReference])
         #expect(line.reference == englishReference)
-        #expect(line.snippet?.word == "iniquity")
+        #expect(line.text == verse, "the verse whole, not cut around the word")
+        #expect(line.marks.map(\.start) == [30])
+        #expect(marked(verse, line.marks) == ["iniquity"])
     }
 
     /// A verse the English does not tag with this word is never marked at a
     /// likely word.
-    @Test func aVerseTheTranslationDoesNotTagIsLeftOut() {
+    @Test func aVerseTheTranslationDoesNotTagIsLeftOut() throws {
         let numbering = LampVersification.standard(.english)
         let found = LampSeptuagintSection.english(
             for: [1_029_020, 1_029_021],
@@ -1144,9 +1146,11 @@ struct SeptuagintEnglishTests {
                 verseTexts: [1_029_020: "his love for her", 1_029_021: "love unmarked"]
             )
         )
-        #expect(found[1_029_020]?.snippet?.word == "love")
+        let tagged = try #require(found[1_029_020])
+        #expect(marked("his love for her", tagged.marks) == ["love"])
         #expect(found[1_029_021]?.reference == 1_029_021)
-        #expect(found[1_029_021]?.snippet == nil, "not marked at a likely word")
+        #expect(found[1_029_021]?.text == nil, "not marked at a likely word")
+        #expect(found[1_029_021]?.marks.isEmpty == true)
     }
 
     /// A word with no analysis — no Strong's number to ask by — still has its
@@ -1164,7 +1168,8 @@ struct SeptuagintEnglishTests {
         let psalm = try #require(found[19_051_007])
         #expect(psalm.reference == hebrew.opens(19_051_007, in: english))
         #expect(psalm.reference != 19_051_007)
-        #expect(psalm.snippet == nil)
+        #expect(psalm.text == nil)
+        #expect(psalm.marks.isEmpty)
         #expect(found[1_029_020]?.reference == 1_029_020)
     }
 
@@ -1184,7 +1189,47 @@ struct SeptuagintEnglishTests {
         let line = try #require(found[hebrewReference])
         #expect(line.reference == hebrew.opens(hebrewReference, in: english))
         #expect(line.reference != hebrewReference)
-        #expect(line.snippet == nil)
+        #expect(line.text == nil)
+    }
+
+    /// The English marks every place it renders the word, because the Greek
+    /// line beside it does. Marking one of two said the two texts disagreed
+    /// where they agreed.
+    @Test func everyRenderingInAVerseIsMarked() throws {
+        let numbering = LampVersification.standard(.english)
+        // ABP Genesis 1:3, the verse the owner found.
+        let verse = "And God said, Let there be light! And there was light."
+        let first = try #require(verse.range(of: "light"))
+        let second = try #require(verse.range(of: "light", options: .backwards))
+        func offset(_ index: String.Index) -> Int {
+            verse.unicodeScalars.distance(from: verse.unicodeScalars.startIndex, to: index)
+        }
+        let found = LampSeptuagintSection.english(
+            for: [1_001_003],
+            hebrewNumbering: numbering,
+            englishNumbering: numbering,
+            analysis: Self.analysis(
+                // Given out of order, as an analysis may list them.
+                occurrences: [
+                    Self.occurrence(1_001_003, offset(second.lowerBound), offset(second.upperBound)),
+                    Self.occurrence(1_001_003, offset(first.lowerBound), offset(first.upperBound)),
+                ],
+                verseTexts: [1_001_003: verse]
+            )
+        )
+        let line = try #require(found[1_001_003])
+        #expect(line.text == verse)
+        #expect(marked(verse, line.marks) == ["light", "light"])
+        #expect(line.marks.map(\.start) == line.marks.map(\.start).sorted(), "in reading order")
+    }
+
+    /// The text each mark names, for asserting on what a row would draw.
+    private func marked(_ text: String, _ marks: [LampSeptuagintSection.Span]) -> [String] {
+        let scalars = Array(text.unicodeScalars)
+        return marks.compactMap { span in
+            guard span.start >= 0, span.end > span.start, span.end <= scalars.count else { return nil }
+            return String(String.UnicodeScalarView(scalars[span.start..<span.end]))
+        }
     }
 
     @Test func aHebrewWordIsNamedForSomeoneWithNoHebrew() {

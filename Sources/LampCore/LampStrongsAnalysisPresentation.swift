@@ -1379,13 +1379,24 @@ public enum LampSeptuagintSection {
         /// reader of it looks the verse up by — kept whether or not the verse
         /// is marked, so one list never mixes two numberings.
         public let reference: Int
-        /// Nil where the translation has the verse but does not tag the word
-        /// in it: shown unmarked would be a guess at which English it is.
-        public let snippet: LampStrongsContext.Snippet?
+        /// The verse as that translation prints it, whole. Nil where the
+        /// translation has the verse but does not tag the word in it: shown
+        /// unmarked it would be a guess at which English is the word's.
+        public let text: String?
+        /// Every place the translation tags the word, in code points, in the
+        /// order they stand. Empty exactly when `text` is nil.
+        ///
+        /// Every place, not the first: the Greek line beside this one marks
+        /// each occurrence, and a row that marked one of two in the English
+        /// said the two texts disagreed when they agreed. ABP Genesis 1:3,
+        /// "Let there be light! And there was light.", is the case the owner
+        /// found — one "light" marked against φῶς marked twice.
+        public let marks: [Span]
 
-        public init(reference: Int, snippet: LampStrongsContext.Snippet?) {
+        public init(reference: Int, text: String?, marks: [Span]) {
             self.reference = reference
-            self.snippet = snippet
+            self.text = text
+            self.marks = marks
         }
     }
 
@@ -1398,12 +1409,17 @@ public enum LampSeptuagintSection {
     /// analyse, or one the translation tags nowhere — every verse still has
     /// its English number, and none is marked.
     ///
-    /// The mark is the translation's own tag, at the offsets it records,
+    /// The marks are the translation's own tags, at the offsets it records,
     /// and nothing is guessed: a verse the translation does not tag with
-    /// this word has its English number and no snippet. Only a verse its
+    /// this word has its English number and no text. Only a verse its
     /// numbering has no counterpart for is left out, which is a different
     /// fact — the translation has no such verse, not that it doesn't use the
     /// word there.
+    ///
+    /// The verse comes back whole rather than cut around one occurrence. A
+    /// word rendered twice is marked twice, as it is in the Greek line the
+    /// row shows beside this one, and the two lines are then saying the same
+    /// thing about the same verse.
     /// Where a verse row's English comes from, and which word is marked in it.
     ///
     /// Two quite different readings. The reader's own Bible translates the
@@ -1576,28 +1592,33 @@ public enum LampSeptuagintSection {
         for references: [Int],
         hebrewNumbering: LampVersification,
         englishNumbering: LampVersification,
-        analysis: LampStrongsAnalysis?,
-        window: Int = 90
+        analysis: LampStrongsAnalysis?
     ) -> [Int: English] {
-        var first: [Int: LampStrongsAnalysis.Occurrence] = [:]
-        for occurrence in analysis?.occurrences ?? [] where first[occurrence.reference] == nil {
-            first[occurrence.reference] = occurrence
+        var tagged: [Int: [Span]] = [:]
+        for occurrence in analysis?.occurrences ?? [] {
+            tagged[occurrence.reference, default: []].append(
+                Span(start: occurrence.startOffset, end: occurrence.endOffset)
+            )
         }
         var english: [Int: English] = [:]
         for reference in references {
             // One verse to show in the row, as opening one would give.
             guard let mapped = hebrewNumbering.opens(reference, in: englishNumbering)
             else { continue }
-            var snippet: LampStrongsContext.Snippet?
-            if let occurrence = first[mapped], let text = analysis?.verseTexts[mapped] {
-                snippet = LampStrongsContext.snippet(
-                    of: text,
-                    from: occurrence.startOffset,
-                    to: occurrence.endOffset,
-                    window: window
-                )
+            // A verse the translation does not tag keeps its number and
+            // shows no text: which English is the word's would be a guess,
+            // and the row says so by having nothing to show.
+            guard let marks = tagged[mapped], !marks.isEmpty,
+                  let text = analysis?.verseTexts[mapped]
+            else {
+                english[reference] = English(reference: mapped, text: nil, marks: [])
+                continue
             }
-            english[reference] = English(reference: mapped, snippet: snippet)
+            english[reference] = English(
+                reference: mapped,
+                text: text,
+                marks: marks.sorted { $0.start < $1.start }
+            )
         }
         return english
     }
