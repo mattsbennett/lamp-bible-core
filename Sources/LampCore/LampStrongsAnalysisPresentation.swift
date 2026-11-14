@@ -1482,7 +1482,17 @@ public enum LampSeptuagintSection {
     /// space between. A real number is never written that way: over 4,000
     /// verses of ABP there are 11,263 markers and 7 free-standing numbers,
     /// and the rule separates them exactly.
-    public static func interlinearRuns(in text: String) -> [(text: String, isMarker: Bool)] {
+    ///
+    /// `next` is what follows `text` where a caller has the line in pieces —
+    /// a verse snippet is cut into before/word/after, and the cut falls
+    /// exactly between a marker and the word it belongs to, since the tag
+    /// marks the word and not the number. Without it the last run of digits
+    /// has nothing after it to be glued to and is drawn as a number the verse
+    /// means, which is how "3of love" comes out as a stray 3. A caller
+    /// holding the whole line passes nothing.
+    public static func interlinearRuns(
+        in text: String, followedBy next: String? = nil
+    ) -> [(text: String, isMarker: Bool)] {
         var runs: [(text: String, isMarker: Bool)] = []
         var plain = ""
         var index = text.startIndex
@@ -1499,8 +1509,12 @@ public enum LampSeptuagintSection {
                 cursor = text.index(after: cursor)
             }
             // Glued to a word, so a marker; otherwise it is a number the
-            // verse means.
-            if cursor < text.endIndex, text[cursor].isLetter {
+            // verse means. At the end of the text the word may be in the
+            // next piece of a line the caller holds in pieces.
+            let glued = cursor < text.endIndex
+                ? text[cursor].isLetter
+                : (next?.first?.isLetter ?? false)
+            if glued {
                 if !plain.isEmpty { runs.append((plain, false)); plain = "" }
                 runs.append((digits, true))
             } else {

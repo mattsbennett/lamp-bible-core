@@ -202,6 +202,36 @@ import LampModuleKit
         #expect(LampSeptuagintSection.interlinearRuns(in: "").isEmpty)
     }
 
+    /// A marker belongs to the word after it, and a snippet is cut between
+    /// the two — the tag marks the word, never the number before it. So the
+    /// piece before the marked word ends in digits with nothing in that
+    /// piece to be glued to.
+    @Test func aMarkerAtTheCutStillBelongsToTheWordAfterIt() {
+        // Song of Songs 2:5 in the ABP, cut where the tagged word begins.
+        let before = "Pile me with apples, for [2being pierced 3"
+        let word = "of love"
+
+        // Read alone, the trailing 3 is a number the verse means —
+        // correctly, for a line that truly ends there. The 2 inside the
+        // piece is glued to "being" and is a marker either way.
+        #expect(LampSeptuagintSection
+            .interlinearRuns(in: before).filter(\.isMarker).map(\.text) == ["2"])
+
+        // Told what follows, it is the marker it is.
+        let cut = LampSeptuagintSection.interlinearRuns(in: before, followedBy: word)
+        #expect(cut.filter(\.isMarker).map(\.text) == ["2", "3"])
+        #expect(cut.map(\.text).joined() == before, "and nothing of the text is lost")
+
+        // Only a letter glues it: digits before a space, or before nothing,
+        // are still a number.
+        #expect(LampSeptuagintSection
+            .interlinearRuns(in: before, followedBy: " of love")
+            .filter(\.isMarker).map(\.text) == ["2"])
+        #expect(LampSeptuagintSection
+            .interlinearRuns(in: before, followedBy: "")
+            .filter(\.isMarker).map(\.text) == ["2"])
+    }
+
     /// The Septuagint in English is found by what it tags, and asked of each
     /// key on its own.
     @Test func theSeptuagintInEnglishIsFoundByWhatItTags() async {
