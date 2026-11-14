@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "commentary-series-schema-v1",
+  "title": "Commentary Series Schema",
+  "description": "Schema for commentary series metadata, shared abbreviations, and bibliography. Provides top-level information that applies across all volumes in a series.",
+
+  "definitions": {
+    "annotatedText": {
+      "type": "object",
+      "description": "Text content with annotations",
+      "properties": {
+        "text": { "type": "string", "description": "Plain text content" },
+        "annotations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["footnote", "scripture", "strongs", "greek", "hebrew", "crossref", "abbrev", "page", "lexicon-ref"]
+              },
+              "start": { "type": "integer" },
+              "end": { "type": "integer" },
+              "text": { "type": "string" },
+              "data": { "type": "object" }
+            },
+            "required": ["type", "start", "end"]
+          }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "abbreviation": {
+      "type": "object",
+      "properties": {
+        "abbrev": { "type": "string", "description": "The abbreviation (e.g., 'BDAG', 'LXX')" },
+        "expansion": { "type": "string", "description": "Full form (e.g., 'Bauer, Danker, Arndt, and Gingrich')" },
+        "category": {
+          "type": "string",
+          "enum": ["publication", "bible", "apocrypha", "pseudepigrapha", "patristic", "classical", "qumran", "rabbinic", "journal", "general"],
+          "description": "Category of abbreviation"
+        }
+      },
+      "required": ["abbrev", "expansion"]
+    },
+
+    "bibliographyEntry": {
+      "type": "object",
+      "description": "A bibliography entry or section",
+      "properties": {
+        "subsection": { "type": "string", "description": "Category like 'Commentaries', 'Monographs', 'Articles', 'Ancient Sources'" },
+        "content": { "$ref": "#/definitions/annotatedText" }
+      },
+      "required": ["subsection", "content"]
+    },
+
+    "volumeInfo": {
+      "type": "object",
+      "description": "Information about a volume in the series",
+      "properties": {
+        "id": { "type": "string", "description": "Volume ID (e.g., 'NICNT_Matt')" },
+        "book": { "type": "string", "description": "Bible book abbreviation (e.g., 'Matt', 'Gen')" },
+        "bookNumber": { "type": "integer", "description": "Canonical book number (1-66)" },
+        "title": { "type": "string", "description": "Volume title" },
+        "author": { "type": "string" },
+        "year": { "type": "integer", "description": "Publication year" },
+        "isbn": { "type": "string" },
+        "edition": { "type": "string", "description": "Edition info (e.g., 'Revised', '2nd Edition')" }
+      },
+      "required": ["book", "bookNumber"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Series-level metadata",
+      "properties": {
+        "schemaVersion": { "type": "string", "enum": ["1.0"], "description": "Schema version" },
+        "id": { "type": "string", "description": "Unique series identifier (e.g., 'NICNT', 'NICOT', 'WBC')" },
+        "type": { "type": "string", "enum": ["commentary-series"], "default": "commentary-series" },
+        "name": { "type": "string", "description": "Full series name (e.g., 'New International Commentary on the New Testament')" },
+        "abbreviation": { "type": "string", "description": "Series abbreviation (e.g., 'NICNT')" },
+        "description": { "type": "string", "description": "Series description" },
+        "editor": { "type": "string", "description": "Series editor(s)" },
+        "publisher": { "type": "string", "description": "Publisher name" },
+        "testament": {
+          "type": "string",
+          "enum": ["OT", "NT", "both"],
+          "description": "Testament coverage"
+        },
+        "language": { "type": "string", "description": "Primary language (e.g., 'english')" },
+        "website": { "type": "string", "description": "Series or publisher website" }
+      },
+      "required": ["schemaVersion", "id", "type", "name", "abbreviation"]
+    },
+
+    "editorPreface": {
+      "$ref": "#/definitions/annotatedText",
+      "description": "General editor's preface for the series"
+    },
+
+    "introduction": {
+      "$ref": "#/definitions/annotatedText",
+      "description": "Series introduction or 'About this Series' content"
+    },
+
+    "abbreviations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/abbreviation" },
+      "description": "Shared abbreviations used across the series. Individual volumes may have additional abbreviations."
+    },
+
+    "bibliography": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/bibliographyEntry" },
+      "description": "Shared bibliography or recommended resources for the series"
+    },
+
+    "volumes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/volumeInfo" },
+      "description": "List of volumes in the series (informational, for discovery and linking)"
+    }
+  },
+  "required": ["meta"]
+}

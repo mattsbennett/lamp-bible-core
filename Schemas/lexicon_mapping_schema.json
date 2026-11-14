@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Lexicon Mapping Schema",
+  "description": "Schema for mapping entries between lexicons (e.g., Strong's numbers to BDB entries)",
+  "type": "object",
+  "required": ["meta", "mappings"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schemaVersion", "id", "type", "source", "target"],
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "description": "Version of the schema format",
+          "const": "1.0"
+        },
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this mapping (e.g., 'strongs_hebrew_to_bdb')"
+        },
+        "type": {
+          "type": "string",
+          "const": "lexicon-mapping"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name for this mapping"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the mapping purpose"
+        },
+        "source": {
+          "type": "string",
+          "description": "Source lexicon keyType (e.g., 'strongs-hebrew')"
+        },
+        "target": {
+          "type": "string",
+          "description": "Target lexicon keyType (e.g., 'bdb')"
+        }
+      }
+    },
+    "mappings": {
+      "type": "object",
+      "description": "Map of source keys to arrays of target keys",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1
+      }
+    }
+  }
+}

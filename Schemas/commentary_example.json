@@ -1,0 +1,159 @@
+{
+  "meta": {
+    "schemaVersion": "2.2",
+    "id": "EXC_Matt",
+    "type": "commentary",
+    "seriesAbbrev": "EXC",
+    "seriesFull": "Example Commentary",
+    "title": "Matthew",
+    "author": "An Example Author"
+  },
+  "book": "Matt",
+  "bookNumber": 40,
+  "abbreviations": [
+    {
+      "abbrev": "LXX",
+      "expansion": "Septuagint",
+      "category": "bible"
+    }
+  ],
+  "chapters": [
+    {
+      "chapter": 1,
+      "sections": [
+        {
+          "id": "I",
+          "title": "The Coming of the Messiah",
+          "level": 1,
+          "sv": 40001001,
+          "ev": 40004011,
+          "subsections": [
+            {
+              "id": "I.A",
+              "title": "Where Jesus Comes From",
+              "level": 2,
+              "sv": 40001001,
+              "ev": 40001017,
+              "pericopae": [
+                {
+                  "id": "1:1-17",
+                  "title": "The Genealogy of Jesus",
+                  "sv": 40001001,
+                  "ev": 40001017,
+                  "translation": {
+                    "text": "1 This is the record of the genealogy of Jesus Christ, the son of David, the son of Abraham.",
+                    "annotations": [
+                      {
+                        "type": "footnote",
+                        "start": 28,
+                        "end": 37,
+                        "text": "genealogy",
+                        "id": "1"
+                      }
+                    ]
+                  },
+                  "verses": [
+                    {
+                      "sv": 40001001,
+                      "commentary": {
+                        "text": "Matthew opens with a title that echoes the “generations” of Genesis (γένεσις), presenting Jesus as the start of a new chapter in Israel's story.",
+                        "annotations": [
+                          {
+                            "type": "greek",
+                            "start": 69,
+                            "end": 76,
+                            "text": "γένεσις",
+                            "data": {
+                              "transliteration": "genesis",
+                              "strongs": "G1078"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "sv": 40001002,
+                      "ev": 40001006,
+                      "suffix": "a",
+                      "commentary": {
+                        "text": "The first stretch of the list runs from Abraham to David, following the line given in 1 Chr 2:1-15 and Ruth 4:18-22.",
+                        "annotations": [
+                          {
+                            "type": "scripture",
+                            "start": 86,
+                            "end": 98,
+                            "text": "1 Chr 2:1-15",
+                            "data": {
+                              "sv": 13002001,
+                              "ev": 13002015
+                            }
+                          },
+                          {
+                            "type": "scripture",
+                            "start": 103,
+                            "end": 115,
+                            "text": "Ruth 4:18-22",
+                            "data": {
+                              "sv": 8004018,
+                              "ev": 8004022
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "footnotes": [
+                    {
+                      "id": "1",
+                      "content": {
+                        "text": "The Greek phrase βίβλος γενέσεως also appears in the Septuagint (LXX) at Gen 2:4 and Gen 5:1.",
+                        "annotations": [
+                          {
+                            "type": "greek",
+                            "start": 17,
+                            "end": 32,
+                            "text": "βίβλος γενέσεως",
+                            "data": {
+                              "transliteration": "biblos geneseōs"
+                            }
+                          },
+                          {
+                            "type": "abbrev",
+                            "start": 65,
+                            "end": 68,
+                            "text": "LXX",
+                            "data": {
+                              "expansion": "Septuagint"
+                            }
+                          },
+                          {
+                            "type": "scripture",
+                            "start": 73,
+                            "end": 80,
+                            "text": "Gen 2:4",
+                            "data": {
+                              "sv": 1002004
+                            }
+                          },
+                          {
+                            "type": "scripture",
+                            "start": 85,
+                            "end": 92,
+                            "text": "Gen 5:1",
+                            "data": {
+                              "sv": 1005001
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

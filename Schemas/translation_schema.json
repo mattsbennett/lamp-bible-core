@@ -1,0 +1,277 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "translation-schema-v1",
+  "title": "Bible Translation Schema",
+  "description": "Schema for Bible translations. Uses annotation offsets for clean text with rich markup. One file per translation.",
+
+  "definitions": {
+    "annotation": {
+      "type": "object",
+      "description": "Inline annotation within verse text",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "strongs",
+            "footnote",
+            "red-letter",
+            "added",
+            "divine-name",
+            "selah",
+            "variant"
+          ],
+          "description": "strongs: Strong's number link; footnote: translation note; red-letter: words of Christ; added: words added for clarity (italicized in KJV-style); divine-name: YHWH/LORD; selah: Psalm marker; variant: manuscript variant"
+        },
+        "start": { "type": "integer", "description": "Character offset start position in clean text" },
+        "end": { "type": "integer", "description": "Character offset end position in clean text" },
+        "text": { "type": "string", "description": "The annotated text itself" },
+        "data": {
+          "type": "object",
+          "description": "Additional data depending on annotation type",
+          "properties": {
+            "strongs": { "type": "string", "description": "Strong's number (e.g., G1080, H1234)" },
+            "morphology": { "type": "string", "description": "Morphology code (e.g., V-PAI-3S)" },
+            "lemma": { "type": "string", "description": "Original language lemma" }
+          }
+        }
+      },
+      "required": ["type", "start", "end"]
+    },
+
+    "annotatedText": {
+      "type": "object",
+      "description": "Text content with annotations. Clean text for full-text search with annotations for rich features.",
+      "properties": {
+        "text": { "type": "string", "description": "Plain text content (clean, searchable)" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotation" }
+        },
+        "footnote_refs": {
+          "type": "array",
+          "description": "References to footnotes with positions in the clean text",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "Footnote ID (matches footnotes[].id)" },
+              "offset": { "type": "integer", "description": "Character offset in clean text where footnote marker belongs" }
+            },
+            "required": ["id", "offset"]
+          }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "footnote": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Footnote identifier" },
+        "type": {
+          "type": "string",
+          "enum": ["translation", "manuscript", "alternate", "explanation"],
+          "description": "translation: translation choice note; manuscript: textual variant; alternate: alternate reading; explanation: explanatory note"
+        },
+        "content": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ]
+        }
+      },
+      "required": ["id", "content"]
+    },
+
+    "verseRef": {
+      "type": "integer",
+      "description": "Numeric verse reference in BBCCCVVV format (book 2 digits, chapter 3 digits, verse 3 digits). E.g., 40001001 = Matt 1:1"
+    },
+
+    "verse": {
+      "type": "object",
+      "description": "A single verse",
+      "properties": {
+        "v": { "type": "integer", "description": "Verse number within the chapter" },
+        "ref": { "$ref": "#/definitions/verseRef", "description": "Full verse reference in BBCCCVVV format" },
+        "content": { "$ref": "#/definitions/annotatedText", "description": "Verse text with annotations" },
+        "footnotes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/footnote" }
+        },
+        "paragraph": { "type": "boolean", "description": "True if this verse starts a new paragraph" },
+        "poetry": {
+          "type": "object",
+          "description": "Poetry formatting (for Psalms, prophets, etc.)",
+          "properties": {
+            "indent": { "type": "integer", "description": "Indent level (1, 2, etc.)" },
+            "stanzaBreak": { "type": "boolean", "description": "True if a stanza break precedes this verse" }
+          }
+        }
+      },
+      "required": ["v", "ref", "content"]
+    },
+
+    "sectionHeading": {
+      "type": "object",
+      "description": "Section heading/title inserted by translators",
+      "properties": {
+        "text": { "type": "string", "description": "Heading text" },
+        "beforeVerse": { "type": "integer", "description": "Verse number this heading appears before" },
+        "level": { "type": "integer", "description": "Heading level (1=major, 2=minor)", "default": 1 }
+      },
+      "required": ["text", "beforeVerse"]
+    },
+
+    "chapter": {
+      "type": "object",
+      "description": "A single chapter",
+      "properties": {
+        "chapter": { "type": "integer" },
+        "headings": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/sectionHeading" },
+          "description": "Section headings within this chapter"
+        },
+        "verses": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/verse" }
+        }
+      },
+      "required": ["chapter", "verses"]
+    },
+
+    "book": {
+      "type": "object",
+      "description": "A single Bible book",
+      "properties": {
+        "id": { "type": "string", "description": "Book abbreviation (e.g., Gen, Matt)" },
+        "name": { "type": "string", "description": "Full book name (e.g., Genesis, Matthew)" },
+        "number": {
+          "type": "integer",
+          "description": "Canonical book number (1-66, Genesis=1, Revelation=66)",
+          "minimum": 1,
+          "maximum": 66
+        },
+        "testament": {
+          "type": "string",
+          "enum": ["OT", "NT"],
+          "description": "Old Testament or New Testament"
+        },
+        "chapters": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/chapter" }
+        }
+      },
+      "required": ["id", "name", "number", "testament", "chapters"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Translation metadata",
+      "properties": {
+        "schemaVersion": { "type": "string", "description": "Schema version (1.0)" },
+        "id": { "type": "string", "description": "Unique translation identifier (e.g., KJV, ESV, NIV)" },
+        "type": { "type": "string", "const": "translation" },
+        "name": { "type": "string", "description": "Full translation name (e.g., 'King James Version')" },
+        "abbreviation": { "type": "string", "description": "Short abbreviation (e.g., 'KJV')" },
+        "description": { "type": "string", "description": "Brief description of the translation" },
+
+        "language": {
+          "type": "string",
+          "description": "ISO 639-1 language code (e.g., 'en', 'es', 'he')"
+        },
+        "languageName": {
+          "type": "string",
+          "description": "Human-readable language name (e.g., 'English')"
+        },
+        "textDirection": {
+          "type": "string",
+          "enum": ["ltr", "rtl"],
+          "default": "ltr",
+          "description": "Text direction: left-to-right or right-to-left"
+        },
+
+        "translationPhilosophy": {
+          "type": "string",
+          "enum": ["formal", "dynamic", "paraphrase", "literal", "optimal"],
+          "description": "formal: word-for-word; dynamic: thought-for-thought; paraphrase: free rendering; literal: very literal; optimal: balance of formal and dynamic"
+        },
+
+        "year": { "type": "integer", "description": "Year of publication/revision" },
+        "publisher": { "type": "string" },
+        "copyright": { "type": "string", "description": "Copyright notice" },
+        "copyrightYear": { "type": "integer" },
+        "license": { "type": "string", "description": "License type (e.g., 'Public Domain', 'CC BY-SA 4.0')" },
+
+        "sourceTexts": {
+          "type": "object",
+          "description": "Source texts used for translation",
+          "properties": {
+            "ot": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "OT source texts (e.g., ['Masoretic Text', 'Dead Sea Scrolls'])"
+            },
+            "nt": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "NT source texts (e.g., ['Nestle-Aland 28', 'Textus Receptus'])"
+            },
+            "annotations": {
+              "type": "array",
+              "description": "Where annotation data was matched onto the text when the module was built, rather than printed by its source, for apps to show beside it",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "part": { "type": "string", "enum": ["strongs", "forms"], "description": "strongs: the Strong's numbers; forms: the original-language spellings in lemma" },
+                  "source": { "type": "string", "description": "Where the data came from, named as it would be cited" },
+                  "method": { "type": "string", "description": "How it was matched, as one plain clause the app joins to the source: lower-case start, no closing full stop" }
+                },
+                "required": ["part", "source", "method"]
+              }
+            }
+          }
+        },
+
+        "features": {
+          "type": "object",
+          "description": "Features available in this translation",
+          "properties": {
+            "strongs": { "type": "boolean", "description": "Has Strong's number annotations" },
+            "morphology": { "type": "boolean", "description": "Has morphology codes" },
+            "redLetter": { "type": "boolean", "description": "Has words of Christ marked" },
+            "footnotes": { "type": "boolean", "description": "Has translator footnotes" },
+            "sectionHeadings": { "type": "boolean", "description": "Has section headings" },
+            "poetry": { "type": "boolean", "description": "Has poetry formatting" },
+            "paragraphs": { "type": "boolean", "description": "Has paragraph markers" }
+          }
+        },
+
+        "versification": {
+          "type": "string",
+          "enum": ["standard", "kjv", "eng", "org", "lxx", "vul", "vulgate", "rsc", "rso", "orthodox"],
+          "default": "standard",
+          "description": "Versification system used: Paratext's code (eng, org, lxx, vul, rsc, rso) or a name Lamp reads as one ('standard' and 'kjv' are eng)"
+        },
+
+        "versificationMappings": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Verses the translation places differently from its versification, as Paratext mapping lines from its numbering to the original's, e.g. 'ROM 14:24-26 = ROM 16:25-27'"
+        }
+      },
+      "required": ["schemaVersion", "id", "type", "name", "abbreviation", "language"]
+    },
+
+    "books": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/book" },
+      "description": "All books in this translation"
+    }
+  },
+
+  "required": ["meta", "books"]
+}

@@ -22,12 +22,13 @@ The package currently provides JSON module detection, structural validation, BBC
 
 ## Repository responsibilities
 
-- `lamp-bible-modules` (a private repository) owns JSON Schemas, source material, conversion scripts, and large/generated fixtures.
-- `lamp-bible-core` owns the reusable Swift implementation of the module contract and application runtime.
+- `lamp-bible-core` owns the module contract — the JSON Schemas in [`Schemas/`](Schemas/README.md) — and its reusable Swift implementation, along with the application runtime.
+- `lamp-bible-modules` (a private repository) owns source material, conversion scripts, and large/generated fixtures.
 - [`lamp-bible-ios`](https://github.com/mattsbennett/lamp-bible-ios) and [`lamp-bible-macos`](https://github.com/mattsbennett/lamp-bible-macos) own platform-specific UI and lifecycle code.
 
 ## Documentation
 
+- [Module schemas](Schemas/README.md): the JSON Schemas for every module type, with examples.
 - [Architecture](Documentation/Architecture.md): dependency direction, extraction order, `.lamp` format compatibility, and the sync format transition.
 - [Sync design](Documentation/SyncDesignB.md)
 - [Color rules](Documentation/ColorRules.md)

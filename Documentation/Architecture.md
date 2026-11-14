@@ -3,11 +3,9 @@
 ## Dependency direction
 
 ```text
-lamp-bible-modules (schemas and authoring fixtures)
-                 │
-                 ▼ compatibility tests
-         lamp-bible-core
-          ├─ LampModuleKit
+         lamp-bible-core  ◀──  lamp-bible-modules
+          ├─ Schemas           (sources, fixtures and the bundle,
+          ├─ LampModuleKit      built with lamp-module)
           └─ LampCore
              ▲       ▲
              │       │
@@ -39,7 +37,7 @@ Before a compiler is considered complete, fixture tests must perform this round 
 JSON → validate → temporary SQLite → integrity checks → .lamp → production importer → record assertions
 ```
 
-The JSON Schemas under `lamp-bible-modules/schemas` remain canonical until an automated release process publishes them as versioned resources.
+The JSON Schemas under `Schemas/` are canonical. `SchemaFilesTests` checks that every module kind has one, that the examples beside them compile, and that the inspector requires what the commentary schema does.
 
 ## Sync format transition
 

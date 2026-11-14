@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "schemaVersion": "2.2",
+    "id": "Notes_Matt",
+    "type": "commentary",
+    "seriesAbbrev": "Notes",
+    "seriesFull": "Simple Study Notes",
+    "title": "Study Notes on Matthew"
+  },
+  "book": "Matt",
+  "bookNumber": 40,
+  "chapters": [
+    {
+      "chapter": 1,
+      "verses": [
+        {
+          "sv": 40001001,
+          "commentary": {
+            "text": "This verse introduces Jesus as the Messiah and the son of David."
+          }
+        },
+        {
+          "sv": 40001002,
+          "ev": 40001006,
+          "commentary": {
+            "text": "The list traces Jesus' family line through the patriarchs to King David, so his claim to David's throne rests on it.",
+            "annotations": [
+              {
+                "type": "scripture",
+                "start": 61,
+                "end": 71,
+                "text": "King David",
+                "data": {
+                  "sv": 9016001
+                }
+              }
+            ]
+          }
+        },
+        {
+          "sv": 40001016,
+          "commentary": {
+            "text": "Joseph is called the husband of Mary rather than the father of Jesus: Matthew is preparing for the account of the virgin birth."
+          }
+        }
+      ]
+    }
+  ]
+}

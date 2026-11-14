@@ -1,0 +1,170 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "quiz-schema-v1",
+  "title": "Bible Reading Plan Quiz Schema",
+  "description": "Schema for quiz questions and answers tied to Bible reading plan readings. Each quiz file corresponds to one reading plan and contains age-graded questions for each reading.",
+
+  "definitions": {
+    "verseRef": {
+      "type": "integer",
+      "description": "Numeric verse reference in BBCCCVVV format (book 2 digits, chapter 3 digits, verse 3 digits). E.g., 40001001 = Matt 1:1, 1001001 = Gen 1:1."
+    },
+
+    "annotation": {
+      "type": "object",
+      "description": "Inline annotation within text",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["scripture", "crossref"],
+          "description": "Annotation type for quiz content"
+        },
+        "start": { "type": "integer", "description": "Character offset start position" },
+        "end": { "type": "integer", "description": "Character offset end position" },
+        "data": {
+          "type": "object",
+          "description": "Additional data depending on annotation type",
+          "properties": {
+            "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV) for scripture annotations" },
+            "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV) for scripture ranges" }
+          }
+        }
+      },
+      "required": ["type", "start", "end"]
+    },
+
+    "annotatedText": {
+      "type": "object",
+      "description": "Text content with annotations for UI interpolation",
+      "properties": {
+        "text": { "type": "string", "description": "Plain text content" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotation" }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "ageGroup": {
+      "type": "object",
+      "description": "Definition of an age group for quiz targeting",
+      "properties": {
+        "id": { "type": "string", "description": "Machine-readable identifier (e.g., young_children, children, pre_teen, teen, adult)" },
+        "label": { "type": "string", "description": "Display label (e.g., Young Children)" },
+        "ageRange": { "type": "string", "description": "Age range string (e.g., 5-7, 18+)" }
+      },
+      "required": ["id", "label", "ageRange"]
+    },
+
+    "question": {
+      "type": "object",
+      "description": "A single quiz question with answer",
+      "properties": {
+        "question": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ],
+          "description": "The question text"
+        },
+        "answer": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ],
+          "description": "The answer text, including scripture references where appropriate"
+        },
+        "theme": {
+          "type": "string",
+          "enum": ["narrative", "character", "doctrine", "prophecy", "typology", "salvation", "commandment", "geography", "history", "wisdom"],
+          "description": "Thematic category of the question"
+        },
+        "christFocused": { "type": "boolean", "description": "True if the question centres on Jesus Christ, salvation, or God's redemptive purpose" },
+        "references": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/verseRef" },
+          "description": "Verse references from the reading that this question draws from"
+        },
+        "crossReferences": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/verseRef" },
+          "description": "Cross-reference verses (from TSKE or doctrinal sources) that support the answer"
+        }
+      },
+      "required": ["question", "answer", "theme", "christFocused", "references"]
+    },
+
+    "readingQuizzes": {
+      "type": "object",
+      "description": "Quizzes for a single reading, keyed by age group ID",
+      "properties": {
+        "sv": { "$ref": "#/definitions/verseRef", "description": "Start verse of the reading (matches plan)" },
+        "ev": { "$ref": "#/definitions/verseRef", "description": "End verse of the reading (matches plan)" },
+        "quizzes": {
+          "type": "object",
+          "description": "Questions keyed by age group ID",
+          "patternProperties": {
+            "^[a-z_]+$": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/question" },
+              "minItems": 5,
+              "maxItems": 5,
+              "description": "Exactly 5 questions for this age group"
+            }
+          }
+        }
+      },
+      "required": ["sv", "ev", "quizzes"]
+    },
+
+    "quizDay": {
+      "type": "object",
+      "description": "Quizzes for all readings on a single day",
+      "properties": {
+        "day": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 366,
+          "description": "Day number (1-366), matching the plan"
+        },
+        "readings": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/readingQuizzes" },
+          "description": "Quiz sets for each reading on this day"
+        }
+      },
+      "required": ["day", "readings"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Module metadata",
+      "properties": {
+        "schemaVersion": { "type": "string", "description": "Schema version (1.0)" },
+        "id": { "type": "string", "description": "Unique module identifier (e.g., the_bible_companion_quizzes)" },
+        "type": { "type": "string", "enum": ["quiz"], "description": "Module type" },
+        "planId": { "type": "string", "description": "ID of the reading plan these quizzes correspond to" },
+        "name": { "type": "string", "description": "Display name" },
+        "description": { "type": "string", "description": "Brief description" },
+        "questionsPerReading": { "type": "integer", "description": "Number of questions per reading per age group" },
+        "ageGroups": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ageGroup" },
+          "description": "Age groups defined for this quiz set"
+        }
+      },
+      "required": ["schemaVersion", "id", "type", "planId", "name", "ageGroups"]
+    },
+
+    "days": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/quizDay" },
+      "description": "Array of daily quiz sets, one per plan day"
+    }
+  },
+  "required": ["meta", "days"]
+}

@@ -1,0 +1,344 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "commentary-schema-v2.2",
+  "title": "Bible Commentary Schema",
+  "description": "Schema for Bible commentaries. Version 2.2 adds source-ordered classified blocks, published-volume provenance, and globally scoped footnotes. Legacy chapter/section/verse structures remain supported.",
+
+  "definitions": {
+    "sourceLocation": {
+      "type": "object",
+      "properties": {
+        "volumeId": { "type": "string" },
+        "sourceFile": { "type": "string" },
+        "lineStart": { "type": "integer", "minimum": 1 },
+        "lineEnd": { "type": "integer", "minimum": 1 },
+        "pageStart": { "type": ["string", "null"] },
+        "pageEnd": { "type": ["string", "null"] },
+        "textStart": { "type": "integer", "minimum": 0 },
+        "textEnd": { "type": "integer", "minimum": 0 },
+        "removedMarkers": { "type": "array", "items": { "type": "object", "required": ["id", "label", "sourceStart", "sourceEnd"] } }
+      },
+      "required": ["volumeId", "sourceFile", "lineStart", "lineEnd"]
+    },
+    "contentBlock": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["heading", "translation", "commentary", "paragraph", "bibliography", "abbreviations", "index"] },
+        "content": { "$ref": "#/definitions/annotatedText" },
+        "source": { "$ref": "#/definitions/sourceLocation" },
+        "sv": { "$ref": "#/definitions/verseRef" },
+        "ev": { "$ref": "#/definitions/verseRef" },
+        "classification": { "type": "object" },
+        "displayPrefixLength": { "type": "integer", "minimum": 0, "description": "Printed verse label retained canonically; trim in reader projections and adjust code-point offsets." },
+        "sourceChapter": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["type", "content", "source"]
+    },
+
+    "annotation": {
+      "type": "object",
+      "description": "Inline annotation within text",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["footnote", "scripture", "strongs", "greek", "hebrew", "crossref", "abbrev", "page", "lexicon-ref", "bold", "italic"],
+          "description": "bold and italic mark the printed emphasis of the text they span"
+        },
+        "start": { "type": "integer", "description": "Character offset start position" },
+        "end": { "type": "integer", "description": "Character offset end position" },
+        "id": { "type": "string", "description": "Reference ID (footnote number, strongs key, etc.)" },
+        "text": { "type": "string", "description": "The annotated text itself" },
+        "implicit": { "type": "boolean", "description": "True if this was an implicit reference (e.g., 'v. 5' or '7:21, 28') rather than explicit (e.g., 'Rom 10:5')" },
+        "data": {
+          "type": "object",
+          "description": "Additional data depending on annotation type",
+          "properties": {
+            "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV) for scripture annotations" },
+            "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV) for scripture ranges" },
+            "refs": {
+              "type": "array",
+              "description": "Array of discrete verse references for comma-separated lists like '7:21, 28'",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV)" },
+                  "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV) for ranges within the list" }
+                },
+                "required": ["sv"]
+              }
+            },
+            "strongs": { "type": "string", "description": "Strong's number (e.g., G1080, H1234)" },
+            "lexiconId": { "type": "string", "description": "Cross-reference to another lexicon entry (e.g., BDB123)" },
+            "transliteration": { "type": "string" },
+            "expansion": { "type": "string", "description": "Expanded form of abbreviation" },
+            "pageNum": { "type": "string" }
+          }
+        }
+      },
+      "required": ["type", "start", "end"]
+    },
+
+    "annotatedText": {
+      "type": "object",
+      "description": "Text content with annotations. Inline footnote numbers are stripped from the text for clean full-text search.",
+      "properties": {
+        "text": { "type": "string", "description": "Plain text content (footnote numbers stripped for searchability)" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotation" }
+        },
+        "footnote_refs": {
+          "type": "array",
+          "description": "References to footnotes, with positions in the clean text where they appear",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "Footnote ID (matches footnotes[].id)" },
+              "offset": { "type": "integer", "description": "Character offset in the clean text where this footnote reference belongs" }
+            },
+            "required": ["id", "offset"]
+          }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "footnote": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Footnote identifier (typically a number)" },
+        "content": { "$ref": "#/definitions/annotatedText" }
+      },
+      "required": ["id", "content"]
+    },
+
+    "verseRef": {
+      "type": "integer",
+      "description": "Numeric verse reference in BBCCCVVV format (book 2 digits, chapter 3 digits, verse 3 digits). E.g., 40001001 = Matt 1:1, 01001001 = Gen 1:1"
+    },
+
+    "verseCommentary": {
+      "type": "object",
+      "description": "Commentary on a specific verse or verse range",
+      "properties": {
+        "sv": { "$ref": "#/definitions/verseRef", "description": "Start verse in BBCCCVVV format" },
+        "ev": { "$ref": "#/definitions/verseRef", "description": "End verse (optional, for verse ranges)" },
+        "suffix": { "type": "string", "description": "For partial verses like 'a', 'b'" },
+        "translation": { "$ref": "#/definitions/annotatedText", "description": "Author's translation of the verse(s)" },
+        "commentary": { "$ref": "#/definitions/annotatedText" },
+        "footnotes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/footnote" }
+        }
+      },
+      "required": ["sv"]
+    },
+
+    "pericope": {
+      "type": "object",
+      "description": "A unit/paragraph of text (e.g., 1:1-17)",
+      "properties": {
+        "id": { "type": "string", "description": "Pericope identifier like '1:1-17'" },
+        "title": { "type": "string" },
+        "content": { "type": "array", "items": { "$ref": "#/definitions/contentBlock" }, "description": "Canonical source-ordered blocks for schema 2.2; do not reorder by role or verse." },
+        "source": { "$ref": "#/definitions/sourceLocation" },
+        "sourceOrder": { "type": "integer" },
+        "footnoteIds": { "type": "array", "items": { "type": "string" }, "description": "Definitions in the top-level footnotes array." },
+        "sv": { "$ref": "#/definitions/verseRef", "description": "Start verse of pericope" },
+        "ev": { "$ref": "#/definitions/verseRef", "description": "End verse of pericope" },
+        "introduction": { "$ref": "#/definitions/annotatedText", "description": "Section introduction before verse commentary" },
+        "translation": { "$ref": "#/definitions/annotatedText", "description": "Full translation of the pericope" },
+        "verses": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/verseCommentary" }
+        },
+        "footnotes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/footnote" },
+          "description": "Footnotes for this pericope (shared across verses)"
+        }
+      },
+      "required": ["id"]
+    },
+
+    "section": {
+      "type": "object",
+      "description": "Major section of commentary (e.g., 'I. Introducing The Messiah')",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "level": { "type": "integer", "description": "Nesting level (1=top, 2=sub, etc.)" },
+        "sv": { "$ref": "#/definitions/verseRef", "description": "Start verse of section" },
+        "ev": { "$ref": "#/definitions/verseRef", "description": "End verse of section" },
+        "introduction": { "$ref": "#/definitions/annotatedText" },
+        "subsections": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/section" }
+        },
+        "pericopae": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/pericope" }
+        }
+      },
+      "required": ["id", "title"]
+    },
+
+    "abbreviation": {
+      "type": "object",
+      "properties": {
+        "abbrev": { "type": "string" },
+        "expansion": { "type": "string" },
+        "category": {
+          "type": "string",
+          "enum": ["publication", "bible", "apocrypha", "pseudepigrapha", "patristic", "classical", "qumran", "rabbinic", "general"]
+        }
+      },
+      "required": ["abbrev", "expansion"]
+    },
+
+    "chapterCommentary": {
+      "type": "object",
+      "description": "Commentary for a single chapter",
+      "properties": {
+        "chapter": { "type": "integer" },
+        "introduction": { "$ref": "#/definitions/annotatedText" },
+        "sections": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/section" },
+          "description": "For complex commentaries with hierarchical sections"
+        },
+        "pericopae": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/pericope" },
+          "description": "For commentaries organized by passage units"
+        },
+        "verses": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/verseCommentary" },
+          "description": "For simple verse-by-verse commentaries (use this OR sections/pericopae)"
+        },
+        "footnotes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/footnote" },
+          "description": "Chapter-level footnotes (for simple commentaries)"
+        }
+      },
+      "required": ["chapter"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Module metadata - harmonized with lexicon schema v2.0",
+      "properties": {
+        "schemaVersion": { "type": "string", "enum": ["1.0", "2.0", "2.1", "2.2"], "description": "Schema version" },
+        "id": { "type": "string", "description": "Unique module identifier (e.g., NIC_Matt)" },
+        "type": { "type": "string", "enum": ["dictionary", "commentary"], "default": "commentary" },
+        "name": { "type": "string", "description": "Full module name" },
+        "description": { "type": "string", "description": "Module description" },
+        "seriesAbbrev": { "type": "string", "description": "Short series identifier (e.g., NIC)" },
+        "seriesFull": { "type": "string", "description": "Full series name (e.g., New International Commentary)" },
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "editor": { "type": "string" },
+        "publisher": { "type": "string" },
+        "year": { "type": "integer" }
+      },
+      "required": ["schemaVersion", "seriesAbbrev", "seriesFull"],
+      "anyOf": [{ "required": ["title"] }, { "required": ["name"] }],
+      "$comment": "A volume is shown by its title, or by its name where it has none"
+    },
+
+    "book": {
+      "type": "string",
+      "description": "Bible book abbreviation (e.g., Matt, Gen)"
+    },
+
+    "bookNumber": {
+      "type": "integer",
+      "description": "Canonical book number (1-66, Genesis=1, Revelation=66)"
+    },
+
+    "abbreviations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/abbreviation" },
+      "description": "List of abbreviations used in this commentary"
+    },
+
+    "frontMatter": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "Readable compatibility projection of the front-matter blocks." },
+        "content": { "type": "array", "items": { "$ref": "#/definitions/contentBlock" } },
+        "dedication": { "type": "string" },
+        "editorPreface": { "$ref": "#/definitions/annotatedText" },
+        "authorPreface": { "$ref": "#/definitions/annotatedText" },
+        "introduction": { "$ref": "#/definitions/annotatedText" },
+        "bibliography": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "subsection": { "type": "string", "description": "Category like 'Commentaries', 'Books', 'Articles'" },
+              "content": { "$ref": "#/definitions/annotatedText" }
+            },
+            "required": ["subsection", "content"]
+          }
+        }
+      }
+    },
+
+    "chapters": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/chapterCommentary" }
+    },
+    "sourceVolumes": { "type": "array", "items": { "type": "object" }, "description": "Published-volume metadata, read when the module is built to check its volume details (compiled volumes and split volumes keep separate source identities); not stored in the module." },
+    "footnotes": { "type": "array", "items": { "$ref": "#/definitions/footnote" }, "description": "Unique book-wide definitions for source-scoped note runs." },
+
+    "indices": {
+      "type": "object",
+      "description": "Optional indices for quick lookup",
+      "properties": {
+        "content": { "type": "array", "items": { "$ref": "#/definitions/contentBlock" }, "description": "Source-tracked printed indexes; retain page numbers, never invent scripture hyperlinks or last-verse commentary." },
+        "subjects": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string", "description": "References like '1:1', '2:3-5'" }
+          }
+        },
+        "authors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "scriptures": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "greekWords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "hebrewWords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "required": ["meta", "book", "bookNumber", "chapters"]
+}

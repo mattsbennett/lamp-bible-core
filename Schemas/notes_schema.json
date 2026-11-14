@@ -1,0 +1,207 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "notes-schema-v1.1",
+  "title": "Bible Notes Schema",
+  "description": "Schema for user Bible notes. A simplified subset of the commentary schema optimized for personal note-taking with markdown import/export support. Version 1.1 adds media support for embedded images and audio.",
+
+  "definitions": {
+    "mediaReference": {
+      "type": "object",
+      "description": "Reference to a media file (image or audio)",
+      "properties": {
+        "id": { "type": "string", "description": "Unique media identifier (UUID)" },
+        "type": {
+          "type": "string",
+          "enum": ["image", "audio"],
+          "description": "Media type"
+        },
+        "filename": { "type": "string", "description": "Original filename" },
+        "mimeType": { "type": "string", "description": "MIME type (e.g., image/jpeg, audio/m4a)" },
+        "size": { "type": "integer", "description": "File size in bytes" },
+        "width": { "type": "integer", "description": "Image width in pixels (images only)" },
+        "height": { "type": "integer", "description": "Image height in pixels (images only)" },
+        "duration": { "type": "number", "description": "Duration in seconds (audio only)" },
+        "waveform": {
+          "type": "array",
+          "items": { "type": "number" },
+          "description": "Normalized audio waveform samples 0-1 for visualization (audio only)"
+        },
+        "transcription": { "type": "string", "description": "Optional speech-to-text transcription (audio only)" },
+        "alt": { "type": "string", "description": "Alt text for accessibility (images only)" },
+        "caption": { "type": "string", "description": "Optional caption text" },
+        "created": { "type": "integer", "description": "Unix timestamp when media was added" }
+      },
+      "required": ["id", "type", "filename", "mimeType"]
+    },
+
+    "annotatedText": {
+      "type": "object",
+      "description": "Text content with optional annotations and footnote references",
+      "properties": {
+        "text": { "type": "string", "description": "Plain text content (footnote markers stripped for searchability)" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotation" }
+        },
+        "footnote_refs": {
+          "type": "array",
+          "description": "References to footnotes with positions in the clean text",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "Footnote ID (matches footnotes[].id)" },
+              "offset": { "type": "integer", "description": "Character offset in clean text where footnote marker belongs" }
+            },
+            "required": ["id", "offset"]
+          }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "annotation": {
+      "type": "object",
+      "description": "Inline annotation within text",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["scripture", "strongs", "greek", "hebrew", "media"]
+        },
+        "start": { "type": "integer", "description": "Character offset start position" },
+        "end": { "type": "integer", "description": "Character offset end position" },
+        "text": { "type": "string", "description": "The annotated text itself" },
+        "data": {
+          "type": "object",
+          "properties": {
+            "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV)" },
+            "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV)" },
+            "strongs": { "type": "string", "description": "Strong's number (e.g., G1080, H1234)" },
+            "mediaId": { "type": "string", "description": "Reference to media item in top-level media array (for media annotations)" },
+            "mediaType": { "type": "string", "enum": ["image", "audio"], "description": "Type of media (for media annotations)" },
+            "caption": { "type": "string", "description": "Optional caption for media" },
+            "alignment": { "type": "string", "enum": ["left", "center", "right", "full"], "description": "Image alignment (for image media)" }
+          }
+        }
+      },
+      "required": ["type", "start", "end"]
+    },
+
+    "footnote": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Footnote identifier (typically a number)" },
+        "content": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ]
+        }
+      },
+      "required": ["id", "content"]
+    },
+
+    "verseNote": {
+      "type": "object",
+      "description": "Note on a specific verse or verse range",
+      "properties": {
+        "sv": {
+          "type": "integer",
+          "description": "Start verse in BBCCCVVV format (e.g., 40001001 = Matt 1:1)"
+        },
+        "ev": {
+          "type": "integer",
+          "description": "End verse for ranges (optional)"
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional title for this note"
+        },
+        "commentary": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ],
+          "description": "The note content"
+        },
+        "footnotes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/footnote" }
+        },
+        "lastModified": {
+          "type": "integer",
+          "description": "Unix timestamp of last modification"
+        }
+      },
+      "required": ["sv", "commentary"]
+    },
+
+    "chapterNotes": {
+      "type": "object",
+      "description": "Notes for a single chapter",
+      "properties": {
+        "chapter": { "type": "integer" },
+        "introduction": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ],
+          "description": "Chapter-level notes/introduction"
+        },
+        "verses": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/verseNote" }
+        },
+        "footnotes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/footnote" },
+          "description": "Chapter-level footnotes (shared across verses)"
+        },
+        "lastModified": {
+          "type": "integer",
+          "description": "Unix timestamp of the chapter introduction's last modification"
+        }
+      },
+      "required": ["chapter"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique module identifier" },
+        "type": { "type": "string", "const": "notes" },
+        "name": { "type": "string", "description": "Display name (e.g., 'My Bible Notes')" },
+        "author": { "type": "string", "description": "Note author's name" },
+        "schemaVersion": { "type": "string", "enum": ["1.0", "1.1"], "description": "Schema version" }
+      },
+      "required": ["id", "type"]
+    },
+
+    "book": {
+      "type": "string",
+      "description": "Bible book abbreviation (e.g., 'Matt', 'Gen')"
+    },
+
+    "bookNumber": {
+      "type": "integer",
+      "description": "Canonical book number 1-66",
+      "minimum": 1,
+      "maximum": 66
+    },
+
+    "chapters": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/chapterNotes" }
+    },
+
+    "media": {
+      "type": "array",
+      "description": "Media files referenced by annotations in this module",
+      "items": { "$ref": "#/definitions/mediaReference" }
+    }
+  },
+
+  "required": ["meta", "book", "bookNumber", "chapters"]
+}

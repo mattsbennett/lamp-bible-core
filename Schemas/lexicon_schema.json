@@ -1,0 +1,198 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "lexicon-schema-v2.1",
+  "title": "Bible Lexicon Schema",
+  "description": "Schema for Bible dictionaries and lexicons. Commentaries have their own schema (commentary_schema.json).",
+
+  "definitions": {
+    "annotation": {
+      "type": "object",
+      "description": "Inline annotation within text",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["footnote", "scripture", "strongs", "greek", "hebrew", "crossref", "abbrev", "page", "lexicon-ref", "emphasis"]
+        },
+        "start": { "type": "integer", "description": "Character offset start position" },
+        "end": { "type": "integer", "description": "Character offset end position" },
+        "id": { "type": "string", "description": "Reference ID (e.g. a Strong's key)" },
+        "text": { "type": "string", "description": "The annotated text itself" },
+        "implicit": { "type": "boolean", "description": "True if this was an implicit reference (e.g., 'v. 5' or '7:21, 28') rather than explicit (e.g., 'Rom 10:5')" },
+        "data": {
+          "type": "object",
+          "description": "Additional data depending on annotation type",
+          "properties": {
+            "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV) for scripture annotations" },
+            "style": { "type": "string", "enum": ["bold", "italic", "underline"], "description": "Emphasis style; no style is italic" },
+            "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV) for scripture ranges" },
+            "refs": {
+              "type": "array",
+              "description": "Array of discrete verse references for comma-separated lists like '7:21, 28'",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV)" },
+                  "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV) for ranges within the list" }
+                },
+                "required": ["sv"]
+              }
+            },
+            "strongs": { "type": "string", "description": "Strong's number (e.g., G1080, H1234)" },
+            "lexiconId": { "type": "string", "description": "Cross-reference to another lexicon entry (e.g., BDB123)" },
+            "transliteration": { "type": "string" },
+            "expansion": { "type": "string", "description": "Expanded form of abbreviation" },
+            "pageNum": { "type": "string" }
+          }
+        }
+      },
+      "required": ["type", "start", "end"]
+    },
+
+    "annotatedText": {
+      "type": "object",
+      "description": "Text content with annotations",
+      "properties": {
+        "text": { "type": "string", "description": "Plain text content (markers stripped for searchability)" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotation" }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "verseRef": {
+      "type": "integer",
+      "description": "Numeric verse reference in BBCCCVVV format (book 2 digits, chapter 3 digits, verse 3 digits). E.g., 40001001 = Matt 1:1, 01001001 = Gen 1:1"
+    },
+
+    "sense": {
+      "type": "object",
+      "description": "A distinct meaning or usage of a dictionary entry",
+      "properties": {
+        "id": { "type": "integer", "description": "Sense number within this entry" },
+        "partOfSpeech": { "type": "string", "description": "Grammatical category (noun, verb, etc.)" },
+        "shortDefinition": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ],
+          "description": "Brief gloss or summary definition"
+        },
+        "definition": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ],
+          "description": "Full definition with usage examples"
+        },
+        "derivation": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ],
+          "description": "Etymology or word derivation"
+        },
+        "usage": { "type": "string", "description": "Usage notes" },
+        "gloss": { "type": "string", "description": "Simple one-word gloss" },
+        "references": {
+          "type": "array",
+          "description": "Bible verses where this sense occurs",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sv": { "$ref": "#/definitions/verseRef" },
+              "ev": { "$ref": "#/definitions/verseRef" }
+            },
+            "required": ["sv"]
+          }
+        },
+        "septuagintHebrew": {
+          "type": "array",
+          "description": "Hebrew words the Septuagint renders with this Greek word, as the lexicon says; strongs only where exactly one Hebrew word fits",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string", "description": "The Hebrew word as the lexicon prints it" },
+              "stem": { "type": "string", "description": "The verb stem the lexicon names, e.g. pi." },
+              "strongs": { "type": "string", "description": "Strong's Hebrew number, e.g. H2896" }
+            },
+            "required": ["text"]
+          }
+        },
+        "translationUsages": {
+          "type": "array",
+          "description": "Word translation usage counts from Bible versions",
+          "items": {
+            "type": "object",
+            "properties": {
+              "version": { "type": "string", "description": "Bible version abbreviation (KJV, ESV, etc.)" },
+              "translations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "word": { "type": "string", "description": "English translation word" },
+                    "count": { "type": "integer", "description": "Number of occurrences" }
+                  },
+                  "required": ["word"]
+                }
+              }
+            },
+            "required": ["version", "translations"]
+          }
+        }
+      },
+      "required": ["id"]
+    },
+
+    "dictionaryEntry": {
+      "type": "object",
+      "description": "A single dictionary/lexicon entry",
+      "properties": {
+        "key": { "type": "string", "description": "Entry key (e.g., H1234, G5678, BDB123)" },
+        "lemma": { "type": "string", "description": "Hebrew/Greek word form" },
+        "transliteration": { "type": "string", "description": "Romanized form" },
+        "pronunciation": { "type": "string", "description": "Pronunciation guide" },
+        "senses": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/sense" },
+          "description": "Different meanings/usages of the word"
+        }
+      },
+      "required": ["key", "senses"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Module metadata",
+      "properties": {
+        "schemaVersion": { "type": "string", "description": "Schema version" },
+        "id": { "type": "string", "description": "Unique module identifier (e.g., wsd_hebrew)" },
+        "type": { "type": "string", "const": "dictionary", "description": "Module type" },
+        "name": { "type": "string", "description": "Full module name" },
+        "description": { "type": "string", "description": "Module description" },
+        "seriesAbbrev": { "type": "string", "description": "Short series identifier (e.g., NIC, CWSD)" },
+        "seriesFull": { "type": "string", "description": "Full series name" },
+        "author": { "type": "string" },
+        "editor": { "type": "string" },
+        "publisher": { "type": "string" },
+        "year": { "type": "integer" },
+        "isbn": { "type": "string" },
+        "keyType": { "type": "string", "description": "For dictionaries: strongs-hebrew, strongs-greek, bdb, etc." },
+        "language": { "type": "string", "description": "Primary language: hebrew, greek, english" }
+      },
+      "required": ["schemaVersion", "id", "type", "name"]
+    },
+
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/dictionaryEntry" },
+      "description": "Dictionary entries"
+    }
+  },
+  "required": ["meta", "entries"]
+}

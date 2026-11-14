@@ -1,0 +1,311 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "book-schema-v1",
+  "title": "Book Module Schema",
+  "description": "Schema for long-form books and other chapter-based publications. Content is organized as hierarchical sections and supports annotations, scripture references, footnotes, images, and audio.",
+
+  "definitions": {
+    "verseRef": {
+      "type": "integer",
+      "minimum": 1001001,
+      "description": "Numeric verse reference in BBCCCVVV format (for example, 40001001 for Matthew 1:1)."
+    },
+
+    "verseRange": {
+      "type": "object",
+      "properties": {
+        "sv": { "$ref": "#/definitions/verseRef", "description": "Start verse reference" },
+        "ev": { "$ref": "#/definitions/verseRef", "description": "Optional end verse reference" },
+        "label": { "type": "string", "description": "Optional human-readable reference" }
+      },
+      "required": ["sv"]
+    },
+
+    "mediaReference": {
+      "type": "object",
+      "description": "Reference to an image or audio file packaged with the module.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Unique media identifier" },
+        "type": { "type": "string", "enum": ["image", "audio"] },
+        "filename": { "type": "string", "minLength": 1 },
+        "mimeType": { "type": "string", "minLength": 1 },
+        "size": { "type": "integer", "minimum": 0, "description": "File size in bytes" },
+        "width": { "type": "integer", "minimum": 1, "description": "Image width in pixels" },
+        "height": { "type": "integer", "minimum": 1, "description": "Image height in pixels" },
+        "duration": { "type": "number", "minimum": 0, "description": "Audio duration in seconds" },
+        "waveform": {
+          "type": "array",
+          "items": { "type": "number", "minimum": 0, "maximum": 1 },
+          "description": "Normalized audio waveform samples"
+        },
+        "transcription": { "type": "string" },
+        "alt": { "type": "string", "description": "Accessible alternative text for an image" },
+        "created": { "type": "integer", "description": "Unix timestamp when the media was added" }
+      },
+      "required": ["id", "type", "filename", "mimeType"]
+    },
+
+    "annotation": {
+      "type": "object",
+      "description": "An inline annotation. start and end are Unicode scalar (code point) offsets into the annotated text, not UTF-16 units or grapheme clusters.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["scripture", "strongs", "greek", "hebrew", "link", "emphasis", "quote", "footnote", "page", "media"]
+        },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" },
+        "data": {
+          "type": "object",
+          "properties": {
+            "sv": { "$ref": "#/definitions/verseRef" },
+            "ev": { "$ref": "#/definitions/verseRef" },
+            "refs": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/verseRange" }
+            },
+            "strongs": { "type": "string" },
+            "url": { "type": "string", "format": "uri" },
+            "style": { "type": "string", "enum": ["bold", "italic", "underline"] },
+            "source": { "type": "string" },
+            "footnoteId": { "type": "string" },
+            "pageNum": {
+              "type": ["string", "integer"],
+              "description": "The page number printed in the source (a roman numeral string for front matter). A page outside any printed sequence has no page annotation."
+            },
+            "mediaId": { "type": "string" },
+            "mediaType": { "type": "string", "enum": ["image", "audio"] }
+          }
+        }
+      },
+      "required": ["type", "start", "end"]
+    },
+
+    "footnoteReference": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unicode scalar (code point) offset into the annotated text."
+        }
+      },
+      "required": ["id", "offset"]
+    },
+
+    "annotatedText": {
+      "type": "object",
+      "description": "Plain text plus offset-based annotations and footnote markers.",
+      "properties": {
+        "text": { "type": "string" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotation" }
+        },
+        "footnote_refs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/footnoteReference" }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "textValue": {
+      "oneOf": [
+        { "type": "string" },
+        { "$ref": "#/definitions/annotatedText" }
+      ]
+    },
+
+    "footnote": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "content": { "$ref": "#/definitions/textValue" }
+      },
+      "required": ["id", "content"]
+    },
+
+    "listItem": {
+      "type": "object",
+      "properties": {
+        "content": { "$ref": "#/definitions/annotatedText" },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/listItem" }
+        }
+      },
+      "required": ["content"]
+    },
+
+    "tableCell": {
+      "type": "object",
+      "description": "One cell in a table, positioned by its zero-based column index.",
+      "properties": {
+        "content": { "$ref": "#/definitions/annotatedText" },
+        "column": { "type": "integer", "minimum": 0 },
+        "header": { "type": "boolean", "default": false },
+        "colSpan": { "type": "integer", "minimum": 1, "default": 1 },
+        "rowSpan": { "type": "integer", "minimum": 1, "default": 1 }
+      },
+      "required": ["content", "column"]
+    },
+
+    "tableRow": {
+      "type": "object",
+      "properties": {
+        "cells": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/tableCell" }
+        }
+      },
+      "required": ["cells"]
+    },
+
+    "contentBlock": {
+      "type": "object",
+      "description": "A display block within a section.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["paragraph", "list", "blockquote", "heading", "table", "image", "audio", "thematic-break"]
+        },
+        "content": { "$ref": "#/definitions/annotatedText" },
+        "level": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "listType": { "type": "string", "enum": ["bullet", "numbered"] },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/listItem" }
+        },
+        "columnCount": { "type": "integer", "minimum": 1 },
+        "rows": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/tableRow" }
+        },
+        "mediaId": { "type": "string", "description": "ID of an item in the top-level media array" },
+        "caption": { "$ref": "#/definitions/textValue" },
+        "alignment": { "type": "string", "enum": ["left", "center", "right", "full"] },
+        "showWaveform": { "type": "boolean" },
+        "autoplay": { "type": "boolean" }
+      },
+      "required": ["type"],
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "enum": ["paragraph", "blockquote", "heading"] } } },
+          "then": { "required": ["content"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "list" } } },
+          "then": { "required": ["listType", "items"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "table" } } },
+          "then": { "required": ["columnCount", "rows"] }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["image", "audio"] } } },
+          "then": { "required": ["mediaId"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "heading" } } },
+          "then": { "required": ["level"] }
+        }
+      ]
+    },
+
+    "section": {
+      "type": "object",
+      "description": "A hierarchical book unit such as a preface, part, chapter, or appendix.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Identifier unique within this book" },
+        "type": {
+          "type": "string",
+          "enum": ["front-matter", "part", "chapter", "section", "appendix", "back-matter", "other"]
+        },
+        "number": {
+          "type": ["string", "integer"],
+          "description": "Optional displayed number or label, such as 3, IV, or Appendix A"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "subtitle": { "type": "string" },
+        "order": { "type": "integer", "minimum": 0, "description": "Optional explicit sibling sort order; array order is used when omitted" },
+        "keyScriptures": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/verseRange" }
+        },
+        "content": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/contentBlock" }
+        },
+        "sections": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/section" }
+        }
+      },
+      "required": ["id", "type", "title"],
+      "anyOf": [
+        { "required": ["content"] },
+        { "required": ["sections"] }
+      ]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Book and publication metadata.",
+      "properties": {
+        "schemaVersion": { "type": "string", "const": "1.0" },
+        "id": { "type": "string", "minLength": 1, "description": "Unique module identifier" },
+        "type": { "type": "string", "const": "book" },
+        "title": { "type": "string", "minLength": 1 },
+        "subtitle": { "type": "string" },
+        "description": { "type": "string" },
+        "author": { "type": "string" },
+        "editor": { "type": "string" },
+        "publisher": { "type": "string" },
+        "year": { "type": "integer", "minimum": 0 },
+        "edition": { "type": "string" },
+        "isbn": { "type": "string" },
+        "language": { "type": "string", "minLength": 2, "description": "BCP 47 language tag, such as en" },
+        "textDirection": { "type": "string", "enum": ["ltr", "rtl"] },
+        "copyright": { "type": "string" },
+        "license": { "type": "string" },
+        "version": { "type": "string", "description": "Version of this module's content" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "genre": { "type": "string", "description": "ID of the book's genre, one of the bundle's book_genres, such as first-principles" },
+        "coverMediaId": { "type": "string", "description": "ID of the cover image in the top-level media array" },
+        "isEditable": { "type": "boolean", "default": false },
+        "created": { "type": "integer", "description": "Unix timestamp when the module was created" },
+        "lastModified": { "type": "integer", "description": "Unix timestamp of the last modification" }
+      },
+      "required": ["schemaVersion", "id", "type", "title", "language"]
+    },
+
+    "sections": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/section" },
+      "description": "The book's ordered, hierarchical contents."
+    },
+
+    "footnotes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/footnote" },
+      "description": "Footnotes shared by all sections in the book."
+    },
+
+    "media": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/mediaReference" },
+      "description": "Media referenced by the cover or content blocks."
+    }
+  },
+  "required": ["meta", "sections"]
+}

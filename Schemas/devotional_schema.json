@@ -1,0 +1,330 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "devotional-schema-v1.1",
+  "title": "Devotional Schema",
+  "description": "Schema for longer-form devotional content (sermons, devotionals, reflections). Not tied to specific books/verses. User-editable with markdown export support. Supports embedded images and audio recordings.",
+
+  "definitions": {
+    "mediaReference": {
+      "type": "object",
+      "description": "Reference to a media file (image or audio)",
+      "properties": {
+        "id": { "type": "string", "description": "Unique media identifier (UUID)" },
+        "type": {
+          "type": "string",
+          "enum": ["image", "audio"],
+          "description": "Media type"
+        },
+        "filename": { "type": "string", "description": "Original filename" },
+        "mimeType": { "type": "string", "description": "MIME type (e.g., image/jpeg, audio/m4a)" },
+        "size": { "type": "integer", "description": "File size in bytes" },
+        "width": { "type": "integer", "description": "Image width in pixels (images only)" },
+        "height": { "type": "integer", "description": "Image height in pixels (images only)" },
+        "duration": { "type": "number", "description": "Duration in seconds (audio only)" },
+        "waveform": {
+          "type": "array",
+          "items": { "type": "number" },
+          "description": "Normalized audio waveform samples 0-1 for visualization (audio only)"
+        },
+        "transcription": { "type": "string", "description": "Optional speech-to-text transcription (audio only)" },
+        "alt": { "type": "string", "description": "Alt text for accessibility (images only)" },
+        "created": { "type": "integer", "description": "Unix timestamp when media was added" }
+      },
+      "required": ["id", "type", "filename", "mimeType"]
+    },
+
+    "annotation": {
+      "type": "object",
+      "description": "Inline annotation within text",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["scripture", "strongs", "greek", "hebrew", "link", "emphasis", "quote"]
+        },
+        "start": { "type": "integer", "description": "Character offset start position" },
+        "end": { "type": "integer", "description": "Character offset end position" },
+        "text": { "type": "string", "description": "The annotated text itself" },
+        "data": {
+          "type": "object",
+          "description": "Additional data depending on annotation type",
+          "properties": {
+            "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV) for scripture annotations" },
+            "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV) for scripture ranges" },
+            "refs": {
+              "type": "array",
+              "description": "Array of discrete verse references for comma-separated lists",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV)" },
+                  "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV) for ranges" }
+                },
+                "required": ["sv"]
+              }
+            },
+            "strongs": { "type": "string", "description": "Strong's number (e.g., G1080, H1234)" },
+            "url": { "type": "string", "description": "External URL for link annotations" },
+            "style": {
+              "type": "string",
+              "enum": ["bold", "italic", "underline"],
+              "description": "Emphasis style"
+            },
+            "source": { "type": "string", "description": "Attribution for quote annotations" }
+          }
+        }
+      },
+      "required": ["type", "start", "end"]
+    },
+
+    "annotatedText": {
+      "type": "object",
+      "description": "Text content with annotations. Plain text stored separately for clean full-text search.",
+      "properties": {
+        "text": { "type": "string", "description": "Plain text content" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotation" }
+        },
+        "footnote_refs": {
+          "type": "array",
+          "description": "References to footnotes with positions in the clean text",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "Footnote ID (matches footnotes[].id)" },
+              "offset": { "type": "integer", "description": "Character offset where footnote marker belongs" }
+            },
+            "required": ["id", "offset"]
+          }
+        }
+      },
+      "required": ["text"]
+    },
+
+    "footnote": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Footnote identifier" },
+        "content": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/annotatedText" }
+          ]
+        }
+      },
+      "required": ["id", "content"]
+    },
+
+    "listItem": {
+      "type": "object",
+      "description": "A single list item",
+      "properties": {
+        "content": { "$ref": "#/definitions/annotatedText" },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/listItem" },
+          "description": "Nested list items for sub-lists"
+        }
+      },
+      "required": ["content"]
+    },
+
+    "contentBlock": {
+      "type": "object",
+      "description": "A block of content (paragraph, list, blockquote, image, audio, etc.)",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["paragraph", "list", "blockquote", "heading", "image", "audio"],
+          "description": "Block type"
+        },
+        "content": {
+          "$ref": "#/definitions/annotatedText",
+          "description": "Text content for paragraph, blockquote, or heading blocks"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Heading level (1-6) - only for heading blocks"
+        },
+        "listType": {
+          "type": "string",
+          "enum": ["bullet", "numbered"],
+          "description": "List style - only for list blocks"
+        },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/listItem" },
+          "description": "List items - only for list blocks"
+        },
+        "mediaId": {
+          "type": "string",
+          "description": "Reference to media item in the media array - only for image/audio blocks"
+        },
+        "caption": {
+          "$ref": "#/definitions/annotatedText",
+          "description": "Optional caption for image/audio blocks"
+        },
+        "alignment": {
+          "type": "string",
+          "enum": ["left", "center", "right", "full"],
+          "description": "Display alignment - only for image blocks. Default: center"
+        },
+        "showWaveform": {
+          "type": "boolean",
+          "description": "Whether to display audio waveform visualization - only for audio blocks. Default: true"
+        },
+        "autoplay": {
+          "type": "boolean",
+          "description": "Whether audio should autoplay in present mode - only for audio blocks. Default: false"
+        }
+      },
+      "required": ["type"]
+    },
+
+    "section": {
+      "type": "object",
+      "description": "A section/heading within the devotional content",
+      "properties": {
+        "id": { "type": "string", "description": "Section identifier for linking" },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Heading level (1-6, maps to h1-h6 in markdown)"
+        },
+        "title": { "type": "string", "description": "Section heading text" },
+        "blocks": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/contentBlock" },
+          "description": "Content blocks within this section"
+        },
+        "subsections": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/section" },
+          "description": "Nested subsections"
+        }
+      },
+      "required": ["title"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Devotional metadata",
+      "properties": {
+        "schemaVersion": { "type": "string", "enum": ["1.0", "1.1"], "description": "Schema version. 1.1 adds media support." },
+        "id": { "type": "string", "description": "Unique devotional identifier (UUID recommended)" },
+        "type": { "type": "string", "const": "devotional" },
+        "title": { "type": "string", "description": "Devotional title" },
+        "subtitle": { "type": "string", "description": "Optional subtitle" },
+        "author": { "type": "string", "description": "Author name" },
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "User-entered date (ISO 8601 format: YYYY-MM-DD)"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "User-defined tags for filtering/sorting"
+        },
+        "category": {
+          "type": "string",
+          "description": "The writing's kind, an open vocabulary: any string, stored as written with inner whitespace collapsed. The editors suggest devotional, exhortation, reflection, study, and prayer; a value naming one of them, in any case, takes that kind's spelling, and a legacy \"sermon\" is read as exhortation. Kinds are compared without regard to case. Unlike tags, a writing has one kind."
+        },
+        "series": {
+          "type": "object",
+          "description": "Optional series information if part of a series",
+          "properties": {
+            "id": { "type": "string", "description": "Series identifier" },
+            "name": { "type": "string", "description": "Series name" },
+            "order": { "type": "integer", "description": "Position within the series" }
+          }
+        },
+        "keyScriptures": {
+          "type": "array",
+          "description": "Primary scripture references for this devotional",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sv": { "type": "integer", "description": "Start verse ref (BBCCCVVV)" },
+              "ev": { "type": "integer", "description": "End verse ref (BBCCCVVV)" },
+              "label": { "type": "string", "description": "Human-readable reference (e.g., 'John 3:16-17')" }
+            },
+            "required": ["sv"]
+          }
+        },
+        "created": {
+          "type": "integer",
+          "description": "Unix timestamp when created"
+        },
+        "lastModified": {
+          "type": "integer",
+          "description": "Unix timestamp of last modification"
+        }
+      },
+      "required": ["schemaVersion", "id", "type", "title"]
+    },
+
+    "summary": {
+      "oneOf": [
+        { "type": "string" },
+        { "$ref": "#/definitions/annotatedText" }
+      ],
+      "description": "Brief summary or abstract"
+    },
+
+    "content": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/contentBlock" },
+          "description": "Flat list of content blocks (paragraphs, lists, blockquotes, headings)"
+        },
+        {
+          "type": "object",
+          "description": "Structured content with sections",
+          "properties": {
+            "introduction": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/contentBlock" }
+            },
+            "sections": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/section" }
+            },
+            "conclusion": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/contentBlock" }
+            }
+          }
+        }
+      ],
+      "description": "Main content - either flat array of blocks or structured with sections"
+    },
+
+    "footnotes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/footnote" },
+      "description": "Footnotes for the entire devotional"
+    },
+
+    "relatedDevotionals": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of related devotionals"
+    },
+
+    "media": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/mediaReference" },
+      "description": "Media files referenced by image/audio blocks. A .lamp holds these references, not the files, which arrive by their own sync path."
+    }
+  },
+
+  "required": ["meta", "content"]
+}

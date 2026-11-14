@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "plan-schema-v1",
+  "title": "Bible Reading Plan Schema",
+  "description": "Schema for structured Bible reading plans. Each plan is one file covering a full year (366 days).",
+
+  "definitions": {
+    "verseRef": {
+      "type": "integer",
+      "description": "Numeric verse reference in BBCCCVVV format (book 2 digits, chapter 3 digits, verse 3 digits). E.g., 40001001 = Matt 1:1, 1001001 = Gen 1:1. Use 999 for verse to indicate 'end of chapter'."
+    },
+
+    "reading": {
+      "type": "object",
+      "description": "A single reading assignment (scripture range)",
+      "properties": {
+        "sv": { "$ref": "#/definitions/verseRef", "description": "Start verse reference" },
+        "ev": { "$ref": "#/definitions/verseRef", "description": "End verse reference (use verse=999 for 'end of chapter')" }
+      },
+      "required": ["sv", "ev"]
+    },
+
+    "planDay": {
+      "type": "object",
+      "description": "Readings for a single day",
+      "properties": {
+        "day": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 366,
+          "description": "Day number (1-366)"
+        },
+        "readings": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/reading" },
+          "description": "List of reading assignments for this day"
+        }
+      },
+      "required": ["day", "readings"]
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Module metadata - harmonized with lexicon/commentary schema",
+      "properties": {
+        "schemaVersion": { "type": "string", "description": "Schema version (1.0)" },
+        "id": { "type": "string", "description": "Unique module identifier (e.g., bible_companion)" },
+        "type": { "type": "string", "enum": ["plan"], "description": "Module type" },
+        "name": { "type": "string", "description": "Full plan name" },
+        "description": { "type": "string", "description": "Brief description of the plan" },
+        "author": { "type": "string", "description": "Plan author" },
+        "source": { "type": "string", "description": "Source work or edition" },
+        "license": { "type": "string", "description": "Content licence or public-domain status" },
+        "fullDescription": { "type": "string", "description": "Full description/introduction text" },
+        "duration": { "type": "integer", "description": "Number of days in the plan (typically 366)" },
+        "readingsPerDay": { "type": "integer", "description": "Typical number of readings per day" }
+      },
+      "required": ["schemaVersion", "id", "type", "name"]
+    },
+
+    "days": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/planDay" },
+      "description": "Array of daily reading assignments"
+    }
+  },
+  "required": ["meta", "days"]
+}

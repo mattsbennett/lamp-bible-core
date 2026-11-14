@@ -2,7 +2,7 @@ import Foundation
 
 /// Detects Lamp module JSON and performs fast structural and semantic checks.
 ///
-/// JSON Schema remains canonical in `lamp-bible-modules/schemas`. This inspector
+/// JSON Schema remains canonical in this package's `Schemas/`. This inspector
 /// adds checks that JSON Schema cannot express well, such as BBCCCVVV consistency
 /// and duplicate entry keys.
 public struct ModuleJSONInspector: Sendable {
