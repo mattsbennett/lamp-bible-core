@@ -204,12 +204,12 @@ struct LampModuleCompilerTests {
             {
               "meta":{"schemaVersion":"2.2","seriesAbbrev":"NIC","seriesFull":"NIC","title":"Genesis"},
               "book":"Gen","bookNumber":1,"extraction":{"sourceTracked":true},
-              "footnotes":[{"id":"1","label":"a","content":{"text":"Scoped note"}}],
+              "footnotes":[{"id":"1","label":"a","content":{"text":"Scoped note"}},{"id":"2","label":"b","content":{"text":"Unplaced note"}},{"id":"3","label":"c","content":{"text":"Lone note"}}],
               "chapters":[
-                {"chapter":1,"pericopae":[{"id":"later","sourceOrder":20,"title":"Later in source","sv":1001001,"ev":1001002,"footnoteIds":["1"],"content":[
+                {"chapter":1,"pericopae":[{"id":"later","sourceOrder":20,"title":"Later in source","sv":1001001,"ev":1001002,"footnoteIds":["1","2"],"content":[
                   {"type":"commentary","sv":1001001,"ev":1001002,"content":{"text":"See Genesis 1:1,3","annotations":[{"type":"scripture","start":4,"end":17,"text":"Genesis 1:1,3","data":{"refs":[{"sv":1001001},{"sv":1001003}]}}],"footnote_refs":[{"id":"1","offset":17}]}}
                 ]}]},
-                {"chapter":2,"pericopae":[{"id":"earlier","sourceOrder":10,"title":"Earlier in source","sv":1002001,"content":[
+                {"chapter":2,"pericopae":[{"id":"earlier","sourceOrder":10,"title":"Earlier in source","sv":1002001,"footnoteIds":["3"],"content":[
                   {"type":"translation","content":{"text":"Translated second chapter"}}
                 ]}]}
               ]
@@ -225,6 +225,15 @@ struct LampModuleCompilerTests {
             #expect(commentary?.contains("refs") == true)
             let note = try String.fetchOne(db, sql: "SELECT footnotes_json FROM commentary_units WHERE commentary_json IS NOT NULL")
             #expect(note?.contains("Scoped note") == true)
+            // A passage's own row repeats none of its blocks' notes, and a note
+            // no block cites goes to the block citing its neighbour.
+            let passageNotes = try String.fetchOne(db, sql: "SELECT footnotes_json FROM commentary_units WHERE title = 'Later in source'")
+            #expect(passageNotes == nil)
+            #expect(note?.contains("Unplaced note") == true)
+            // Where no block cites anything, the notes follow the last paragraph.
+            #expect(try String.fetchOne(db, sql: "SELECT footnotes_json FROM commentary_units WHERE title = 'Earlier in source'") == nil)
+            let lone = try String.fetchOne(db, sql: "SELECT footnotes_json FROM commentary_units WHERE translation_json LIKE '%Translated second chapter%'")
+            #expect(lone?.contains("Lone note") == true)
         }
     }
 

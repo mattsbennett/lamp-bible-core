@@ -251,9 +251,10 @@ struct LampAgentLibraryTests {
         #expect(section.content == "Grace and truth came through Jesus Christ.")
     }
 
-    /// Laid out as NIC is: a pericope with no text of its own, holding every
-    /// note in its source scope, over blocks that each carry the notes they
-    /// cite, with a sub-heading among them.
+    /// Laid out as NIC is: a pericope with no text of its own, its source
+    /// scope naming every note, over blocks that each carry the notes they
+    /// cite, with a sub-heading among them. A note whose marker was lost goes
+    /// with the block citing its neighbour, not to the container.
     ///
     /// Served as stored, the container came first and was all a reader chat
     /// got of John 1:1–2 — its notes, and none of the exposition.
@@ -266,7 +267,7 @@ struct LampAgentLibraryTests {
              "book":"John","bookNumber":43,
              "footnotes":[
                {"id":"1","label":"1","content":{"text":"A note the exposition cites."}},
-               {"id":"2","label":"2","content":{"text":"A note gathered from elsewhere in the volume."}}
+               {"id":"2","label":"2","content":{"text":"A note whose marker was lost."}}
              ],
              "chapters":[{"chapter":1,"pericopae":[
                {"title":"Preamble (1:1–5)","sv":43001001,"ev":43001005,"footnoteIds":["1","2"],"content":[
@@ -281,9 +282,10 @@ struct LampAgentLibraryTests {
             .readCommentary(reference: "John 1:4").units
 
         #expect(units.map(\.commentary) == ["The Word was there before anything.", "Life is the light."])
-        #expect(units.allSatisfy { !($0.footnotes ?? "").contains("gathered") },
-                "a container's notes were served, which are its whole source scope")
         #expect(units.first?.footnotes?.contains("A note the exposition cites.") == true)
+        #expect(units.first?.footnotes?.contains("A note whose marker was lost.") == true,
+                "a note no block cites was not served with the block citing its neighbour")
+        #expect(units.last?.footnotes == nil)
         #expect(units.first?.sections == ["Preamble (1:1–5)"],
                 "a heading reached the text before it")
         #expect(units.last?.sections == ["Preamble (1:1–5)", "The light"])

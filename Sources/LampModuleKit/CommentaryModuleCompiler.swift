@@ -177,6 +177,8 @@ private struct CommentaryUnitBuilder {
     private(set) var units: [CommentaryUnitRow] = []
     private var orderIndex = 0
     private let footnotesByID: [String: Any]
+    /// Each note's place in the document's notes, which is their printed order.
+    private let footnoteOrder: [String: Int]
     private let sourceOrdered: Bool
 
     init(moduleID: String, bookNumber: Int, footnotes: [Any] = [], sourceOrdered: Bool = false) {
@@ -184,12 +186,15 @@ private struct CommentaryUnitBuilder {
         self.bookNumber = bookNumber
         self.sourceOrdered = sourceOrdered
         var definitions: [String: Any] = [:]
-        for value in footnotes {
+        var order: [String: Int] = [:]
+        for (index, value) in footnotes.enumerated() {
             if let note = JSONSupport.object(value), let id = JSONSupport.string(note["id"]) {
                 definitions[id] = value
+                if order[id] == nil { order[id] = index }
             }
         }
         self.footnotesByID = definitions
+        self.footnoteOrder = order
     }
 
     mutating func append(chapters: [Any]) throws {
@@ -290,7 +295,52 @@ private struct CommentaryUnitBuilder {
             JSONSupport.string(value).flatMap { footnotesByID[$0] }
         }
         let scopedNotesValue: Any? = scopedNotes.isEmpty ? nil : scopedNotes
-        let footnotes = meaningful(pericope["footnotes"]) ?? scopedNotesValue
+        var footnotes = meaningful(pericope["footnotes"]) ?? scopedNotesValue
+        // Each block carries the notes it cites, so the passage's own row keeps
+        // none of them: repeating them would open every passage with all of
+        // its notes. A note no block cites (its marker was lost) goes to the
+        // block citing its nearest neighbour in the notes' order, the earlier
+        // of two at the same distance, which is where its marker was. Where no
+        // block cites anything, the notes go after the passage's last
+        // paragraph, where they were printed; only a passage with no
+        // paragraph keeps them on its own row.
+        var placed: [Int: [Any]] = [:]
+        if let content = JSONSupport.array(pericope["content"]), let notes = JSONSupport.array(footnotes) {
+            var citing: [String: Int] = [:]
+            var neighbours: [String] = []
+            var lastText: Int?
+            for (index, value) in content.enumerated() {
+                guard let block = JSONSupport.object(value), JSONSupport.string(block["type"]) != "index",
+                      let text = JSONSupport.object(block["content"]) else { continue }
+                let references = JSONSupport.array(text["footnote_refs"]) ?? []
+                if JSONSupport.string(block["type"]) != "heading"
+                    || !(JSONSupport.array(text["annotations"]) ?? []).isEmpty || !references.isEmpty {
+                    lastText = index
+                }
+                for reference in references {
+                    guard let noteID = JSONSupport.object(reference).flatMap({ JSONSupport.string($0["id"]) }),
+                          citing[noteID] == nil else { continue }
+                    citing[noteID] = index
+                    if footnoteOrder[noteID] != nil { neighbours.append(noteID) }
+                }
+            }
+            var kept: [Any] = []
+            for note in notes {
+                let noteID = JSONSupport.object(note).flatMap { JSONSupport.string($0["id"]) }
+                if let noteID, citing[noteID] != nil { continue }
+                guard let noteID, let position = footnoteOrder[noteID], !neighbours.isEmpty else {
+                    if let lastText { placed[lastText, default: []].append(note) } else { kept.append(note) }
+                    continue
+                }
+                let nearest = neighbours.min { first, second in
+                    let a = footnoteOrder[first]!, b = footnoteOrder[second]!
+                    let distanceA = abs(a - position), distanceB = abs(b - position)
+                    return distanceA != distanceB ? distanceA < distanceB : (a < position && b > position)
+                }!
+                placed[citing[nearest]!, default: []].append(note)
+            }
+            footnotes = kept.isEmpty ? nil : kept
+        }
         appendRow(
             id: id,
             chapter: chapter,
@@ -340,7 +390,7 @@ private struct CommentaryUnitBuilder {
                     title: heading ? JSONSupport.string(text["text"]) : nil,
                     translation: isTranslation ? text : nil,
                     commentary: !heading && !isTranslation ? text : nil,
-                    footnotes: scoped.isEmpty ? nil : scoped,
+                    footnotes: (scoped + (placed[index] ?? [])).isEmpty ? nil : scoped + (placed[index] ?? []),
                     searchText: makeSearchText(heading ? JSONSupport.string(text["text"]) : nil, nil, isTranslation ? text : nil, !heading && !isTranslation ? text : nil)
                 )
             }
