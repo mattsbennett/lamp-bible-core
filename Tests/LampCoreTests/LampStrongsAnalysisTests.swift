@@ -387,6 +387,27 @@ struct StrongsCorpusLanguageTests {
         #expect(hebrew.books.map(\.id) == [1])
     }
 
+    /// One text, one book list: a Hebrew-numbered name is measured against
+    /// the same books a Greek word of the same text is.
+    ///
+    /// The names do not fall in every book, so counting only the books that
+    /// hold one answered "of 36" for a name and "of 38" for a Greek word in
+    /// the same Septuagint — two totals a reader cannot tell apart.
+    @Test func oneTextHasOneBookList() {
+        let verses: [(Int, [(String, String)])] = [
+            // Greek throughout, with a Hebrew-numbered name in one book only.
+            (1_001_001, [("name", "H5019"), ("word", "G3056")]),
+            (2_001_001, [("word", "G3056"), ("the", "G3588")]),
+            (3_001_001, [("word", "G3056"), ("the", "G3588")]),
+        ]
+        let name = analysis(key: "H5019", verses: verses)
+        let greek = analysis(key: "G3056", verses: verses)
+        #expect(name.books.map(\.id) == [1, 2, 3], "every tagged book, as the Greek word has")
+        #expect(greek.books.map(\.id) == [1, 2, 3])
+        #expect(name.wordCount == greek.wordCount)
+        #expect(name.wordCount == 6)
+    }
+
     /// A code that is not a word is not counted as one.
     @Test func aGrammarCodeIsNotAWord() {
         let verses: [(Int, [(String, String)])] = [

@@ -211,25 +211,32 @@ public enum LampStrongsIndex {
         // 3.31 in every thousand words rather than 0.08, with the spread's
         // expectation drawn from the same wrong distribution.
         var keyLanguageBooks = Set<Int>()
+        var otherLanguageBooks = Set<Int>()
         var chapterWords: [Int: [Int: Int]] = [:]
         var versesByBook: [Int: Int] = [:]
         for row in try Row.fetchAll(db, sql: """
             SELECT language, book, chapter, tags, verses FROM strongs_chapter_tags
-            WHERE translation_id = ? AND language IN (?, '*') AND book BETWEEN ? AND ?
-            """, arguments: [translationID, language, bookRange?.lowerBound ?? Int.min, bookRange?.upperBound ?? Int.max]) {
+            WHERE translation_id = ? AND book BETWEEN ? AND ?
+            """, arguments: [translationID, bookRange?.lowerBound ?? Int.min, bookRange?.upperBound ?? Int.max]) {
             let book = row["book"] as Int
             let rowLanguage = row["language"] as String
             if rowLanguage == language { keyLanguageBooks.insert(book) }
+            else if rowLanguage != "*" { otherLanguageBooks.insert(book) }
             guard rowLanguage == "*" else { continue }
             chapterWords[book, default: [:]][row["chapter"] as Int] = row["tags"]
             // One row per chapter per language, each verse counted once in
             // the "*" row, so these add up without counting a verse twice.
             versesByBook[book, default: 0] += row["verses"] as Int
         }
+        let corpusBooks = LampStrongsAnalyzer.corpusBooks(
+            keyLanguage: keyLanguageBooks,
+            otherLanguage: otherLanguageBooks,
+            tagged: Set(chapterWords.keys)
+        )
         return LampStrongsCorpus(
-            chapterWords: chapterWords.filter { keyLanguageBooks.contains($0.key) },
+            chapterWords: chapterWords.filter { corpusBooks.contains($0.key) },
             taggedVerseCount: versesByBook
-                .filter { keyLanguageBooks.contains($0.key) }
+                .filter { corpusBooks.contains($0.key) }
                 .values.reduce(0, +)
         )
     }

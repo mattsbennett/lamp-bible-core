@@ -368,6 +368,10 @@ public struct LampStrongsAnalyzer {
     /// `LampStrongsIndex.corpus(for:…)`, which answers the same question from
     /// the index.
     private var keyLanguageBooks = Set<Int>()
+    /// The books holding a tag of the other language, for telling a text
+    /// whose languages are partitioned by book from one where they are
+    /// mixed inside a book.
+    private var otherLanguageBooks = Set<Int>()
     /// Tagged verses by book, so the count can be taken over the books that
     /// end up in the corpus rather than every book added.
     private var taggedVersesByBook: [Int: Int] = [:]
@@ -438,6 +442,7 @@ public struct LampStrongsAnalyzer {
             chapterWords[book, default: [:]][chapter, default: 0] += tags.count
             taggedVersesByBook[book, default: 0] += 1
             if !keyLanguageTags.isEmpty { keyLanguageBooks.insert(book) }
+            if keyLanguageTags.count < tags.count { otherLanguageBooks.insert(book) }
             // Companions stay within the key's own language: a Greek word's
             // companions are the Greek words it keeps company with, not the
             // Hebrew-numbered names that happen to stand in the same verse.
@@ -482,12 +487,17 @@ public struct LampStrongsAnalyzer {
         // Counted here rather than added up as the verses arrived: which
         // books belong to the corpus is only known once every verse has been
         // seen. A given corpus is already drawn to this rule.
-        let counted = countsCorpus
-            ? chapterWords.filter { keyLanguageBooks.contains($0.key) }
-            : chapterWords
+        let corpusBooks = countsCorpus
+            ? Self.corpusBooks(
+                keyLanguage: keyLanguageBooks,
+                otherLanguage: otherLanguageBooks,
+                tagged: Set(chapterWords.keys)
+            )
+            : Set(chapterWords.keys)
+        let counted = chapterWords.filter { corpusBooks.contains($0.key) }
         let countedVerses = countsCorpus
             ? taggedVersesByBook
-                .filter { keyLanguageBooks.contains($0.key) }
+                .filter { corpusBooks.contains($0.key) }
                 .values.reduce(0, +)
             : taggedVerseCount
         let totalWords = counted.values.reduce(0) { $0 + $1.values.reduce(0, +) }
@@ -523,6 +533,29 @@ public struct LampStrongsAnalyzer {
         let tag = LampStrongsKey.normalized(raw)
         normalizedTags[raw] = tag
         return tag
+    }
+
+    /// The books a key is measured against: those tagging its language,
+    /// unless the two languages are mixed inside the same books rather than
+    /// each having their own, when it is every tagged book.
+    ///
+    /// An English Bible tags Hebrew in the Old Testament and Greek in the
+    /// New, so a word is measured against its own Testament, which is what a
+    /// reader means by "22 of 27 books". The Septuagint is Greek throughout
+    /// and numbers the names the New Testament does not use from the Hebrew,
+    /// so its Hebrew-keyed books are simply Greek books that happen to hold a
+    /// name: measured against those alone, one text answered "of 36" for a
+    /// name and "of 38" for a Greek word, two totals for one book list.
+    ///
+    /// The test is "every", not "any", so one stray tag of the other
+    /// language in an otherwise partitioned text cannot tip it.
+    static func corpusBooks(
+        keyLanguage: Set<Int>,
+        otherLanguage: Set<Int>,
+        tagged: Set<Int>
+    ) -> Set<Int> {
+        guard !keyLanguage.isEmpty else { return keyLanguage }
+        return keyLanguage.isSubset(of: otherLanguage) ? tagged : keyLanguage
     }
 
     /// Whether a tag is a word at all. Anything that is not a Hebrew or
