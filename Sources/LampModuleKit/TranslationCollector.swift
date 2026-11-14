@@ -79,13 +79,26 @@ struct SpanStyle: Equatable {
         }
     }
 
-    /// "H07225" → "H7225"; anything after the number ("H1234a") is dropped.
+    /// "H07225" → "H7225"; a letter after the number ("H1234a") is dropped.
+    ///
+    /// Numbers with decimals are the Apostolic Bible Polyglot's: "1510.7.3"
+    /// is one of its sub-numbers for the forms of εἰμί, G1510, but "180.2" is
+    /// its own number for a Septuagint word Strong's list lacks, which is not
+    /// G180, so it is left off. The sub-numbers have two decimals, except
+    /// εἰμί's, which may have one.
     static func normalizedStrongs(_ key: String) -> String? {
         guard let prefix = key.first.map({ Character($0.uppercased()) }), prefix == "H" || prefix == "G" else {
             return nil
         }
         let digits = key.dropFirst().prefix(while: \.isNumber)
         guard let number = Int(digits) else { return nil }
+        let rest = key.dropFirst(1 + digits.count)
+        if rest.first == ".", !(prefix == "G" && number == 1510) {
+            let decimals = rest.dropFirst().split(separator: ".", omittingEmptySubsequences: false)
+            if decimals.count == 1, let only = decimals.first, !only.isEmpty, only.allSatisfy(\.isNumber) {
+                return nil
+            }
+        }
         return "\(prefix)\(number)"
     }
 }

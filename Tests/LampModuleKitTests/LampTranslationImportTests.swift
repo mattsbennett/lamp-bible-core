@@ -374,6 +374,19 @@ struct LampTranslationImportTests {
         #expect(verse(imported, 19_023_001).map { spans($0, "divine-name") } == ["Lord"])
     }
 
+    /// The Apostolic Bible Polyglot numbers words Strong's lacks with a
+    /// decimal of a nearby number ("180.2" is not G180), and the forms of
+    /// εἰμί with sub-numbers of G1510 ("1510.7.3", "1510.2").
+    @Test func apostolicBiblePolyglotDecimalsAreItsOwnNumbersExceptSubNumbers() throws {
+        let imported = try readXML("""
+            <osis><osisText><div type="book" osisID="Gen"><chapter osisID="Gen.1">
+            <verse osisID="Gen.1.2"><w lemma="strong:G01093">earth</w> <w lemma="strong:G1510.7.3">was</w> <w lemma="strong:G00517">unseen</w> and <w lemma="strong:G180.2">unready,</w> <w lemma="strong:G1510.2">is</w> <w lemma="strong:G*">Laban</w> <w lemma="strong:H1234a">x</w></verse>
+            </chapter></div></osisText></osis>
+            """)
+        let words = try #require(verse(imported, 1_001_002)).annotations.filter { $0.kind == "strongs" }
+        #expect(words.map(\.strongs) == ["G1093", "G1510", "G517", "G1510", "H1234"])
+    }
+
     @Test func osisLineGroupsOfOneLineAreNotStanzas() throws {
         let oneLineGroups = try readXML("""
             <osis><osisText><div type="book" osisID="Ps"><chapter osisID="Ps.1">
