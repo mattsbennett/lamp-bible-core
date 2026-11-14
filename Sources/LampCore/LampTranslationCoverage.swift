@@ -11,9 +11,9 @@ import LampModuleKit
 /// in every bundled translation the two agree, as an import writes the
 /// list from the module's own books.
 public enum LampTranslationCoverage {
-    /// Book number to chapter count, from a single translation's `books`
-    /// table, or from `translation_books` for `translationID` in the
-    /// bundle's layout. Empty where the file has neither.
+    /// Book number to chapter count, from `translation_books` for
+    /// `translationID` in the bundle's layout, or from a single
+    /// translation's `books` table. Empty where the file has neither.
     public static func chapterCounts(in db: Database, translationID: String?) throws -> [Int: Int] {
         let tables = Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'table'"))
         return try chapterCounts(in: db, tables: tables, translationID: translationID)
@@ -27,15 +27,18 @@ public enum LampTranslationCoverage {
     }
 
     static func chapterCounts(in db: Database, tables: Set<String>, translationID: String?) throws -> [Int: Int] {
-        if tables.contains("books") {
-            return counts(try Row.fetchAll(db, sql: "SELECT id AS book, chapter_count FROM books"))
-        }
+        // The several-translation layout first: the bundle also has a
+        // `books` table, the canonical list, which counts no chapters.
         if tables.contains("translation_books"), let translationID {
             return counts(try Row.fetchAll(
                 db,
                 sql: "SELECT book_number AS book, chapter_count FROM translation_books WHERE translation_id = ?",
                 arguments: [translationID]
             ))
+        }
+        if tables.contains("books"),
+           try LampModuleText.columnNames(in: db, table: "books").contains("chapter_count") {
+            return counts(try Row.fetchAll(db, sql: "SELECT id AS book, chapter_count FROM books"))
         }
         return [:]
     }

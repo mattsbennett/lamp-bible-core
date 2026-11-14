@@ -97,6 +97,9 @@ struct TranslationStrongsFeatureTests {
         try queue.write { db in
             try db.execute(sql: "CREATE TABLE translation_books (translation_id TEXT, book_number INTEGER, book_id TEXT, name TEXT, testament TEXT, chapter_count INTEGER)")
             try db.execute(sql: "INSERT INTO translation_books VALUES ('NT', 40, 'Matt', 'Matthew', 'NT', 28), ('NT', 66, 'Rev', 'Revelation', 'NT', 22), ('OT', 1, 'Gen', 'Genesis', 'OT', 50)")
+            // The bundle's canonical book list, beside it, counts no chapters.
+            try db.execute(sql: "CREATE TABLE books (id INTEGER, genre TEXT, name TEXT, osis_id TEXT, osis_paratext_abbreviation TEXT, testament TEXT)")
+            try db.execute(sql: "INSERT INTO books VALUES (1, 'law', 'Genesis', 'Gen', 'GEN', 'OT')")
         }
         let (nt, missing, all) = try queue.read { db in
             (
@@ -110,5 +113,9 @@ struct TranslationStrongsFeatureTests {
         #expect(all == ["NT": [40: 28, 66: 22], "OT": [1: 50]])
         let empty = try DatabaseQueue().read { try LampTranslationCoverage.chapterCounts(in: $0, translationID: "NT") }
         #expect(empty.isEmpty)
+        // Asked of the bundle without a translation, the canonical list is
+        // not mistaken for one's books.
+        let unnamed = try queue.read { try LampTranslationCoverage.chapterCounts(in: $0, translationID: nil) }
+        #expect(unnamed.isEmpty)
     }
 }
