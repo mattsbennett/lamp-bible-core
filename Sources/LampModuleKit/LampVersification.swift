@@ -87,11 +87,18 @@ public struct LampVersification: Sendable {
     /// `ROM 14:24-26 = ROM 16:25-27` for a translation that ends Romans 14
     /// with the doxology the English scheme numbers 16:25–27.
     public func departing(by lines: [String]) -> LampVersification {
-        LampVersification(
-            scheme: scheme,
-            verseCounts: verseCounts,
-            pairs: Self.mappings(in: lines.joined(separator: "\n"), books: Self.bookNumbers(in: scheme)) + pairs
-        )
+        let own = Self.mappings(in: lines.joined(separator: "\n"), books: Self.bookNumbers(in: scheme))
+        // A translation's own lines **replace** the scheme's for any verse
+        // they name, on either side. Prepending alone used to be enough,
+        // because the lookups kept the first pair for a verse and dropped
+        // the rest; `counterparts` keeps them all, so the scheme's line for
+        // the same verse would stand beside the departure and the verse
+        // would answer to both. A text whose Jonah 2:1 is the English 1:17
+        // would have answered to the original 2:1 *and* 2:2.
+        let named = Set(own.map(\.verse))
+        let namedOriginals = Set(own.map(\.original))
+        let kept = pairs.filter { !named.contains($0.verse) && !namedOriginals.contains($0.original) }
+        return LampVersification(scheme: scheme, verseCounts: verseCounts, pairs: own + kept)
     }
 
     /// The original-language verse `reference` in this scheme is.

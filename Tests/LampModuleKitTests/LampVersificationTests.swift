@@ -72,6 +72,27 @@ struct LampVersificationTests {
 
     /// The WEB ends Romans 14 with the doxology the English scheme numbers
     /// 16:25-27, and says so as a departure from the English scheme.
+    /// A translation's own line replaces its scheme's for the verse it
+    /// names, rather than standing beside it.
+    ///
+    /// Found by `5b` while mapping new translations. While `convert` read a
+    /// map that kept the first pair for a verse, prepending the departures
+    /// was enough to make them win. `counterparts` keeps every pair, so the
+    /// scheme's own line for the same verse answered as well, and the verse
+    /// came back with two counterparts where it has one.
+    @Test func aDepartureReplacesTheSchemesOwnLine() {
+        // The English scheme maps Jonah 2:1-10 to the original's 2:2-11. A
+        // text that numbers its Jonah 2:1 as the original's 2:1 says so.
+        let plain = english.counterparts(of: ref(32, 2, 1), in: original)
+        #expect(plain == [ref(32, 2, 2)], "the scheme's own line")
+        let departing = english.departing(by: ["JON 2:1 = JON 2:1"])
+        #expect(departing.counterparts(of: ref(32, 2, 1), in: original) == [ref(32, 2, 1)],
+            "its own line, and only its own")
+        // Verses it says nothing about keep the scheme's mapping.
+        #expect(departing.counterparts(of: ref(32, 2, 5), in: original)
+            == english.counterparts(of: ref(32, 2, 5), in: original))
+    }
+
     @Test func takesATranslationsOwnDepartures() {
         let web = english.departing(by: ["ROM 14:24-26 = ROM 16:25-27"])
         #expect(web.opens(ref(45, 14, 24), in: english) == ref(45, 16, 25))

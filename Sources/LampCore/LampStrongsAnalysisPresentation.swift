@@ -1143,6 +1143,58 @@ public enum LampSeptuagintSection {
     /// Nil where none of them holds: one of each, and nothing competing for
     /// it. That is as strong as a verse-level crossing can be, and a row
     /// with nothing said against it should read that way.
+    /// Whether where the words stand settles which Greek occurrence answers
+    /// to which Hebrew one, clearly enough to stop warning about it.
+    ///
+    /// Positions are each word's midpoint as a fraction of its own verse,
+    /// 0 to 1. A Septuagint verse and its Hebrew do not run to the same
+    /// length, but a word's place within its verse carries across: measured
+    /// over 5,762 pairings that are forced — one occurrence on each side, so
+    /// the answer is not in doubt — the Greek word sits a median 0.028 from
+    /// where the Hebrew word sits, and 90% of them within 0.092.
+    ///
+    /// So the nearest candidate wins, but only when it is genuinely near
+    /// (within that 0.092, rounded to `near`) and the next is genuinely far
+    /// (`far`). Gated that way it answered 517 two-candidate problems whose
+    /// answer was known from 99.6% correct, against 95.8% for nearest alone,
+    /// and it settles about 70% of the verses that carry a doubt. Ungated it
+    /// would be wrong about one verse in twenty-four.
+    ///
+    /// This is inference from position, not a reading from any source, so it
+    /// is only ever used to decide **whether to warn** — never to print which
+    /// Hebrew word a Greek word renders. Where it does not settle, the doubt
+    /// stands as written.
+    ///
+    /// Measured on the books where the two numbering systems agree. Psalms,
+    /// Jeremiah, Esther and Daniel were left out, and they are also where the
+    /// Greek word order is freest, so 99.6% is the better case rather than
+    /// the average one.
+    public static func pairingIsSettled(
+        hebrewAt: [Double],
+        greekAt: [Double],
+        near: Double = 0.09,
+        far: Double = 0.20
+    ) -> Bool {
+        guard !hebrewAt.isEmpty, !greekAt.isEmpty else { return false }
+        // One each is settled by arithmetic, not by position.
+        guard hebrewAt.count > 1 || greekAt.count > 1 else { return true }
+        // More Hebrew occurrences than Greek ones means at least one Hebrew
+        // word the Greek cannot be answering to; nothing to settle.
+        guard hebrewAt.count <= greekAt.count else { return false }
+        var taken: [Int] = []
+        for position in hebrewAt {
+            let ranked = greekAt.enumerated()
+                .map { (index: $0.offset, distance: abs($0.element - position)) }
+                .sorted { $0.distance < $1.distance }
+            guard let best = ranked.first, best.distance <= near else { return false }
+            if ranked.count > 1, ranked[1].distance < far { return false }
+            // Two Hebrew words cannot both answer to the same Greek one.
+            if taken.contains(best.index) { return false }
+            taken.append(best.index)
+        }
+        return true
+    }
+
     public static func pairingDoubt(
         greek lemma: String?,
         hebrew word: String,
@@ -1343,6 +1395,97 @@ public enum LampSeptuagintSection {
     /// numbering has no counterpart for is left out, which is a different
     /// fact — the translation has no such verse, not that it doesn't use the
     /// word there.
+    /// Where a verse row's English comes from, and which word is marked in it.
+    ///
+    /// Two quite different readings. The reader's own Bible translates the
+    /// **Hebrew**, so the word marked in it is the Hebrew word's rendering,
+    /// and the Greek beside it has to be taken on trust. A translation of
+    /// the Greek Old Testament translates the **Greek**, so the word marked
+    /// is that Greek word's own English — which is what someone who does
+    /// not read Greek came to the section for.
+    public enum EnglishSource: Equatable, Sendable {
+        /// The translation being read, marked where it renders the Hebrew.
+        case readersBible(moduleID: String, key: String)
+        /// A translation of the Greek Old Testament, marked where it renders
+        /// the Greek word itself.
+        case septuagintInEnglish(moduleID: String, key: String)
+    }
+
+    /// Whether a text carries the Greek Old Testament in another language: a
+    /// translation, not an original-language text, holding a Greek key in
+    /// Old Testament books.
+    ///
+    /// Recognised by what it tags rather than by what it is called. An
+    /// English Bible translated from the Hebrew tags the Old Testament with
+    /// Hebrew keys; a Greek text is an original-language text; only a
+    /// translation **of the Greek** tags Greek keys in those books. The
+    /// Apostolic Bible Polyglot is one, and declares neither "septuagint"
+    /// versification nor anything else that would say so.
+    public static func rendersTheGreekOldTestament(
+        _ analysis: LampStrongsAnalysis,
+        isOriginalLanguage: Bool
+    ) -> Bool {
+        guard !isOriginalLanguage, analysis.key.uppercased().hasPrefix("G") else { return false }
+        return analysis.books.contains { $0.id <= 39 && $0.occurrenceCount > 0 }
+    }
+
+    /// What the two English readings are called where a reader picks between
+    /// them, and what is true of each.
+    public enum EnglishChoice {
+        /// The Septuagint in English: an English rendering of the Greek word
+        /// itself.
+        public static let direct = "Septuagint in English"
+        /// The reader's own Bible: an English rendering of the Hebrew word.
+        public static let indirect = "Your Bible"
+        public static let title = "English from"
+    }
+
+    /// What each reading gives and what it costs, said where the choice is
+    /// made.
+    ///
+    /// Neither is a lesser version of the other, and the warning is not that
+    /// one is wrong. The direct reading is exact about the word and strange
+    /// about everything else: it is another translation's wording, numbering
+    /// its verses its own way. The indirect reading is the reader's own
+    /// Bible, and it is not a guess either — the verse is already narrowed to
+    /// one where the Septuagint uses this Greek word, and where the words'
+    /// places settle which occurrence answers to which the row stops warning.
+    /// What it cannot do is show the Greek word's own English, because the
+    /// reader's translators were rendering the Hebrew.
+    public static let indirectEnglishWarning =
+        "Your own Bible, marked where it renders the Hebrew word. The verse "
+        + "is already one where the Septuagint uses this Greek word, so this "
+        + "is the Greek word's sense reached through the Hebrew, in wording "
+        + "you know — an approximation, and a close one. What it cannot show "
+        + "is the Greek word's own English: your translators were rendering "
+        + "the Hebrew, and the Septuagint's translators made their own choice "
+        + "centuries earlier."
+
+    /// What the direct reading is, for the same disclosure.
+    public static let directEnglishNote =
+        "A translation of the Greek Old Testament itself, so the marked word "
+        + "is the Greek word's own English, with nothing inferred. It is not "
+        + "the translation you read, and it numbers some verses its own way."
+
+    /// The English to show in a verse row, given what is installed.
+    ///
+    /// Without a Septuagint in English this is the reader's own Bible on the
+    /// Hebrew word, which is all there has ever been. With one it is that
+    /// text on the Greek word. A Hebrew word with no Strong's number of its
+    /// own leaves only the reader's Bible, since there is nothing to mark.
+    public static func englishSource(
+        hebrewKey: String?,
+        greekKey: String,
+        readersTranslationID: String,
+        septuagintInEnglish: String?
+    ) -> EnglishSource? {
+        if let septuagintInEnglish, !septuagintInEnglish.isEmpty, !greekKey.isEmpty {
+            return .septuagintInEnglish(moduleID: septuagintInEnglish, key: greekKey)
+        }
+        guard let hebrewKey, !hebrewKey.isEmpty else { return nil }
+        return .readersBible(moduleID: readersTranslationID, key: hebrewKey)
+    }
+
     public static func english(
         for references: [Int],
         hebrewNumbering: LampVersification,

@@ -1291,6 +1291,94 @@ struct SeptuagintEnglishTests {
         ) == "d\u{0101}\u{1E07}\u{0101}r \u{201C}words\u{201D} (H1697) \u{00B7} in 1289 Hebrew verses")
     }
 
+    /// The section reads the same with a Septuagint in English installed and
+    /// without one, and marks a different word in each case.
+    @Test func theEnglishComesFromWhicheverSeptuagintIsInstalled() {
+        func analysis(_ id: String, key: String, books: [(Int, Int)]) -> LampStrongsAnalysis {
+            LampStrongsAnalysis(
+                key: key, translationID: id, translationName: id, translationAbbreviation: id,
+                wordCount: 1_000, taggedVerseCount: 10,
+                occurrences: [], references: [], renderings: [], forms: [],
+                parsings: [], grammar: [],
+                books: books.map {
+                    LampStrongsAnalysis.Division(
+                        id: $0.0, name: "Book \($0.0)", bookRange: $0.0...$0.0,
+                        occurrenceCount: $0.1, verseCount: $0.1, wordCount: 100,
+                        expectedCount: 0, keyness: 0, chapters: []
+                    )
+                },
+                sections: [], companions: []
+            )
+        }
+        // Without one: the reader's own Bible, on the Hebrew word.
+        #expect(LampSeptuagintSection.englishSource(
+            hebrewKey: "H160", greekKey: "G26",
+            readersTranslationID: "BSBs", septuagintInEnglish: nil
+        ) == .readersBible(moduleID: "BSBs", key: "H160"))
+        // With one: that text, on the Greek word, which is what the section
+        // is about — the reader's Bible translates the Hebrew, not this.
+        #expect(LampSeptuagintSection.englishSource(
+            hebrewKey: "H160", greekKey: "G26",
+            readersTranslationID: "BSBs", septuagintInEnglish: "ABPs"
+        ) == .septuagintInEnglish(moduleID: "ABPs", key: "G26"))
+        // A Hebrew word with no number of its own, and no Septuagint in
+        // English: nothing to mark, so no English is claimed.
+        #expect(LampSeptuagintSection.englishSource(
+            hebrewKey: nil, greekKey: "G26",
+            readersTranslationID: "BSBs", septuagintInEnglish: nil
+        ) == nil)
+        // ... but with one there is still the Greek word to mark.
+        #expect(LampSeptuagintSection.englishSource(
+            hebrewKey: nil, greekKey: "G26",
+            readersTranslationID: "BSBs", septuagintInEnglish: "ABPs"
+        ) == .septuagintInEnglish(moduleID: "ABPs", key: "G26"))
+
+        // Recognised by what it tags: a Greek key standing in Old Testament
+        // books, in a text that is not itself Greek.
+        #expect(LampSeptuagintSection.rendersTheGreekOldTestament(
+            analysis("ABPs", key: "G26", books: [(22, 11), (21, 2)]), isOriginalLanguage: false
+        ))
+        // An English Bible translated from the Hebrew holds no Greek key
+        // in those books, so a Greek key finds it only in the New Testament.
+        #expect(!LampSeptuagintSection.rendersTheGreekOldTestament(
+            analysis("BSBs", key: "G26", books: [(43, 8), (45, 12)]), isOriginalLanguage: false
+        ))
+        // The Greek text itself is an original-language text, not a rendering
+        // of one.
+        #expect(!LampSeptuagintSection.rendersTheGreekOldTestament(
+            analysis("LXX", key: "G26", books: [(22, 11)]), isOriginalLanguage: true
+        ))
+        // A Hebrew key says nothing about the Greek Old Testament.
+        #expect(!LampSeptuagintSection.rendersTheGreekOldTestament(
+            analysis("ABPs", key: "H160", books: [(22, 11)]), isOriginalLanguage: false
+        ))
+    }
+
+    /// Where the words stand settles some verses and not others, and it is
+    /// only ever allowed to take a warning away.
+    @Test func positionSettlesAPairingOnlyWhenItIsClear() {
+        // One each: settled without needing a position at all.
+        #expect(LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.4], greekAt: [0.9]))
+        // One Hebrew, two Greek, and only one of them is anywhere near it.
+        #expect(LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.2], greekAt: [0.24, 0.8]))
+        // Near enough, but the runner-up is near too: nothing is settled, and
+        // this is the case the measurement says costs accuracy.
+        #expect(!LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.2], greekAt: [0.24, 0.33]))
+        // Nothing within reach of where the Hebrew word stands.
+        #expect(!LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.2], greekAt: [0.5, 0.9]))
+        // Two of each, each clearly its own.
+        #expect(LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.1, 0.7], greekAt: [0.12, 0.72]))
+        // Two Hebrew words with one Greek between them: one of them must be
+        // answering to nothing, so the doubt stands.
+        #expect(!LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.1, 0.7], greekAt: [0.12]))
+        // Two Hebrew words whose nearest is the same Greek word: that Greek
+        // word cannot be both of them.
+        #expect(!LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.30, 0.34], greekAt: [0.32, 0.9]))
+        // Nothing said about a verse with nothing in it.
+        #expect(!LampSeptuagintSection.pairingIsSettled(hebrewAt: [], greekAt: [0.3]))
+        #expect(!LampSeptuagintSection.pairingIsSettled(hebrewAt: [0.3], greekAt: []))
+    }
+
     /// One of each and nothing competing is the strong case, and says
     /// nothing; each other case says which doubt it is.
     @Test func aVersePairingSaysWhichDoubtItHas() {
