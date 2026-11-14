@@ -2,6 +2,15 @@ import Foundation
 
 public enum LampReferenceParser {
     public static func parse(_ source: String) throws -> LampAgentReferenceRange {
+        try parse(source, bookNames: [:])
+    }
+
+    /// `bookNames` are a translation's own names for its books, by number
+    /// ("Génesis"), read before the English ones: see `bookNumber(for:names:)`.
+    public static func parse(
+        _ source: String,
+        bookNames: [Int: String]
+    ) throws -> LampAgentReferenceRange {
         let normalized = source
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "–", with: "-")
@@ -11,10 +20,10 @@ public enum LampReferenceParser {
         let pieces = normalized.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false).map {
             String($0).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let start = try parseCompletePoint(pieces[0], source: source)
+        let start = try parseCompletePoint(pieces[0], bookNames: bookNames, source: source)
         let end = pieces.count == 1
             ? start
-            : try parseEndPoint(pieces[1], inheriting: start, source: source)
+            : try parseEndPoint(pieces[1], inheriting: start, bookNames: bookNames, source: source)
         guard sortValue(end, missingVerse: 999) >= sortValue(start, missingVerse: 1) else {
             throw LampAgentError.invalidReference(source)
         }
@@ -60,11 +69,12 @@ public enum LampReferenceParser {
 
     private static func parseCompletePoint(
         _ value: String,
+        bookNames: [Int: String],
         source: String
     ) throws -> LampAgentReferencePoint {
         let captures = try match(#"^(.+?)\s+(\d+)(?::(\d+))?$"#, in: value)
         guard captures.count == 3,
-              let book = bookNumber(for: captures[0]),
+              let book = bookNumber(for: captures[0], names: bookNames),
               let chapter = Int(captures[1]), (1...999).contains(chapter) else {
             throw LampAgentError.invalidReference(source)
         }
@@ -83,10 +93,11 @@ public enum LampReferenceParser {
     private static func parseEndPoint(
         _ value: String,
         inheriting start: LampAgentReferencePoint,
+        bookNames: [Int: String],
         source: String
     ) throws -> LampAgentReferencePoint {
         if value.rangeOfCharacter(from: .letters) != nil {
-            return try parseCompletePoint(value, source: source)
+            return try parseCompletePoint(value, bookNames: bookNames, source: source)
         }
         if let colon = value.firstIndex(of: ":") {
             let chapterText = value[..<colon].trimmingCharacters(in: .whitespaces)
@@ -122,15 +133,35 @@ public enum LampReferenceParser {
         point.book * 1_000_000 + point.chapter * 1_000 + (point.verse ?? missingVerse)
     }
 
+    /// The book `value` names. A translation's own `names` come first, so a
+    /// Spanish reader's "Judas" is Jude: the whole name, or the start of
+    /// just one of them, three letters or more ("Apoc", "Gén"). Then the
+    /// English names and abbreviations. Case and accents aside, so
+    /// "genesis" is Génesis.
     public static func bookNumber(for value: String) -> Int? {
-        aliases[normalizeBook(value)]
+        bookNumber(for: value, names: [:])
+    }
+
+    public static func bookNumber(for value: String, names: [Int: String]) -> Int? {
+        let key = normalizeBook(value)
+        guard !key.isEmpty else { return nil }
+        if !names.isEmpty {
+            let own = names.map { (book: $0.key, name: normalizeBook($0.value)) }
+            if let whole = own.first(where: { $0.name == key }) { return whole.book }
+            if key.count >= 3 {
+                let starting = Set(own.filter { $0.name.hasPrefix(key) }.map(\.book))
+                if starting.count == 1 { return starting.first }
+            }
+        }
+        return aliases[key]
     }
 
     private static func normalizeBook(_ value: String) -> String {
-        value.lowercased().unicodeScalars.compactMap { scalar -> Character? in
-            if CharacterSet.alphanumerics.contains(scalar) { return Character(String(scalar)) }
-            return nil
-        }.reduce(into: "") { $0.append($1) }
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+            .unicodeScalars.compactMap { scalar -> Character? in
+                if CharacterSet.alphanumerics.contains(scalar) { return Character(String(scalar)) }
+                return nil
+            }.reduce(into: "") { $0.append($1) }
     }
 
     private static let aliases: [String: Int] = {

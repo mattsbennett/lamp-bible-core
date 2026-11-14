@@ -1361,10 +1361,20 @@ public enum LampPlanCalendar {
 
 public enum LampBibleReferenceFormatter {
     public static func describeRange(from startReference: Int, to endReference: Int) -> String {
+        describeRange(from: startReference, to: endReference, bookNames: [:])
+    }
+
+    /// The range with its books as a translation names them (`bookNames`,
+    /// by number: "Génesis 1:1"), the app's own names for any it lacks.
+    public static func describeRange(
+        from startReference: Int,
+        to endReference: Int,
+        bookNames: [Int: String]
+    ) -> String {
         let start = components(of: startReference)
         let end = components(of: endReference)
-        let startBook = bookName(start.book)
-        let endBook = bookName(end.book)
+        let startBook = bookNames[start.book] ?? bookName(start.book)
+        let endBook = bookNames[end.book] ?? bookName(end.book)
 
         if start.book == end.book {
             if start.chapter == end.chapter {

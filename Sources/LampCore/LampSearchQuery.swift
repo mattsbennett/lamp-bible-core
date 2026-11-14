@@ -79,6 +79,12 @@ public struct LampSearchReference: Equatable, Sendable {
     public var description: String {
         LampBibleReferenceFormatter.describeRange(from: startReference, to: endReference)
     }
+
+    /// As a translation names its books: "Génesis 1".
+    public func description(bookNames: [Int: String]) -> String {
+        LampBibleReferenceFormatter.describeRange(
+            from: startReference, to: endReference, bookNames: bookNames)
+    }
 }
 
 /// The search grammar every search of either app reads a query by: a typed
@@ -202,7 +208,13 @@ public struct LampSearchQuery: Equatable, Sendable {
     /// 23:1-4", when the book has that chapter. A chapter is required, so a
     /// book's name alone ("Job", "Acts", "Mark") stays a word to search for.
     public var reference: LampSearchReference? {
-        guard let range = try? LampReferenceParser.parse(source),
+        reference(bookNames: [:])
+    }
+
+    /// The passage named, by a translation's own book names too ("Génesis
+    /// 1", "Apoc 21"), for a field that goes to a place in that translation.
+    public func reference(bookNames: [Int: String]) -> LampSearchReference? {
+        guard let range = try? LampReferenceParser.parse(source, bookNames: bookNames),
               let startChapters = LampReferenceParser.chapterCount(ofBook: range.start.book),
               let endChapters = LampReferenceParser.chapterCount(ofBook: range.end.book),
               range.start.chapter <= startChapters, range.end.chapter <= endChapters else { return nil }
