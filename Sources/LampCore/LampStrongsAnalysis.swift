@@ -362,6 +362,19 @@ public struct LampStrongsAnalyzer {
     private var normalizedTags: [String: String] = [:]
     private var chapterWords: [Int: [Int: Int]] = [:]
     private var taggedVerseCount = 0
+    /// The books holding a tag of the key's own language, when this counts
+    /// its own corpus. What a key is measured against is every tagged word of
+    /// those books, not only the words of its language: see
+    /// `LampStrongsIndex.corpus(for:…)`, which answers the same question from
+    /// the index.
+    private var keyLanguageBooks = Set<Int>()
+    /// Tagged verses by book, so the count can be taken over the books that
+    /// end up in the corpus rather than every book added.
+    private var taggedVersesByBook: [Int: Int] = [:]
+    /// This verse's tags of the key's language, kept beside `tags` so a
+    /// verse is read once. A stored buffer rather than a local, on the path
+    /// every verse of every translation takes.
+    private var keyLanguageTags: [String] = []
     private var verseFrequency: [String: Int] = [:]
     private var sharedVerses: [String: Int] = [:]
     private var occurrences: [LampStrongsAnalysis.Occurrence] = []
@@ -412,19 +425,25 @@ public struct LampStrongsAnalyzer {
     public mutating func add(reference: Int, text: @autoclosure () -> String, annotationsJSON: String?) {
         guard let annotationsJSON, !key.isEmpty else { return }
         tags.removeAll(keepingCapacity: true)
+        keyLanguageTags.removeAll(keepingCapacity: true)
         Self.forEachTag(in: annotationsJSON) { raw in
             let tag = normalizedTag(raw)
-            if isCounted(tag) { tags.append(tag) }
+            guard Self.isWord(tag) else { return }
+            tags.append(tag)
+            if isOfKeysLanguage(tag) { keyLanguageTags.append(tag) }
         }
         guard !tags.isEmpty else { return }
         let (book, chapter, _) = LampBibleReferenceFormatter.components(of: reference)
-        let distinct = Set(tags)
         if countsCorpus {
             chapterWords[book, default: [:]][chapter, default: 0] += tags.count
-            taggedVerseCount += 1
-            for tag in distinct { verseFrequency[tag, default: 0] += 1 }
+            taggedVersesByBook[book, default: 0] += 1
+            if !keyLanguageTags.isEmpty { keyLanguageBooks.insert(book) }
+            // Companions stay within the key's own language: a Greek word's
+            // companions are the Greek words it keeps company with, not the
+            // Hebrew-numbered names that happen to stand in the same verse.
+            for tag in Set(keyLanguageTags) { verseFrequency[tag, default: 0] += 1 }
         }
-        guard distinct.contains(where: isKey) else { return }
+        guard keyLanguageTags.contains(where: isKey) else { return }
 
         let verseText = text()
         let (all, joined) = verseOccurrences(reference: reference, text: verseText, annotationsJSON: annotationsJSON)
@@ -435,7 +454,7 @@ public struct LampStrongsAnalyzer {
         guard !found.isEmpty else { return }
         if keepsVerseText { verseTexts[reference] = verseText }
         occurrences += found
-        for tag in distinct where !isKey(tag) { sharedVerses[tag, default: 0] += 1 }
+        for tag in Set(keyLanguageTags) where !isKey(tag) { sharedVerses[tag, default: 0] += 1 }
     }
 
     public func analysis() -> LampStrongsAnalysis {
@@ -460,15 +479,26 @@ public struct LampStrongsAnalyzer {
         for occurrence in ordered where references.last != occurrence.reference {
             references.append(occurrence.reference)
         }
-        let totalWords = chapterWords.values.reduce(0) { $0 + $1.values.reduce(0, +) }
-        let books = bookDivisions(ordered, totalWords: totalWords)
+        // Counted here rather than added up as the verses arrived: which
+        // books belong to the corpus is only known once every verse has been
+        // seen. A given corpus is already drawn to this rule.
+        let counted = countsCorpus
+            ? chapterWords.filter { keyLanguageBooks.contains($0.key) }
+            : chapterWords
+        let countedVerses = countsCorpus
+            ? taggedVersesByBook
+                .filter { keyLanguageBooks.contains($0.key) }
+                .values.reduce(0, +)
+            : taggedVerseCount
+        let totalWords = counted.values.reduce(0) { $0 + $1.values.reduce(0, +) }
+        let books = bookDivisions(ordered, chapterWords: counted, totalWords: totalWords)
         return LampStrongsAnalysis(
             key: key,
             translationID: translationID,
             translationName: translationName,
             translationAbbreviation: translationAbbreviation,
             wordCount: totalWords,
-            taggedVerseCount: taggedVerseCount,
+            taggedVerseCount: countedVerses,
             occurrences: ordered,
             references: references,
             renderings: renderings(ordered),
@@ -477,7 +507,11 @@ public struct LampStrongsAnalyzer {
             grammar: grammar(ordered),
             books: books,
             sections: sections(books, totalHits: ordered.count, totalWords: totalWords),
-            companions: companions(hitVerses: references.count, verseFrequency: verseFrequency),
+            companions: companions(
+                hitVerses: references.count,
+                verseFrequency: verseFrequency,
+                taggedVerseCount: countedVerses
+            ),
             verseTexts: verseTexts
         )
     }
@@ -491,13 +525,19 @@ public struct LampStrongsAnalyzer {
         return tag
     }
 
-    /// Whether a tag is a word of the key's language. A bare key names no
-    /// language, so every Hebrew and Greek tag counts for it; anything else,
-    /// such as a TVM code (`TH8799`), is not a word.
-    private func isCounted(_ tag: String) -> Bool {
+    /// Whether a tag is a word at all. Anything that is not a Hebrew or
+    /// Greek number — a TVM code such as `TH8799` — is not one.
+    private static func isWord(_ tag: String) -> Bool {
+        guard let first = tag.first else { return false }
+        return first == "H" || first == "G"
+    }
+
+    /// Whether a tag is a word of the key's own language. A bare key names no
+    /// language, so every word is one of its language.
+    private func isOfKeysLanguage(_ tag: String) -> Bool {
         guard let first = tag.first else { return false }
         if let keyLanguage { return first == keyLanguage }
-        return first == "H" || first == "G"
+        return Self.isWord(tag)
     }
 
     private func isKey(_ tag: String) -> Bool {
@@ -815,6 +855,7 @@ public struct LampStrongsAnalyzer {
 
     private func bookDivisions(
         _ occurrences: [LampStrongsAnalysis.Occurrence],
+        chapterWords: [Int: [Int: Int]],
         totalWords: Int
     ) -> [LampStrongsAnalysis.Division] {
         var hits: [Int: [Int: Int]] = [:]
@@ -898,6 +939,7 @@ public struct LampStrongsAnalyzer {
     private func companions(
         hitVerses: Int,
         verseFrequency: [String: Int],
+        taggedVerseCount: Int,
         limit: Int = 25
     ) -> [LampStrongsAnalysis.Companion] {
         guard hitVerses > 0, taggedVerseCount > 0 else { return [] }

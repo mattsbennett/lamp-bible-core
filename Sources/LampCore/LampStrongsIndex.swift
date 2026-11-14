@@ -197,16 +197,41 @@ public enum LampStrongsIndex {
     ) throws -> LampStrongsCorpus {
         let first = LampStrongsKey.normalized(key).first
         let language = first == "G" || first == "H" ? String(first!) : "*"
+        // The books that tag the key's language, and every tagged word in
+        // them — the "*" rows, both languages, not the key's language alone.
+        //
+        // Where a text tags one language per book, the two are the same
+        // number and a word is still measured against its own Testament: an
+        // English Bible's Old Testament books carry Hebrew tags and no Greek
+        // ones. Where the languages are mixed inside a book they are not the
+        // same number at all. The Septuagint is Greek throughout and carries
+        // Hebrew numbers on the names the New Testament does not use, and
+        // counting such a name against those names alone made it 43 times as
+        // frequent as it is: H5019, Nebuchadnezzar, 36 occurrences, read as
+        // 3.31 in every thousand words rather than 0.08, with the spread's
+        // expectation drawn from the same wrong distribution.
+        var keyLanguageBooks = Set<Int>()
         var chapterWords: [Int: [Int: Int]] = [:]
-        var verses = 0
+        var versesByBook: [Int: Int] = [:]
         for row in try Row.fetchAll(db, sql: """
-            SELECT book, chapter, tags, verses FROM strongs_chapter_tags
-            WHERE translation_id = ? AND language = ? AND book BETWEEN ? AND ?
+            SELECT language, book, chapter, tags, verses FROM strongs_chapter_tags
+            WHERE translation_id = ? AND language IN (?, '*') AND book BETWEEN ? AND ?
             """, arguments: [translationID, language, bookRange?.lowerBound ?? Int.min, bookRange?.upperBound ?? Int.max]) {
-            chapterWords[row["book"] as Int, default: [:]][row["chapter"] as Int] = row["tags"]
-            verses += row["verses"] as Int
+            let book = row["book"] as Int
+            let rowLanguage = row["language"] as String
+            if rowLanguage == language { keyLanguageBooks.insert(book) }
+            guard rowLanguage == "*" else { continue }
+            chapterWords[book, default: [:]][row["chapter"] as Int] = row["tags"]
+            // One row per chapter per language, each verse counted once in
+            // the "*" row, so these add up without counting a verse twice.
+            versesByBook[book, default: 0] += row["verses"] as Int
         }
-        return LampStrongsCorpus(chapterWords: chapterWords, taggedVerseCount: verses)
+        return LampStrongsCorpus(
+            chapterWords: chapterWords.filter { keyLanguageBooks.contains($0.key) },
+            taggedVerseCount: versesByBook
+                .filter { keyLanguageBooks.contains($0.key) }
+                .values.reduce(0, +)
+        )
     }
 
     /// How many verses in range hold each of `keys`, as stored: the

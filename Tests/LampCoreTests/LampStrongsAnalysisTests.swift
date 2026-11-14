@@ -312,3 +312,86 @@ struct LampStrongsAnalysisTests {
         #expect(throws: LampAgentError.self) { try LampReferenceParser.books("Nowhere") }
     }
 }
+
+/// What a key's counts are measured against: the words of the books that tag
+/// its language, both languages' words together.
+struct StrongsCorpusLanguageTests {
+    /// One verse of tagged words, in the shape a module stores.
+    private func verse(_ words: [(String, String)]) -> (text: String, json: String) {
+        var text = ""
+        var entries: [String] = []
+        for (word, key) in words {
+            let start = text.count
+            if !text.isEmpty { text += " " }
+            let begin = text.count
+            text += word
+            _ = start
+            entries.append(#"{"type":"strongs","text":"\#(word)","start":\#(begin),"end":\#(text.count),"data":{"strongs":"\#(key)"}}"#)
+        }
+        return (text, "[" + entries.joined(separator: ",") + "]")
+    }
+
+    private func analysis(key: String, verses: [(Int, [(String, String)])]) -> LampStrongsAnalysis {
+        var analyzer = LampStrongsAnalyzer(key: key, translationID: "T", translationName: "T")
+        for (reference, words) in verses {
+            let built = verse(words)
+            analyzer.add(reference: reference, text: built.text, annotationsJSON: built.json)
+        }
+        return analyzer.analysis()
+    }
+
+    /// A Hebrew-numbered name inside a Greek text is measured against that
+    /// text, not against the other Hebrew-numbered names.
+    ///
+    /// The Septuagint is Greek throughout and numbers the names the New
+    /// Testament does not use from the Hebrew. Counted against those names
+    /// alone, Nebuchadnezzar's 36 occurrences read as 3.31 in every thousand
+    /// words instead of 0.08 — 43 times as often — and the spread's
+    /// expectation came from the same wrong distribution.
+    @Test func aNameNumberedFromHebrewIsMeasuredAgainstTheGreekAroundIt() {
+        // Two Greek words a verse through Psalm 1, and one Hebrew-numbered
+        // name in the first verse.
+        var verses: [(Int, [(String, String)])] = [
+            (19_001_001, [("name", "H5019"), ("word", "G3056"), ("the", "G3588")]),
+        ]
+        for verse in 2...10 {
+            verses.append((19_001_000 + verse, [("word", "G3056"), ("the", "G3588")]))
+        }
+        let name = analysis(key: "H5019", verses: verses)
+        #expect(name.occurrenceCount == 1)
+        // Every tagged word of the book, not the one Hebrew-numbered word.
+        #expect(name.wordCount == 21)
+        #expect(name.taggedVerseCount == 10)
+        // A Greek key in the same text is measured against the same words.
+        let greek = analysis(key: "G3056", verses: verses)
+        #expect(greek.wordCount == 21)
+        #expect(greek.occurrenceCount == 10)
+    }
+
+    /// A text that tags one language per book still measures a word against
+    /// its own Testament: that is what the rule is for.
+    @Test func aTestamentIsStillWhatAWordIsMeasuredAgainst() {
+        let verses: [(Int, [(String, String)])] = [
+            (1_001_001, [("God", "H430"), ("created", "H1254")]),
+            (1_001_002, [("spirit", "H7307"), ("water", "H4325")]),
+            (46_013_001, [("love", "G26"), ("and", "G2532")]),
+            (46_013_002, [("love", "G26"), ("faith", "G4102")]),
+        ]
+        let greek = analysis(key: "G26", verses: verses)
+        #expect(greek.occurrenceCount == 2)
+        #expect(greek.wordCount == 4, "the New Testament's words, not the Hebrew ones too")
+        #expect(greek.taggedVerseCount == 2)
+        #expect(greek.books.map(\.id) == [46])
+        let hebrew = analysis(key: "H430", verses: verses)
+        #expect(hebrew.wordCount == 4, "the Old Testament's")
+        #expect(hebrew.books.map(\.id) == [1])
+    }
+
+    /// A code that is not a word is not counted as one.
+    @Test func aGrammarCodeIsNotAWord() {
+        let verses: [(Int, [(String, String)])] = [
+            (1_001_001, [("God", "H430"), ("created", "H1254"), ("verb", "TH8799")]),
+        ]
+        #expect(analysis(key: "H430", verses: verses).wordCount == 2)
+    }
+}
