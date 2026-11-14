@@ -65,4 +65,50 @@ struct TranslationStrongsFeatureTests {
         #expect(modules.first { $0.id == "T" }?.tagsStrongs == true)
         #expect(modules.first { $0.id == "U" }?.tagsStrongs == false)
     }
+
+    @Test func aTranslationHoldsTheWholeBibleOnlyWithEveryBook() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-whole-bible-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let library = LampLibrary(rootURL: fixture.appendingPathComponent("Library"))
+        // One without Nehemiah, as the Septuagint is, and one with all 66.
+        for (id, numbers) in [("Whole", Array(1...66)), ("Part", Array(1...66).filter { $0 != 16 })] {
+            let moduleURL = fixture.appendingPathComponent("\(id).lamp")
+            let meta: String = #"{"schemaVersion": "1.0", "id": "\#(id)", "type": "translation", "name": "Test \#(id)", "abbreviation": "\#(id)", "language": "en"}"#
+            let books = numbers.map { number -> String in
+                let book = LampCanonicalBooks.book(number)!
+                return #"{"id": "\#(book.osisID)", "name": "\#(book.name)", "number": \#(number), "testament": "\#(book.testament)", "chapters": [{"chapter": 1, "verses": [{"v": 1, "content": {"text": "Text"}}]}]}"#
+            }.joined(separator: ", ")
+            let document: String = #"{"meta": \#(meta), "books": [\#(books)]}"#
+            _ = try LampModuleCompiler().compile(data: Data(document.utf8), sourceFilename: "\(id).json", destinationURL: moduleURL)
+            _ = try await library.install(from: moduleURL)
+        }
+        let modules = try await library.installedModules()
+        #expect(modules.first { $0.id == "Whole" }?.holdsWholeBible == true)
+        #expect(modules.first { $0.id == "Part" }?.holdsWholeBible == false)
+        #expect(modules.first { $0.id == "Part" }?.coveredBooks.count == 65)
+        #expect(modules.first { $0.id == "Part" }?.coveredBooks[43] == 1)
+        #expect(modules.first { $0.id == "Part" }?.coveredBooks[16] == nil)
+    }
+
+    @Test func coverageReadsTheBundlesLayoutByTranslation() throws {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: "CREATE TABLE translation_books (translation_id TEXT, book_number INTEGER, book_id TEXT, name TEXT, testament TEXT, chapter_count INTEGER)")
+            try db.execute(sql: "INSERT INTO translation_books VALUES ('NT', 40, 'Matt', 'Matthew', 'NT', 28), ('NT', 66, 'Rev', 'Revelation', 'NT', 22), ('OT', 1, 'Gen', 'Genesis', 'OT', 50)")
+        }
+        let (nt, missing, all) = try queue.read { db in
+            (
+                try LampTranslationCoverage.chapterCounts(in: db, translationID: "NT"),
+                try LampTranslationCoverage.chapterCounts(in: db, translationID: "Missing"),
+                try LampTranslationCoverage.chapterCountsByTranslation(in: db)
+            )
+        }
+        #expect(nt == [40: 28, 66: 22])
+        #expect(missing.isEmpty)
+        #expect(all == ["NT": [40: 28, 66: 22], "OT": [1: 50]])
+        let empty = try DatabaseQueue().read { try LampTranslationCoverage.chapterCounts(in: $0, translationID: "NT") }
+        #expect(empty.isEmpty)
+    }
 }

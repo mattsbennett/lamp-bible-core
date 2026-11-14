@@ -2,7 +2,10 @@ import Foundation
 
 /// Translations grouped by the language they are written in, as a picker
 /// lists them: the reader's own language first, then any other modern
-/// language by name, then the biblical languages last.
+/// language by name, then the biblical languages last. Within a language,
+/// whole Bibles come first and translations of part of it after them, so
+/// the Septuagint or a New Testament is not what a reader reaches for
+/// first when choosing what to read.
 ///
 /// "Biblical Languages" rather than "Original Languages": the Greek
 /// Septuagint is written in a biblical language but is itself a
@@ -15,7 +18,35 @@ public enum LampTranslationLanguages {
         /// languages, or `other` for modules that declare none.
         public let id: String
         public let title: String
+        /// Whole Bibles first, then the rest, each in the order given.
         public let items: [Item]
+        /// `items` split into whole Bibles and parts, only those with any,
+        /// in that order. One part holding everything when the caller does
+        /// not say which are whole.
+        public let parts: [Part<Item>]
+    }
+
+    /// The whole Bibles of a language, or the translations of part of it.
+    public struct Part<Item>: Identifiable {
+        public enum Scope: String, Sendable {
+            case wholeBible
+            case partOfTheBible
+        }
+
+        public let scope: Scope
+        public let items: [Item]
+
+        public var id: String { scope.rawValue }
+
+        /// A heading for the part, where it needs one: the parts of the
+        /// Bible are named, the whole Bibles above them are not, being
+        /// what a language's list is chiefly of.
+        public var title: String? {
+            switch scope {
+            case .wholeBible: nil
+            case .partOfTheBible: "Part of the Bible"
+            }
+        }
     }
 
     /// Koine and classical Greek, Biblical Hebrew and Aramaic. Modern Greek
@@ -34,10 +65,12 @@ public enum LampTranslationLanguages {
     }
 
     /// `items` grouped by language, each group keeping the order it was
-    /// given in.
+    /// given in, and within it whole Bibles before parts where
+    /// `holdsWholeBible` says which is which.
     public static func grouped<Item>(
         _ items: [Item],
         language: (Item) -> String?,
+        holdsWholeBible: ((Item) -> Bool)? = nil,
         locale: Locale = .current
     ) -> [Group<Item>] {
         var byLanguage: [String: [Item]] = [:]
@@ -71,6 +104,18 @@ public enum LampTranslationLanguages {
             if a != b { return a < b }
             return title(left).localizedStandardCompare(title(right)) == .orderedAscending
         }
-        return keys.map { Group(id: $0, title: title($0), items: byLanguage[$0] ?? []) }
+        return keys.map { key in
+            let members = byLanguage[key] ?? []
+            let parts: [Part<Item>]
+            if let holdsWholeBible {
+                parts = [
+                    Part(scope: .wholeBible, items: members.filter(holdsWholeBible)),
+                    Part(scope: .partOfTheBible, items: members.filter { !holdsWholeBible($0) }),
+                ].filter { !$0.items.isEmpty }
+            } else {
+                parts = [Part(scope: .wholeBible, items: members)]
+            }
+            return Group(id: key, title: title(key), items: parts.flatMap(\.items), parts: parts)
+        }
     }
 }

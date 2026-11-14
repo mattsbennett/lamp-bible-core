@@ -14,6 +14,17 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
     /// says so ("Berean Standard Bible", not "… (Strongs)"), and a feature a
     /// translation does not declare is not claimed for it.
     public let tagsStrongs: Bool
+    /// The books a translation holds, by number, each with its chapter
+    /// count (`LampTranslationCoverage`). Read from the module itself, not
+    /// declared beside it, so it cannot disagree with what the reader can
+    /// open. Empty for any other kind of module.
+    public let coveredBooks: [Int: Int]
+
+    /// Whether a translation holds all 66 books, so a picker can put whole
+    /// Bibles before a Septuagint or a New Testament.
+    public var holdsWholeBible: Bool {
+        LampCanonicalBooks.holdsEveryBook(coveredBooks.keys)
+    }
 
     public init(
         id: String,
@@ -23,7 +34,8 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
         language: String? = nil,
         compressedByteCount: Int = 0,
         isBundled: Bool = false,
-        tagsStrongs: Bool = false
+        tagsStrongs: Bool = false,
+        coveredBooks: [Int: Int] = [:]
     ) {
         self.id = id
         self.kind = kind
@@ -33,6 +45,7 @@ public struct LampInstalledModule: Identifiable, Equatable, Sendable {
         self.compressedByteCount = compressedByteCount
         self.isBundled = isBundled
         self.tagsStrongs = tagsStrongs
+        self.coveredBooks = coveredBooks
     }
 
     /// Whether a module's `features_json` declares Strong's tagging.

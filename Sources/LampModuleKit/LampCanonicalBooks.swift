@@ -45,6 +45,15 @@ public enum LampCanonicalBooks {
         ("Rev", "REV", "Revelation"),
     ]
 
+    /// Whether `bookNumbers` include every one of the 66 books, which is
+    /// what makes a translation a whole Bible rather than a part of one. A
+    /// book numbered past 66, should a translation ever carry one, neither
+    /// makes up for a missing book nor stops a whole one being whole.
+    public static func holdsEveryBook<Numbers: Sequence>(_ bookNumbers: Numbers) -> Bool
+    where Numbers.Element == Int {
+        Set(bookNumbers).isSuperset(of: 1...all.count)
+    }
+
     public static func book(_ number: Int) -> LampCanonicalBook? {
         all.indices.contains(number - 1) ? all[number - 1] : nil
     }

@@ -4962,17 +4962,20 @@ public actor LampLibrary {
             if tables.contains("translations") {
                 let features = try LampModuleText.columnNames(in: db, table: "translations")
                     .contains("features_json") ? ", features_json" : ""
+                let books = try LampTranslationCoverage.chapterCountsByTranslation(in: db, tables: tables)
                 modules += try Row.fetchAll(db, sql: """
                     SELECT id, name, abbreviation, language\(features) FROM translations
                     ORDER BY name
                     """).map { row in
-                        LampInstalledModule(
-                            id: row["id"], kind: .translation, name: row["name"],
+                        let id: String = row["id"]
+                        return LampInstalledModule(
+                            id: id, kind: .translation, name: row["name"],
                             abbreviation: row["abbreviation"], language: row["language"],
                             isBundled: true,
                             tagsStrongs: LampInstalledModule.declaresStrongs(
                                 row.hasColumn("features_json") ? row["features_json"] : nil
-                            )
+                            ),
+                            coveredBooks: books[id] ?? [:]
                         )
                     }
             }
@@ -5658,6 +5661,9 @@ public actor LampLibrary {
                     compressedByteCount: compressedByteCount,
                     tagsStrongs: LampInstalledModule.declaresStrongs(
                         row.hasColumn("features_json") ? row["features_json"] : nil
+                    ),
+                    coveredBooks: try LampTranslationCoverage.chapterCounts(
+                        in: db, tables: tables, translationID: row["id"]
                     )
                 )
             }
@@ -5672,6 +5678,9 @@ public actor LampLibrary {
                     compressedByteCount: compressedByteCount,
                     tagsStrongs: LampInstalledModule.declaresStrongs(
                         row.hasColumn("features_json") ? row["features_json"] : nil
+                    ),
+                    coveredBooks: try LampTranslationCoverage.chapterCounts(
+                        in: db, tables: tables, translationID: row["id"]
                     )
                 )
             }
