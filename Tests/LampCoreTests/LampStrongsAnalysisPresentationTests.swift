@@ -1084,7 +1084,7 @@ struct SeptuagintEnglishTests {
         let hebrew = LampVersification.standard(.original)
         let english = LampVersification.standard(.english)
         let hebrewReference = 19_051_007
-        let englishReference = try #require(hebrew.convert(hebrewReference, to: english))
+        let englishReference = try #require(hebrew.opens(hebrewReference, in: english))
         #expect(englishReference != hebrewReference, "the psalm's title shifts the verse")
         let verse = "Surely I was brought forth in iniquity; I was sinful when my mother conceived me."
         let found = LampSeptuagintSection.english(
@@ -1132,7 +1132,7 @@ struct SeptuagintEnglishTests {
             analysis: nil
         )
         let psalm = try #require(found[19_051_007])
-        #expect(psalm.reference == hebrew.convert(19_051_007, to: english))
+        #expect(psalm.reference == hebrew.opens(19_051_007, in: english))
         #expect(psalm.reference != 19_051_007)
         #expect(psalm.snippet == nil)
         #expect(found[1_029_020]?.reference == 1_029_020)
@@ -1152,7 +1152,7 @@ struct SeptuagintEnglishTests {
             analysis: Self.analysis(occurrences: [], verseTexts: [:])
         )
         let line = try #require(found[hebrewReference])
-        #expect(line.reference == hebrew.convert(hebrewReference, to: english))
+        #expect(line.reference == hebrew.opens(hebrewReference, in: english))
         #expect(line.reference != hebrewReference)
         #expect(line.snippet == nil)
     }
@@ -1193,14 +1193,133 @@ struct SeptuagintEnglishTests {
             greek: "λόγος", septuagint: .tagged("Brenton Greek Septuagint")
         )
         #expect(!note.contains("tagged word by word"))
-        #expect(note.contains("not λόγος’s"))
-        #expect(note.contains("λόγος’s own verses in Brenton Greek Septuagint are listed above"))
-        // The Greek under a verse is still another word's as often as not.
-        #expect(note.contains("may use another word"))
-        // Tagged but unnamed: the fact holds, the pointer cannot be given.
-        let unnamed = LampSeptuagintSection.note(greek: "λόγος", septuagint: .tagged(""))
-        #expect(unnamed.contains("may use another word"))
-        #expect(!unnamed.contains("are listed above"))
+        // It says only what the section above it has not: whose verses these
+        // are. One Septuagint section, each thing said once.
+        #expect(note == "λόγος stands mostly for these Hebrew words, "
+            + "and the verses under each are that word’s.")
+        #expect(!note.contains("Greek Old Testament"), "the heading says it")
+        #expect(!note.contains("listed above"), "nothing stands above it to point at")
+        #expect(LampSeptuagintSection.note(greek: "λόγος", septuagint: .tagged("")) == note,
+            "the text's name belongs to the heading, not to this sentence")
+    }
+
+    /// A Hebrew word's verses can now be narrowed to the ones the Septuagint
+    /// renders with the Greek word being studied, through its own numbering.
+    @Test func aHebrewWordsVersesNarrowToTheOnesUsingTheGreekWord() {
+        let hebrew = LampVersification.standard(.original)
+        let septuagint = LampVersification.standard(.septuagint)
+        // Psalm 51:5 in the Hebrew is the Septuagint's 50:7, so a list that
+        // matched raw numbers would drop it.
+        let psalm = 19_051_005
+        let mapped = try! #require(hebrew.opens(psalm, in: septuagint))
+        let genesis = 1_001_001
+        let found = LampSeptuagintSection.versesRenderedByGreek(
+            hebrew: [genesis, psalm],
+            hebrewNumbering: hebrew,
+            septuagintNumbering: septuagint,
+            septuagintReferences: [mapped]
+        )
+        #expect(found == [psalm], "the psalm is in, by the Septuagint's own number")
+        // Nothing known of the Greek: nothing claimed, rather than everything.
+        #expect(LampSeptuagintSection.versesRenderedByGreek(
+            hebrew: [genesis, psalm],
+            hebrewNumbering: hebrew,
+            septuagintNumbering: septuagint,
+            septuagintReferences: []
+        ).isEmpty)
+    }
+
+    /// A word standing in a psalm's title is in the list, whichever half of
+    /// the title it stands in.
+    ///
+    /// TAHOT holds a whole title as one verse, numbered 0; the Septuagint
+    /// numbers it as two. Crossing on a single converted number found only
+    /// the first half, so a word in "when Nathan the prophet came to him"
+    /// was tested against "To the choirmaster, a psalm of David" and fell
+    /// out of a list that claims to be that word's verses. Words like
+    /// מִזְמוֹר and לַמְנַצֵּחַ live almost entirely in titles.
+    @Test func aWordInEitherHalfOfAPsalmTitleIsInTheList() {
+        let hebrew = LampVersification.standard(.english)
+        let septuagint = LampVersification.standard(.septuagint)
+        let title = 19_051_000
+        #expect(hebrew.counterparts(of: title, in: septuagint) == [19_050_001, 19_050_002])
+        // The first half: found before this change, and still found.
+        #expect(LampSeptuagintSection.versesRenderedByGreek(
+            hebrew: [title],
+            hebrewNumbering: hebrew,
+            septuagintNumbering: septuagint,
+            septuagintReferences: [19_050_001]
+        ) == [title])
+        // The second half: the half that used to be lost.
+        #expect(LampSeptuagintSection.versesRenderedByGreek(
+            hebrew: [title],
+            hebrewNumbering: hebrew,
+            septuagintNumbering: septuagint,
+            septuagintReferences: [19_050_002]
+        ) == [title])
+        // A Septuagint verse belonging to neither half still excludes it.
+        #expect(LampSeptuagintSection.versesRenderedByGreek(
+            hebrew: [title],
+            hebrewNumbering: hebrew,
+            septuagintNumbering: septuagint,
+            septuagintReferences: [19_050_003]
+        ).isEmpty)
+    }
+
+    /// What a narrowed list says, and what it does not.
+    @Test func theNarrowedListSaysWhatTheRestAre() {
+        #expect(LampSeptuagintSection.renderedHeading(greek: "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}", shown: 575, of: 1_289)
+            == "Narrowed to the 575 of 1289 where the Septuagint uses \u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}; "
+            + "in the rest it translates the Hebrew another way.")
+        #expect(LampSeptuagintSection.renderedHeading(greek: "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}", shown: 8, of: 8)
+            == "The Septuagint uses \u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2} in all 8 of them.")
+        #expect(LampSeptuagintSection.renderedHeading(greek: nil, shown: 1, of: 2)
+            .hasPrefix("Narrowed to the 1 of 2 where the Septuagint uses this word"))
+        #expect(LampSeptuagintSection.renderedHeading(greek: "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}", shown: 0, of: 0).isEmpty)
+    }
+
+    /// A narrowed count says what it counts, so it is not read as the whole.
+    @Test func aNarrowedCountNamesTheGreekWord() {
+        let hebrew = LampSeptuagintHebrew(text: "\u{05D3}\u{05B8}\u{05D1}\u{05B8}\u{05E8}", strongs: "H1697")
+        #expect(LampSeptuagintSection.heading(
+            hebrew, transliteration: "d\u{0101}\u{1E07}\u{0101}r", rendering: "words",
+            verses: 735, usingGreek: "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}"
+        ) == "d\u{0101}\u{1E07}\u{0101}r \u{201C}words\u{201D} (H1697) \u{00B7} 735 verses using \u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}")
+        // Not narrowed, it is every verse of the Hebrew word, as before.
+        #expect(LampSeptuagintSection.heading(
+            hebrew, transliteration: "d\u{0101}\u{1E07}\u{0101}r", rendering: "words", verses: 1_289
+        ) == "d\u{0101}\u{1E07}\u{0101}r \u{201C}words\u{201D} (H1697) \u{00B7} in 1289 Hebrew verses")
+    }
+
+    /// One of each and nothing competing is the strong case, and says
+    /// nothing; each other case says which doubt it is.
+    @Test func aVersePairingSaysWhichDoubtItHas() {
+        func doubt(_ hebrew: Int, _ greek: Int, also: [String] = []) -> String? {
+            LampSeptuagintSection.pairingDoubt(
+                greek: "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}", hebrew: "\u{05D3}\u{05B8}\u{05D1}\u{05B8}\u{05E8}",
+                hebrewOccurrences: hebrew, greekOccurrences: greek, alsoRendered: also
+            )
+        }
+        #expect(doubt(1, 1) == nil, "one of each, nothing competing")
+        #expect(doubt(2, 1) == "\u{05D3}\u{05B8}\u{05D1}\u{05B8}\u{05E8} stands twice in this verse.")
+        #expect(doubt(1, 3) == "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2} stands three times in the Greek.")
+        #expect(doubt(1, 1, also: ["\u{05DE}\u{05B4}\u{05DC}\u{05B8}\u{05BC}\u{05D4}"])
+            == "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2} also renders \u{05DE}\u{05B4}\u{05DC}\u{05B8}\u{05BC}\u{05D4}, which stands here too.")
+        // Every doubt there is, in one line.
+        let all = doubt(2, 2, also: ["\u{05DE}\u{05B4}\u{05DC}\u{05B8}\u{05BC}\u{05D4}", "\u{05D0}\u{05B5}\u{05DE}\u{05B6}\u{05E8}"])
+        #expect(all?.contains("twice in this verse; ") == true)
+        #expect(all?.contains("twice in the Greek; ") == true)
+        #expect(all?.hasSuffix("and \u{05D0}\u{05B5}\u{05DE}\u{05B6}\u{05E8}, which stands here too.") == true)
+    }
+
+    /// The narrowed list says what it cannot show, not only what it shows.
+    @Test func theNarrowedListOwnsUpToBeingVerseDeep() {
+        let caveat = LampSeptuagintSection.renderedCaveat(greek: "\u{03bb}\u{03cc}\u{03b3}\u{03bf}\u{03c2}")
+        #expect(caveat.contains("both stand in it"))
+        #expect(caveat.contains("may be translating another word of it"))
+        // Without a lemma it still reads as a sentence about the Greek word.
+        #expect(LampSeptuagintSection.renderedCaveat(greek: nil)
+            .contains("the Greek word in the Greek"))
     }
 
     /// The headline counts verses in both Testaments, and never adds them.
@@ -1285,7 +1404,21 @@ struct SeptuagintEnglishTests {
         ))
         #expect(untagged.newTestament.perThousandWords == 0)
         #expect(LampSeptuagintSection.contrastCaption(untagged)
-            == "Counted apart, never added: they are two texts, not two halves of one.")
+            == "Counted apart, never added, each bar against the larger of the two: "
+            + "they are two texts, not two halves of one.")
+        // What the track is, on both captions: a filled bar is the larger
+        // side, not all of them.
+        #expect(caption.contains("each bar against the larger of the two"))
+        // A rate under a tenth is said, not rounded to nothing: ἀγάπη stands
+        // 14 times in the Septuagint's 476,000 tagged words, and "0.0" beside
+        // a count of 14 reads as a contradiction.
+        let rare = try! #require(LampSeptuagintSection.contrast(
+            newTestament: analysis("TAGNT", verses: 106, occurrences: 116, words: 138_000),
+            septuagint: analysis("LXX", verses: 14, occurrences: 14, words: 476_000)
+        ))
+        let rareCaption = LampSeptuagintSection.contrastCaption(rare)
+        #expect(rareCaption.contains("0.03 in the Septuagint"))
+        #expect(!rareCaption.contains("0.0 in the Septuagint"))
     }
 
     /// A reader is sent to the verse their own Bible numbers, and told when
@@ -1332,8 +1465,8 @@ struct SeptuagintGreekTests {
         let septuagint = LampVersification.standard(.septuagint)
         let first = 19_051_007
         let second = 19_051_008
-        let mappedFirst = try #require(hebrew.convert(first, to: septuagint))
-        let mappedSecond = try #require(hebrew.convert(second, to: septuagint))
+        let mappedFirst = try #require(hebrew.opens(first, in: septuagint))
+        let mappedSecond = try #require(hebrew.opens(second, in: septuagint))
         #expect((mappedFirst / 1_000) % 1_000 == 50, "the Septuagint numbers this psalm 50")
 
         var reads: [String] = []

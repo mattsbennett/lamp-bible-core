@@ -796,22 +796,27 @@ public enum LampSeptuagintSection {
         var read: [Int: String] = [:]
         for reference in references {
             try Task.checkCancellation()
-            guard let mapped = numbering.convert(reference, to: textNumbering)
-            else { continue }
-            let parts = LampBibleReferenceFormatter.components(of: mapped)
-            let chapterKey = parts.book * 1_000 + parts.chapter
-            if chapters[chapterKey] == nil {
-                do {
-                    chapters[chapterKey] = try await readChapter(parts.book, parts.chapter)
-                } catch {
-                    // A read cut short by cancellation is not a chapter that
-                    // could not be read.
-                    try Task.checkCancellation()
-                    chapters[chapterKey] = [:]
+            // Every verse the text numbers for this one, not the first of
+            // them: a psalm's title is one verse here and two in the
+            // Septuagint, and half a title is not the verse.
+            var halves: [String] = []
+            for mapped in numbering.counterparts(of: reference, in: textNumbering) {
+                let parts = LampBibleReferenceFormatter.components(of: mapped)
+                let chapterKey = parts.book * 1_000 + parts.chapter
+                if chapters[chapterKey] == nil {
+                    do {
+                        chapters[chapterKey] = try await readChapter(parts.book, parts.chapter)
+                    } catch {
+                        // A read cut short by cancellation is not a chapter
+                        // that could not be read.
+                        try Task.checkCancellation()
+                        chapters[chapterKey] = [:]
+                    }
                 }
+                if let text = chapters[chapterKey]?[parts.verse] { halves.append(text) }
             }
-            if let text = chapters[chapterKey]?[parts.verse] {
-                read[reference] = text
+            if !halves.isEmpty {
+                read[reference] = halves.joined(separator: " ")
             }
         }
         return read
@@ -827,6 +832,18 @@ public enum LampSeptuagintSection {
     /// Why the Greek word's own Septuagint verses are worth a reader's time,
     /// said for someone who does not read Greek and will not be reading them
     /// in Greek.
+    /// The one heading over everything said about how the section's figures
+    /// were arrived at: what the Septuagint is, what the tags are, and what
+    /// a crossed verse list cannot promise.
+    ///
+    /// One disclosure rather than five open paragraphs. A blind design panel
+    /// read the section with the method written out around the charts and
+    /// called it documentation rather than analysis — "five separate
+    /// paragraphs at caption size stack between the charts, so the figures
+    /// get buried" — while asking for the same sentences to be kept and
+    /// grouped. They are all still here, one press away.
+    public static let methodologyTitle = "How this is counted"
+
     public static let ownUseAbout =
         "The Septuagint is the Greek Old Testament the New Testament’s first "
         + "readers knew, so the same Greek word here shows what it was already "
@@ -974,14 +991,26 @@ public enum LampSeptuagintSection {
     /// times as many Septuagint verses and still be the rarer word there.
     public static func contrastCaption(_ contrast: Contrast) -> String {
         func rate(_ side: Contrast.Side) -> String {
-            String(format: "%.1f", side.perThousandWords)
+            let value = side.perThousandWords
+            // A word standing 14 times in the Septuagint's 476,000 tagged
+            // words is 0.03 per thousand, which one decimal place prints as
+            // "0.0" — a figure that reads as "none at all" beside a count of
+            // 14 right above it. Two places where one would round a real
+            // rate away; never for a rate that is truly zero.
+            if value > 0, value < 0.1 { return String(format: "%.2f", value) }
+            return String(format: "%.1f", value)
         }
         let sides = [contrast.newTestament, contrast.septuagint]
         guard sides.allSatisfy({ $0.wordCount > 0 }) else {
-            return "Counted apart, never added: they are two texts, not two "
-                + "halves of one."
+            return "Counted apart, never added, each bar against the larger "
+                + "of the two: they are two texts, not two halves of one."
         }
-        return "Counted apart, never added. Per thousand tagged words: "
+        // What the bars are drawn against, said rather than left to be
+        // worked out. The longer side fills its track, and a full bar reads
+        // as "all of them" to anyone not told what the track is; a design
+        // panel asked for "an axis or a shared maximum made explicit".
+        return "Counted apart, never added, each bar against the larger of "
+            + "the two. Per thousand tagged words: "
             + "\(rate(contrast.newTestament)) in the New Testament, "
             + "\(rate(contrast.septuagint)) in the Septuagint."
     }
@@ -1014,7 +1043,8 @@ public enum LampSeptuagintSection {
     ) -> [Int: Numbering] {
         var numbered: [Int: Numbering] = [:]
         for reference in references {
-            if let mapped = septuagintNumbering.convert(reference, to: readerNumbering) {
+            // One destination, because that is all opening a verse can be.
+            if let mapped = septuagintNumbering.opens(reference, in: readerNumbering) {
                 numbered[reference] = Numbering(reference: mapped, isTheSeptuagintsOwn: false)
             } else {
                 numbered[reference] = Numbering(reference: reference, isTheSeptuagintsOwn: true)
@@ -1023,29 +1053,174 @@ public enum LampSeptuagintSection {
         return numbered
     }
 
+    /// Which of a Hebrew word's verses the Septuagint renders with this
+    /// Greek word, by reading its own tags.
+    ///
+    /// Until the Septuagint was tagged, a Hebrew word's verses were all that
+    /// could be listed, and the Greek under any one of them might use quite
+    /// another word: for דָבָר it uses λόγος in 575 of 1,289 verses, so
+    /// more than half the list was beside the point for a reader studying
+    /// λόγος. With both texts tagged the two lists can be crossed, and
+    /// what is left is the verses where the Hebrew word stands and the
+    /// Septuagint reached for this Greek word.
+    ///
+    /// References come in and go out in the Hebrew text's numbering, since
+    /// that is what the rows are keyed by; the Septuagint's own numbering is
+    /// used only to look each one up (its Psalm 50:7 is the Hebrew's 51:5).
+    ///
+    /// What this says, exactly: the Greek verse holds the word. It does not
+    /// say the Greek word stands for *this* Hebrew word there rather than
+    /// for another word of the same verse, which no tag in either text can
+    /// settle. Narrow a list by it, and say what the narrowing means.
+    public static func versesRenderedByGreek(
+        hebrew references: [Int],
+        hebrewNumbering: LampVersification,
+        septuagintNumbering: LampVersification,
+        septuagintReferences: Set<Int>
+    ) -> Set<Int> {
+        guard !septuagintReferences.isEmpty else { return [] }
+        var found = Set<Int>()
+        for reference in references {
+            // Any counterpart carrying the Greek word makes this verse one of
+            // the word's. A Hebrew psalm title answers to two Septuagint
+            // verses, and the word may stand in either.
+            let mapped = hebrewNumbering.counterparts(of: reference, in: septuagintNumbering)
+            if mapped.contains(where: septuagintReferences.contains) { found.insert(reference) }
+        }
+        return found
+    }
+
+    /// What the narrowed list is, said where a reader can act on it.
+    ///
+    /// Named rather than counted alone, because "575 of 1,289" invites the
+    /// reading that the other 714 are missing something; they are verses the
+    /// Septuagint translated another way, which is a fact about the Greek
+    /// and not a gap.
+    public static func renderedHeading(
+        greek lemma: String?,
+        shown: Int,
+        of total: Int
+    ) -> String {
+        let lemma = lemma.flatMap { $0.isEmpty ? nil : $0 } ?? "this word"
+        guard total > 0 else { return "" }
+        guard shown < total else {
+            return "The Septuagint uses \(lemma) in all \(total) of them."
+        }
+        return "Narrowed to the \(shown) of \(total) where the Septuagint uses "
+            + "\(lemma); in the rest it translates the Hebrew another way."
+    }
+
+    /// What a narrowed list does not promise, said with it.
+    ///
+    /// The crossing is of verses, not of words. A verse is kept because the
+    /// Hebrew word stands in it and the Greek word stands in the
+    /// Septuagint's verse at the same place; in a long verse the Greek word
+    /// may be rendering some other word of it, and no tag in either text can
+    /// settle which. Narrowing a list makes a reader trust it more, so what
+    /// it still cannot show has to be said beside it rather than left to be
+    /// assumed.
+    public static func renderedCaveat(greek lemma: String?) -> String {
+        let lemma = lemma.flatMap { $0.isEmpty ? nil : $0 } ?? "the Greek word"
+        return "A verse is here because both stand in it: the Hebrew word, and "
+            + "\(lemma) in the Greek. In a long verse \(lemma) may be translating "
+            + "another word of it."
+    }
+
+    /// What stands in the way of reading one crossed verse as a pairing.
+    ///
+    /// The crossing is of verses: this Hebrew word stands in the verse, and
+    /// the Greek word stands in the Septuagint's. Three things can make that
+    /// less than a pairing, and each is worth saying because each is a
+    /// different doubt:
+    ///
+    /// - the Hebrew word stands more than once, so at most one of them is
+    ///   the one the Greek word renders;
+    /// - the Greek word stands more than once, the same the other way round;
+    /// - another Hebrew word that this same Greek word renders stands in the
+    ///   verse too, which is the case most likely to mislead, since the
+    ///   Greek word may belong to that one instead.
+    ///
+    /// Nil where none of them holds: one of each, and nothing competing for
+    /// it. That is as strong as a verse-level crossing can be, and a row
+    /// with nothing said against it should read that way.
+    public static func pairingDoubt(
+        greek lemma: String?,
+        hebrew word: String,
+        hebrewOccurrences: Int,
+        greekOccurrences: Int,
+        alsoRendered: [String]
+    ) -> String? {
+        let lemma = lemma.flatMap { $0.isEmpty ? nil : $0 } ?? "the Greek word"
+        let word = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        var doubts: [String] = []
+        if hebrewOccurrences > 1 {
+            doubts.append("\(word.isEmpty ? "the Hebrew word" : word) stands "
+                + "\(Self.times(hebrewOccurrences)) in this verse")
+        }
+        if greekOccurrences > 1 {
+            doubts.append("\(lemma) stands \(Self.times(greekOccurrences)) in the Greek")
+        }
+        let competing = alsoRendered
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !competing.isEmpty {
+            doubts.append("\(lemma) also renders \(Self.joined(competing)), "
+                + "which stands here too")
+        }
+        guard !doubts.isEmpty else { return nil }
+        return doubts.joined(separator: "; ") + "."
+    }
+
+    /// "a", "a and b", "a, b and c" — the Hebrew words read left to right
+    /// whichever way their own script runs, since each is marked for it
+    /// where it is drawn.
+    private static func joined(_ items: [String]) -> String {
+        guard let last = items.last else { return "" }
+        guard items.count > 1 else { return last }
+        return items.dropLast().joined(separator: ", ") + " and " + last
+    }
+
+    private static func times(_ count: Int) -> String {
+        switch count {
+        case 2: "twice"
+        case 3: "three times"
+        default: "\(count) times"
+        }
+    }
+
     /// A Hebrew word's heading, naming whose verses they are.
     ///
     /// With its transliteration and the English it is most often rendered
     /// by, it reads to someone with no Hebrew: "ʼahăbâh “love” (H160) · in
     /// 40 Hebrew verses". Without them it is the Hebrew as printed: "Hebrew
     /// אַהֲבָה (H160) · 40 verses".
+    /// `usingGreek` names the Greek word when the count beside a Hebrew word
+    /// is the narrowed one. Without it "in 735 Hebrew verses" reads as all
+    /// the verses that Hebrew word stands in, which is the number the list
+    /// was narrowed *from*.
     public static func heading(
         _ hebrew: LampSeptuagintHebrew,
         transliteration: String? = nil,
         rendering: String? = nil,
-        verses: Int
+        verses: Int,
+        usingGreek: String? = nil
     ) -> String {
         let transliteration = transliteration.flatMap { $0.isEmpty ? nil : $0 }
         let rendering = rendering.flatMap { $0.isEmpty ? nil : $0 }
+        let greek = usingGreek.flatMap { $0.isEmpty ? nil : $0 }
+        let verseWord = verses == 1 ? "verse" : "verses"
+        let counted = greek.map { "\(verses) \(verseWord) using \($0)" }
+            ?? "in \(verses) Hebrew \(verseWord)"
         guard transliteration != nil || rendering != nil else {
             let name = hebrew.strongs.map { "\(word(hebrew)) (\($0))" } ?? word(hebrew)
-            return "Hebrew \(name) · \(verses) \(verses == 1 ? "verse" : "verses")"
+            return greek.map { "Hebrew \(name) · \(verses) \(verseWord) using \($0)" }
+                ?? "Hebrew \(name) · \(verses) \(verseWord)"
         }
         var name = [transliteration ?? word(hebrew), rendering.map { "“\($0)”" }]
             .compactMap { $0 }
             .joined(separator: " ")
         if let strongs = hebrew.strongs { name += " (\(strongs))" }
-        return "\(name) · in \(verses) Hebrew \(verses == 1 ? "verse" : "verses")"
+        return "\(name) · \(counted)"
     }
 
     /// The section's title. It is the Hebrew a Greek word translates, which
@@ -1103,12 +1278,14 @@ public enum LampSeptuagintSection {
             return whose + ": \(named(name, or: "the Septuagint installed")) "
                 + "isn’t tagged word by word, so its Greek, under each verse, "
                 + "may use another word."
-        case .tagged(let name):
-            let may = whose + ", so the Greek under a verse may use another word."
-            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return may }
-            return may + " \(lemma)’s own verses in \(trimmed) are listed "
-                + "above, counted from that text’s own tags."
+        case .tagged:
+            // Short, and it says only what the heading above has not. The
+            // section names the Septuagint, gives its counts and explains
+            // what it is; saying any of that again here was three sentences
+            // of the same thing, and one of them pointed at a list that no
+            // longer stands above it.
+            return "\(lemma) stands mostly for these Hebrew words, and the "
+                + "verses under each are that word’s."
         }
     }
 
@@ -1164,7 +1341,8 @@ public enum LampSeptuagintSection {
         }
         var english: [Int: English] = [:]
         for reference in references {
-            guard let mapped = hebrewNumbering.convert(reference, to: englishNumbering)
+            // One verse to show in the row, as opening one would give.
+            guard let mapped = hebrewNumbering.opens(reference, in: englishNumbering)
             else { continue }
             var snippet: LampStrongsContext.Snippet?
             if let occurrence = first[mapped], let text = analysis?.verseTexts[mapped] {

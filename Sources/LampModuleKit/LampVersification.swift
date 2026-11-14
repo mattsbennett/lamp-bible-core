@@ -62,6 +62,14 @@ public struct LampVersification: Sendable {
     /// Vulgate's Psalm 9:22 is both the original 10:0 and 10:1, and each of
     /// them still has to find its way back.
     private let fromOriginal: [Int: Int]
+    /// Every original-language verse a verse in this scheme answers to, in
+    /// the order the scheme's lines give them. One verse can answer to two:
+    /// the English scheme numbers a psalm's whole title verse 0, and its
+    /// own file says so — "many of the subscripts that are part of verses
+    /// 1,2 in the original text end up as verse #0 in English translations".
+    private let toOriginals: [Int: [Int]]
+    /// Every verse in this scheme an original-language verse answers to.
+    private let fromOriginals: [Int: [Int]]
 
     /// One of the standard schemes.
     public static func standard(_ scheme: Scheme) -> LampVersification {
@@ -98,10 +106,38 @@ public struct LampVersification: Sendable {
         return toOriginal[original] == nil ? original : nil
     }
 
-    /// The verse in `target`'s numbering that `reference` in this one is, or
-    /// nil where the target numbers no such verse.
-    public func convert(_ reference: Int, to target: LampVersification) -> Int? {
-        target.reference(forOriginal: original(of: reference))
+    /// Every verse `target` numbers for `reference` in this one, in order.
+    ///
+    /// Empty where the target has no counterpart for it. *Several* where one
+    /// verse answers to many: a psalm's title is one verse in an
+    /// English-numbered text and two in the Septuagint, so the English
+    /// Psalm 51:0 is the Septuagint's 50:1 and 50:2 both. Anything that
+    /// counts, crosses or lists verses wants all of them; `opens(_:in:)` is
+    /// for the one question that wants a single answer.
+    public func counterparts(of reference: Int, in target: LampVersification) -> [Int] {
+        var found: [Int] = []
+        for original in toOriginals[reference] ?? [reference] {
+            let there: [Int]
+            if let mapped = target.fromOriginals[original] {
+                there = mapped
+            } else {
+                // Not listed: numbered as the original numbers it, unless the
+                // target spends that number on another verse.
+                there = target.toOriginals[original] == nil ? [original] : []
+            }
+            for verse in there where !found.contains(verse) { found.append(verse) }
+        }
+        return found
+    }
+
+    /// The verse to open when showing `reference` in `target`: the first of
+    /// its counterparts, or nil where it has none.
+    ///
+    /// Only for going somewhere, where one destination is all a reader can
+    /// be given. It is lossy by design — a title's second half is not where
+    /// it sends you — so counting and crossing use `counterparts(of:in:)`.
+    public func opens(_ reference: Int, in target: LampVersification) -> Int? {
+        counterparts(of: reference, in: target).first
     }
 
     /// Whether this scheme has `reference` as a verse: its book's chapter, and
@@ -149,12 +185,25 @@ public struct LampVersification: Sendable {
         self.pairs = pairs
         var toOriginal: [Int: Int] = [:]
         var fromOriginal: [Int: Int] = [:]
+        var toOriginals: [Int: [Int]] = [:]
+        var fromOriginals: [Int: [Int]] = [:]
         for (verse, original) in pairs {
             if toOriginal[verse] == nil { toOriginal[verse] = original }
             if fromOriginal[original] == nil { fromOriginal[original] = verse }
+            // Kept whole, where the single maps keep only the first. The
+            // order is the file's, so the halves of a title stay in the
+            // order they are read in.
+            if toOriginals[verse, default: []].contains(original) == false {
+                toOriginals[verse, default: []].append(original)
+            }
+            if fromOriginals[original, default: []].contains(verse) == false {
+                fromOriginals[original, default: []].append(verse)
+            }
         }
         self.toOriginal = toOriginal
         self.fromOriginal = fromOriginal
+        self.toOriginals = toOriginals
+        self.fromOriginals = fromOriginals
     }
 
     private static func parse(_ text: String, as scheme: Scheme) -> LampVersification {

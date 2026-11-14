@@ -272,14 +272,24 @@ enum LampModuleCLI {
     /// rather than keeping a second copy of the schemes.
     private static func versify(from source: LampVersification, to target: LampVersification) -> Bool {
         while let line = readLine(strippingNewline: true) {
+            // A psalm title is verse 0, which `numbers` rightly refuses as a
+            // citation — a source citing "51:0" has miscited — but which the
+            // schemes do number: the English file says so itself. Refusing it
+            // here hid a real mapping fault for a day, so the one tool for
+            // looking at mappings now shows it.
             guard let reference = Int(line.trimmingCharacters(in: .whitespaces)),
-                  source.numbers(reference),
-                  let converted = source.convert(reference, to: target),
-                  let last = target.lastVerse(ofChapterOf: converted) else {
+                  source.numbers(reference) || reference % 1_000 == 0 else {
                 print("-")
                 continue
             }
-            print("\(converted) \(last)")
+            let converted = source.counterparts(of: reference, in: target)
+            guard let first = converted.first,
+                  let last = target.lastVerse(ofChapterOf: first) else {
+                print("-")
+                continue
+            }
+            // Every counterpart, so a verse that answers to two is seen to.
+            print("\(converted.map(String.init).joined(separator: ",")) \(last)")
         }
         return true
     }

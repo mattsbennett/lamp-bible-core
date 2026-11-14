@@ -18,30 +18,55 @@ struct LampVersificationTests {
 
     @Test func numbersAPsalmsVersesAfterItsTitle() {
         // English Psalm 3:1 is the Hebrew's 3:2: the title is the Hebrew's 3:1.
-        #expect(english.convert(ref(19, 3, 1), to: original) == ref(19, 3, 2))
-        #expect(original.convert(ref(19, 3, 9), to: english) == ref(19, 3, 8))
+        #expect(english.opens(ref(19, 3, 1), in: original) == ref(19, 3, 2))
+        #expect(original.opens(ref(19, 3, 9), in: english) == ref(19, 3, 8))
+    }
+
+    /// A psalm's title is one verse in an English-numbered text and two in
+    /// the Septuagint, so it is the case a single answer cannot carry.
+    ///
+    /// The English scheme's own file says it numbers titles verse 0 — "many
+    /// of the subscripts that are part of verses 1,2 in the original text end
+    /// up as verse #0 in English translations" — and maps Psalm 51:0 to both
+    /// the original's 51:1 and 51:2. Before `counterparts`, only the first
+    /// survived: a Hebrew word standing in "when Nathan the prophet came to
+    /// him" was crossed against "To the choirmaster, a psalm of David", which
+    /// is the wrong half of the title rather than a missing verse.
+    @Test func givesBothHalvesOfAPsalmsTitle() {
+        let septuagint = LampVersification.standard(.septuagint)
+        #expect(english.counterparts(of: ref(19, 51, 0), in: septuagint)
+            == [ref(19, 50, 1), ref(19, 50, 2)])
+        // The verses after it are unmoved, and still one apiece.
+        #expect(english.counterparts(of: ref(19, 51, 1), in: septuagint) == [ref(19, 50, 3)])
+        #expect(english.opens(ref(19, 51, 1), in: septuagint) == ref(19, 50, 3))
+        // A title the Septuagint numbers as one verse stays one.
+        #expect(english.counterparts(of: ref(19, 3, 0), in: septuagint) == [ref(19, 3, 1)])
+        // `opens` is the lossy question, and says so by answering with one.
+        #expect(english.opens(ref(19, 51, 0), in: septuagint) == ref(19, 50, 1))
+        // An ordinary verse is one counterpart, never an empty list.
+        #expect(english.counterparts(of: ref(43, 3, 16), in: septuagint) == [ref(43, 3, 16)])
     }
 
     @Test func dividesJoelAndMalachiAsEachSchemeDoes() {
-        #expect(english.convert(ref(29, 2, 28), to: original) == ref(29, 3, 1))
-        #expect(english.convert(ref(29, 3, 1), to: original) == ref(29, 4, 1))
-        #expect(english.convert(ref(39, 4, 1), to: original) == ref(39, 3, 19))
-        #expect(original.convert(ref(39, 3, 24), to: english) == ref(39, 4, 6))
+        #expect(english.opens(ref(29, 2, 28), in: original) == ref(29, 3, 1))
+        #expect(english.opens(ref(29, 3, 1), in: original) == ref(29, 4, 1))
+        #expect(english.opens(ref(39, 4, 1), in: original) == ref(39, 3, 19))
+        #expect(original.opens(ref(39, 3, 24), in: english) == ref(39, 4, 6))
     }
 
     /// The Vulgate joins Psalms 9 and 10, so its 9:22 is the Hebrew's 10:1,
     /// and a verse whose number the Vulgate gives to something else has to
     /// come back as that, not as itself.
     @Test func followsTheVulgateThroughAPsalmItJoins() {
-        #expect(english.convert(ref(19, 10, 1), to: vulgate) == ref(19, 9, 22))
-        #expect(english.convert(ref(19, 10, 18), to: vulgate) == ref(19, 9, 39))
-        #expect(vulgate.convert(ref(19, 9, 23), to: english) == ref(19, 10, 2))
+        #expect(english.opens(ref(19, 10, 1), in: vulgate) == ref(19, 9, 22))
+        #expect(english.opens(ref(19, 10, 18), in: vulgate) == ref(19, 9, 39))
+        #expect(vulgate.opens(ref(19, 9, 23), in: english) == ref(19, 10, 2))
     }
 
     @Test func leavesAVerseEveryoneNumbersAlikeAsItIs() {
         let john316 = ref(43, 3, 16)
         for scheme in LampVersification.Scheme.allCases {
-            #expect(english.convert(john316, to: .standard(scheme)) == john316)
+            #expect(english.opens(john316, in: .standard(scheme)) == john316)
         }
     }
 
@@ -49,9 +74,9 @@ struct LampVersificationTests {
     /// 16:25-27, and says so as a departure from the English scheme.
     @Test func takesATranslationsOwnDepartures() {
         let web = english.departing(by: ["ROM 14:24-26 = ROM 16:25-27"])
-        #expect(web.convert(ref(45, 14, 24), to: english) == ref(45, 16, 25))
-        #expect(english.convert(ref(45, 16, 27), to: web) == ref(45, 14, 26))
-        #expect(web.convert(ref(45, 14, 23), to: english) == ref(45, 14, 23))
+        #expect(web.opens(ref(45, 14, 24), in: english) == ref(45, 16, 25))
+        #expect(english.opens(ref(45, 16, 27), in: web) == ref(45, 14, 26))
+        #expect(web.opens(ref(45, 14, 23), in: english) == ref(45, 14, 23))
     }
 
     /// A lexicon keyed to the Hebrew's numbering cites verses English numbers
@@ -60,7 +85,7 @@ struct LampVersificationTests {
     @Test func tellsAVerseASchemeNumbersFromOneItDoesNot() {
         #expect(original.numbers(ref(4, 17, 27)))
         #expect(!english.numbers(ref(4, 17, 27)))
-        #expect(original.convert(ref(4, 17, 27), to: english) == ref(4, 17, 12))
+        #expect(original.opens(ref(4, 17, 27), in: english) == ref(4, 17, 12))
         #expect(!original.numbers(ref(5, 42, 1)), "Deuteronomy has 34 chapters")
         #expect(!original.numbers(ref(5, 20, 22)), "Deuteronomy 20 has 20 verses")
         #expect(!original.numbers(ref(19, 3, 0)))
@@ -95,7 +120,7 @@ struct LampVersificationTests {
     @Test func readsTheSeptuagintsDanielAsDaniel() {
         let septuagint = LampVersification.standard(.septuagint)
         #expect(septuagint.verseCounts[27]?[3] != nil)
-        #expect(septuagint.convert(ref(27, 3, 91), to: english) == ref(27, 3, 24))
+        #expect(septuagint.opens(ref(27, 3, 91), in: english) == ref(27, 3, 24))
         // Elsewhere Greek Esther is a book of its own, not Esther.
         #expect(english.verseCounts[17]?[10] == 3)
     }

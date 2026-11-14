@@ -45,7 +45,7 @@ struct LampLibraryVersificationTests {
         let hebrew = try await library.versification(moduleID: "HEB")
         #expect(hebrew.scheme == .original)
         // Its Joel 3:1 is the English 2:28.
-        #expect(hebrew.convert(ref(29, 3, 1), to: .standard(.english)) == ref(29, 2, 28))
+        #expect(hebrew.opens(ref(29, 3, 1), in: .standard(.english)) == ref(29, 2, 28))
     }
 
     /// The Septuagint's numbering, which the bundled `LXX` and `Brenton`
@@ -56,13 +56,13 @@ struct LampLibraryVersificationTests {
         let english = LampVersification.standard(.english)
         let septuagint = LampVersification.standard(.septuagint)
         func asSeptuagint(_ book: Int, _ chapter: Int, _ verse: Int) -> Int? {
-            english.convert(ref(book, chapter, verse), to: septuagint)
+            english.opens(ref(book, chapter, verse), in: septuagint)
         }
 
         // A psalm's title is the Septuagint's verse 1, not an unnumbered line.
         #expect(asSeptuagint(19, 22, 0) == ref(19, 21, 1))
         #expect(asSeptuagint(19, 22, 1) == ref(19, 21, 2))
-        #expect(septuagint.convert(ref(19, 21, 2), to: english) == ref(19, 22, 1))
+        #expect(septuagint.opens(ref(19, 21, 2), in: english) == ref(19, 22, 1))
 
         // One lower through the middle of the book, and the joins and splits
         // that stop it being an offset.
@@ -138,7 +138,7 @@ struct LampLibraryVersificationTests {
         #expect(web.scheme == .english)
         #expect(kjv.scheme == .english)
         // The WEB's 14:24 is the doxology the KJV numbers 16:25.
-        #expect(web.convert(ref(45, 14, 24), to: kjv) == ref(45, 16, 25))
-        #expect(kjv.convert(ref(45, 16, 27), to: web) == ref(45, 14, 26))
+        #expect(web.opens(ref(45, 14, 24), in: kjv) == ref(45, 16, 25))
+        #expect(kjv.opens(ref(45, 16, 27), in: web) == ref(45, 14, 26))
     }
 }
