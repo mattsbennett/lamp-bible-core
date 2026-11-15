@@ -400,6 +400,33 @@ struct LampSyncBundlePassTests {
         #expect(store.bodies["Workspaces/Writing/talk/Documents/outline.md"] == Data("outline, edited offline".utf8))
     }
 
+    /// What goes up after a fetch for a merge is conditioned on the copy that
+    /// was fetched, not on the listing before it: the server may have moved
+    /// on since the listing, and a folder, whose revisions are its bytes', can
+    /// even move back to the listed revision with another device's copy.
+    @Test func whatGoesUpAfterAFetchIsConditionedOnWhatWasFetched() async throws {
+        let path = "Workspaces/Writing/talk/Documents/outline.md"
+        let store = try seeded(path: path, revision: "\"listed\"")
+        store.bodies[path] = Data("outline".utf8)
+        store.revisions[path] = "\"fetched\""
+        let url = try makeFile("outline, edited offline")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.sources[source, default: .init()].files[path] =
+            .init(uploadedDigest: LampSyncContentRevision.digest(for: Data("outline".utf8)))
+        var held = gathered([local(path, url, "outline, edited offline")])
+        held.extraListing = [path: "\"listed\""]
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { held }, records: &records)
+
+        // Under the listed revision the server, now at the fetched one, would
+        // refuse it.
+        #expect(outcome.failures.isEmpty)
+        #expect(store.bodies[path] == Data("outline, edited offline".utf8))
+    }
+
     /// The first pass after a move has no records, so the plan calls every
     /// file changed on both sides. Each one is fetched — but a file whose
     /// bytes turn out to be the ones this client already holds is recorded

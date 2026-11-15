@@ -338,9 +338,10 @@ public struct LampSyncBundlePass {
         // 2. Reconcile what both sides changed, as one transaction, and
         //    publish the result under the revision the plan named.
         var republish: [String: URL] = [:]
+        var fetchedRevisions: [String: String] = [:]
         if !plan.merge.isEmpty {
             do {
-                republish = try await reconcile(
+                (republish, fetchedRevisions) = try await reconcile(
                     plan.merge, local: filesByPath, records: &records, outcome: &outcome
                 )
             } catch {
@@ -361,13 +362,15 @@ public struct LampSyncBundlePass {
         }
 
         // 4. Publish, both what only changed here and what was just merged.
-        //    A merged path carries its own condition — the revision that was
-        //    downloaded — and publishes the file the transaction produced,
-        //    never the one digested before it ran. Each success is remembered
-        //    as pending until the bundle below names it.
+        //    A merged path carries its own condition — the revision of the
+        //    copy that was downloaded, not the one the listing showed, which
+        //    the server may have moved from and back to since — and publishes
+        //    the file the transaction produced, never the one digested before
+        //    it ran. Each success is remembered as pending until the bundle
+        //    below names it.
         var toPublish = plan.uploads
         for (path, revision) in plan.merge where republish[path] != nil {
-            toPublish[path] = .ifRevision(revision)
+            toPublish[path] = .ifRevision(fetchedRevisions[path] ?? revision)
         }
         var written: [String: (revision: String?, previous: String?)] = [:]
         // Media first, then everything else, each in path order. A writing
@@ -625,8 +628,9 @@ public struct LampSyncBundlePass {
         local: [String: LampSyncLocalFile],
         records: inout LampSyncFileRecords,
         outcome: inout Outcome
-    ) async throws -> [String: URL] {
+    ) async throws -> (republish: [String: URL], fetchedRevisions: [String: String]) {
         var downloaded: [String: URL] = [:]
+        var fetchedRevisions: [String: String] = [:]
         var scratch: [URL] = []
         defer { for url in scratch { try? FileManager.default.removeItem(at: url) } }
         var unchanged: [String] = []
@@ -635,6 +639,7 @@ public struct LampSyncBundlePass {
             let url = LampSyncScratchFile.url()
             scratch.append(url)
             guard let file = try await store.read(path: path, into: url) else { continue }
+            if let revision = file.revision { fetchedRevisions[path] = revision }
             let fetched = try? LampSyncContentRevision.digest(forFileAt: file.url)
             switch Self.fetchedForMerge(
                 fetched: fetched, held: local[path]?.digest,
@@ -666,10 +671,10 @@ public struct LampSyncBundlePass {
             )
         }
         outcome.alreadyInStep.append(contentsOf: unchanged)
-        guard !downloaded.isEmpty else { return ahead }
+        guard !downloaded.isEmpty else { return (ahead, fetchedRevisions) }
         let republish = try await library.reconcile(downloaded)
         outcome.reconciled = downloaded.keys.sorted()
-        return republish.merging(ahead) { merged, _ in merged }
+        return (republish.merging(ahead) { merged, _ in merged }, fetchedRevisions)
     }
 
     enum FetchedForMerge: Equatable {
