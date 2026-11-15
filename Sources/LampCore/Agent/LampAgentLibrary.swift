@@ -32,6 +32,16 @@ public actor LampAgentLibrary {
         self.policy = policy
     }
 
+    /// A writing import's dry run. Compared with the person's writing only
+    /// when personal content is open to agents; otherwise the files are
+    /// checked alone, and the report says so.
+    public func planWritingImport(_ files: [LampWritingImportFile]) async throws -> LampWritingImportPlan {
+        try requireEnabled()
+        return try await library.planWritingImport(
+            files, comparingWithLibrary: policy.includesPersonalContent
+        )
+    }
+
     public func listModules(kinds: Set<LampModuleKind>? = nil) async throws -> [LampAgentModule] {
         try requireEnabled()
         var modules = try await permittedInstalledModules(kinds: kinds).map(Self.agentModule)

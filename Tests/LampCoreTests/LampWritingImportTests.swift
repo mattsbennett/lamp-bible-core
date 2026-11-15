@@ -331,6 +331,30 @@ struct LampWritingImportTests {
         #expect(again.items.map(\.action) == [.unchanged, .unchanged])
     }
 
+    @Test func anAgentWithoutPersonalContentGetsTheFilesCheckedButNotCompared() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = try write("# Watch\n\nText.", to: "w/watch.md", in: root)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: file))
+        try await library.applyWritingImport(plan, selecting: [plan.items[0].id])
+
+        let closed = LampAgentLibrary(library: library, policy: LampAgentAccessPolicy(
+            isEnabled: true, includesPersonalContent: false
+        ))
+        let blind = try await closed.planWritingImport(LampWritingImport.files(at: file))
+        #expect(blind.items.map(\.action) == [.create])
+        #expect(blind.items[0].warnings.contains { $0.contains("Not compared") })
+        let open = LampAgentLibrary(library: library, policy: LampAgentAccessPolicy(
+            isEnabled: true, includesPersonalContent: true
+        ))
+        let report = try await open.planWritingImport(LampWritingImport.files(at: file)).report
+        #expect(report.unchanged == 1)
+        #expect(try JSONDecoder().decode(
+            LampWritingImportReport.self, from: JSONEncoder().encode(report)
+        ) == report)
+    }
+
     @Test func theOldMarkdownImportNoLongerAddsCopies() async throws {
         let root = try scratch()
         defer { try? FileManager.default.removeItem(at: root) }

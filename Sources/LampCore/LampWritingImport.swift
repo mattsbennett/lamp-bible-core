@@ -73,6 +73,24 @@ public struct LampWritingImportPlan: Sendable {
     public func count(_ action: LampWritingImportItem.Action) -> Int {
         items.filter { $0.action == action }.count
     }
+
+    /// The plan as an agent reads it.
+    public var report: LampWritingImportReport {
+        LampWritingImportReport(
+            create: count(.create), update: count(.update), unchanged: count(.unchanged),
+            conflict: count(.conflict), rejected: count(.rejected), items: items
+        )
+    }
+}
+
+/// A plan's counts and items, for an agent or a script to read.
+public struct LampWritingImportReport: Codable, Equatable, Sendable {
+    public let create: Int
+    public let update: Int
+    public let unchanged: Int
+    public let conflict: Int
+    public let rejected: Int
+    public let items: [LampWritingImportItem]
 }
 
 /// What applying a plan did.
@@ -345,13 +363,25 @@ public enum LampWritingImport {
         return [candidate]
     }
 
-    /// Lamp's own Markdown export of several writings: a title heading, a
-    /// rule, then each writing under `##`, ruled off from the next.
+    /// Lamp's own Markdown export of writing: a title heading, then each
+    /// writing under `##`, ruled off from the next. One writing exported
+    /// alone has no rule, so it is known by the details Lamp writes under its
+    /// heading (`**Author:** …`, `> **Summary:** …`). A file of the writer's
+    /// own that opens `# Title` then `## Section` has neither, and is one
+    /// writing.
     static func isLampMarkdownExport(_ body: String) -> Bool {
         let lines = body.components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        return lines.count >= 3 && lines[0].hasPrefix("# ") && lines[1] == "---" && lines[2].hasPrefix("## ")
+        guard lines.count >= 3, lines[0].hasPrefix("# ") else { return false }
+        if lines[1] == "---" { return lines[2].hasPrefix("## ") }
+        guard lines[1].hasPrefix("## ") else { return false }
+        return lines.contains { line in
+            line.range(
+                of: #"^(\*\*(Author|Date|Tags|Category|Series|Series Order|Scripture):\*\*|> \*\*Summary:\*\*)"#,
+                options: .regularExpression
+            ) != nil
+        }
     }
 
     private static func exportCandidates(
@@ -519,7 +549,15 @@ public enum LampWritingImport {
 
 public extension LampLibrary {
     /// What importing these files would do, without writing anything.
-    func planWritingImport(_ files: [LampWritingImportFile]) throws -> LampWritingImportPlan {
+    ///
+    /// - Parameter comparingWithLibrary: false checks the files alone, for an
+    ///   agent not allowed to read the person's writing: every file reads as
+    ///   new, and each item says it was not compared. Lamp compares when it
+    ///   shows the import for review.
+    func planWritingImport(
+        _ files: [LampWritingImportFile],
+        comparingWithLibrary: Bool = true
+    ) throws -> LampWritingImportPlan {
         var candidates = files.flatMap(LampWritingImport.candidates(from:))
         var counts: [String: Int] = [:]
         for candidate in candidates where candidate.errors.isEmpty {
@@ -532,9 +570,9 @@ public extension LampLibrary {
             candidates[index].errors.append("Another file has the same id (\(others.joined(separator: ", "))).")
         }
 
-        let existing = Dictionary(
+        let existing = comparingWithLibrary ? Dictionary(
             try personalDevotionals().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
-        )
+        ) : [:]
         let now = Date()
         var items: [LampWritingImportItem] = []
         var writings: [String: LampDevotional] = [:]
@@ -561,6 +599,9 @@ public extension LampLibrary {
                         )
                         action = decision == .incoming ? .update : .conflict
                     }
+                } else if !comparingWithLibrary {
+                    action = .create
+                    warnings.append("Not compared with the library: personal content is closed to agents. Lamp compares it when it shows the import for review.")
                 } else {
                     action = .create
                     if try isPersonalDevotionalDeleted(id: writing.id, itemModified: incoming) {
