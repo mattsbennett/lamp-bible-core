@@ -736,8 +736,10 @@ first format-4 client to read a format-3 bundle moves the library, inside
    `DevotionalMedia/`, and a copy put back after a deletion. It writes over a
    file at a new path only when it can tell it is a copy of what the old path
    no longer holds: its own, made before a format-3 device wrote again, or one
-   a move cut short left, while the format-3 bundle it read still stands and
-   no device can have published there yet. Anything else, once the bundle has
+   a move cut short left, while the format-3 bundle it read still stands on a
+   WebDAV server, so no device can have published there yet. A folder iCloud
+   fills file by file can hold a newer copy before the bundle that moved the
+   library, so there the move keeps what it did not write. Anything else, once the bundle has
    moved or beside iCloud versions, may be a format-4 device's and is kept
    (`formatFourCopy`). The collection is rewritten to say
    `writing` in `module_format`, `module_meta` and each entry, because the

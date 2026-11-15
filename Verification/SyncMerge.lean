@@ -4022,8 +4022,10 @@ inductive FormatFourCopy where
 
 -- At a file's new path: write where nothing is; keep what is there when it is
 -- the same; replace it when this move wrote it, or while the format-3 bundle
--- it read still stands, when no device can have published there yet and what
--- is there is a copy a move cut short left; keep it otherwise.
+-- it read still stands on a server with one view of all its files, when no
+-- device can have published there yet and what is there is a copy a move cut
+-- short left; keep it otherwise. A folder iCloud fills file by file never
+-- answers `stillAsRead`: it can hold a newer copy before the bundle.
 def formatFourCopy (present same ours stillAsRead : Bool) : FormatFourCopy :=
   if !present then .write else if same || !(ours || stillAsRead) then .keep else .replace
 

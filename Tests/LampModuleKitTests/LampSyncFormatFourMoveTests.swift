@@ -277,6 +277,23 @@ struct LampSyncFormatFourMoveTests {
         #expect(snapshot.revision == "\"bundle4\"")
     }
 
+    /// In a folder iCloud fills file by file, another device's move can have
+    /// published at a new path before its bundle arrives, so the bundle
+    /// standing as read says nothing, and what the move did not write is kept.
+    @Test func aFolderNeverHasAFileTheMoveDidNotWriteWrittenOver() async throws {
+        let store = VersionedMoveStore()
+        store.put("Devotionals/sermons.lamp", Data("sermons".utf8), "\"b\"")
+        store.put("Writing/sermons.lamp", Data("sermons, published since".utf8), "\"x\"")
+        store.put(LampSyncSettingsStore.path, try LampSyncSettingsBundle(manifest: try formatThreeManifest([
+            ("Devotionals/sermons.lamp", 6, "\"b\"", nil, nil),
+        ])).encoded(version: 3), "\"bundle3\"")
+
+        _ = try await LampSyncSettingsStore.read(from: store, patience: .immediate)
+
+        #expect(store.data("Writing/sermons.lamp") == Data("sermons, published since".utf8))
+        #expect(store.conditions["Writing/sermons.lamp"] == nil)
+    }
+
     /// A move cut short before it wrote the bundle left a copy; a format-3
     /// device then wrote the old path again. While that format-3 bundle still
     /// stands, the copy left is a move's, and it is replaced with what the old

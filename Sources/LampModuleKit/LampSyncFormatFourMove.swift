@@ -43,12 +43,15 @@ public enum LampSyncFormatFourMove {
     /// which it may write over. Kept across the attempts of one
     /// `LampSyncSettingsStore.read`, and no longer.
     ///
-    /// `asRead` is the revision of the format-3 bundle this attempt read,
-    /// when iCloud holds no versions of it. While the bundle is still there
-    /// at that revision, no device has moved the library, and none has
-    /// published to format 4's paths, so anything at one is a copy a move
-    /// left, one cut short before it wrote the bundle, and it may be written
-    /// over with what the old path holds now. Nil where that cannot be known.
+    /// `asRead` is the revision of the format-3 bundle this attempt read, on
+    /// a server with one view of all its files, WebDAV's. While the bundle is
+    /// still there at that revision, no device has moved the library, and
+    /// none has published to format 4's paths, so anything at one is a copy
+    /// a move left, one cut short before it wrote the bundle, and it may be
+    /// written over with what the old path holds now. Nil where that cannot
+    /// be known: beside iCloud versions of the bundle, and in any folder iCloud
+    /// fills file by file, which can hold another device's newer copy at a
+    /// new path before the bundle that moved the library reaches it.
     final class Copies: @unchecked Sendable {
         var written: [String: String] = [:]
         var asRead: String?

@@ -241,7 +241,12 @@ public enum LampSyncSettingsStore {
         let threes = (formatThree.isFormatThree ? [formatThree.bundle] : [])
             + formatThree.versions.filter(\.isFormatThree).map(\.bundle)
         let manifest = threes.map(\.manifest).reduce(LampSyncLibraryManifest()) { $0.merged(with: $1) }
-        copies.asRead = formatThree.isFormatThree && formatThree.versions.isEmpty ? formatThree.revision : nil
+        // Only a server with one view of all its files can tell, from the
+        // bundle standing as read, that nothing was published to format 4's
+        // paths. A folder that iCloud fills file by file can hold another
+        // device's newer copy before the bundle that moved the library.
+        copies.asRead = formatThree.isFormatThree && formatThree.versions.isEmpty
+            && !(store is any LampSyncVersionedStore) ? formatThree.revision : nil
         let carried = try await LampSyncFormatFourMove.copy(manifest, in: store, copies: copies, patience: patience)
         let moved = formatThree.isFormatThree
             ? LampSyncFormatFourMove.bundle(formatThree.bundle, carried: carried)
