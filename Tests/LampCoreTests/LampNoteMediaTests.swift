@@ -121,10 +121,10 @@ struct LampNoteMediaTests {
         #expect(try LampPortableDevotionalMedia.remotePath(
             scope: .note, moduleID: "personal-notes", ownerID: "note-1", filename: "tomb.png"
         ) == "NoteMedia/personal-notes/note-1/tomb.png")
-        // Unchanged for devotionals, which sync under the path they always did.
+        // A writing's, under writing's own folder.
         #expect(try LampPortableDevotionalMedia.iOSRemotePath(
             moduleID: "personal-devotionals", devotionalID: "d-1", filename: "tomb.png"
-        ) == "DevotionalMedia/personal-devotionals/d-1/tomb.png")
+        ) == "WritingMedia/personal-devotionals/d-1/tomb.png")
 
         // A name that would climb out of the folder is refused, for a note as
         // for a devotional.
@@ -363,16 +363,16 @@ struct LampNoteMediaTests {
         #expect(try Data(contentsOf: arrived) == Data("a picture".utf8))
     }
 
-    /// A writing's attachments still go where they always did, and the two
+    /// A writing's attachments go to writing's media folder, and the two
     /// never land in each other's folders.
     @Test func aWritingsMediaIsUnmovedByTheNoteScope() throws {
         #expect(try LampSyncFolderLayout.devotionalMediaPath(
             moduleID: "devotionals", devotionalID: "d-1", filename: "tomb.png"
-        ) == "DevotionalMedia/devotionals/d-1/tomb.png")
+        ) == "WritingMedia/devotionals/d-1/tomb.png")
         #expect(try LampSyncFolderLayout.noteMediaPath(
             moduleID: "notes", noteOwnerID: "43011035", filename: "tomb.png"
         ) == "NoteMedia/notes/43011035/tomb.png")
-        #expect(LampSyncFolderLayout.kind(of: "DevotionalMedia/d/1/x.png") == .devotionalMedia)
+        #expect(LampSyncFolderLayout.kind(of: "WritingMedia/d/1/x.png") == .devotionalMedia)
         #expect(LampSyncFolderLayout.remoteModuleID(of: "NoteMedia/notes/43011035/x.png") == "notes")
         // Three segments is a notes *module's* picture, not an invalid
         // personal one: the count is what tells the two apart, and this

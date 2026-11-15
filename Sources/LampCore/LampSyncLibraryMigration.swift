@@ -102,7 +102,24 @@ public enum LampSyncLibraryMigration {
             return .republished
         }
         if republishedDirectories.contains(head) { return .republished }
-        return LampSyncFolderLayout.kind(of: path) == nil ? .unknown : .inPlace
+        // A per-file file at format 3's writing paths is in place too: the
+        // move carries it to format 4's (`inPlaceFormatThreeFiles`).
+        if LampSyncFolderLayout.kind(of: path) != nil
+            || LampSyncFolderLayout.formatFourPath(ofFormatThree: path) != nil {
+            return .inPlace
+        }
+        return .unknown
+    }
+
+    /// The files in place at format 3's writing paths, which the move copies
+    /// to format 4's before it writes the first bundle, so the pass after
+    /// finds them where it lists.
+    public static func inPlaceFormatThreeFiles(in archive: LampSyncArchive) -> [String] {
+        archive.entries.map(\.path).filter { path in
+            guard fate(of: path) == .inPlace,
+                  let target = LampSyncFolderLayout.formatFourPath(ofFormatThree: path) else { return false }
+            return target != path
+        }.sorted()
     }
 
     /// Every entry the move cannot place, so the Mac can name them all
@@ -211,6 +228,13 @@ public enum LampSyncLibraryMigration {
                 throw MigrationError.notTheMacsLibrary
             case .write(let condition):
                 let bundle = try firstBundle(from: archive)
+                // The first bundle is format 4, so per-file files left at
+                // format 3's writing paths are copied to format 4's first.
+                // Written only where absent, so a retry, or another Mac
+                // moving too, leaves the first copies.
+                _ = try await LampSyncFormatFourMove.copy(
+                    members: inPlaceFormatThreeFiles(in: archive), in: store, patience: patience
+                )
                 switch try await LampSyncConditionalWrite.write(
                     bundle.encoded(), to: LampSyncSettingsStore.path, in: store,
                     condition: condition, patience: patience

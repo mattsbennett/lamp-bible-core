@@ -233,6 +233,53 @@ struct LampSyncLibraryMigrationTests {
         #expect(plan.adopt.keys.sorted() == ["Translations/kjv.lamp", "Workspaces/Presentations/easter.lampdeck"])
     }
 
+    /// An entry at format 3's writing paths has a place: it is in place,
+    /// and the move carries it to format 4's.
+    @Test func formatThreesWritingPathsAreInPlace() {
+        let archive = LampSyncArchive(entries: [
+            .init(path: "Devotionals/sermons.lamp", data: Data(), modifiedAt: .distantPast),
+            .init(path: "DevotionalMedia/sermons/w1/a.png", data: Data(), modifiedAt: .distantPast),
+            .init(path: "Writing/advent.lamp", data: Data(), modifiedAt: .distantPast),
+            .init(path: "Translations/kjv.lamp", data: Data(), modifiedAt: .distantPast),
+            .init(path: "Devotionals/daily.json", data: Data(), modifiedAt: .distantPast),
+        ])
+        #expect(LampSyncLibraryMigration.unplaceableEntries(in: archive).isEmpty)
+        #expect(LampSyncLibraryMigration.inPlaceFormatThreeFiles(in: archive) == [
+            "DevotionalMedia/sermons/w1/a.png", "Devotionals/sermons.lamp",
+        ])
+    }
+
+    /// The phone's writing in the folder at format 3's paths, written beside
+    /// the Mac's old tree after the Mac imported it. The first bundle is
+    /// format 4, whose pass lists `Writing/`, so the move copies the module
+    /// there first, and the next pass adopts it.
+    @Test func thePhonesWritingAtFormatThreesPathsIsCarriedToFormatFours() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mac-move-writing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for (path, data) in ArchiveEraFixtures.macFolder {
+            let url = folder.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
+        let imported = try await LampSyncFolderPublisher.capture(from: folder)
+        let sermons = folder.appendingPathComponent("Devotionals/sermons.lamp")
+        try FileManager.default.createDirectory(at: sermons.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("sermons".utf8).write(to: sermons)
+
+        let store = LampSyncDirectoryStore(root: folder)
+        let moved = try await LampSyncLibraryMigration.migrate(in: store, imported: imported, revision: nil, patience: .immediate)
+
+        #expect(try Data(contentsOf: folder.appendingPathComponent("Writing/sermons.lamp")) == Data("sermons".utf8))
+        // Nothing old is deleted.
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("Devotionals/sermons.lamp").path))
+        let listing = try await LampSyncFilePlan.listing(in: store, manifest: moved.bundle.manifest)
+        let plan = LampSyncFilePlan.plan(
+            manifest: moved.bundle.manifest, local: [], deletedLocally: [:], listing: listing
+        )
+        #expect(plan.adopt.keys.contains("Writing/sermons.lamp"))
+    }
+
     @Test func anEmptyFolderIsNotTheMacsToMove() async throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-mac-move-empty-\(UUID().uuidString)", isDirectory: true)

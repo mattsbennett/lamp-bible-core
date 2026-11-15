@@ -418,9 +418,14 @@
     },
     "Sources/LampModuleKit/LampSyncFolderLayout.swift": {
       "rules": [
-        "FileClass"
+        "FileClass",
+        "formatFourPath",
+        "theRenameIsOneToOneWithoutAModuleCalledWriting"
       ],
-      "boundary": "Path spelling and validation are Swift's. What the plan needs from a path, whether it is media and whether its folder is listed, is the model's FileClass, and filePlanAction's table reaches it through one path of each class."
+      "boundary": "Path spelling and validation are Swift's. What the plan needs from a path, whether it is media and whether its folder is listed, is the model's FileClass, and filePlanAction's table reaches it through one path of each class.",
+      "conformance": [
+        "formatFourPath"
+      ]
     },
     "Sources/LampModuleKit/LampSyncFolderPublisher.swift": {
       "rules": [
@@ -483,14 +488,18 @@
         "amemberIsNeverArecordedDeletion",
         "afirstDeletionIsRecorded",
         "alaterDeletionIsRecordedAgain",
-        "thesameTimeAtAnotherRevisionIsRecorded"
+        "thesameTimeAtAnotherRevisionIsRecorded",
+        "formatFourEntry",
+        "theMoveKeepsMembership",
+        "aMovedTombstoneDeletesAnyCopy"
       ],
       "conformance": [
         "manifestMerge",
         "recordWrite",
         "adoptFile",
         "pruneTombstone",
-        "recordsAdeletion"
+        "recordsAdeletion",
+        "formatFourEntry"
       ],
       "boundary": "Revisions compare as tokens here and as numbers in the model; the tables use single-digit revisions, where the two orders agree. Coding, path validation and sorting are Swift's. `recordsAdeletion` separates a deletion the manifest took from one a pass merely asked for: a client whose deletions come from a permanent ledger rather than a consumable queue asks for the same tombstones on every pass, so anything done because one was recorded must read this and not the plan's list."
     },
@@ -576,7 +585,10 @@
         "bundlePathHolds",
         "archiveReaderAccepts",
         "oldReadersRefuseTheBundle",
-        "anArchiveIsNeverReadAsTheBundle"
+        "anArchiveIsNeverReadAsTheBundle",
+        "formatThreeClientHolds",
+        "aFormatThreeClientStopsAtFormatFour",
+        "formatThreeIsNeverReadAsTheBundle"
       ],
       "conformance": [
         "bundlePathHolds"
@@ -622,7 +634,14 @@
         "archiveKeeper",
         "anArchiveWithAModuleIsTheMacs",
         "theMacsSettingsMarkItsArchive",
-        "anEntryThePhoneNeverWritesSettlesIt"
+        "anEntryThePhoneNeverWritesSettlesIt",
+        "formatFourMoveStep",
+        "aMoveRefusedIsReadAgain",
+        "aMoveBesideVersionsIsLeftForTheUpdate",
+        "updateChanged",
+        "aFormatThreeCopyIsAlwaysWritten",
+        "aNewerVersionIsNeverMerged",
+        "formatThreeIsNeverReadAsTheBundle"
       ],
       "conformance": [
         "settingsUpdate",
@@ -632,7 +651,8 @@
         "bundleRead",
         "earlierLibrary",
         "mayClaim",
-        "archiveKeeper"
+        "archiveKeeper",
+        "formatFourMoveStep"
       ],
       "boundary": "Reading and the one-HEAD checks are Swift's; the retry and its bound, what an empty path means, which versions merge and what the write does with them are held by tables. `change` and `mergingVersion` must be merges that only compute, which the types cannot enforce. A weak revision is waited out within `patience` before `unversioned`: Apache, which the user's Synology runs, tags a file weak for the second after it changes."
     },
@@ -723,6 +743,25 @@
         "decodedDevotionalBlocks"
       ],
       "boundary": "Projecting a writing's rich blocks for reading and editing; a body is rich only when it carries the block schema and decodes."
+    },
+    "Sources/LampModuleKit/LampSyncFormatFourMove.swift": {
+      "rules": [
+        "formatFourPath",
+        "theRenameKeepsTheKind",
+        "theRenameIsOneToOneWithoutAModuleCalledWriting",
+        "aModuleCalledWritingMeetsTheCollection",
+        "everythingElseStays",
+        "formatFourEntry",
+        "theMoveKeepsMembership",
+        "aMovedTombstoneDeletesAnyCopy",
+        "anUnmovedEntryIsUntouched",
+        "aFormatThreeClientStopsAtFormatFour"
+      ],
+      "conformance": [
+        "formatFourPath",
+        "formatFourEntry"
+      ],
+      "boundary": "Which path each format-3 path becomes, and what its manifest entry becomes, are held by tables. Copying the files, rewriting the collection's module ID inside its SQLite, and listing format 3's writing folder for files no manifest names are Swift's, held by LampSyncFormatFourMoveTests."
     }
   },
   "platformSources": {

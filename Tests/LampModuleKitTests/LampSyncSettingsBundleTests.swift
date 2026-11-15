@@ -30,7 +30,7 @@ struct LampSyncSettingsBundleTests {
         #expect {
             try LampSyncArchive.decode(compressedData: encoded)
         } throws: { error in
-            guard case LampSyncArchive.ArchiveError.unsupportedVersion(3) = error else { return false }
+            guard case LampSyncArchive.ArchiveError.unsupportedVersion(4) = error else { return false }
             return true
         }
     }

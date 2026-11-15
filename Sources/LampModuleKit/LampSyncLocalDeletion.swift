@@ -6,7 +6,7 @@ import Foundation
 /// recorded only where every client carries it out is what stops a tombstone
 /// one client obeys and another refuses on every pass.
 ///
-/// `Notes/notes.lamp` and `Devotionals/devotionals.lamp` are collections: one
+/// `Notes/notes.lamp` and `Writing/writing.lamp` are collections: one
 /// file holds every note, or every writing, so deleting it would delete them
 /// all, from a pass nobody is watching. Items are deleted through their own
 /// ledger instead, and those two paths are never deleted as files. An
@@ -33,8 +33,10 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
 
     /// The module ID of the collection every note is published in.
     public static let notesCollectionID = "notes"
-    /// The module ID of the collection every writing is published in.
-    public static let writingCollectionID = "devotionals"
+    /// The module ID of the collection every writing is published in. It
+    /// was `devotionals` until bundle format 4
+    /// (`LampSyncFolderLayout.FormatThree.writingCollectionID`).
+    public static let writingCollectionID = "writing"
 
     public static func target(of path: String) -> LampSyncLocalDeletion {
         guard let kind = LampSyncFolderLayout.kind(of: path) else { return .unsupported }

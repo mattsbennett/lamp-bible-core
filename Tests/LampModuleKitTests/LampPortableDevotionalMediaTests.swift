@@ -54,7 +54,7 @@ struct LampPortableDevotionalMediaTests {
         ) == expected)
         #expect(try LampPortableDevotionalMedia.iOSRemotePath(
             moduleID: "devotionals", devotionalID: "daily", filename: ".morning.png"
-        ) == "DevotionalMedia/devotionals/daily/.morning.png")
+        ) == "WritingMedia/devotionals/daily/.morning.png")
     }
 
     @Test func visualEditorPreservesLegacyLinksAndRichMediaIDs() {

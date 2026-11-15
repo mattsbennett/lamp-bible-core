@@ -372,9 +372,8 @@ public struct LampSyncBundlePass {
         var written: [String: (revision: String?, previous: String?)] = [:]
         // Media first, then everything else, each in path order. A writing
         // must never land on another device before the picture it names, and
-        // a book before its plates. Today that also happens to fall out of
-        // the alphabet — `BookMedia` before `Books`, `DevotionalMedia` before
-        // `Devotionals` — which is true until somebody renames a folder.
+        // a book before its plates. The alphabet doesn't promise it: since
+        // writing was renamed, `Writing` sorts before `WritingMedia`.
         let inOrder = toPublish.sorted { a, b in
             let aMedia = LampSyncFolderLayout.kind(of: a.key)?.isMedia ?? false
             let bMedia = LampSyncFolderLayout.kind(of: b.key)?.isMedia ?? false

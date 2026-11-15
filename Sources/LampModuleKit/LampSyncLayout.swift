@@ -1,5 +1,11 @@
 /// Stable paths in the shared WebDAV library. Apps may support different
 /// content kinds, but directory spelling is defined here once.
+///
+/// The raw value is the folder the **archive** formats use, under
+/// `Compatibility/`, and the one the phone's iCloud library used before the
+/// bundle: it never changes, or an old archive stops reading. The per-file
+/// layout's folder is `folder`, which differs for writing since bundle
+/// format 4.
 public enum LampSyncContentKind: String, CaseIterable, Codable, Sendable {
     case translations = "Translations"
     case dictionaries = "Dictionaries"
@@ -10,6 +16,22 @@ public enum LampSyncContentKind: String, CaseIterable, Codable, Sendable {
     case plans = "Plans"
     case highlights = "Highlights"
     case quizzes = "Quizzes"
+
+    /// The folder a module of this kind lives in under the per-file layout.
+    /// Writing was `Devotionals` until bundle format 4; see
+    /// `LampSyncFolderLayout.formatFourPath(ofFormatThree:)`.
+    public var folder: String {
+        switch self {
+        case .devotionals: "Writing"
+        default: rawValue
+        }
+    }
+
+    /// The kind whose per-file folder is `folder`, or nil.
+    public init?(folder: String) {
+        guard let kind = Self.allCases.first(where: { $0.folder == folder }) else { return nil }
+        self = kind
+    }
 }
 
 public enum LampSyncLayout {

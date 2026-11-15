@@ -17,11 +17,21 @@ public enum LampSyncSettingsStore {
         /// without a base: after a lost write, the base it recorded is its
         /// own write, which the current copy never saw.
         public let versions: [Version]
+        /// The copy at `revision` is still format 3, and `bundle` is it moved
+        /// to format 4, its files already copied. Only while iCloud holds
+        /// versions of it, which keep the move from writing: the next
+        /// `update` writes it, whether or not it changed anything.
+        public let isFormatThree: Bool
 
         public init(bundle: LampSyncSettingsBundle, revision: String, versions: [Version] = []) {
+            self.init(bundle: bundle, revision: revision, versions: versions, isFormatThree: false)
+        }
+
+        init(bundle: LampSyncSettingsBundle, revision: String, versions: [Version], isFormatThree: Bool) {
             self.bundle = bundle
             self.revision = revision
             self.versions = versions
+            self.isFormatThree = isFormatThree
         }
     }
 
@@ -92,9 +102,10 @@ public enum LampSyncSettingsStore {
     }
 
     /// Only a bundle this client reads can be merged; anything else stops the
-    /// update. (`Verification/SyncMerge.lean`: `versionMerges`.)
+    /// update. A format-3 version is read moved to format 4, as the copy it
+    /// stands beside was. (`Verification/SyncMerge.lean`: `versionMerges`.)
     static func versionMerges(_ contents: LampSyncSettingsBundle.Contents) -> Bool {
-        contents == .bundle
+        contents == .bundle || contents == .formatThreeBundle
     }
 
     public static let path = LampSyncFolderLayout.bundlePath
@@ -148,31 +159,99 @@ public enum LampSyncSettingsStore {
     /// just after any device's write sees `W/"…"`, and a second later the
     /// same tag strong. Only a revision still weak after `patience` throws
     /// `unversioned`.
+    ///
+    /// A format-3 bundle is moved to format 4 here, before anything reads it
+    /// (`LampSyncFormatFourMove`), so every caller sees format 4's paths. If
+    /// another device writes the bundle while it is moved, it is read again,
+    /// up to `moveAttempts` times.
     public static func read(
         from store: any LampSyncRemoteStore,
         knownArchiveRevision: String? = nil,
-        patience: LampSyncConditionalWrite.Patience = .standard
+        patience: LampSyncConditionalWrite.Patience = .standard,
+        moveAttempts: Int = 3
     ) async throws -> Snapshot? {
         if let knownArchiveRevision, LampWebDAVStorage.isStrongETag(knownArchiveRevision),
            let current = try await store.revision(path: path),
            LampSyncConditionalWrite.namesSameRevision(current, knownArchiveRevision) {
             throw StoreError.notMigrated(revision: current)
         }
-        var snapshot: Snapshot?
-        var waits = Array(patience.confirm.dropFirst())[...]
-        while true {
-            do {
-                snapshot = try await readBundle(from: store)
-                break
-            } catch is WeakRevision {
-                guard let wait = waits.popFirst() else { throw StoreError.unversioned }
-                try? await Task.sleep(for: wait)
+        for attempt in 0..<max(moveAttempts, 1) {
+            try? await Task.sleep(for: patience.retryWait(before: attempt))
+            var snapshot: Snapshot?
+            var waits = Array(patience.confirm.dropFirst())[...]
+            while true {
+                do {
+                    snapshot = try await readBundle(from: store)
+                    break
+                } catch is WeakRevision {
+                    guard let wait = waits.popFirst() else { throw StoreError.unversioned }
+                    try? await Task.sleep(for: wait)
+                }
+            }
+            if snapshot == nil, try await holdsEarlierLibrary(store) {
+                throw StoreError.notMigrated(revision: nil)
+            }
+            guard let found = snapshot, found.isFormatThree else { return snapshot }
+            if let moved = try await moveToFormatFour(found, in: store, patience: patience) {
+                return moved
             }
         }
-        if snapshot == nil, try await holdsEarlierLibrary(store) {
-            throw StoreError.notMigrated(revision: nil)
+        throw StoreError.tooManyAttempts
+    }
+
+    /// `formatThree` moved: its files copied, and the bundle written as
+    /// format 4 under the revision it was read at. Nil when another device
+    /// wrote the bundle first, to be read again. Where iCloud holds versions
+    /// of it, no write can land until they are merged, so it returns the
+    /// moved bundle unwritten for `update` to write.
+    /// (`Verification/SyncMerge.lean`: `formatFourMoveStep`.)
+    private static func moveToFormatFour(
+        _ formatThree: Snapshot,
+        in store: any LampSyncRemoteStore,
+        patience: LampSyncConditionalWrite.Patience
+    ) async throws -> Snapshot? {
+        let copied = try await LampSyncFormatFourMove.copy(
+            formatThree.bundle.manifest, in: store, patience: patience
+        )
+        let moved = LampSyncFormatFourMove.bundle(formatThree.bundle, copied: copied)
+        let outcome: LampSyncConditionalWrite.Outcome? = formatThree.versions.isEmpty
+            ? try await LampSyncConditionalWrite.write(
+                moved.encoded(), to: path, in: store,
+                condition: .ifRevision(formatThree.revision), patience: patience
+            )
+            : nil
+        switch formatFourMoveStep(versions: !formatThree.versions.isEmpty, outcome: outcome) {
+        case .moved(let revision): return Snapshot(bundle: moved, revision: revision)
+        case .leftForTheUpdate:
+            return Snapshot(
+                bundle: moved, revision: formatThree.revision,
+                versions: formatThree.versions, isFormatThree: true
+            )
+        case .readAgain: return nil
+        case .unconfirmed: throw LampSyncConditionalWrite.Unconfirmed(path: path)
         }
-        return snapshot
+    }
+
+    enum FormatFourMoveStep: Equatable {
+        case moved(String)
+        case leftForTheUpdate
+        case readAgain
+        case unconfirmed
+    }
+
+    /// What the move does once its files are copied, from whether iCloud
+    /// holds versions of the bundle and what became of its write: none is
+    /// tried beside versions. (`Verification/SyncMerge.lean`:
+    /// `formatFourMoveStep`.)
+    static func formatFourMoveStep(
+        versions: Bool, outcome: LampSyncConditionalWrite.Outcome?
+    ) -> FormatFourMoveStep {
+        if versions { return .leftForTheUpdate }
+        switch outcome {
+        case .written(let revision): return .moved(revision)
+        case .writtenUnconfirmed: return .unconfirmed
+        case .refused, nil: return .readAgain
+        }
     }
 
     /// The bundle, or, in a library nobody has synced to yet, an empty one
@@ -259,6 +338,12 @@ public enum LampSyncSettingsStore {
                 condition = .ifRevision(archive.revision)
             }
             knownArchiveRevision = nil
+            if migratingPhone {
+                // The phone's modules are loose files the next pass adopts
+                // from a listing, which is of format 4's folders: its
+                // writing, at format 3's, is copied there first.
+                _ = try await LampSyncFormatFourMove.copy(members: [], in: store, patience: patience)
+            }
             switch try await LampSyncConditionalWrite.write(
                 first.encoded(), to: path, in: store, condition: condition, patience: patience
             ) {
@@ -306,8 +391,11 @@ public enum LampSyncSettingsStore {
         let root = try await store.list(directory: "") ?? []
         let names = Set(root.map(\.name))
         var contentFound = false
-        for kind in LampSyncContentKind.allCases where names.contains(kind.rawValue) {
-            let entries = try await store.list(directory: kind.rawValue + "/") ?? []
+        // A kind folder by either name: the earlier sync's, which is the
+        // raw value, or the per-file layout's, for modules dropped in by hand.
+        let kindFolders = Set(LampSyncContentKind.allCases.flatMap { [$0.rawValue, $0.folder] })
+        for folder in kindFolders.sorted() where names.contains(folder) {
+            let entries = try await store.list(directory: folder + "/") ?? []
             if entries.contains(where: { !$0.isDirectory && !$0.name.hasPrefix(".") }) {
                 contentFound = true
                 break
@@ -354,7 +442,7 @@ public enum LampSyncSettingsStore {
     /// (`Verification/SyncMerge.lean`: `anEntryThePhoneNeverWritesSettlesIt`.)
     static func verdict(fromStart data: Data) -> StartVerdict {
         switch LampSyncSettingsBundle.contents(ofHeader: (try? LampSyncSettingsBundle.header(of: data)) ?? Data()) {
-        case .bundle, .newerBundle: .bundle
+        case .bundle, .formatThreeBundle, .newerBundle: .bundle
         case .damaged: .undecided
         case .archive: entryPaths(inStart: data).contains { !phoneArchivePaths.contains($0) } ? .mac : .undecided
         }
@@ -438,11 +526,16 @@ public enum LampSyncSettingsStore {
             }
             guard let body else { return nil }
             let data = try Data(contentsOf: body.url, options: .alwaysMapped)
-            if LampSyncSettingsBundle.contents(ofHeader: try LampSyncSettingsBundle.header(of: data))
-                == .archive {
+            let contents = LampSyncSettingsBundle.contents(ofHeader: try LampSyncSettingsBundle.header(of: data))
+            if contents == .archive {
                 throw StoreError.notMigrated(revision: body.revision)
             }
-            let bundle = try LampSyncSettingsBundle.decode(data)
+            // Read as it stands, format 3's paths and all: `read` moves it
+            // before anything else sees it.
+            let isFormatThree = contents == .formatThreeBundle
+            let bundle = isFormatThree
+                ? try LampSyncSettingsBundle.decodeFormatThree(data)
+                : try LampSyncSettingsBundle.decode(data)
             guard let revision = body.revision, LampWebDAVStorage.isStrongETag(revision) else {
                 if body.revision?.hasPrefix("W/") == true { throw WeakRevision() }
                 throw StoreError.unversioned
@@ -454,7 +547,8 @@ public enum LampSyncSettingsStore {
             }
             return Snapshot(
                 bundle: bundle, revision: revision,
-                versions: versions.keys.sorted().compactMap { versions[$0] }
+                versions: versions.keys.sorted().compactMap { versions[$0] },
+                isFormatThree: isFormatThree
             )
         }
     }
@@ -462,9 +556,19 @@ public enum LampSyncSettingsStore {
     private static func version(at url: URL, revision: String) throws -> Version {
         do {
             let data = try Data(contentsOf: url, options: .alwaysMapped)
-            guard versionMerges(LampSyncSettingsBundle.contents(ofHeader: try LampSyncSettingsBundle.header(of: data)))
-            else { throw StoreError.unreadableVersion(revision) }
-            return Version(bundle: try LampSyncSettingsBundle.decode(data), revision: revision)
+            let contents = LampSyncSettingsBundle.contents(ofHeader: try LampSyncSettingsBundle.header(of: data))
+            guard versionMerges(contents) else { throw StoreError.unreadableVersion(revision) }
+            guard contents == .formatThreeBundle else {
+                return Version(bundle: try LampSyncSettingsBundle.decode(data), revision: revision)
+            }
+            // Its files are where the copy it stands beside put them, or
+            // still on the device that wrote it.
+            return Version(
+                bundle: LampSyncFormatFourMove.bundle(
+                    try LampSyncSettingsBundle.decodeFormatThree(data), copied: [:]
+                ),
+                revision: revision
+            )
         } catch {
             throw StoreError.unreadableVersion(revision)
         }
@@ -532,7 +636,10 @@ public enum LampSyncSettingsStore {
             try change(&bundle)
             let decision = write(
                 current: current != nil, versions: !versions.isEmpty,
-                merges: mergingVersion != nil, changed: bundle != current?.bundle
+                merges: mergingVersion != nil,
+                // A format-3 copy is written whatever the change did, so the
+                // moved bundle lands (`aFormatThreeCopyIsAlwaysWritten`).
+                changed: bundle != current?.bundle || current?.isFormatThree == true
             )
             let revision: String
             do {

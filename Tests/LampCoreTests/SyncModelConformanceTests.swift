@@ -108,6 +108,7 @@ struct SyncModelConformanceTests {
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
         "macMigrationStep", "writeOutcome", "passTrace",
+        "formatFourPath", "formatFourEntry", "formatFourMoveStep",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
     ]
@@ -911,7 +912,7 @@ struct SyncModelConformanceTests {
             return entryCode(adopted.entry(at: path)) == f[3]
         }
         try conform("pruneTombstone") { f in
-            let entry = manifestEntry(f[0], at: f[2] == "true" ? path : "DevotionalMedia/m/w/a.png")
+            let entry = manifestEntry(f[0], at: f[2] == "true" ? path : "WritingMedia/m/w/a.png")
             return LampSyncLibraryManifest.prunes(entry, now: Int64(f[1])!, present: f[3] == "true")
                 == (f[4] == "true")
         }
@@ -921,7 +922,7 @@ struct SyncModelConformanceTests {
         // One real path of each class, deletable by a library or not.
         let paths = [
             "media:true": try LampSyncFolderLayout.deckAssetPath(filename: "a.png"),
-            "media:false": "DevotionalMedia/m/w/a.png",
+            "media:false": "WritingMedia/m/w/a.png",
             "listed:true": try LampSyncFolderLayout.modulePath(kind: .translations, moduleID: "kjv"),
             "listed:false": "Notes/notes.lamp",
             "unlisted:false": "Workspaces/a.md",
@@ -1196,7 +1197,7 @@ struct SyncModelConformanceTests {
             uploaded("Notes/notes.lamp", "before", "n1")
         }
         if uploadMedia {
-            try hold("DevotionalMedia/w/d/a.png", "png")
+            try hold("WritingMedia/w/d/a.png", "png")
         }
         if uploadModule {
             try member("Commentaries/c1.lamp", "c1")
@@ -1296,6 +1297,7 @@ struct SyncModelConformanceTests {
             let expected: LampSyncSettingsBundle.Contents = switch f[1] {
             case "bundle": .bundle
             case "archive": .archive
+            case "formatThree": .formatThreeBundle
             case "damaged": .damaged
             default: .newerBundle(Int(f[1].dropFirst("newer:".count))!)
             }
@@ -1304,6 +1306,58 @@ struct SyncModelConformanceTests {
         try conform("versionMerges") { f in
             LampSyncSettingsStore.versionMerges(LampSyncSettingsBundle.contents(ofHeader: header(f[0])))
                 == (f[1] == "true")
+        }
+    }
+
+    /// The model's paths as real ones: a writing module or a writing's media
+    /// in either format's folders, by ID, or a path elsewhere of each kind.
+    private func formatThreePath(_ name: String) -> String {
+        let parts = name.split(separator: ":").map(String.init)
+        func id(_ field: String) -> String {
+            switch field {
+            case "collection": "devotionals"
+            case "calledWriting", "writing": "writing"
+            default: "module-\(field.dropFirst("other".count))"
+            }
+        }
+        switch parts[0] {
+        case "module": return "Devotionals/\(id(parts[1])).lamp"
+        case "media": return "DevotionalMedia/\(id(parts[1]))/w/file-\(parts[2]).png"
+        default: return parts[1] == "1" ? "Translations/kjv.lamp" : "NoteMedia/notes/43011035/a.png"
+        }
+    }
+
+    private func formatFourPath(_ name: String) -> String {
+        formatThreePath(name)
+            .replacingOccurrences(of: "Devotionals/", with: "Writing/")
+            .replacingOccurrences(of: "DevotionalMedia/", with: "WritingMedia/")
+    }
+
+    @Test func formatFour() throws {
+        try conform("formatFourPath") { f in
+            LampSyncFolderLayout.formatFourPath(ofFormatThree: formatThreePath(f[0])) == formatFourPath(f[1])
+        }
+        try conform("formatFourEntry") { f in
+            let path = f[1] == "true" ? "Devotionals/sermons.lamp" : "Translations/kjv.lamp"
+            let target = LampSyncFolderLayout.formatFourPath(ofFormatThree: path)!
+            let moved = manifest(holding: f[0], at: path)
+                .formatFour(copied: f[2] == "-" ? [:] : [path: quoted(f[2])])
+            return entryCode(moved.entry(at: target)) == f[3]
+        }
+        try conform("formatFourMoveStep") { f in
+            let outcome: LampSyncConditionalWrite.Outcome = switch f[1] {
+            case "writtenUnconfirmed": .writtenUnconfirmed
+            case "refused": .refused
+            default: .written(quoted(String(f[1].dropFirst("written:".count))))
+            }
+            let step = LampSyncSettingsStore.formatFourMoveStep(versions: f[0] == "true", outcome: outcome)
+            let name = switch step {
+            case .moved(let revision): "moved:" + LampSyncConditionalWrite.token(for: revision)
+            case .leftForTheUpdate: "leftForTheUpdate"
+            case .readAgain: "readAgain"
+            case .unconfirmed: "unconfirmed"
+            }
+            return name == f[2]
         }
     }
 
@@ -1418,7 +1472,11 @@ struct SyncModelConformanceTests {
             "media": ["Media/Devotionals/daily/a.png"],
             "workspaceFile": ["Workspaces/Presentations/easter.lampdeck", "Workspaces/sermon/notes.md"],
             "compatibleModule": ["Compatibility/Notes/notes.lamp"],
-            "perFile": ["Translations/kjv.lamp", "Devotionals/daily.lamp", "DevotionalMedia/w/d/a.png"],
+            // Format 3's writing paths too, which the move copies to format 4's.
+            "perFile": [
+                "Translations/kjv.lamp", "Writing/daily.lamp", "WritingMedia/w/d/a.png",
+                "Devotionals/daily.lamp", "DevotionalMedia/w/d/a.png",
+            ],
             "unknown": ["Backups/old.zip", "Devotionals/daily.md", "UserData/other.db", "notes.txt"],
         ]
         try conform("entryFate") { f in

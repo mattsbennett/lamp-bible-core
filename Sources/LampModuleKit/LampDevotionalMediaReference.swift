@@ -31,10 +31,11 @@ public enum LampMediaScope: String, Codable, Sendable, CaseIterable {
     }
 
     /// The directory a client publishes this media under when syncing.
+    /// Writing's was `DevotionalMedia` until bundle format 4.
     public var remoteDirectory: String {
         switch self {
-        case .devotional: "DevotionalMedia"
-        case .note: "NoteMedia"
+        case .devotional: LampSyncFolderLayout.devotionalMediaDirectory
+        case .note: LampSyncFolderLayout.noteMediaDirectory
         }
     }
 }

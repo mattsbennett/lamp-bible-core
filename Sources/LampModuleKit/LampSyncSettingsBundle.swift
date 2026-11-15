@@ -4,13 +4,21 @@ import Foundation
 ///
 /// They are not independent of each other the way modules are, so they are
 /// read, merged and written together through `LampSyncSettingsStore.update`.
-/// It lives at the archive's old path as format 3: zlib JSON shaped like an
-/// archive with no entries, `{"formatVersion":3,"entries":[],"bundle":{…}}`.
-/// An archive reader decodes that far, checks the version and refuses it, so
-/// an old client stops with "Unsupported sync archive version: 3" rather than
-/// reading a library with no modules in it as one that was emptied.
+/// It lives at the archive's old path: zlib JSON shaped like an archive with
+/// no entries, `{"formatVersion":4,"entries":[],"bundle":{…}}`. An archive
+/// reader decodes that far, checks the version and refuses it, so an old
+/// client stops with "Unsupported sync archive version" rather than reading a
+/// library with no modules in it as one that was emptied.
+///
+/// Format 4 is format 3 with writing renamed in the per-file layout
+/// (`LampSyncFolderLayout.formatFourPath(ofFormatThree:)`): the payload is
+/// the same, and only the manifest's paths differ. A format-3 client finds
+/// format 4 newer and stops; a format-4 client finds format 3 and moves the
+/// library (`LampSyncFormatFourMove`).
 public struct LampSyncSettingsBundle: Equatable, Sendable {
-    public static let formatVersion = 3
+    public static let formatVersion = 4
+    /// The format before writing was renamed, which this client moves.
+    public static let formatThree = 3
 
     /// iOS's settings database, today's `UserData/user-settings.db` entry.
     public var userSettings: Data?
@@ -56,12 +64,27 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         self.manifest = manifest
     }
 
-    public enum BundleError: Error, Equatable {
+    public enum BundleError: Error, Equatable, LocalizedError {
         /// An archive, format 1 or 2: the Mac hasn't migrated this library.
         case isArchive
         /// A bundle from a later version.
         case unsupportedVersion(Int)
+        /// A format-3 bundle, which `LampSyncFormatFourMove` moves first.
+        case isFormatThree
         case damaged
+
+        public var errorDescription: String? {
+            switch self {
+            case .isArchive:
+                "The server still holds the older library layout, so the new sync did not run. Nothing was changed."
+            case .unsupportedVersion:
+                "This library was synced by a newer version of Lamp Bible. Update Lamp Bible on this device to keep syncing. Nothing was changed."
+            case .isFormatThree:
+                "The library is in the layout before writing was renamed and has to be moved first. Nothing was changed."
+            case .damaged:
+                "The library's sync file could not be read, so it was left alone. Nothing was changed."
+            }
+        }
     }
 
     /// What a body at the bundle path holds, judged from its first bytes, so
@@ -70,6 +93,8 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
     public enum Contents: Equatable, Sendable {
         case bundle
         case archive
+        /// Format 3, from before writing was renamed.
+        case formatThreeBundle
         case newerBundle(Int)
         case damaged
     }
@@ -87,6 +112,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
     static func contents(ofVersion version: Int) -> Contents {
         switch version {
         case 1, 2: .archive
+        case formatThree: .formatThreeBundle
         case formatVersion: .bundle
         case let later where later > formatVersion: .newerBundle(later)
         default: .damaged
@@ -114,6 +140,11 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
 
     /// The same bundle always encodes to the same bytes.
     public func encoded() throws -> Data {
+        try encoded(version: Self.formatVersion)
+    }
+
+    /// As another format would write it, for tests of the move from it.
+    func encoded(version: Int) throws -> Data {
         try preferences.validate()
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
@@ -124,7 +155,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         ))
         // Written by hand so the version comes first, where `contents`
         // looks for it.
-        var json = Data(#"{"formatVersion":\#(Self.formatVersion),"entries":[],"bundle":"#.utf8)
+        var json = Data(#"{"formatVersion":\#(version),"entries":[],"bundle":"#.utf8)
         json.append(payload)
         json.append(Data("}".utf8))
         return try (json as NSData).compressed(using: .zlib) as Data
@@ -134,9 +165,24 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         switch contents(ofHeader: try header(of: data)) {
         case .bundle: break
         case .archive: throw BundleError.isArchive
+        case .formatThreeBundle: throw BundleError.isFormatThree
         case .newerBundle(let version): throw BundleError.unsupportedVersion(version)
         case .damaged: throw BundleError.damaged
         }
+        return try decodeBody(data, version: formatVersion)
+    }
+
+    /// A format-3 bundle as it stands, its manifest still at format 3's
+    /// paths. Only `LampSyncFormatFourMove` reads one: anything else that
+    /// merged it would put format 3's paths in a format-4 manifest.
+    public static func decodeFormatThree(_ data: Data) throws -> Self {
+        guard contents(ofHeader: try header(of: data)) == .formatThreeBundle else {
+            throw BundleError.damaged
+        }
+        return try decodeBody(data, version: formatThree)
+    }
+
+    private static func decodeBody(_ data: Data, version: Int) throws -> Self {
         let file: File
         do {
             file = try JSONDecoder().decode(
@@ -145,7 +191,7 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
         } catch {
             throw BundleError.damaged
         }
-        guard file.formatVersion == formatVersion else { throw BundleError.damaged }
+        guard file.formatVersion == version else { throw BundleError.damaged }
         let payload = file.bundle
         try payload.preferences.validate()
         return Self(

@@ -223,6 +223,39 @@ public struct LampSyncLibraryManifest: Codable, Equatable, Sendable {
         return !(entry.kind?.isListed ?? false) || !present
     }
 
+    /// This format-3 manifest at format 4's paths
+    /// (`LampSyncFolderLayout.formatFourPath(ofFormatThree:)`).
+    ///
+    /// A renamed entry keeps its times, so what was a member is one and what
+    /// was deleted stays deleted. Its revisions were the old path's, and mean
+    /// nothing at the new one: a copy the move wrote is recorded at the
+    /// revision `copied` gives for its old path, and anything else at none,
+    /// which reads as "compare by value" (`anUnknownFileIsAdopted`) and, for
+    /// a tombstone, as a deletion of whatever copy turns up. Paths the move
+    /// leaves alone keep everything. An entry format 3's layout didn't hold
+    /// is kept as it is, as any manifest keeps a later version's paths,
+    /// unless format 4's layout holds it, which no format-3 client could
+    /// have meant. Call only once `formatFourCollision(in:)` is empty: two
+    /// entries with one target would be merged. (`formatFourEntry`.)
+    public func formatFour(copied: [String: String] = [:]) -> Self {
+        var moved = Self()
+        for entry in entries.values {
+            guard let target = LampSyncFolderLayout.formatFourPath(ofFormatThree: entry.path) else {
+                if LampSyncFolderLayout.kind(of: entry.path) == nil { moved.entries[entry.path] = entry }
+                continue
+            }
+            var renamed = entry
+            if target != entry.path {
+                renamed = Entry(path: target)
+                renamed.presentSince = entry.presentSince
+                renamed.deletedAt = entry.deletedAt
+                renamed.revision = entry.isMember ? copied[entry.path] : nil
+            }
+            moved.entries[target] = moved.entries[target].map { $0.merged(with: renamed) } ?? renamed
+        }
+        return moved
+    }
+
     private var sorted: [Entry] {
         entries.values.sorted { $0.path < $1.path }
     }

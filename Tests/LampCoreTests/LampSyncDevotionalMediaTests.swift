@@ -19,8 +19,8 @@ struct LampSyncDevotionalMediaTests {
             title: "Daily", content: "![Morning](media/image-id)", mediaJSON: mediaJSON
         )
         let files = [
-            "DevotionalMedia/devotionals/daily/.morning.png": Data("image".utf8),
-            "DevotionalMedia/devotionals/daily/prayer.m4a": Data("audio".utf8),
+            "WritingMedia/devotionals/daily/.morning.png": Data("image".utf8),
+            "WritingMedia/devotionals/daily/prayer.m4a": Data("audio".utf8),
         ]
         try await LampSyncDevotionalMedia.downloadToLibrary(
             for: [devotional], from: "devotionals", into: root
@@ -30,8 +30,8 @@ struct LampSyncDevotionalMediaTests {
         }
         let imageURL = root.appendingPathComponent("Media/Devotionals/daily/.morning.png")
         let audioURL = root.appendingPathComponent("Media/Devotionals/daily/prayer.m4a")
-        #expect(try Data(contentsOf: imageURL) == files["DevotionalMedia/devotionals/daily/.morning.png"])
-        #expect(try Data(contentsOf: audioURL) == files["DevotionalMedia/devotionals/daily/prayer.m4a"])
+        #expect(try Data(contentsOf: imageURL) == files["WritingMedia/devotionals/daily/.morning.png"])
+        #expect(try Data(contentsOf: audioURL) == files["WritingMedia/devotionals/daily/prayer.m4a"])
         #expect(devotional.mediaReferences.first?.alt == "Morning light")
         #expect(devotional.mediaReferences.last?.transcription == "A prayer")
 
@@ -42,7 +42,7 @@ struct LampSyncDevotionalMediaTests {
             guard let data = files[path] else { throw TestFailure.missing }
             return data
         }
-        #expect(try Data(contentsOf: imageURL) == files["DevotionalMedia/devotionals/daily/.morning.png"])
+        #expect(try Data(contentsOf: imageURL) == files["WritingMedia/devotionals/daily/.morning.png"])
     }
 
     @Test func rejectsUnsafeReferencedFilenameBeforeWritingIt() async throws {
@@ -77,9 +77,9 @@ struct LampSyncDevotionalMediaTests {
             for: [devotional], to: "devotionals", from: root
         )
         #expect(files.map(\.remotePath) == [
-            "DevotionalMedia/devotionals/daily/old.png",
-            "DevotionalMedia/devotionals/daily/new.m4a",
-            "DevotionalMedia/devotionals/daily/future.bin",
+            "WritingMedia/devotionals/daily/old.png",
+            "WritingMedia/devotionals/daily/new.m4a",
+            "WritingMedia/devotionals/daily/future.bin",
         ])
         #expect(files.map(\.data) == [
             Data("legacy".utf8), Data("rich".utf8), Data("future".utf8),

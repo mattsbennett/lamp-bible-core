@@ -211,7 +211,7 @@ struct LampWebDAVPersonalArchiveAdapterTests {
             to: "devotionals", from: library.rootURL
         )
         #expect(outgoing.map(\.remotePath) == [
-            "DevotionalMedia/devotionals/daily/\(stored.lastPathComponent)"
+            "WritingMedia/devotionals/daily/\(stored.lastPathComponent)"
         ])
         #expect(outgoing.first?.data == body)
 

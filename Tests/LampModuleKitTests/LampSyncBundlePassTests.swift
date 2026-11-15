@@ -601,8 +601,8 @@ struct LampSyncBundlePassTests {
         ).run(
             gathering: {
                 gathered([
-                    local("Devotionals/devotionals.lamp", url, "bytes"),
-                    local("DevotionalMedia/devotionals/w1/a.jpg", url, "bytes"),
+                    local("Writing/writing.lamp", url, "bytes"),
+                    local("WritingMedia/writing/w1/a.jpg", url, "bytes"),
                     local("Translations/KJVs.lamp", url, "bytes"),
                 ])
             },
@@ -610,8 +610,8 @@ struct LampSyncBundlePassTests {
         )
 
         let writes = store.operations.filter { $0.hasPrefix("write ") }
-        let picture = try #require(writes.firstIndex(of: "write DevotionalMedia/devotionals/w1/a.jpg"))
-        let writing = try #require(writes.firstIndex(of: "write Devotionals/devotionals.lamp"))
+        let picture = try #require(writes.firstIndex(of: "write WritingMedia/writing/w1/a.jpg"))
+        let writing = try #require(writes.firstIndex(of: "write Writing/writing.lamp"))
         #expect(picture < writing)
     }
 
@@ -1142,7 +1142,7 @@ struct LampSyncBundlePassTests {
     /// path, so the record is the whole answer: having one means this client
     /// installed those very bytes, whatever the server says now.
     @Test func apictureThisClientHasHadBeforeIsReportedThoughNothingListsIt() async throws {
-        let path = "DevotionalMedia/devotionals/w1/a.jpg"
+        let path = "WritingMedia/devotionals/w1/a.jpg"
         let store = try seededMedia(at: path)
         var records = LampSyncFileRecords()
         records.recordInstall(path, in: source, revision: "\"pic-1\"")
@@ -1159,7 +1159,7 @@ struct LampSyncBundlePassTests {
     /// other first fetch is. A record with no revision in it is no record of
     /// a revision: the folder provider had not answered with one.
     @Test func apictureWithNoRecordedRevisionIsAfirstFetch() async throws {
-        let path = "DevotionalMedia/devotionals/w1/a.jpg"
+        let path = "WritingMedia/devotionals/w1/a.jpg"
         for keepsARecord in [false, true] {
             let store = try seededMedia(at: path)
             var records = LampSyncFileRecords()
@@ -1347,7 +1347,7 @@ struct LampSyncBundlePassTests {
         let paths = [
             "Translations/kjv.lamp", "Plans/mcheyne.lamp", "Notes/notes.lamp",
             "Notes/imported.lamp", "Highlights/set-1.lamp", "Quizzes/q1.lamp",
-            "DevotionalMedia/devotionals/w1/a.jpg", "BookMedia/atonement/plate.jpg",
+            "WritingMedia/devotionals/w1/a.jpg", "BookMedia/atonement/plate.jpg",
             "Workspaces/Presentations/sunday.lampdeck",
             "Workspaces/Presentations/Assets/a1b2c3.jpg",
             "Workspaces/Devotionals/advent/Documents/notes.md",

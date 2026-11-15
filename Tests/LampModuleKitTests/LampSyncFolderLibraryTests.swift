@@ -8,7 +8,7 @@ struct LampSyncFolderLibraryTests {
     @Test func eachPathSaysWhatItHolds() throws {
         #expect(LampSyncFolderLayout.kind(of: "Translations/kjv.lamp") == .module(.translations))
         #expect(LampSyncFolderLayout.kind(of: "Notes/notes.LAMP") == .module(.notes))
-        #expect(LampSyncFolderLayout.kind(of: "DevotionalMedia/m/w/a.png") == .devotionalMedia)
+        #expect(LampSyncFolderLayout.kind(of: "WritingMedia/m/w/a.png") == .devotionalMedia)
         #expect(LampSyncFolderLayout.kind(of: "BookMedia/b/images/a.png") == .bookMedia)
         #expect(LampSyncFolderLayout.kind(of: "Workspaces/Presentations/d.lampdeck") == .deck)
         #expect(LampSyncFolderLayout.kind(of: "Workspaces/Presentations/Assets/a.png") == .deckAsset)
@@ -16,7 +16,7 @@ struct LampSyncFolderLibraryTests {
         #expect(try LampSyncFolderLayout.modulePath(kind: .notes, moduleID: "notes") == "Notes/notes.lamp")
         #expect(try LampSyncFolderLayout.bookMediaPath(moduleID: "b", path: "images/a.png") == "BookMedia/b/images/a.png")
         #expect(LampSyncFolderLayout.remoteModuleID(of: "Highlights/set-1.lamp") == "set-1")
-        #expect(LampSyncFolderLayout.remoteModuleID(of: "DevotionalMedia/m/w/a.png") == "m")
+        #expect(LampSyncFolderLayout.remoteModuleID(of: "WritingMedia/m/w/a.png") == "m")
     }
 
     /// Placeholders, legacy formats, the bundle and anything unsafe are
@@ -27,7 +27,7 @@ struct LampSyncFolderLibraryTests {
             "Translations/kjv.json", "Translations/.lamp", "lamp-bible.lampsync",
             "lamp-bible.lampsync.index.json", "Notes/../x.lamp", "Notes/a/b.lamp",
             "Workspaces/Presentations/deleted-decks.json", "Workspaces/Presentations/x/y.lampdeck",
-            "DevotionalMedia/m/a.png", "Unknown/a.lamp",
+            "WritingMedia/m/a.png", "Unknown/a.lamp",
         ] {
             #expect(LampSyncFolderLayout.kind(of: path) == nil, "\(path)")
         }
@@ -170,7 +170,7 @@ struct LampSyncFolderLibraryTests {
         for kind in LampModuleKind.allCases {
             let folder = LampSyncContentKind(kind)
             let path = try LampSyncFolderLayout.modulePath(kind: folder, moduleID: "web")
-            #expect(path == "\(folder.rawValue)/web.lamp")
+            #expect(path == "\(folder.folder)/web.lamp")
             #expect(LampSyncFolderLayout.kind(of: path) == .module(folder))
             #expect(LampSyncFolderLayout.remoteModuleID(of: path) == "web")
         }

@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 4,137 cases across 53 decisions. `SyncModelConformanceTests` asks the
+  answer, 4,593 cases across 69 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.
@@ -96,10 +96,23 @@ read just to be compared (`aRecordedMemberIsNeverRead`). The bundle's update
 retries a refused write, never more than its attempts
 (`settingsUpdateIsBounded`).
 
-The bundle is format 3. Readers that accept only formats 1 and 2 refuse it
+The bundle is format 4. Readers that accept only formats 1 and 2 refuse it
 (`oldReadersRefuseTheBundle`), and anything else at the bundle path is never
 read as a bundle (`anArchiveIsNeverReadAsTheBundle`), judged from the unpacked
-header alone.
+header alone. A format-3 client finds format 4 newer and stops
+(`aFormatThreeClientStopsAtFormatFour`); this one moves a format-3 bundle
+before reading it (`formatThreeIsNeverReadAsTheBundle`).
+
+Format 4 renames writing in the per-file layout (`formatFourPath`): only
+writing moves (`everythingElseStays`), each path keeps its kind
+(`theRenameKeepsTheKind`), and no two paths land on one unless a module is
+already called `writing` (`theRenameIsOneToOneWithoutAModuleCalledWriting`),
+which stops the move. A moved manifest entry keeps its membership
+(`theMoveKeepsMembership`), and a moved tombstone deletes whatever copy turns
+up (`aMovedTombstoneDeletesAnyCopy`). The move reads again when another device
+wrote first (`aMoveRefusedIsReadAgain`), leaves a bundle with iCloud versions
+to the next update (`aMoveBesideVersionsIsLeftForTheUpdate`), which writes a
+format-3 copy whatever its change did (`aFormatThreeCopyIsAlwaysWritten`).
 
 ### Claiming a library, and moving an earlier one
 
@@ -201,7 +214,7 @@ sides call it: whether a removal here may be recorded as a deletion, and
 whether one recorded elsewhere is carried out, so no client records a
 tombstone another refuses (`mayRecordRemoval`,
 `everyRecordedRemovalIsCarriedOut`). `Notes/notes.lamp` and
-`Devotionals/devotionals.lamp` are each one file holding every note or every
+`Writing/writing.lamp` are each one file holding every note or every
 writing, so they are never deleted as files; their items are deleted through
 the ledger (`aCollectionIsNeverDeletedWhole`). Any other notes or writing
 module is a module, and so is a highlight set: deleting a set on one device

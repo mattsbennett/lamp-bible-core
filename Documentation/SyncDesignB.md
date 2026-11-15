@@ -20,10 +20,10 @@ replaces it.
 
 | What | Path | Bytes |
 |---|---|---|
-| Settings bundle | `lamp-bible.lampsync` | format 3 (see below) |
+| Settings bundle | `lamp-bible.lampsync` | format 4 (see below) |
 | A module | `<Kind>/<id>.lamp`, e.g. `Translations/kjv.lamp` | as the phone writes them today |
-| A personal module | `Notes/…`, `Highlights/…`, `Devotionals/…` | as the phone writes them: `LampWebDAVPersonalArchiveAdapter` output, with module IDs rewritten |
-| Writing media | `DevotionalMedia/<module>/<writing>/<file>` | the media file |
+| A personal module | `Notes/…`, `Highlights/…`, `Writing/…` | as the phone writes them: `LampWebDAVPersonalArchiveAdapter` output, with module IDs rewritten |
+| Writing media | `WritingMedia/<module>/<writing>/<file>` | the media file |
 | Book images | `BookMedia/<module>/<path>` | the image, as the phone uploads it today |
 | A deck | `Workspaces/Presentations/<id>.lampdeck` | the deck file |
 | A deck image | `Workspaces/Presentations/Assets/<file>` | the image |
@@ -40,9 +40,9 @@ Anything else is outside the library and is never adopted:
 - the bundle and its old index;
 - anything under the deck folder that isn't a deck or a deck image.
 
-The bundle keeps the archive's path but uses format version 3. Archive readers
+The bundle keeps the archive's path but uses format version 4. Archive readers
 accept only 1 and 2, so an old client refuses the bundle with "Unsupported sync
-archive version: 3" and stops. It never reads an archive with no modules in it
+archive version" and stops. It never reads an archive with no modules in it
 and concludes the library was deleted. bf checked the shipped Mac reader and
 ios-92 the shipped phone reader. Both validate the version before reading
 entries, and neither writes after a failed read.
@@ -221,7 +221,7 @@ members in `listing`. They're planned like listed files.
 
 ```swift
 public struct LampSyncSettingsBundle: Equatable, Sendable {
-    public static let formatVersion: Int                   // 3
+    public static let formatVersion: Int                   // 4; 3 is moved (see "Format 4")
     public var userSettings: Data?                         // iOS settings database
     public var macSettings: Data?                          // the Mac's synced settings.plist keys
     public var preferences: LampSharedPreferenceLedger
@@ -230,8 +230,8 @@ public struct LampSyncSettingsBundle: Equatable, Sendable {
     public var planProgress: Data?                         // plans followed and readings finished, both apps
     public var bookReading: Data?                          // where each book was left, and its bookmarks, both apps
     public var manifest: LampSyncLibraryManifest
-    public func encoded() throws -> Data                   // zlib {"formatVersion":3,"entries":[],"bundle":{…}}
-    public static func decode(_ data: Data) throws -> Self // .isArchive, .unsupportedVersion, .damaged
+    public func encoded() throws -> Data                   // zlib {"formatVersion":4,"entries":[],"bundle":{…}}
+    public static func decode(_ data: Data) throws -> Self // .isArchive, .isFormatThree, .unsupportedVersion, .damaged
 }
 
 public enum LampSyncSettingsStore {
@@ -509,7 +509,9 @@ What each entry of the archive or tree becomes (`entryFate`):
   `Compatibility/` modules, `Workspaces/`, and the portable writings
   `Devotionals/*.json`.
 - **In place**: a file already in the per-file layout, such as
-  `Translations/kjv.lamp` or `Devotionals/daily.lamp`, which the pass adopts.
+  `Translations/kjv.lamp` or `Writing/daily.lamp`, which the pass adopts. One
+  at format 3's writing paths, such as `Devotionals/daily.lamp`, is copied to
+  format 4's first (see "Format 4").
 - **Dropped**: the old layout's bookkeeping. That covers the legacy and
   compatibility manifests, the portable `manifest.json`, the folder seal, the
   archive index, any hidden file such as Finder's `Media/.DS_Store`, and the
@@ -596,7 +598,7 @@ Swift.
 - **Listing:** a recorded member is never read.
 - **The bundle's update:** retries are bounded.
 - **The bundle path:** an archive is never read as a bundle, and old readers
-  refuse format 3.
+  refuse the bundle. A format-3 client stops at format 4.
 - **Pruning:** a tombstone waits for its file to be reaped. The 180-day cost is
   proved as a counterexample.
 - **The folder store:** its coordinated check is the folder publisher's, and
@@ -707,3 +709,48 @@ order, a subset per pass. The table runs the engine for all 64 combinations
 of work and compares the steps it logs. Swapping media and modules fails 24
 of them.
 
+## Format 4: writing renamed
+
+Bundle format 4 renames writing in the per-file layout, to match what the apps
+call it:
+
+| Format 3 | Format 4 |
+|---|---|
+| `Devotionals/<id>.lamp` | `Writing/<id>.lamp` |
+| `Devotionals/devotionals.lamp`, the writing collection | `Writing/writing.lamp` |
+| `DevotionalMedia/<module>/<writing>/<file>` | `WritingMedia/<module>/<writing>/<file>` |
+| `DevotionalMedia/devotionals/<writing>/<file>` | `WritingMedia/writing/<writing>/<file>` |
+
+Nothing else moves. `LampSyncFolderLayout.formatFourPath(ofFormatThree:)` is
+the one statement of the rename. The archive formats keep `Devotionals`, which
+is `LampSyncContentKind.devotionals`' raw value; the per-file folder is its
+`folder`.
+
+A format-3 client finds format 4 newer and stops, and says to update. The
+first format-4 client to read a format-3 bundle moves the library, inside
+`LampSyncSettingsStore.read`, so every caller sees format 4:
+
+1. It copies each member the rename moves to its new path, written only where
+   absent, and any module in `Devotionals/` that no manifest names yet. The
+   collection is rewritten to say `writing` in `module_format`, `module_meta`
+   and each entry, because the phone checks that a module's file name and the
+   ID inside agree.
+2. It writes the bundle as format 4 under the revision it read, its manifest
+   re-keyed: a renamed entry keeps its times, a copy is recorded at the
+   revision it was written at, and a tombstone loses its revisions, which
+   deletes whatever copy turns up (`formatFourEntry`).
+3. If another device wrote the bundle first, it reads again, and moves again
+   if that is still format 3 (`formatFourMoveStep`). Where iCloud holds
+   versions of the bundle no write lands, so the moved bundle is returned for
+   the next `update` to write; a format-3 version is merged as format 4.
+
+Nothing old is deleted. A file a format-3 device uploaded after the copies, and
+media no device copied, stay at the old paths; the device that wrote them
+holds them and publishes them by value once updated, since a path it has no
+record of is compared by value (`anUnknownFileIsAdopted`). Each device's own
+records were kept by path, so its records of the old paths are simply never
+asked for again.
+
+An installed writing module whose ID is already `writing` would land on the
+collection's path. The move stops and says so rather than merge the two
+(`theRenameIsOneToOneWithoutAModuleCalledWriting`).

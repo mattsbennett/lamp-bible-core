@@ -324,7 +324,7 @@ struct LampWebDAVStorageTests {
         defer { try? FileManager.default.removeItem(at: source) }
         try Data("png".utf8).write(to: source)
         log = []
-        _ = try await storage.write(fileAt: source, to: "DevotionalMedia/w/d/a.png", condition: .ifAbsent)
+        _ = try await storage.write(fileAt: source, to: "WritingMedia/w/d/a.png", condition: .ifAbsent)
         #expect(log.filter { $0.hasPrefix("PUT") }.count == 2)
         conflictAlways = true
         log = []

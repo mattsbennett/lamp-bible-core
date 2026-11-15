@@ -3527,14 +3527,18 @@ inductive BundleHeader where
   deriving DecidableEq, Repr
 
 inductive BundleContents where
-  | bundle | archive | newer (n : Nat) | damaged
+  | bundle | archive | formatThree | newer (n : Nat) | damaged
   deriving DecidableEq, Repr
 
+-- Format 4 is the bundle. Format 3 is the bundle from before writing was
+-- renamed, which this client moves to format 4 before reading
+-- (`formatFourMoveStep`).
 def bundlePathHolds : BundleHeader → BundleContents
   | .version n =>
     if n = 1 ∨ n = 2 then .archive
-    else if n = 3 then .bundle
-    else if 3 < n then .newer n
+    else if n = 3 then .formatThree
+    else if n = 4 then .bundle
+    else if 4 < n then .newer n
     else .damaged
   | .entriesFirst => .archive
   | .garbage => .damaged
@@ -3543,7 +3547,26 @@ def bundlePathHolds : BundleHeader → BundleContents
 -- bundle rather than reading a library with no modules as an emptied one.
 def archiveReaderAccepts (version : Nat) : Bool := version == 1 || version == 2
 
-theorem oldReadersRefuseTheBundle : archiveReaderAccepts 3 = false := rfl
+theorem oldReadersRefuseTheBundle : archiveReaderAccepts 4 = false := rfl
+
+-- What a format-3 client made of the same header.
+def formatThreeClientHolds : BundleHeader → BundleContents
+  | .version n =>
+    if n = 1 ∨ n = 2 then .archive
+    else if n = 3 then .bundle
+    else if 3 < n then .newer n
+    else .damaged
+  | .entriesFirst => .archive
+  | .garbage => .damaged
+
+-- A format-3 client finds format 4 newer and stops, rather than reading a
+-- manifest whose writing it would look for at paths nobody writes any more.
+theorem aFormatThreeClientStopsAtFormatFour :
+    formatThreeClientHolds (.version 4) = .newer 4 := by decide
+
+-- And this client never reads format 3 as its own bundle: it moves it.
+theorem formatThreeIsNeverReadAsTheBundle :
+    bundlePathHolds (.version 3) = .formatThree := by decide
 
 theorem anArchiveIsNeverReadAsTheBundle (n : Nat) (h : archiveReaderAccepts n = true) :
     bundlePathHolds (.version n) = .archive := by
@@ -3711,13 +3734,17 @@ theorem anOrdinaryPassClaimsOnlyANewLibrary (mac phone content : Bool)
     emptyBundlePath (mac || phone) content = false := by
   cases mac <;> cases phone <;> cases content <;> simp_all [earlierLibrary, mayClaim, emptyBundlePath]
 
--- Only a bundle this client reads is merged. Anything else stops the update:
+-- Only a bundle this client reads is merged, a format-3 one read moved to
+-- format 4 as the copy beside it was. Anything else stops the update:
 -- merging it is impossible, and dropping it loses another device's write.
-def versionMerges (c : BundleContents) : Bool := c == .bundle
+def versionMerges (c : BundleContents) : Bool := c == .bundle || c == .formatThree
 
 theorem anArchiveVersionIsNeverMerged (n : Nat) (h : archiveReaderAccepts n = true) :
     versionMerges (bundlePathHolds (.version n)) = false := by
-  rw [anArchiveIsNeverReadAsTheBundle n h]; rfl
+  rw [anArchiveIsNeverReadAsTheBundle n h]; decide
+
+theorem aNewerVersionIsNeverMerged (n : Nat) : versionMerges (.newer n) = false := by
+  simp [versionMerges]
 
 inductive SettingsWrite where
   | needsMerge | resolve | create | replace | nothing
@@ -3854,6 +3881,133 @@ theorem aWriteIsNamedOnlyByItsOwnBytes (sent r : Nat) (readBacks : List (Option 
     · unfold confirmReadBacks at h; split at h
       · rename_i hd; cases h; subst hd; exact List.mem_cons_self
       · exact List.mem_cons_of_mem _ (ih h)
+
+/-! ### Bundle format 4
+
+Format 4 renames writing in the per-file layout: `Devotionals/` becomes
+`Writing/`, `DevotionalMedia/` becomes `WritingMedia/`, and the writing
+collection's ID `devotionals` becomes `writing`, in its file name and in its
+media's folder. Every other path stays. The first format-4 client to read a
+format-3 bundle copies what the manifest holds to the new paths, then writes
+the bundle as format 4 with its manifest re-keyed, under the revision it read.
+Nothing old is deleted; a format-3 client stops at format 4
+(`aFormatThreeClientStopsAtFormatFour`). -/
+
+-- A writing module's ID in format 3: the collection (`devotionals`), a module
+-- whose ID is `writing`, which is what format 4 calls the collection, or any
+-- other.
+inductive FormatThreeID where
+  | collection | calledWriting | other (n : Nat)
+  deriving DecidableEq, Repr
+
+inductive FormatFourID where
+  | writing | other (n : Nat)
+  deriving DecidableEq, Repr
+
+-- A path by what it holds: a writing module or a writing's media file, or
+-- anything else, which both layouts hold alike.
+inductive FormatThreePath where
+  | writingModule (id : FormatThreeID)
+  | writingMedia (id : FormatThreeID) (file : Nat)
+  | elsewhere (n : Nat)
+  deriving DecidableEq, Repr
+
+inductive FormatFourPath where
+  | writingModule (id : FormatFourID)
+  | writingMedia (id : FormatFourID) (file : Nat)
+  | elsewhere (n : Nat)
+  deriving DecidableEq, Repr
+
+def formatFourID : FormatThreeID → FormatFourID
+  | .collection => .writing
+  | .calledWriting => .writing
+  | .other n => .other n
+
+def formatFourPath : FormatThreePath → FormatFourPath
+  | .writingModule id => .writingModule (formatFourID id)
+  | .writingMedia id file => .writingMedia (formatFourID id) file
+  | .elsewhere n => .elsewhere n
+
+-- Only writing moves.
+theorem everythingElseStays (n : Nat) : formatFourPath (.elsewhere n) = .elsewhere n := rfl
+
+-- A module moves as a module and media as media, so a pass plans it as the
+-- kind it was.
+theorem theRenameKeepsTheKind (p : FormatThreePath) :
+    (∃ id, p = .writingModule id) ↔ (∃ id, formatFourPath p = .writingModule id) := by
+  cases p <;> simp [formatFourPath]
+
+def calledWriting : FormatThreePath → Bool
+  | .writingModule .calledWriting | .writingMedia .calledWriting _ => true
+  | _ => false
+
+-- Without a module called `writing`, no two paths land on one: the move is a
+-- renaming. With one, it meets the collection, and the move stops
+-- (`LampSyncFormatFourMove.MoveError.collision`) rather than merge the two.
+theorem theRenameIsOneToOneWithoutAModuleCalledWriting (a b : FormatThreePath)
+    (ha : calledWriting a = false) (hb : calledWriting b = false)
+    (h : formatFourPath a = formatFourPath b) : a = b := by
+  cases a with
+  | writingModule i => cases b with
+    | writingModule j => cases i <;> cases j <;> simp_all [formatFourPath, formatFourID, calledWriting]
+    | _ => simp [formatFourPath] at h
+  | writingMedia i f => cases b with
+    | writingMedia j g => cases i <;> cases j <;> simp_all [formatFourPath, formatFourID, calledWriting]
+    | _ => simp [formatFourPath] at h
+  | elsewhere n => cases b <;> simp_all [formatFourPath]
+
+theorem aModuleCalledWritingMeetsTheCollection :
+    formatFourPath (.writingModule .calledWriting) = formatFourPath (.writingModule .collection) := rfl
+
+-- One manifest entry moved. A renamed entry keeps its times; its revisions
+-- were the old path's, so a member keeps only the revision of its copy, and a
+-- tombstone none.
+def formatFourEntry (e : ManifestEntry) (renamed : Bool) (copied : Option Nat) : ManifestEntry :=
+  if renamed then ⟨e.presentSince, if entryIsMember e then copied else none, e.deletedAt, none⟩ else e
+
+-- What was a member still is, and what was deleted is still deleted.
+theorem theMoveKeepsMembership (e : ManifestEntry) (renamed : Bool) (copied : Option Nat) :
+    entryIsMember (formatFourEntry e renamed copied) = entryIsMember e := by
+  unfold formatFourEntry; split <;> simp [entryIsMember]
+
+-- A moved tombstone deletes whatever copy turns up at the new path: nothing
+-- of the old path's is left to spare one.
+theorem aMovedTombstoneDeletesAnyCopy (e : ManifestEntry) (copied : Option Nat) (r : Nat)
+    (h : entryIsMember e = false) : deletesRevision (formatFourEntry e true copied) r = true := by
+  simp [formatFourEntry, h, deletesRevision]
+
+-- A path the move leaves alone keeps everything.
+theorem anUnmovedEntryIsUntouched (e : ManifestEntry) (copied : Option Nat) :
+    formatFourEntry e false copied = e := rfl
+
+inductive FormatFourMoveStep where
+  | moved (r : Nat) | leftForTheUpdate | readAgain | unconfirmed
+  deriving DecidableEq, Repr
+
+-- After the copies, from whether iCloud holds versions of the bundle and
+-- what became of the write under the revision read. With versions no write
+-- lands until they are merged, so the moved bundle goes to the next update.
+def formatFourMoveStep (versions : Bool) (outcome : WriteOutcome) : FormatFourMoveStep :=
+  if versions then .leftForTheUpdate
+  else match outcome with
+    | .written r => .moved r
+    | .writtenUnconfirmed => .unconfirmed
+    | .refused => .readAgain
+
+-- Another device wrote the bundle first: it is read again, and moved again
+-- if it is still format 3, so its writes are carried too.
+theorem aMoveRefusedIsReadAgain : formatFourMoveStep false .refused = .readAgain := rfl
+
+theorem aMoveBesideVersionsIsLeftForTheUpdate (o : WriteOutcome) :
+    formatFourMoveStep true o = .leftForTheUpdate := rfl
+
+-- `update` writes a format-3 copy even when its change left the bundle as it
+-- was, so the moved bundle lands.
+def updateChanged (differs formatThree : Bool) : Bool := differs || formatThree
+
+theorem aFormatThreeCopyIsAlwaysWritten (versions merges differs : Bool) :
+    settingsWrite true versions merges (updateChanged differs true) ≠ .nothing := by
+  cases versions <;> cases merges <;> simp [settingsWrite, updateChanged]
 
 /-! ### The Mac's migration
 
@@ -4782,8 +4936,29 @@ def headerName : BundleHeader → String
   | .garbage => "garbage"
 
 def contentsName : BundleContents → String
-  | .bundle => "bundle" | .archive => "archive" | .newer n => "newer:" ++ toString n
+  | .bundle => "bundle" | .archive => "archive" | .formatThree => "formatThree"
+  | .newer n => "newer:" ++ toString n
   | .damaged => "damaged"
+
+def formatThreeIDName : FormatThreeID → String
+  | .collection => "collection" | .calledWriting => "calledWriting" | .other n => "other" ++ toString n
+
+def formatFourIDName : FormatFourID → String
+  | .writing => "writing" | .other n => "other" ++ toString n
+
+def formatThreePathName : FormatThreePath → String
+  | .writingModule id => "module:" ++ formatThreeIDName id
+  | .writingMedia id f => "media:" ++ formatThreeIDName id ++ ":" ++ toString f
+  | .elsewhere n => "elsewhere:" ++ toString n
+
+def formatFourPathName : FormatFourPath → String
+  | .writingModule id => "module:" ++ formatFourIDName id
+  | .writingMedia id f => "media:" ++ formatFourIDName id ++ ":" ++ toString f
+  | .elsewhere n => "elsewhere:" ++ toString n
+
+def formatFourMoveStepName : FormatFourMoveStep → String
+  | .moved r => "moved:" ++ toString r | .leftForTheUpdate => "leftForTheUpdate"
+  | .readAgain => "readAgain" | .unconfirmed => "unconfirmed"
 
 def manifestEntries : List ManifestEntry :=
   [emptyEntry, ⟨some 5, some 1, none, none⟩, ⟨some 5, some 2, none, none⟩,
@@ -4905,7 +5080,7 @@ def localDeletionName : LocalDeletion → String
       IO.println <| conformanceLine "settingsUpdate"
         [toString attempts, bools refusals, optNat (settingsUpdate attempts refusals)]
   for header in [BundleHeader.version 0, .version 1, .version 2, .version 3, .version 4,
-                 .entriesFirst, .garbage] do
+                 .version 5, .entriesFirst, .garbage] do
     IO.println <| conformanceLine "bundlePathHolds"
       [headerName header, contentsName (bundlePathHolds header)]
 
@@ -5020,9 +5195,22 @@ def bundleCopies : List BundleCopy :=
           [toString bundle, toString marker, toString content,
            bundleReadName (bundleRead bundle marker content)]
   for header in [BundleHeader.version 0, .version 1, .version 2, .version 3, .version 4,
-                 .entriesFirst, .garbage] do
+                 .version 5, .entriesFirst, .garbage] do
     IO.println <| conformanceLine "versionMerges"
       [headerName header, toString (versionMerges (bundlePathHolds header))]
+  for p in [FormatThreePath.writingModule .collection, .writingModule .calledWriting,
+            .writingModule (.other 1), .writingMedia .collection 1, .writingMedia .calledWriting 1,
+            .writingMedia (.other 1) 2, .elsewhere 1, .elsewhere 2] do
+    IO.println <| conformanceLine "formatFourPath" [formatThreePathName p, formatFourPathName (formatFourPath p)]
+  for e in manifestEntries do
+    for renamed in [true, false] do
+      for copied in [none, some 8] do
+        IO.println <| conformanceLine "formatFourEntry"
+          [entryCode e, toString renamed, optNat copied, entryCode (formatFourEntry e renamed copied)]
+  for versions in [true, false] do
+    for outcome in [WriteOutcome.written 4, .writtenUnconfirmed, .refused] do
+      IO.println <| conformanceLine "formatFourMoveStep"
+        [toString versions, writeOutcomeName outcome, formatFourMoveStepName (formatFourMoveStep versions outcome)]
   for current in [true, false] do
     for versions in [true, false] do
       for merges in [true, false] do

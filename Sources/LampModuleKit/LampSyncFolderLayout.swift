@@ -53,8 +53,8 @@ public enum LampSyncFileKind: Hashable, Sendable {
 /// | What | Path |
 /// |---|---|
 /// | Settings bundle | `lamp-bible.lampsync` |
-/// | A module | `<Kind>/<id>.lamp`, e.g. `Translations/kjv.lamp` |
-/// | Writing media | `DevotionalMedia/<module>/<writing>/<file>` |
+/// | A module | `<Kind>/<id>.lamp`, e.g. `Translations/kjv.lamp`, `Writing/writing.lamp` |
+/// | Writing media | `WritingMedia/<module>/<writing>/<file>` |
 /// | Note media | `NoteMedia/<module>/<verse>/<file>` |
 /// | Book images | `BookMedia/<module>/<path>` |
 /// | A deck | `Workspaces/Presentations/<id>.lampdeck` |
@@ -64,6 +64,12 @@ public enum LampSyncFileKind: Hashable, Sendable {
 /// A module's bytes are the phone's: personal modules are the
 /// `LampWebDAVPersonalArchiveAdapter` output, with module IDs rewritten, and a
 /// `lamp-modules` build drops into its kind folder unchanged.
+///
+/// Until bundle format 4, writing lived under `Devotionals/` and
+/// `DevotionalMedia/`, and the writing collection was
+/// `Devotionals/devotionals.lamp`. `formatFourPath(ofFormatThree:)` is the
+/// one statement of that rename; `LampSyncFormatFourMove` carries a library
+/// across it.
 public enum LampSyncFolderLayout {
     public enum PathError: Error, Equatable {
         case unsafe(String)
@@ -74,7 +80,7 @@ public enum LampSyncFolderLayout {
     /// with no modules in it as one that was emptied.
     public static let bundlePath = LampSyncLayout.archivePath
     public static let moduleExtension = "lamp"
-    public static let devotionalMediaDirectory = "DevotionalMedia"
+    public static let devotionalMediaDirectory = "WritingMedia"
     public static let noteMediaDirectory = "NoteMedia"
     public static let bookMediaDirectory = "BookMedia"
     public static let workspacesDirectory = LampPortableBackupLayout.workspacesDirectory
@@ -84,10 +90,10 @@ public enum LampSyncFolderLayout {
 
     /// The kind folders and the deck folder, one Depth:1 listing each.
     public static let listedDirectories: [String] =
-        LampSyncContentKind.allCases.map(\.rawValue) + [decksDirectory]
+        LampSyncContentKind.allCases.map(\.folder) + [decksDirectory]
 
     public static func modulePath(kind: LampSyncContentKind, moduleID: String) throws -> String {
-        try checked([kind.rawValue], "\(moduleID).\(moduleExtension)")
+        try checked([kind.folder], "\(moduleID).\(moduleExtension)")
     }
 
     /// Where one of the reader's notes keeps a file on the server. The owner
@@ -142,7 +148,7 @@ public enum LampSyncFolderLayout {
         let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard components.count >= 2, components.allSatisfy(isSafeComponent) else { return nil }
         let head = components[0]
-        if components.count == 2, let kind = LampSyncContentKind(rawValue: head) {
+        if components.count == 2, let kind = LampSyncContentKind(folder: head) {
             return isModuleFilename(components[1]) && !isRetiredAlias(path) ? .module(kind) : nil
         }
         if head == devotionalMediaDirectory {
@@ -177,7 +183,7 @@ public enum LampSyncFolderLayout {
     /// back any deleted before the deletion ledger existed.
     public static func isRetiredAlias(_ path: String) -> Bool {
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
-        guard components.count == 2, components[0] == Substring(LampSyncContentKind.notes.rawValue),
+        guard components.count == 2, components[0] == Substring(LampSyncContentKind.notes.folder),
               let id = LampSyncModuleFiles.moduleID(from: String(components[1])),
               components[1].lowercased().hasSuffix(".\(moduleExtension)")
         else { return false }
@@ -196,6 +202,65 @@ public enum LampSyncFolderLayout {
         case .devotionalMedia, .noteMedia, .bookMedia: return components[1]
         default: return nil
         }
+    }
+
+    // MARK: - Bundle format 3
+
+    /// Writing's names under bundle format 3.
+    public enum FormatThree {
+        public static let writingFolder = "Devotionals"
+        public static let writingMediaDirectory = "DevotionalMedia"
+        /// The writing collection's module ID, `Devotionals/devotionals.lamp`.
+        public static let writingCollectionID = "devotionals"
+    }
+
+    /// Where a path of the format-3 layout lives in format 4. A writing module
+    /// moves from `Devotionals/` to `Writing/`, its media from
+    /// `DevotionalMedia/` to `WritingMedia/`, and the writing collection's ID
+    /// from `devotionals` to `writing`, in its file name and in its media's
+    /// folder. Every other path of the format-3 layout is the same in format
+    /// 4. Nil for one that layout didn't hold, `Writing/` among them.
+    ///
+    /// One path is left without a place: an installed writing module whose ID
+    /// is already `writing` goes where the collection goes
+    /// (`formatFourCollision(in:)`).
+    /// (`Verification/SyncMerge.lean`: `formatFourPath`.)
+    public static func formatFourPath(ofFormatThree path: String) -> String? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.count >= 2, components.allSatisfy(isSafeComponent) else { return nil }
+        let head = components[0]
+        func renamed(_ id: String) -> String {
+            id == FormatThree.writingCollectionID ? LampSyncLocalDeletion.writingCollectionID : id
+        }
+        if head == FormatThree.writingFolder {
+            guard components.count == 2, isModuleFilename(components[1]),
+                  let id = LampSyncModuleFiles.moduleID(from: components[1]) else { return nil }
+            let renamedPath = "\(LampSyncContentKind.devotionals.folder)/\(renamed(id)).\(moduleExtension)"
+            return kind(of: renamedPath) == nil ? nil : renamedPath
+        }
+        if head == FormatThree.writingMediaDirectory {
+            guard components.count == 4 else { return nil }
+            let renamedPath = ([devotionalMediaDirectory, renamed(components[1])] + components[2...])
+                .joined(separator: "/")
+            return kind(of: renamedPath) == nil ? nil : renamedPath
+        }
+        // Folders format 4 added held nothing of format 3's.
+        if head == LampSyncContentKind.devotionals.folder || head == devotionalMediaDirectory { return nil }
+        return kind(of: path) == nil ? nil : path
+    }
+
+    /// The format-3 paths among `paths` that would land on the same format-4
+    /// path, sorted. Only the writing collection and an installed writing
+    /// module with ID `writing` can: `Devotionals/devotionals.lamp` and
+    /// `Devotionals/writing.lamp`, or their media folders. Empty for any
+    /// library where the move is a renaming.
+    public static func formatFourCollision(in paths: some Sequence<String>) -> [String] {
+        var byTarget: [String: [String]] = [:]
+        for path in Set(paths) {
+            guard let target = formatFourPath(ofFormatThree: path) else { continue }
+            byTarget[target, default: []].append(path)
+        }
+        return byTarget.values.filter { $0.count > 1 }.flatMap { $0 }.sorted()
     }
 
     private static func isModuleFilename(_ name: String) -> Bool {
