@@ -420,7 +420,10 @@
       "rules": [
         "FileClass",
         "formatFourPath",
-        "theRenameIsOneToOneWithoutAModuleCalledWriting"
+        "theRenameIsOneToOne",
+        "formatThreeOf",
+        "formatThreeOfUndoesTheRename",
+        "aModuleCalledWritingIsNotCarried"
       ],
       "boundary": "Path spelling and validation are Swift's. What the plan needs from a path, whether it is media and whether its folder is listed, is the model's FileClass, and filePlanAction's table reaches it through one path of each class.",
       "conformance": [
@@ -491,9 +494,8 @@
         "thesameTimeAtAnotherRevisionIsRecorded",
         "formatFourEntry",
         "theMoveKeepsMembership",
-        "aMovedTombstoneDeletesWhatItDeleted",
-        "formatFourMeet",
-        "aDeletedModuleNeverDeletesTheCollection"
+        "aMovedTombstoneDeletesAnyCopy",
+        "aCopyPutBackIsAdoptedByTheMove"
       ],
       "conformance": [
         "manifestMerge",
@@ -501,8 +503,7 @@
         "adoptFile",
         "pruneTombstone",
         "recordsAdeletion",
-        "formatFourEntry",
-        "formatFourMeet"
+        "formatFourEntry"
       ],
       "boundary": "Revisions compare as tokens here and as numbers in the model; the tables use single-digit revisions, where the two orders agree. Coding, path validation and sorting are Swift's. `recordsAdeletion` separates a deletion the manifest took from one a pass merely asked for: a client whose deletions come from a permanent ledger rather than a consumable queue asks for the same tombstones on every pass, so anything done because one was recorded must read this and not the plan's list."
     },
@@ -750,27 +751,29 @@
     "Sources/LampModuleKit/LampSyncFormatFourMove.swift": {
       "rules": [
         "formatFourPath",
+        "formatFourID",
         "theRenameKeepsTheKind",
-        "theRenameIsOneToOneWithoutAModuleCalledWriting",
-        "aModuleCalledWritingMeetsTheCollection",
+        "theRenameIsOneToOne",
+        "aModuleCalledWritingIsNotCarried",
         "everythingElseStays",
+        "formatThreeOf",
+        "formatThreeOfUndoesTheRename",
         "formatFourEntry",
         "theMoveKeepsMembership",
+        "aMovedTombstoneDeletesAnyCopy",
+        "aCopyPutBackIsAdoptedByTheMove",
         "anUnmovedEntryIsUntouched",
-        "aFormatThreeClientStopsAtFormatFour",
-        "aMovedTombstoneDeletesWhatItDeleted",
-        "formatFourMeet",
-        "aDeletedModuleNeverDeletesTheCollection",
         "formatFourCopy",
-        "theMoveNeverKeepsAStaleCopy"
+        "theMoveNeverWritesOverAnotherDevicesFile",
+        "theMoveReplacesItsOwnStaleCopy",
+        "aFormatThreeClientStopsAtFormatFour"
       ],
       "conformance": [
         "formatFourPath",
         "formatFourEntry",
-        "formatFourMeet",
         "formatFourCopy"
       ],
-      "boundary": "Which path each format-3 path becomes, what its manifest entry becomes, which entry wins where two meet, and whether a copy already at the new path is kept or replaced are held by tables. Reading and writing the files, comparing their digests, rewriting the collection's module ID inside its SQLite, walking format 3's writing folders for files no manifest accounts for, and copying a member that arrives late are Swift's, held by LampSyncFormatFourMoveTests."
+      "boundary": "Which path each format-3 path becomes, what its manifest entry becomes, and whether the move writes, keeps or replaces what is at a new path are held by tables. Reading and writing the files, comparing their digests, knowing which files this move wrote, rewriting the collection's module ID inside its SQLite, walking format 3's writing folders for files no manifest accounts for, and copying and recording a member that arrives late are Swift's, held by LampSyncFormatFourMoveTests."
     }
   },
   "platformSources": {

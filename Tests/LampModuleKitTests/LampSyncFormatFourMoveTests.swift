@@ -13,6 +13,10 @@ struct LampSyncFormatFourMoveTests {
         let cases: [(String, String?)] = [
             ("Devotionals/devotionals.lamp", "Writing/writing.lamp"),
             ("Devotionals/sermons.lamp", "Writing/sermons.lamp"),
+            // A module already called `writing` is not carried: its new path
+            // is the collection's.
+            ("Devotionals/writing.lamp", nil),
+            ("DevotionalMedia/writing/w1/a.jpg", nil),
             ("DevotionalMedia/devotionals/w1/a.jpg", "WritingMedia/writing/w1/a.jpg"),
             ("DevotionalMedia/sermons/w1/a.jpg", "WritingMedia/sermons/w1/a.jpg"),
             ("Translations/kjv.lamp", "Translations/kjv.lamp"),
@@ -47,16 +51,14 @@ struct LampSyncFormatFourMoveTests {
         #expect(LampSyncLocalDeletion.target(of: "Writing/devotionals.lamp") == .module("devotionals"))
     }
 
-    @Test func onlyAModuleCalledWritingCollidesWithTheCollection() {
-        #expect(LampSyncFolderLayout.formatFourCollision(in: [
-            "Devotionals/devotionals.lamp", "Devotionals/sermons.lamp", "DevotionalMedia/devotionals/w/a.png",
-        ]).isEmpty)
-        #expect(LampSyncFolderLayout.formatFourCollision(in: [
-            "Devotionals/devotionals.lamp", "Devotionals/writing.lamp", "Translations/kjv.lamp",
-        ]) == ["Devotionals/devotionals.lamp", "Devotionals/writing.lamp"])
-        #expect(LampSyncFolderLayout.formatFourCollision(in: [
-            "DevotionalMedia/devotionals/w/a.png", "DevotionalMedia/writing/w/a.png",
-        ]) == ["DevotionalMedia/devotionals/w/a.png", "DevotionalMedia/writing/w/a.png"])
+    /// Where a format-4 writing path was moved from, which a late arrival is
+    /// looked for beside.
+    @Test func eachMovedPathSaysWhereItCameFrom() {
+        for path in ["Devotionals/devotionals.lamp", "Devotionals/sermons.lamp", "DevotionalMedia/devotionals/w/a.png",
+                     "DevotionalMedia/sermons/w/a.png", "Translations/kjv.lamp"] {
+            let moved = LampSyncFolderLayout.formatFourPath(ofFormatThree: path)!
+            #expect(LampSyncFolderLayout.formatThreePath(ofFormatFour: moved) == path)
+        }
     }
 
     // MARK: - The manifest
@@ -81,9 +83,9 @@ struct LampSyncFormatFourMoveTests {
         // Not copied: a member still, compared by value when next seen.
         let sermons = try #require(moved.entry(at: "Writing/sermons.lamp"))
         #expect(sermons.isMember && sermons.revision == nil)
-        // Still deleted, of the copy it deleted.
+        // Still deleted, of whatever copy turns up.
         let old = try #require(moved.entry(at: "Writing/old.lamp"))
-        #expect(!old.isMember && old.deletedAt == 9 && old.revision == "\"c\"" && old.deletedRevision == "\"c\"")
+        #expect(!old.isMember && old.deletedAt == 9 && old.revision == nil && old.deletedRevision == nil)
         // Untouched by the rename.
         #expect(moved.entry(at: "Translations/kjv.lamp") == manifest.entry(at: "Translations/kjv.lamp"))
         #expect(moved.entry(at: "Future/thing.lamp") == manifest.entry(at: "Future/thing.lamp"))
@@ -139,7 +141,7 @@ struct LampSyncFormatFourMoveTests {
         let snapshot = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
 
         // Written as format 4, under the revision read.
-        #expect(!snapshot.isFormatThree)
+        #expect(!snapshot.mustBeWritten)
         let written = try #require(store.data(LampSyncSettingsStore.path))
         #expect(try LampSyncSettingsBundle.decode(written) == snapshot.bundle)
         #expect(store.conditions[LampSyncSettingsStore.path] == [.ifRevision("\"bundle3\"")])
@@ -188,8 +190,9 @@ struct LampSyncFormatFourMoveTests {
     }
 
     /// Another device wrote the bundle after the copies and before the move's
-    /// write: a format-3 device, publishing a writing the copies missed. The
-    /// write is refused, and the move reads again and carries that too.
+    /// write: a format-3 device, editing one writing module and publishing
+    /// another the copies missed. The write is refused, and the move reads
+    /// again, carries the new one, and replaces its own copy of the old.
     @Test func aBundleWrittenDuringTheMoveIsMovedAgain() async throws {
         let store = MoveStore()
         store.put("Devotionals/sermons.lamp", Data("sermons".utf8), "\"b\"")
@@ -198,10 +201,11 @@ struct LampSyncFormatFourMoveTests {
         ]))
         store.put(LampSyncSettingsStore.path, try before.encoded(version: 3), "\"bundle3\"")
         let after = LampSyncSettingsBundle(manifest: try formatThreeManifest([
-            ("Devotionals/sermons.lamp", 6, "\"b\"", nil, nil),
+            ("Devotionals/sermons.lamp", 9, "\"b2\"", nil, nil),
             ("Devotionals/advent.lamp", 8, "\"g\"", nil, nil),
         ]))
         store.beforeBundleWrite = {
+            store.put("Devotionals/sermons.lamp", Data("sermons, edited".utf8), "\"b2\"")
             store.put("Devotionals/advent.lamp", Data("advent".utf8), "\"g\"")
             store.put(LampSyncSettingsStore.path, try after.encoded(version: 3), "\"bundle3b\"")
         }
@@ -210,6 +214,8 @@ struct LampSyncFormatFourMoveTests {
 
         #expect(snapshot.bundle.manifest.paths == ["Writing/sermons.lamp", "Writing/advent.lamp"])
         #expect(store.data("Writing/advent.lamp") == Data("advent".utf8))
+        #expect(store.data("Writing/sermons.lamp") == Data("sermons, edited".utf8))
+        #expect(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp")?.revision == store.revision(of: "Writing/sermons.lamp"))
         #expect(store.conditions[LampSyncSettingsStore.path] == [.ifRevision("\"bundle3\""), .ifRevision("\"bundle3b\"")])
     }
 
@@ -231,7 +237,9 @@ struct LampSyncFormatFourMoveTests {
         #expect(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp")?.revision == "\"x\"")
     }
 
-    @Test func aModuleCalledWritingStopsTheMoveBeforeAnythingIsWritten() async throws {
+    /// A module already called `writing` is left where it was, and its entry
+    /// with it, outside format 4's layout: the collection takes the name.
+    @Test func aModuleCalledWritingIsLeftBehindAndTheCollectionMoves() async throws {
         let store = MoveStore()
         store.put("Devotionals/devotionals.lamp", try writingCollection(id: "devotionals"), "\"a\"")
         store.put("Devotionals/writing.lamp", Data("someone's".utf8), "\"b\"")
@@ -239,14 +247,29 @@ struct LampSyncFormatFourMoveTests {
             ("Devotionals/devotionals.lamp", 5, "\"a\"", nil, nil),
             ("Devotionals/writing.lamp", 6, "\"b\"", nil, nil),
         ])).encoded(version: 3), "\"bundle3\"")
-        let writes = store.writeCount
 
-        await #expect(throws: LampSyncFormatFourMove.MoveError.collision([
-            "Devotionals/devotionals.lamp", "Devotionals/writing.lamp",
-        ])) {
-            try await LampSyncSettingsStore.read(from: store, patience: .immediate)
-        }
-        #expect(store.writeCount == writes)
+        let snapshot = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
+
+        #expect(snapshot.bundle.manifest.paths == ["Writing/writing.lamp", "Devotionals/writing.lamp"])
+        #expect(try moduleIDs(inCollection: try #require(store.data("Writing/writing.lamp")))["module_meta"] == ["writing"])
+        #expect(store.data("Devotionals/writing.lamp") == Data("someone's".utf8))
+    }
+
+    /// A file another device put at a new path, a second device moving or a
+    /// format-4 pass, is never written over, even where it differs.
+    @Test func aFileAnotherDeviceWroteIsNeverWrittenOver() async throws {
+        let store = MoveStore()
+        store.put("Devotionals/sermons.lamp", Data("sermons".utf8), "\"b\"")
+        store.put("Writing/sermons.lamp", Data("sermons, published since".utf8), "\"x\"")
+        store.put(LampSyncSettingsStore.path, try LampSyncSettingsBundle(manifest: try formatThreeManifest([
+            ("Devotionals/sermons.lamp", 6, "\"b\"", nil, nil),
+        ])).encoded(version: 3), "\"bundle3\"")
+
+        let snapshot = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
+
+        #expect(store.data("Writing/sermons.lamp") == Data("sermons, published since".utf8))
+        #expect(store.conditions["Writing/sermons.lamp"] == nil)
+        #expect(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp")?.revision == "\"x\"")
     }
 
     /// A format-3 bundle written over by `update` is a format-4 one, even
@@ -272,23 +295,6 @@ struct LampSyncFormatFourMoveTests {
 
     // MARK: - What review found
 
-    /// A copy an earlier attempt made, before a format-3 device wrote the old
-    /// path again, is replaced with what the old path holds now.
-    @Test func aStaleCopyFromAnEarlierAttemptIsReplaced() async throws {
-        let store = MoveStore()
-        store.put("Devotionals/sermons.lamp", Data("sermons, edited".utf8), "\"b2\"")
-        store.put("Writing/sermons.lamp", Data("sermons".utf8), "\"x\"")
-        store.put(LampSyncSettingsStore.path, try LampSyncSettingsBundle(manifest: try formatThreeManifest([
-            ("Devotionals/sermons.lamp", 9, "\"b2\"", nil, nil),
-        ])).encoded(version: 3), "\"bundle3\"")
-
-        let snapshot = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
-
-        #expect(store.data("Writing/sermons.lamp") == Data("sermons, edited".utf8))
-        #expect(store.conditions["Writing/sermons.lamp"] == [.ifRevision("\"x\"")])
-        #expect(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp")?.revision == store.revision(of: "Writing/sermons.lamp"))
-    }
-
     /// A writing's media and a module no manifest names, as the phone's own
     /// library held them before it had a bundle, are carried by the phone's
     /// move as by any other.
@@ -309,9 +315,9 @@ struct LampSyncFormatFourMoveTests {
         #expect(store.data("Writing/dropped.lamp") == Data("dropped".utf8))
     }
 
-    /// A copy put back by hand after its module was deleted is carried, and
-    /// the tombstone keeps the copy it deleted, so a pass adopts the one put
-    /// back, as it would have at the old path. The copy it deleted is not.
+    /// A copy put back by hand after its module was deleted is carried and
+    /// adopted, as a pass would have adopted it at the old path. The copy a
+    /// deletion was of is not carried, and its tombstone deletes any copy.
     @Test func aCopyPutBackAfterADeletionIsCarriedAndTheDeletionIsNot() async throws {
         let store = MoveStore()
         store.put("Devotionals/sermons.lamp", Data("put back".utf8), "\"new\"")
@@ -325,11 +331,10 @@ struct LampSyncFormatFourMoveTests {
 
         #expect(store.data("Writing/sermons.lamp") == Data("put back".utf8))
         #expect(store.data("Writing/old.lamp") == nil)
-        let tombstone = try #require(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp"))
-        #expect(!tombstone.isMember)
-        #expect(try snapshot.bundle.manifest.adopting(
-            "Writing/sermons.lamp", revision: try #require(store.revision(of: "Writing/sermons.lamp")), at: 9
-        ).entry(at: "Writing/sermons.lamp")?.isMember == true)
+        let adopted = try #require(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp"))
+        #expect(adopted.isMember && adopted.revision == store.revision(of: "Writing/sermons.lamp"))
+        let deleted = try #require(snapshot.bundle.manifest.entry(at: "Writing/old.lamp"))
+        #expect(!deleted.isMember && deleted.deletes(revision: "\"anything\""))
     }
 
     /// A member whose file iCloud had not delivered when the library moved
@@ -346,10 +351,18 @@ struct LampSyncFormatFourMoveTests {
 
         store.put("Devotionals/devotionals.lamp", try writingCollection(id: "devotionals"), "\"a\"")
         store.put("DevotionalMedia/devotionals/w1/a.jpg", Data("a".utf8), "\"b\"")
-        _ = try await LampSyncSettingsStore.read(from: store, patience: .immediate)
+        let arrived = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
 
         #expect(try moduleIDs(inCollection: try #require(store.data("Writing/writing.lamp")))["module_meta"] == ["writing"])
         #expect(store.data("WritingMedia/writing/w1/a.jpg") == Data("a".utf8))
+        // Recorded by the next write, after which nothing is looked for.
+        #expect(arrived.mustBeWritten)
+        #expect(arrived.bundle.manifest.entry(at: "Writing/writing.lamp")?.revision == store.revision(of: "Writing/writing.lamp"))
+        let written = try await LampSyncSettingsStore.update(in: store, patience: .immediate) { _ in }
+        #expect(written.bundle.manifest.entry(at: "WritingMedia/writing/w1/a.jpg")?.revision != nil)
+        let writes = store.writeCount
+        let settled = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
+        #expect(!settled.mustBeWritten && store.writeCount == writes)
     }
 
     /// A module called `writing` that was deleted does not stop the move, and
@@ -365,16 +378,6 @@ struct LampSyncFormatFourMoveTests {
         let snapshot = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
 
         #expect(snapshot.bundle.manifest.entry(at: "Writing/writing.lamp")?.isMember == true)
-    }
-
-    /// The phone keeps one module per ID, of whatever kind, so a book called
-    /// `writing` takes the collection's new name as surely as a writing
-    /// module would.
-    @Test func aModuleCalledWritingOfAnyKindCollides() {
-        #expect(LampSyncFolderLayout.formatFourCollision(in: [
-            "Devotionals/devotionals.lamp", "Books/writing.lamp",
-        ]) == ["Books/writing.lamp", "Devotionals/devotionals.lamp"])
-        #expect(LampSyncFolderLayout.formatFourCollision(in: ["Books/writing.lamp"]).isEmpty)
     }
 
     /// The collection's extension in another case is still the collection,
@@ -404,7 +407,7 @@ struct LampSyncFormatFourMoveTests {
         ])).encoded(version: 3), "\"version3\"")]
 
         let read = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
-        #expect(read.isFormatThree)
+        #expect(read.mustBeWritten)
         #expect(read.bundle.manifest.paths == ["Writing/sermons.lamp"])
         #expect(read.versions.map(\.bundle.manifest.paths) == [["WritingMedia/advent/w1/only-in-the-version.jpg"]])
         #expect(store.data("WritingMedia/advent/w1/only-in-the-version.jpg") == Data("jpeg".utf8))

@@ -17,22 +17,26 @@ public enum LampSyncSettingsStore {
         /// without a base: after a lost write, the base it recorded is its
         /// own write, which the current copy never saw.
         public let versions: [Version]
-        /// The copy at `revision` is still format 3, and `bundle` is it moved
-        /// to format 4, its files already copied. Only while iCloud holds
-        /// versions of it, which keep the move from writing: the next
-        /// `update` writes it, whether or not it changed anything.
-        public let isFormatThree: Bool
+        /// The copy at `revision` is not `bundle` as written: still format 3,
+        /// with `bundle` it moved to format 4 and its files copied, while
+        /// iCloud holds versions of it that keep the move from writing; or
+        /// format 4, with `bundle` recording members whose files arrived late.
+        /// The next `update` writes it, whether or not it changed anything.
+        public let mustBeWritten: Bool
 
         public init(bundle: LampSyncSettingsBundle, revision: String, versions: [Version] = []) {
-            self.init(bundle: bundle, revision: revision, versions: versions, isFormatThree: false)
+            self.init(bundle: bundle, revision: revision, versions: versions, mustBeWritten: false)
         }
 
-        init(bundle: LampSyncSettingsBundle, revision: String, versions: [Version], isFormatThree: Bool) {
+        init(bundle: LampSyncSettingsBundle, revision: String, versions: [Version], mustBeWritten: Bool) {
             self.bundle = bundle
             self.revision = revision
             self.versions = versions
-            self.isFormatThree = isFormatThree
+            self.mustBeWritten = mustBeWritten
         }
+
+        /// Read as format 3, before `read` moved it. Never seen outside.
+        var isFormatThree = false
     }
 
     public struct Version: Equatable, Sendable {
@@ -183,6 +187,9 @@ public enum LampSyncSettingsStore {
            LampSyncConditionalWrite.namesSameRevision(current, knownArchiveRevision) {
             throw StoreError.notMigrated(revision: current)
         }
+        // What this read's move writes, across its attempts: the only files
+        // it may write over (`LampSyncFormatFourMove.Copies`).
+        let copies = LampSyncFormatFourMove.Copies()
         for attempt in 0..<max(moveAttempts, 1) {
             try? await Task.sleep(for: patience.retryWait(before: attempt))
             var snapshot: Snapshot?
@@ -201,10 +208,15 @@ public enum LampSyncSettingsStore {
             }
             guard let found = snapshot else { return nil }
             guard found.isFormatThree || found.versions.contains(where: \.isFormatThree) else {
-                try await LampSyncFormatFourMove.copyLateArrivals(found.bundle.manifest, in: store, patience: patience)
-                return found
+                let recovered = try await LampSyncFormatFourMove.lateArrivals(
+                    in: found.bundle.manifest, in: store, patience: patience
+                )
+                guard !recovered.isEmpty else { return found }
+                var bundle = found.bundle
+                bundle.manifest = bundle.manifest.recordingCopies(recovered)
+                return Snapshot(bundle: bundle, revision: found.revision, versions: found.versions, mustBeWritten: true)
             }
-            if let moved = try await moveToFormatFour(found, in: store, patience: patience) {
+            if let moved = try await moveToFormatFour(found, in: store, copies: copies, patience: patience) {
                 return moved
             }
         }
@@ -220,6 +232,7 @@ public enum LampSyncSettingsStore {
     private static func moveToFormatFour(
         _ formatThree: Snapshot,
         in store: any LampSyncRemoteStore,
+        copies: LampSyncFormatFourMove.Copies,
         patience: LampSyncConditionalWrite.Patience
     ) async throws -> Snapshot? {
         // The current copy and any iCloud version still at format 3, every
@@ -228,13 +241,13 @@ public enum LampSyncSettingsStore {
         let threes = (formatThree.isFormatThree ? [formatThree.bundle] : [])
             + formatThree.versions.filter(\.isFormatThree).map(\.bundle)
         let manifest = threes.map(\.manifest).reduce(LampSyncLibraryManifest()) { $0.merged(with: $1) }
-        let copied = try await LampSyncFormatFourMove.copy(manifest, in: store, patience: patience)
+        let carried = try await LampSyncFormatFourMove.copy(manifest, in: store, copies: copies, patience: patience)
         let moved = formatThree.isFormatThree
-            ? LampSyncFormatFourMove.bundle(formatThree.bundle, copied: copied)
+            ? LampSyncFormatFourMove.bundle(formatThree.bundle, carried: carried)
             : formatThree.bundle
         let versions = formatThree.versions.map { version in
             version.isFormatThree
-                ? Version(bundle: LampSyncFormatFourMove.bundle(version.bundle, copied: copied), revision: version.revision)
+                ? Version(bundle: LampSyncFormatFourMove.bundle(version.bundle, carried: carried), revision: version.revision)
                 : version
         }
         let outcome: LampSyncConditionalWrite.Outcome? = versions.isEmpty
@@ -248,7 +261,7 @@ public enum LampSyncSettingsStore {
         case .leftForTheUpdate:
             return Snapshot(
                 bundle: moved, revision: formatThree.revision,
-                versions: versions, isFormatThree: formatThree.isFormatThree
+                versions: versions, mustBeWritten: formatThree.isFormatThree
             )
         case .readAgain: return nil
         case .unconfirmed: throw LampSyncConditionalWrite.Unconfirmed(path: path)
@@ -568,11 +581,12 @@ public enum LampSyncSettingsStore {
                 guard let revision = file.revision else { throw StoreError.unreadableVersion("") }
                 versions[revision] = try version(at: file.url, revision: revision)
             }
-            return Snapshot(
+            var snapshot = Snapshot(
                 bundle: bundle, revision: revision,
-                versions: versions.keys.sorted().compactMap { versions[$0] },
-                isFormatThree: isFormatThree
+                versions: versions.keys.sorted().compactMap { versions[$0] }
             )
+            snapshot.isFormatThree = isFormatThree
+            return snapshot
         }
     }
 
@@ -656,9 +670,9 @@ public enum LampSyncSettingsStore {
             let decision = write(
                 current: current != nil, versions: !versions.isEmpty,
                 merges: mergingVersion != nil,
-                // A format-3 copy is written whatever the change did, so the
-                // moved bundle lands (`aFormatThreeCopyIsAlwaysWritten`).
-                changed: bundle != current?.bundle || current?.isFormatThree == true
+                // A copy not as read is written whatever the change did, so
+                // a moved bundle lands (`aFormatThreeCopyIsAlwaysWritten`).
+                changed: bundle != current?.bundle || current?.mustBeWritten == true
             )
             let revision: String
             do {

@@ -11,102 +11,120 @@ import SQLite3
 /// `LampSyncSettingsStore.read` calls it, so nothing else has to know. It
 /// copies every member it renames to its new path, the collection with its
 /// module ID rewritten inside, then writes the bundle as format 4 with its
-/// manifest at the new paths, under the revision it read. The copies are
-/// written only where absent, so a second device moving at the same time,
-/// or this one after a pass that died, finds them there and goes on; only
-/// one bundle write can win.
+/// manifest at the new paths, under the revision it read.
+///
+/// It never writes over a file it did not write itself. A file already at a
+/// new path is another device's: a second device moving at the same time, or
+/// a format-4 pass that ran while iCloud held versions of the bundle. Only a
+/// copy this same move made, from what the old path held before a format-3
+/// device wrote it again, is replaced (`formatFourCopy`). So a move retried
+/// after another device wrote the bundle carries the newer file, and nothing a
+/// format-4 device published is lost to an old copy.
 ///
 /// Nothing old is deleted. A format-3 client finds format 4 newer and stops
 /// rather than writing to paths nobody reads, so its edits wait on the device
-/// until it is updated, and its next pass publishes them by value.
-///
-/// A file only another format-3 device had, uploaded after the copy and
-/// before the bundle write, is left at its old path: the device that wrote it
-/// still holds it, and publishes it once updated. So does media a member names
-/// that no device ever copied, which the move never lists.
+/// until it is updated, and its next pass publishes them by value. A member
+/// whose file was not there yet is copied when it arrives
+/// (`lateArrivals(in:in:patience:)`).
 public enum LampSyncFormatFourMove {
     public enum MoveError: Error, Equatable, LocalizedError {
-        /// A module whose ID is `writing` and the writing collection are both
-        /// there: the collection's new name is taken.
-        case collision([String])
         /// The collection's module ID could not be rewritten.
         case unreadableCollection(String)
 
         public var errorDescription: String? {
             switch self {
-            case .collision(let paths):
-                "This library holds a module whose ID is “writing”, which the writing collection is now called, so the library could not be moved to the new layout. Remove that module on a device still on the older version of Lamp Bible and let it sync, then sync here. Nothing was changed. (\(paths.joined(separator: ", ")))"
             case .unreadableCollection(let path):
                 "The writing collection at \(path) could not be read to move it to the new layout. Nothing was changed."
             }
         }
     }
 
+    /// What one move has written, by new path, at the revision it wrote:
+    /// the only files it may write over. Kept across the attempts of one
+    /// `LampSyncSettingsStore.read`, and no longer.
+    final class Copies: @unchecked Sendable {
+        var written: [String: String] = [:]
+        init() {}
+    }
+
+    /// What the move found to carry: each file's old path, with the revision
+    /// of its copy where the server gave one, and the files put back after a
+    /// deletion, which the manifest adopts.
+    struct Carried: Equatable {
+        var copied: [String: String] = [:]
+        var putBack: Set<String> = []
+    }
+
     /// The format-4 bundle for `formatThree`, whose files have been copied:
-    /// its manifest at the new paths, recording each copy at the revision
-    /// the copy was written at.
+    /// its manifest at the new paths, recording each copy at the revision the
+    /// copy was written at, and adopting each copy put back after a deletion.
     static func bundle(
-        _ formatThree: LampSyncSettingsBundle, copied: [String: String]
+        _ formatThree: LampSyncSettingsBundle, carried: Carried = .init(), at now: Int64 = currentTime()
     ) -> LampSyncSettingsBundle {
         var moved = formatThree
-        moved.manifest = formatThree.manifest.formatFour(copied: copied)
+        moved.manifest = formatThree.manifest.formatFour(copied: carried.copied, putBack: carried.putBack, at: now)
         return moved
     }
 
-    /// Copies what `manifest` holds that the move renames, with any file at
-    /// format 3's writing paths no manifest names yet or that was put back
-    /// after a deletion (`files(in:beside:)`). Returns each file copied, by
-    /// its old path, with the revision of its copy where the server gave one.
-    ///
-    /// Throws `collision` before copying anything if two of them would land
-    /// on one path.
+    static func currentTime() -> Int64 { Int64((Date().timeIntervalSince1970 * 1_000).rounded()) }
+
+    /// Copies what `manifest` holds that the move renames, with every file at
+    /// format 3's writing paths it does not account for (`files(in:beside:)`).
     static func copy(
         _ manifest: LampSyncLibraryManifest,
         in store: any LampSyncRemoteStore,
+        copies: Copies,
         patience: LampSyncConditionalWrite.Patience
-    ) async throws -> [String: String] {
-        try await copy(members: manifest.members.map(\.path), manifest: manifest, in: store, patience: patience)
+    ) async throws -> Carried {
+        try await copy(
+            members: manifest.members.map(\.path), manifest: manifest, in: store, copies: copies, patience: patience
+        )
     }
 
     /// Copies `members`, format-3 paths, to their format-4 paths, with the
-    /// files at format 3's writing paths that `manifest` does not account for
-    /// (`files(in:beside:)`). Throws `collision`, copying nothing, if two of
-    /// them would land on one path, or if one is a module called `writing`
-    /// and the collection is there too. The Mac's move from an archive calls
-    /// this with the per-file files it found in place, and the phone's move
-    /// from its own layout with none, so both carry the old folders' files to
-    /// where the next pass lists.
+    /// files at format 3's writing paths that `manifest` does not account for.
+    /// The Mac's move from an archive calls this with the per-file files it
+    /// found in place, and the phone's move from its own layout with none, so
+    /// both carry the old folders' files to where the next pass lists.
     public static func copy(
         members: some Sequence<String>,
         manifest: LampSyncLibraryManifest = .init(),
         in store: any LampSyncRemoteStore,
         patience: LampSyncConditionalWrite.Patience = .standard
     ) async throws -> [String: String] {
-        let found = try await files(in: store, beside: manifest)
-        let toCopy = Set(members).union(found)
-        let memberPaths = Set(manifest.members.map(\.path))
-        let collision = LampSyncFolderLayout.formatFourCollision(in: toCopy.union(memberPaths))
-        guard collision.isEmpty else { throw MoveError.collision(collision) }
+        try await copy(members: members, manifest: manifest, in: store, copies: Copies(), patience: patience).copied
+    }
 
-        var copied: [String: String] = [:]
-        for path in toCopy.sorted() {
+    static func copy(
+        members: some Sequence<String>,
+        manifest: LampSyncLibraryManifest,
+        in store: any LampSyncRemoteStore,
+        copies: Copies,
+        patience: LampSyncConditionalWrite.Patience
+    ) async throws -> Carried {
+        let found = try await files(in: store, beside: manifest)
+        var carried = Carried(putBack: found.putBack)
+        for path in Set(members).union(found.unaccounted).union(found.putBack).sorted() {
             guard let target = LampSyncFolderLayout.formatFourPath(ofFormatThree: path), target != path
             else { continue }
-            if let revision = try await copy(path, to: target, in: store, patience: patience) {
-                copied[path] = revision
+            if let revision = try await copy(path, to: target, in: store, copies: copies, patience: patience) {
+                carried.copied[path] = revision
             }
         }
-        return copied
+        // A copy put back that could not be copied stays deleted.
+        carried.putBack = carried.putBack.filter { carried.copied[$0] != nil }
+        return carried
     }
 
     /// The files at format 3's writing paths that `manifest` does not account
     /// for: a module or a writing's media no entry names, which a pass would
-    /// have adopted, and one put back after a deletion, which it would have
+    /// have adopted, and a copy put back after a deletion, which it would have
     /// adopted too (`adoptFile`). Media is never listed by a pass, so its
-    /// folder is walked here, its three levels: module, writing, file.
+    /// folder is walked here, its three levels: module, writing, file. A file
+    /// the move does not carry, such as a module called `writing`, is left out.
     static func files(
         in store: any LampSyncRemoteStore, beside manifest: LampSyncLibraryManifest
-    ) async throws -> [String] {
+    ) async throws -> (unaccounted: [String], putBack: Set<String>) {
         func visible(_ entries: [LampSyncRemoteEntry]?) -> [LampSyncRemoteEntry] {
             (entries ?? []).filter { !$0.name.hasPrefix(".") }
         }
@@ -125,28 +143,31 @@ public enum LampSyncFormatFourMove {
                 }
             }
         }
-        return found.compactMap { path, revision in
-            guard LampSyncFolderLayout.formatFourPath(ofFormatThree: path) != nil else { return nil }
-            guard let entry = manifest.entry(at: path) else { return path }
-            if entry.isMember { return path }
+        var unaccounted: [String] = []
+        var putBack: Set<String> = []
+        for (path, listed) in found where LampSyncFolderLayout.formatFourPath(ofFormatThree: path) != nil {
+            guard let entry = manifest.entry(at: path) else { unaccounted.append(path); continue }
+            guard !entry.isMember else { continue }
             // A tombstone: the copy it deleted is waiting to be reaped, and
-            // any other was put back after it.
-            guard let revision, !entry.deletes(revision: revision) else { return nil }
-            return path
+            // any other was put back after it. A folder lists no revisions,
+            // so one is asked for.
+            let revision: String? = if let listed { listed } else { try await store.revision(path: path) }
+            if let revision, !entry.deletes(revision: revision) { putBack.insert(path) }
         }
+        return (unaccounted, putBack)
     }
 
-    /// One file, to its new path. What the new path should hold is the old
-    /// file, the collection with its ID rewritten; a copy already there that
-    /// holds it is kept, and one that doesn't is written over. It can be an
-    /// earlier attempt's, made before a format-3 device wrote the old path
-    /// again, and the move must carry what the old path holds now. Returns
-    /// the revision at the new path afterwards; nil when the old path holds
-    /// nothing, or the server took the copy without showing it back yet.
+    /// One file, to its new path: the old file, or the collection with its
+    /// ID rewritten. Where nothing is, it is written. What is there is kept
+    /// when it holds the same, and when another device wrote it; only a copy
+    /// this move wrote, from what the old path held before, is replaced.
+    /// Returns the revision at the new path afterwards: nil when the old path
+    /// holds nothing, or the server took the copy without showing it back.
     /// (`Verification/SyncMerge.lean`: `formatFourCopy`.)
     private static func copy(
         _ path: String, to target: String,
         in store: any LampSyncRemoteStore,
+        copies: Copies,
         patience: LampSyncConditionalWrite.Patience
     ) async throws -> String? {
         try await LampSyncScratchFile.with { scratch -> String? in
@@ -156,26 +177,38 @@ public enum LampSyncFormatFourMove {
             }
             let expected = try LampSyncContentRevision.digest(forFileAt: scratch)
             let isMedia = LampSyncFolderLayout.kind(of: target)?.isMedia ?? false
-            for _ in 0..<2 {
-                let existing = try await LampSyncScratchFile.with { other -> (String, String)? in
-                    guard let there = try await store.read(path: target, into: other),
-                          let revision = there.revision else { return nil }
-                    return (revision, try LampSyncContentRevision.digest(forFileAt: other))
+            // A refusal means another device wrote first, which the next
+            // look finds and keeps; a server that refuses and still shows
+            // nothing is given up on after a few, the copy left unrecorded.
+            for _ in 0..<3 {
+                let existing = try await LampSyncScratchFile.with { other -> (revision: String?, digest: String)? in
+                    guard let there = try await store.read(path: target, into: other) else { return nil }
+                    return (there.revision, try LampSyncContentRevision.digest(forFileAt: other))
                 }
-                let step = formatFourCopy(present: existing != nil, same: existing?.1 == expected)
-                if step == .keep, let existing { return existing.0 }
-                let condition: LampSyncWriteCondition = existing.map { .ifRevision($0.0) } ?? .ifAbsent
-                switch try await LampSyncConditionalWrite.write(
-                    fileAt: scratch, to: target, in: store, condition: condition,
-                    patience: patience, confirm: isMedia ? .revision : .reading
-                ) {
-                case .written(let revision): return revision
-                case .writtenUnconfirmed: return nil
-                // Another device moving too wrote first: look again.
-                case .refused: continue
+                let ours = existing.flatMap(\.revision).map {
+                    LampSyncConditionalWrite.namesSameRevision(copies.written[target], $0)
+                } ?? false
+                switch formatFourCopy(present: existing != nil, same: existing?.digest == expected, ours: ours) {
+                case .keep:
+                    return existing?.revision
+                case .write, .replace:
+                    let condition: LampSyncWriteCondition = existing?.revision.map { .ifRevision($0) } ?? .ifAbsent
+                    switch try await LampSyncConditionalWrite.write(
+                        fileAt: scratch, to: target, in: store, condition: condition,
+                        patience: patience, confirm: isMedia ? .revision : .reading
+                    ) {
+                    case .written(let revision):
+                        copies.written[target] = revision
+                        return revision
+                    case .writtenUnconfirmed:
+                        return nil
+                    case .refused:
+                        copies.written[target] = nil
+                        continue
+                    }
                 }
             }
-            return try await store.revision(path: target)
+            return nil
         }
     }
 
@@ -183,33 +216,71 @@ public enum LampSyncFormatFourMove {
         case write, keep, replace
     }
 
-    /// What the move does at a file's new path: write where nothing is, keep
-    /// what is there when it is what the move would write, and replace it
-    /// otherwise. (`Verification/SyncMerge.lean`: `formatFourCopy`.)
-    static func formatFourCopy(present: Bool, same: Bool) -> FormatFourCopy {
+    /// What the move does at a file's new path: write where nothing is; keep
+    /// what is there when it holds the same, or when this move did not write
+    /// it; replace only its own copy of what the old path held before.
+    /// (`Verification/SyncMerge.lean`: `formatFourCopy`.)
+    static func formatFourCopy(present: Bool, same: Bool, ours: Bool) -> FormatFourCopy {
         guard present else { return .write }
-        return same ? .keep : .replace
+        return same || !ours ? .keep : .replace
     }
 
-    /// Members at format 4's writing paths with no revision, whose file is
-    /// not at the new path and is at the old one: a member the move found no
-    /// file for, which reached its old path later, as iCloud can deliver a
-    /// bundle before the files it names. Copied there now, so a pass finds
-    /// it. Asked of every format-4 bundle read, at one HEAD for each such
-    /// member, which a library holds none of once its files have arrived.
-    static func copyLateArrivals(
-        _ manifest: LampSyncLibraryManifest,
+    /// Members at format 4's writing paths with no revision: a member the move
+    /// found no file for, as iCloud can deliver a bundle before the files it
+    /// names. Each is copied once its file reaches the old path, and one whose
+    /// file is at the new path, copied by an earlier read or published since,
+    /// is recorded at the revision there. Returns those revisions by new
+    /// path, for the bundle to record, after which no read asks again. One
+    /// listing of each folder such a member is in.
+    static func lateArrivals(
+        in manifest: LampSyncLibraryManifest,
         in store: any LampSyncRemoteStore,
         patience: LampSyncConditionalWrite.Patience
-    ) async throws {
-        for entry in manifest.members where entry.revision == nil {
-            guard let old = LampSyncFolderLayout.formatThreePath(ofFormatFour: entry.path),
-                  old != entry.path,
-                  try await store.revision(path: entry.path) == nil,
-                  try await store.revision(path: old) != nil
-            else { continue }
-            _ = try await copy(old, to: entry.path, in: store, patience: patience)
+    ) async throws -> [String: String] {
+        let waiting = manifest.members.filter { entry in
+            guard entry.revision == nil,
+                  let old = LampSyncFolderLayout.formatThreePath(ofFormatFour: entry.path)
+            else { return false }
+            return old != entry.path
         }
+        guard !waiting.isEmpty else { return [:] }
+        var listings: [String: [String: String?]] = [:]
+        func files(in folder: String) async throws -> [String: String?] {
+            if let known = listings[folder] { return known }
+            var files: [String: String?] = [:]
+            for entry in try await store.list(directory: folder + "/") ?? [] where !entry.isDirectory {
+                files[entry.name] = entry.revision
+            }
+            listings[folder] = files
+            return files
+        }
+        func split(_ path: String) -> (folder: String, name: String) {
+            let slash = path.lastIndex(of: "/")!
+            return (String(path[..<slash]), String(path[path.index(after: slash)...]))
+        }
+        var recovered: [String: String] = [:]
+        for entry in waiting {
+            let (folder, name) = split(entry.path)
+            if let listed = try await files(in: folder)[name] {
+                // There already. A folder lists no revisions, so one is asked
+                // for, once: recorded, it is not asked again.
+                let revision: String? = if let listed { listed } else { try await store.revision(path: entry.path) }
+                if let revision { recovered[entry.path] = revision }
+                continue
+            }
+            guard let expected = LampSyncFolderLayout.formatThreePath(ofFormatFour: entry.path) else { continue }
+            // The old file by what it moves to, so `devotionals.LAMP` is
+            // found as surely as `devotionals.lamp`.
+            let (oldFolder, _) = split(expected)
+            guard let source = try await files(in: oldFolder).keys
+                .map({ "\(oldFolder)/\($0)" })
+                .first(where: { LampSyncFolderLayout.formatFourPath(ofFormatThree: $0) == entry.path })
+            else { continue }
+            if let revision = try await copy(source, to: entry.path, in: store, copies: Copies(), patience: patience) {
+                recovered[entry.path] = revision
+            }
+        }
+        return recovered
     }
 
     static let formatFourCollectionPath =

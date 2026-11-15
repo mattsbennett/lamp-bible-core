@@ -105,18 +105,19 @@ before reading it (`formatThreeIsNeverReadAsTheBundle`).
 
 Format 4 renames writing in the per-file layout (`formatFourPath`): only
 writing moves (`everythingElseStays`), each path keeps its kind
-(`theRenameKeepsTheKind`), and no two paths land on one unless a module is
-already called `writing` (`theRenameIsOneToOneWithoutAModuleCalledWriting`),
-which stops the move. A moved manifest entry keeps its membership
-(`theMoveKeepsMembership`), a moved tombstone deletes exactly what it deleted,
-so a copy put back after it is adopted at the new path as at the old
-(`aMovedTombstoneDeletesWhatItDeleted`), and where a member and a tombstone
-meet the member is kept (`aDeletedModuleNeverDeletesTheCollection`). A copy
-already at a new path is kept only if it is what the old path holds now
-(`theMoveNeverKeepsAStaleCopy`). The move reads again when another device
-wrote first (`aMoveRefusedIsReadAgain`), leaves a bundle with iCloud versions
-to the next update (`aMoveBesideVersionsIsLeftForTheUpdate`), which writes a
-format-3 copy whatever its change did (`aFormatThreeCopyIsAlwaysWritten`).
+(`theRenameKeepsTheKind`), a module already called `writing` is not carried
+(`aModuleCalledWritingIsNotCarried`), so no two paths land on one
+(`theRenameIsOneToOne`, through the inverse late arrivals are looked for at,
+`formatThreeOfUndoesTheRename`). A moved manifest entry keeps its membership
+(`theMoveKeepsMembership`), a moved tombstone deletes whatever copy turns up,
+an earlier attempt's among them (`aMovedTombstoneDeletesAnyCopy`), and a copy
+put back after a deletion is adopted (`aCopyPutBackIsAdoptedByTheMove`). The
+move never writes over a file another device wrote
+(`theMoveNeverWritesOverAnotherDevicesFile`), and replaces its own copy of what
+the old path no longer holds (`theMoveReplacesItsOwnStaleCopy`). It reads again
+when another device wrote first (`aMoveRefusedIsReadAgain`), leaves a bundle
+with iCloud versions to the next update (`aMoveBesideVersionsIsLeftForTheUpdate`),
+which writes it whatever its change did (`aFormatThreeCopyIsAlwaysWritten`).
 
 ### Claiming a library, and moving an earlier one
 

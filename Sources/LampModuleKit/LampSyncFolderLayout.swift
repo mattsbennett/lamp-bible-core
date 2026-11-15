@@ -221,61 +221,38 @@ public enum LampSyncFolderLayout {
     /// folder. Every other path of the format-3 layout is the same in format
     /// 4. Nil for one that layout didn't hold, `Writing/` among them.
     ///
-    /// One path is left without a place: an installed writing module whose ID
-    /// is already `writing` goes where the collection goes
-    /// (`formatFourCollision(in:)`).
+    /// Nil too for a writing module whose ID is already `writing`, and its
+    /// media: its new path is the collection's, so it is not carried, and
+    /// stays at its old path. No two paths land on one. A device that has it
+    /// installed keeps it, and says it cannot sync it.
     /// (`Verification/SyncMerge.lean`: `formatFourPath`.)
     public static func formatFourPath(ofFormatThree path: String) -> String? {
         let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard components.count >= 2, components.allSatisfy(isSafeComponent) else { return nil }
         let head = components[0]
-        func renamed(_ id: String) -> String {
-            id == FormatThree.writingCollectionID ? LampSyncLocalDeletion.writingCollectionID : id
+        let collection = LampSyncLocalDeletion.writingCollectionID
+        func renamed(_ id: String) -> String? {
+            switch id {
+            case FormatThree.writingCollectionID: collection
+            case collection: nil
+            default: id
+            }
         }
         if head == FormatThree.writingFolder {
             guard components.count == 2, isModuleFilename(components[1]),
-                  let id = LampSyncModuleFiles.moduleID(from: components[1]) else { return nil }
-            let renamedPath = "\(LampSyncContentKind.devotionals.folder)/\(renamed(id)).\(moduleExtension)"
+                  let id = LampSyncModuleFiles.moduleID(from: components[1]),
+                  let newID = renamed(id) else { return nil }
+            let renamedPath = "\(LampSyncContentKind.devotionals.folder)/\(newID).\(moduleExtension)"
             return kind(of: renamedPath) == nil ? nil : renamedPath
         }
         if head == FormatThree.writingMediaDirectory {
-            guard components.count == 4 else { return nil }
-            let renamedPath = ([devotionalMediaDirectory, renamed(components[1])] + components[2...])
-                .joined(separator: "/")
+            guard components.count == 4, let newID = renamed(components[1]) else { return nil }
+            let renamedPath = ([devotionalMediaDirectory, newID] + components[2...]).joined(separator: "/")
             return kind(of: renamedPath) == nil ? nil : renamedPath
         }
         // Folders format 4 added held nothing of format 3's.
         if head == LampSyncContentKind.devotionals.folder || head == devotionalMediaDirectory { return nil }
         return kind(of: path) == nil ? nil : path
-    }
-
-    /// The format-3 paths among `paths` that would land on the same format-4
-    /// path, sorted. Only the writing collection and an installed writing
-    /// module with ID `writing` can: `Devotionals/devotionals.lamp` and
-    /// `Devotionals/writing.lamp`, or their media folders.
-    ///
-    /// With the collection there, a module of any kind called `writing`
-    /// collides too: the phone keeps one module per ID, whatever its kind, so
-    /// its collection could not take the name. Empty for any library where
-    /// the move is a renaming.
-    public static func formatFourCollision(in paths: some Sequence<String>) -> [String] {
-        let paths = Set(paths)
-        var byTarget: [String: [String]] = [:]
-        for path in paths {
-            guard let target = formatFourPath(ofFormatThree: path) else { continue }
-            byTarget[target, default: []].append(path)
-        }
-        var colliding = Set(byTarget.values.filter { $0.count > 1 }.flatMap { $0 })
-        let collection = "\(FormatThree.writingFolder)/\(FormatThree.writingCollectionID).\(moduleExtension)"
-        if paths.contains(collection) {
-            let calledWriting = paths.filter { path in
-                guard path != collection, let target = formatFourPath(ofFormatThree: path),
-                      case .module? = kind(of: target) else { return false }
-                return remoteModuleID(of: target) == LampSyncLocalDeletion.writingCollectionID
-            }
-            if !calledWriting.isEmpty { colliding.formUnion(calledWriting + [collection]) }
-        }
-        return colliding.sorted()
     }
 
     /// The format-3 path a format-4 writing path was moved from, the inverse
