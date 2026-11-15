@@ -720,6 +720,7 @@ call it:
 | `Devotionals/devotionals.lamp`, the writing collection | `Writing/writing.lamp` |
 | `DevotionalMedia/<module>/<writing>/<file>` | `WritingMedia/<module>/<writing>/<file>` |
 | `DevotionalMedia/devotionals/<writing>/<file>` | `WritingMedia/writing/<writing>/<file>` |
+| `Workspaces/Devotionals/<workspace>/<path>`, the Mac's writing workspaces | `Workspaces/Writing/<workspace>/<path>` |
 
 Nothing else moves. `LampSyncFolderLayout.formatFourPath(ofFormatThree:)` is
 the one statement of the rename. The archive formats keep `Devotionals`, which

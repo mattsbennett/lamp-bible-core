@@ -3906,15 +3906,19 @@ inductive FormatFourID where
 
 -- A path by what it holds: a writing module or a writing's media file, or
 -- anything else, which both layouts hold alike.
+-- A file in one of the Mac's writing workspaces, `Workspaces/Devotionals/…`
+-- in format 3 and `Workspaces/Writing/…` in format 4, moves too.
 inductive FormatThreePath where
   | writingModule (id : FormatThreeID)
   | writingMedia (id : FormatThreeID) (file : Nat)
+  | writingWorkspace (file : Nat)
   | elsewhere (n : Nat)
   deriving DecidableEq, Repr
 
 inductive FormatFourPath where
   | writingModule (id : FormatFourID)
   | writingMedia (id : FormatFourID) (file : Nat)
+  | writingWorkspace (file : Nat)
   | elsewhere (n : Nat)
   deriving DecidableEq, Repr
 
@@ -3928,6 +3932,7 @@ def formatFourID : FormatThreeID → Option FormatFourID
 def formatFourPath : FormatThreePath → Option FormatFourPath
   | .writingModule id => (formatFourID id).map .writingModule
   | .writingMedia id file => (formatFourID id).map (.writingMedia · file)
+  | .writingWorkspace file => some (.writingWorkspace file)
   | .elsewhere n => some (.elsewhere n)
 
 -- Only writing moves.
@@ -3950,6 +3955,7 @@ theorem theRenameKeepsTheKind (p : FormatThreePath) (q : FormatFourPath)
   cases p with
   | writingModule i => cases i <;> simp [formatFourPath, formatFourID] at h <;> subst h <;> rfl
   | writingMedia i f => cases i <;> simp [formatFourPath, formatFourID] at h <;> subst h <;> rfl
+  | writingWorkspace f => simp [formatFourPath] at h; subst h; rfl
   | elsewhere n => simp [formatFourPath] at h; subst h; rfl
 
 -- The path a format-4 path was moved from: the collection's for `writing`.
@@ -3959,6 +3965,7 @@ def formatThreeOf : FormatFourPath → FormatThreePath
   | .writingModule (.other n) => .writingModule (.other n)
   | .writingMedia .writing f => .writingMedia .collection f
   | .writingMedia (.other n) f => .writingMedia (.other n) f
+  | .writingWorkspace f => .writingWorkspace f
   | .elsewhere n => .elsewhere n
 
 theorem formatThreeOfUndoesTheRename (p : FormatThreePath) (q : FormatFourPath)
@@ -3966,6 +3973,7 @@ theorem formatThreeOfUndoesTheRename (p : FormatThreePath) (q : FormatFourPath)
   cases p with
   | writingModule i => cases i <;> simp [formatFourPath, formatFourID] at h <;> subst h <;> rfl
   | writingMedia i f => cases i <;> simp [formatFourPath, formatFourID] at h <;> subst h <;> rfl
+  | writingWorkspace f => simp [formatFourPath] at h; subst h; rfl
   | elsewhere n => simp [formatFourPath] at h; subst h; rfl
 
 -- No two paths land on one, so no entry, and no file, is merged into another.
@@ -5010,11 +5018,13 @@ def formatFourIDName : FormatFourID → String
 def formatThreePathName : FormatThreePath → String
   | .writingModule id => "module:" ++ formatThreeIDName id
   | .writingMedia id f => "media:" ++ formatThreeIDName id ++ ":" ++ toString f
+  | .writingWorkspace f => "workspace:" ++ toString f
   | .elsewhere n => "elsewhere:" ++ toString n
 
 def formatFourPathName : FormatFourPath → String
   | .writingModule id => "module:" ++ formatFourIDName id
   | .writingMedia id f => "media:" ++ formatFourIDName id ++ ":" ++ toString f
+  | .writingWorkspace f => "workspace:" ++ toString f
   | .elsewhere n => "elsewhere:" ++ toString n
 
 def formatFourCopyName : FormatFourCopy → String
@@ -5264,7 +5274,7 @@ def bundleCopies : List BundleCopy :=
       [headerName header, toString (versionMerges (bundlePathHolds header))]
   for p in [FormatThreePath.writingModule .collection, .writingModule .calledWriting,
             .writingModule (.other 1), .writingMedia .collection 1, .writingMedia .calledWriting 1,
-            .writingMedia (.other 1) 2, .elsewhere 1, .elsewhere 2] do
+            .writingMedia (.other 1) 2, .writingWorkspace 3, .elsewhere 1, .elsewhere 2] do
     IO.println <| conformanceLine "formatFourPath"
       [formatThreePathName p, ((formatFourPath p).map formatFourPathName).getD "-"]
   for e in manifestEntries do

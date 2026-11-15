@@ -1323,14 +1323,15 @@ struct SyncModelConformanceTests {
         switch parts[0] {
         case "module": return "Devotionals/\(id(parts[1])).lamp"
         case "media": return "DevotionalMedia/\(id(parts[1]))/w/file-\(parts[2]).png"
+        case "workspace": return "Workspaces/Devotionals/advent/Documents/file-\(parts[1]).md"
         default: return parts[1] == "1" ? "Translations/kjv.lamp" : "NoteMedia/notes/43011035/a.png"
         }
     }
 
     private func formatFourPath(_ name: String) -> String {
         formatThreePath(name)
-            .replacingOccurrences(of: "Devotionals/", with: "Writing/")
             .replacingOccurrences(of: "DevotionalMedia/", with: "WritingMedia/")
+            .replacingOccurrences(of: "Devotionals/", with: "Writing/")
     }
 
     @Test func formatFour() throws {

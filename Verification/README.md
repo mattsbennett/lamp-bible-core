@@ -103,8 +103,8 @@ header alone. A format-3 client finds format 4 newer and stops
 (`aFormatThreeClientStopsAtFormatFour`); this one moves a format-3 bundle
 before reading it (`formatThreeIsNeverReadAsTheBundle`).
 
-Format 4 renames writing in the per-file layout (`formatFourPath`): only
-writing moves (`everythingElseStays`), each path keeps its kind
+Format 4 renames writing in the per-file layout (`formatFourPath`), the Mac's
+writing workspaces with it: only writing moves (`everythingElseStays`), each path keeps its kind
 (`theRenameKeepsTheKind`), a module already called `writing` is not carried
 (`aModuleCalledWritingIsNotCarried`), so no two paths land on one
 (`theRenameIsOneToOne`, through the inverse late arrivals are looked for at,

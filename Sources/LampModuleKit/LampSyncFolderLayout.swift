@@ -85,6 +85,9 @@ public enum LampSyncFolderLayout {
     public static let bookMediaDirectory = "BookMedia"
     public static let workspacesDirectory = LampPortableBackupLayout.workspacesDirectory
     public static let decksDirectory = "\(workspacesDirectory)/Presentations"
+    /// The Mac's writing workspaces, one folder each, under the workspace
+    /// tree. `Workspaces/Devotionals` until bundle format 4.
+    public static let writingWorkspacesDirectory = "\(workspacesDirectory)/Writing"
     public static let deckAssetsDirectory = "\(decksDirectory)/Assets"
     public static let deckExtension = "lampdeck"
 
@@ -212,14 +215,18 @@ public enum LampSyncFolderLayout {
         public static let writingMediaDirectory = "DevotionalMedia"
         /// The writing collection's module ID, `Devotionals/devotionals.lamp`.
         public static let writingCollectionID = "devotionals"
+        /// The Mac's writing workspaces.
+        public static let writingWorkspacesDirectory = "\(workspacesDirectory)/Devotionals"
     }
 
     /// Where a path of the format-3 layout lives in format 4. A writing module
     /// moves from `Devotionals/` to `Writing/`, its media from
-    /// `DevotionalMedia/` to `WritingMedia/`, and the writing collection's ID
-    /// from `devotionals` to `writing`, in its file name and in its media's
-    /// folder. Every other path of the format-3 layout is the same in format
-    /// 4. Nil for one that layout didn't hold, `Writing/` among them.
+    /// `DevotionalMedia/` to `WritingMedia/`, the writing collection's ID from
+    /// `devotionals` to `writing`, in its file name and in its media's folder,
+    /// and the Mac's writing workspaces from `Workspaces/Devotionals/` to
+    /// `Workspaces/Writing/`. Every other path of the format-3 layout is the
+    /// same in format 4. Nil for one that layout didn't hold, `Writing/` and
+    /// `Workspaces/Writing/` among them.
     ///
     /// Nil too for a writing module whose ID is already `writing`, and its
     /// media: its new path is the collection's, so it is not carried, and
@@ -250,6 +257,14 @@ public enum LampSyncFolderLayout {
             let renamedPath = ([devotionalMediaDirectory, newID] + components[2...]).joined(separator: "/")
             return kind(of: renamedPath) == nil ? nil : renamedPath
         }
+        if head == workspacesDirectory, components.count >= 3 {
+            let workspaceFolder = "\(head)/\(components[1])"
+            if workspaceFolder == FormatThree.writingWorkspacesDirectory {
+                let renamedPath = ([writingWorkspacesDirectory] + components[2...]).joined(separator: "/")
+                return kind(of: renamedPath) == nil ? nil : renamedPath
+            }
+            if workspaceFolder == writingWorkspacesDirectory { return nil }
+        }
         // Folders format 4 added held nothing of format 3's.
         if head == LampSyncContentKind.devotionals.folder || head == devotionalMediaDirectory { return nil }
         return kind(of: path) == nil ? nil : path
@@ -271,6 +286,9 @@ public enum LampSyncFolderLayout {
         if components[0] == devotionalMediaDirectory {
             return ([FormatThree.writingMediaDirectory, original(components[1])] + components[2...])
                 .joined(separator: "/")
+        }
+        if components.count >= 3, "\(components[0])/\(components[1])" == writingWorkspacesDirectory {
+            return ([FormatThree.writingWorkspacesDirectory] + components[2...]).joined(separator: "/")
         }
         return path
     }

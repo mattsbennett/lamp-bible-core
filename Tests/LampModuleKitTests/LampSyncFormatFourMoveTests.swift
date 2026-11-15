@@ -24,7 +24,11 @@ struct LampSyncFormatFourMoveTests {
             ("NoteMedia/notes/43011035/x.png", "NoteMedia/notes/43011035/x.png"),
             ("BookMedia/atonement/plate.jpg", "BookMedia/atonement/plate.jpg"),
             ("Workspaces/Presentations/talk.lampdeck", "Workspaces/Presentations/talk.lampdeck"),
-            ("Workspaces/Devotionals/talk/Documents/a.md", "Workspaces/Devotionals/talk/Documents/a.md"),
+            // The Mac's writing workspaces move with the rest of writing.
+            ("Workspaces/Devotionals/talk/Documents/a.md", "Workspaces/Writing/talk/Documents/a.md"),
+            ("Workspaces/Devotionals/talk/DeletedFiles.json", "Workspaces/Writing/talk/DeletedFiles.json"),
+            ("Workspaces/Writing/talk/Documents/a.md", nil),
+            ("Workspaces/Sermons/notes.md", "Workspaces/Sermons/notes.md"),
             // Format 3 held nothing in format 4's folders.
             ("Writing/writing.lamp", nil),
             ("WritingMedia/writing/w1/a.jpg", nil),
@@ -55,7 +59,8 @@ struct LampSyncFormatFourMoveTests {
     /// looked for beside.
     @Test func eachMovedPathSaysWhereItCameFrom() {
         for path in ["Devotionals/devotionals.lamp", "Devotionals/sermons.lamp", "DevotionalMedia/devotionals/w/a.png",
-                     "DevotionalMedia/sermons/w/a.png", "Translations/kjv.lamp"] {
+                     "DevotionalMedia/sermons/w/a.png", "Translations/kjv.lamp",
+                     "Workspaces/Devotionals/talk/Documents/a.md"] {
             let moved = LampSyncFolderLayout.formatFourPath(ofFormatThree: path)!
             #expect(LampSyncFolderLayout.formatThreePath(ofFormatFour: moved) == path)
         }
