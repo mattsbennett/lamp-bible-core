@@ -1043,6 +1043,29 @@ struct LampWritingImportTests {
         #expect(stored.contentJSON == #"[{"type":"paragraph"}]"#, "the text is the same, so the blocks stay")
     }
 
+    @Test func aWritersOwnLinkAfterAGeneratedOneIsLeftWhenAnotherWritingFails() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("study")
+        try write("# Two\n\n![Map](map.png)", to: "two.md", in: folder)
+        try write("# Three\n\nText.", to: "three.md", in: folder)
+        try onePixelPNG.write(to: folder.appendingPathComponent("map.png"))
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let ids = try await library.planWritingImport(LampWritingImport.files(at: folder)).items
+        let twoID = try #require(ids.first { $0.path == "study/two.md" }?.writingID)
+        let threeID = try #require(ids.first { $0.path == "study/three.md" }?.writingID)
+        let text = "[file](three.md) [mine](lampbible://writing/\(threeID)) [other](two.md) [again](lampbible://writing/\(twoID))"
+        try write("# One\n\n" + text, to: "one.md", in: folder)
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        // Three is left unticked; Two is chosen but fails, its picture gone.
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("map.png"))
+        let chosen = Set(plan.items.filter { $0.path != "study/three.md" }.map(\.id))
+        let result = try await library.applyWritingImport(plan, selecting: chosen)
+        #expect(result.failed.map(\.item.path) == ["study/two.md"])
+        let one = try #require(try await library.personalDevotionals().first { $0.title == "One" })
+        #expect(one.content == text, "each generated link goes back; the writer's own stay")
+    }
+
     @Test func aPictureChangedAfterThePlanIsRefused() async throws {
         let root = try scratch()
         defer { try? FileManager.default.removeItem(at: root) }

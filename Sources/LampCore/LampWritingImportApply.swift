@@ -530,7 +530,12 @@ public extension LampWritingImport {
             .appendingPathComponent("lamp-writing-import-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let copy = folder.appendingPathComponent(url.lastPathComponent)
-        try bytes.write(to: copy)
+        do {
+            try bytes.write(to: copy)
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
         return copy
     }
 
@@ -689,11 +694,15 @@ public extension LampWritingImport {
         // A link to a chosen writing that did not arrive is put back.
         let arrived = Set(existing.keys).union(saved.keys)
         for (index, entry) in undo.writings.enumerated() {
+            // Only links to writings chosen but not arrived: those to
+            // writings never chosen were put back already, and their places
+            // counted again now would land on others.
             guard let item = imported.first(where: { $0.writingID == entry.id && $0.kind == .writing }),
-                  let made = plan.links[item.id], let stored = saved[entry.id],
-                  made.keys.contains(where: { !arrived.contains($0) }) else { continue }
+                  let made = plan.links[item.id], let stored = saved[entry.id] else { continue }
+            let pending = made.filter { hoped.contains($0.key) && !arrived.contains($0.key) }
+            guard !pending.isEmpty else { continue }
             do {
-                let text = restoringLinks(in: stored.content, made: made, available: arrived)
+                let text = restoringLinks(in: stored.content, made: pending, available: arrived)
                 guard text != stored.content else { continue }
                 if let again = try await store.saveImportedWriting(stored.withContent(text), expecting: stored) {
                     saved[entry.id] = again
