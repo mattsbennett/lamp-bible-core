@@ -853,6 +853,12 @@ public enum LampSeptuagintSection {
     /// grouped. They are all still here, one press away.
     public static let methodologyTitle = "How this is counted"
 
+    /// The disclosure above the Hebrew words' lists that says, collapsed by
+    /// default, how far they are narrowed (`renderedHeading`): kept one
+    /// press away rather than as a paragraph, which read as hedging (owner,
+    /// Nov 2026).
+    public static let narrowingTitle = "Which verses are listed"
+
     public static let ownUseAbout =
         "The Septuagint is the Greek Old Testament the New Testament’s first "
         + "readers knew, so the same Greek word here shows what it was already "
@@ -994,10 +1000,12 @@ public enum LampSeptuagintSection {
         )
     }
 
-    /// How to read the two bars, said once under them.
-    ///
-    /// The rate carries the part the bars cannot: a word can stand in four
-    /// times as many Septuagint verses and still be the rarer word there.
+    /// The one thing the two bars cannot show, said under them: how often
+    /// the word stands for the length of each text, since a word can stand
+    /// in four times as many Septuagint verses and still be the rarer word
+    /// there. Empty where either side has no tagged words to count against;
+    /// the bars say the rest themselves (owner, Nov 2026: the prose about
+    /// how they are drawn was dropped).
     public static func contrastCaption(_ contrast: Contrast) -> String {
         func rate(_ side: Contrast.Side) -> String {
             let value = side.perThousandWords
@@ -1010,17 +1018,8 @@ public enum LampSeptuagintSection {
             return String(format: "%.1f", value)
         }
         let sides = [contrast.newTestament, contrast.septuagint]
-        guard sides.allSatisfy({ $0.wordCount > 0 }) else {
-            return "Counted apart, never added, each bar against the larger "
-                + "of the two: they are two texts, not two halves of one."
-        }
-        // What the bars are drawn against, said rather than left to be
-        // worked out. The longer side fills its track, and a full bar reads
-        // as "all of them" to anyone not told what the track is; a design
-        // panel asked for "an axis or a shared maximum made explicit".
-        return "Counted apart, never added, each bar against the larger of "
-            + "the two. Per thousand tagged words: "
-            + "\(rate(contrast.newTestament)) in the New Testament, "
+        guard sides.allSatisfy({ $0.wordCount > 0 }) else { return "" }
+        return "Per 1,000 tagged words: \(rate(contrast.newTestament)) in the New Testament, "
             + "\(rate(contrast.septuagint)) in the Septuagint."
     }
 
@@ -1273,23 +1272,29 @@ public enum LampSeptuagintSection {
     /// `usingGreek` names the Greek word when the count beside a Hebrew word
     /// is the narrowed one. Without it "in 735 Hebrew verses" reads as all
     /// the verses that Hebrew word stands in, which is the number the list
-    /// was narrowed *from*.
+    /// was narrowed *from*. `of` is that number, where it is known: "130 of
+    /// 158 verses using ὀργή" keeps in the heading the fact that the list
+    /// is narrowed, and from how many, which a sentence above the lists
+    /// once said.
     public static func heading(
         _ hebrew: LampSeptuagintHebrew,
         transliteration: String? = nil,
         rendering: String? = nil,
         verses: Int,
+        of total: Int? = nil,
         usingGreek: String? = nil
     ) -> String {
         let transliteration = transliteration.flatMap { $0.isEmpty ? nil : $0 }
         let rendering = rendering.flatMap { $0.isEmpty ? nil : $0 }
         let greek = usingGreek.flatMap { $0.isEmpty ? nil : $0 }
-        let verseWord = verses == 1 ? "verse" : "verses"
-        let counted = greek.map { "\(verses) \(verseWord) using \($0)" }
+        // A total only beside a narrowed count, and only where it narrows.
+        let ofTotal = greek != nil ? total.flatMap { $0 > verses ? " of \($0)" : nil } ?? "" : ""
+        let verseWord = (ofTotal.isEmpty ? verses : total ?? verses) == 1 ? "verse" : "verses"
+        let counted = greek.map { "\(verses)\(ofTotal) \(verseWord) using \($0)" }
             ?? "in \(verses) Hebrew \(verseWord)"
         guard transliteration != nil || rendering != nil else {
             let name = hebrew.strongs.map { "\(word(hebrew)) (\($0))" } ?? word(hebrew)
-            return greek.map { "Hebrew \(name) · \(verses) \(verseWord) using \($0)" }
+            return greek.map { "Hebrew \(name) · \(verses)\(ofTotal) \(verseWord) using \($0)" }
                 ?? "Hebrew \(name) · \(verses) \(verseWord)"
         }
         var name = [transliteration ?? word(hebrew), rendering.map { "“\($0)”" }]
@@ -1355,13 +1360,10 @@ public enum LampSeptuagintSection {
                 + "isn’t tagged word by word, so its Greek, under each verse, "
                 + "may use another word."
         case .tagged:
-            // Short, and it says only what the heading above has not. The
-            // section names the Septuagint, gives its counts and explains
-            // what it is; saying any of that again here was three sentences
-            // of the same thing, and one of them pointed at a list that no
-            // longer stands above it.
-            return "\(lemma) stands mostly for these Hebrew words, and the "
-                + "verses under each are that word’s."
+            // Nothing: the words below and their headings ("130 of 158
+            // verses using ὀργή") say it, and the sentence that said it
+            // again was read as hedging (owner, Nov 2026).
+            return ""
         }
     }
 

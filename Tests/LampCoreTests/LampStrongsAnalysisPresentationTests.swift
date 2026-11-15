@@ -1241,6 +1241,21 @@ struct SeptuagintEnglishTests {
             == "אַהֲבָה “love” (H160) · in 1 Hebrew verse")
         #expect(LampSeptuagintSection.heading(word, verses: 40)
             == "Hebrew אַהֲבָה (H160) · 40 verses", "unchanged without English")
+        // Narrowed, the heading says from how many: the list holds the
+        // verses that use the Greek word, not all the Hebrew word's.
+        #expect(LampSeptuagintSection.heading(
+            word, transliteration: "ʼahăbâh", rendering: "love", verses: 14, of: 35, usingGreek: "ἀγάπη"
+        ) == "ʼahăbâh “love” (H160) · 14 of 35 verses using ἀγάπη")
+        #expect(LampSeptuagintSection.heading(word, verses: 1, of: 3, usingGreek: "ἀγάπη")
+            == "Hebrew אַהֲבָה (H160) · 1 of 3 verses using ἀγάπη")
+        // Never "35 of 35", and never a total without the Greek word.
+        #expect(LampSeptuagintSection.heading(
+            word, rendering: "love", verses: 35, of: 35, usingGreek: "ἀγάπη"
+        ) == "אַהֲבָה “love” (H160) · 35 verses using ἀγάπη")
+        #expect(LampSeptuagintSection.heading(word, rendering: "love", verses: 1, of: nil, usingGreek: "ἀγάπη")
+            == "אַהֲבָה “love” (H160) · 1 verse using ἀγάπη")
+        #expect(LampSeptuagintSection.heading(word, rendering: "love", verses: 14, of: 35)
+            == "אַהֲבָה “love” (H160) · in 14 Hebrew verses")
         let analysis = Self.analysis(occurrences: [], verseTexts: [:], renderings: [
             .init(id: "", text: "", count: 9, variants: []),
             .init(id: "love", text: "love", count: 8, variants: []),
@@ -1268,14 +1283,10 @@ struct SeptuagintEnglishTests {
             greek: "λόγος", septuagint: .tagged("Brenton Greek Septuagint")
         )
         #expect(!note.contains("tagged word by word"))
-        // It says only what the section above it has not: whose verses these
-        // are. One Septuagint section, each thing said once.
-        #expect(note == "λόγος stands mostly for these Hebrew words, "
-            + "and the verses under each are that word’s.")
-        #expect(!note.contains("Greek Old Testament"), "the heading says it")
-        #expect(!note.contains("listed above"), "nothing stands above it to point at")
-        #expect(LampSeptuagintSection.note(greek: "λόγος", septuagint: .tagged("")) == note,
-            "the text's name belongs to the heading, not to this sentence")
+        // Nothing at all: the headings under it say whose verses they are,
+        // and how many of how many.
+        #expect(note.isEmpty)
+        #expect(LampSeptuagintSection.note(greek: "λόγος", septuagint: .tagged("")).isEmpty)
     }
 
     /// A Hebrew word's verses can now be narrowed to the ones the Septuagint
@@ -1561,7 +1572,7 @@ struct SeptuagintEnglishTests {
         #expect(abs(contrast.share(of: contrast.newTestament) - 330.0 / 1_238.0) < 0.000_1)
         // The rate is the part the bars cannot carry.
         let caption = LampSeptuagintSection.contrastCaption(contrast)
-        #expect(caption.contains("Counted apart, never added"))
+        #expect(caption == "Per 1,000 tagged words: 2.4 in the New Testament, 3.0 in the Septuagint.")
         #expect(caption.contains("2.4 in the New Testament"))
         #expect(caption.contains("3.0 in the Septuagint"))
         // One side alone is not a contrast; the headline covers that case.
@@ -1577,12 +1588,8 @@ struct SeptuagintEnglishTests {
             septuagint: septuagint
         ))
         #expect(untagged.newTestament.perThousandWords == 0)
-        #expect(LampSeptuagintSection.contrastCaption(untagged)
-            == "Counted apart, never added, each bar against the larger of the two: "
-            + "they are two texts, not two halves of one.")
-        // What the track is, on both captions: a filled bar is the larger
-        // side, not all of them.
-        #expect(caption.contains("each bar against the larger of the two"))
+        // Nothing to say without words to count against.
+        #expect(LampSeptuagintSection.contrastCaption(untagged).isEmpty)
         // A rate under a tenth is said, not rounded to nothing: ἀγάπη stands
         // 14 times in the Septuagint's 476,000 tagged words, and "0.0" beside
         // a count of 14 reads as a contradiction.
