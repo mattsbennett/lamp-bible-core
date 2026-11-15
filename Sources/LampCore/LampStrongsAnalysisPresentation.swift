@@ -6,6 +6,53 @@ import LampModuleKit
 // and the Septuagint section's wording. Pure, so the Mac and the phone draw
 // the same figures and say the same things about them.
 
+/// Whether a key's analyses amount to a finding at all.
+///
+/// A translation answers for every key asked of it, because most of what a
+/// card draws belongs to the module rather than to the key: the tagged words
+/// a rate is measured against, the books in range an absence is marked in.
+/// So a key that is no key - "H0" - came back from every tagged translation
+/// as an analysis reading nought occurrences, nought verses and nought of 39
+/// books, and drew as a finding about Hebrew rather than as a key that does
+/// not exist.
+///
+/// Judged here rather than in the library, because the same zero is worth
+/// drawing elsewhere: a comparison across translations shows a bar at nought
+/// for a translation that does not use the key, and that bar is a true thing
+/// to say about that translation. What differs between the two is the
+/// question being asked, not the data, so the library goes on answering and
+/// the apps decide what the answer means.
+public enum LampStrongsPresence {
+    /// True when not one of the analyses holds a single occurrence - the case
+    /// of no analyses at all included.
+    ///
+    /// Ask it only once every translation has answered. Part-way through, the
+    /// first to answer may be one that does not tag the key while another
+    /// does, and "not here" would be wrong a tenth of a second before it was
+    /// right.
+    public static func absent(from analyses: [LampStrongsAnalysis]) -> Bool {
+        analyses.allSatisfy(\.occurrences.isEmpty)
+    }
+
+    /// What to call the absence. The key is named, because the pane that
+    /// shows this is usually reached by typing and a typo is the likeliest
+    /// reason to be here.
+    public static func title(key: String) -> String {
+        "No Tags for \(key)"
+    }
+
+    /// Why nothing was found, which is a different thing in a narrowed
+    /// search: a key may be tagged all through the Bible and still reach none
+    /// of the books being searched, and saying there that no translation tags
+    /// it would be false.
+    public static func reason(narrowed: Bool) -> String {
+        narrowed
+            ? "No installed translation tags this key in the chosen books."
+            : "No installed translation tags this key. Check the number, or "
+                + "install a translation that carries tags."
+    }
+}
+
 /// Narrowing a Strong's analysis to the occurrences behind one of its figures.
 ///
 /// Every case is answerable from an occurrence on its own. That is the point:

@@ -77,6 +77,46 @@ struct StrongsAnalysisSupportTests {
         )
     }
 
+    // MARK: - Is the key there at all
+
+    /// The case that sent this rule here: every translation answers, and the
+    /// answer is a card of noughts.
+    @Test func aKeyNoTranslationTagsIsAbsent() {
+        // wordCount is the module's tagged words, not the key's, so it is a
+        // thousand for a key that is nowhere. That is what made the pane
+        // believe it had something to draw.
+        let answers = [
+            Self.analysis(key: "H0", translationID: "esv"),
+            Self.analysis(key: "H0", translationID: "kjv"),
+        ]
+        #expect(answers.allSatisfy { $0.wordCount > 0 })
+        #expect(LampStrongsPresence.absent(from: answers))
+    }
+
+    /// One occurrence anywhere is a finding, however many modules answered
+    /// with none.
+    @Test func oneOccurrenceInAnyTranslationIsPresent() {
+        #expect(!LampStrongsPresence.absent(from: [
+            Self.analysis(translationID: "esv"),
+            Self.analysis(translationID: "kjv", occurrences: [Self.occurrence()]),
+        ]))
+    }
+
+    /// No analyses at all — no tagged translation installed — is absent too,
+    /// so the caller has one question to ask rather than two.
+    @Test func nothingAskedIsAbsent() {
+        #expect(LampStrongsPresence.absent(from: []))
+    }
+
+    /// Why it found nothing is a different sentence when the search was
+    /// narrowed: the key may be tagged all through the Bible and reach none
+    /// of the books chosen, and the unnarrowed wording would be false there.
+    @Test func theReasonNamesTheBooksOnlyWhenNarrowed() {
+        #expect(LampStrongsPresence.reason(narrowed: true).contains("chosen books"))
+        #expect(!LampStrongsPresence.reason(narrowed: false).contains("chosen books"))
+        #expect(LampStrongsPresence.title(key: "H0") == "No Tags for H0")
+    }
+
     /// Books the key is in, out of the books in range that tag its language —
     /// a zero is a book that could have had it and does not.
     @Test func booksWithOccurrencesCountsOnlyBooksTheKeyIsIn() {
