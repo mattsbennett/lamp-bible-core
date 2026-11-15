@@ -65,6 +65,14 @@ public struct LampWritingImportUndo: Codable, Equatable, Identifiable, Sendable 
         public let previous: String?
         /// Media files the import added to it.
         public let addedMedia: [String]
+
+        public init(id: String, title: String, written: Int, previous: String?, addedMedia: [String]) {
+            self.id = id
+            self.title = title
+            self.written = written
+            self.previous = previous
+            self.addedMedia = addedMedia
+        }
     }
 
     public struct Deck: Codable, Equatable, Sendable {
@@ -72,12 +80,26 @@ public struct LampWritingImportUndo: Codable, Equatable, Identifiable, Sendable 
         public let title: String
         public let written: LampPresentationDeck
         public let previous: LampPresentationDeck?
+
+        public init(id: String, title: String, written: LampPresentationDeck, previous: LampPresentationDeck?) {
+            self.id = id
+            self.title = title
+            self.written = written
+            self.previous = previous
+        }
     }
 
     public let id: String
     public let importedAt: Date
     public var writings: [Writing]
     public var decks: [Deck]
+
+    public init(id: String, importedAt: Date, writings: [Writing], decks: [Deck]) {
+        self.id = id
+        self.importedAt = importedAt
+        self.writings = writings
+        self.decks = decks
+    }
 
     public var isEmpty: Bool { writings.isEmpty && decks.isEmpty }
 }
