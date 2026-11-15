@@ -1934,6 +1934,24 @@ struct TranslationSourceTests {
         #expect(LampTranslationSource.parsed(#"{"part": "forms"}"#).isEmpty)
     }
 
+    /// The tagged Septuagint's two sources for its numbers, which read as one
+    /// sentence begun twice when each was its own paragraph: one lead, then
+    /// each source. A part with one source keeps its sentence.
+    @Test func severalSourcesForOnePartAreSaidOnce() {
+        let sources: [LampTranslationSource] = [
+            .init(part: .strongs, source: "STEPBible’s TAGNT", method: "matched to each word by machine"),
+            .init(part: .forms, source: "an earlier module"),
+            .init(part: .strongs, source: "STEPBible’s TAHOT", method: "for names the New Testament does not use"),
+        ]
+        #expect(LampTranslationSource.disclosures(sources, translationName: "LXX", strongsKey: "G26") == [
+            "Strong’s numbers in LXX come from two sources:\n"
+                + "• STEPBible’s TAGNT, matched to each word by machine.\n"
+                + "• STEPBible’s TAHOT, for names the New Testament does not use.",
+            "Greek spellings in LXX come from an earlier module.",
+        ])
+        #expect(LampTranslationSource.disclosures([], translationName: "LXX", strongsKey: "G26").isEmpty)
+    }
+
     @Test func theLibraryReadsAnInstalledModulesSources() async throws {
         let fixture = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-source-tests-\(UUID().uuidString)", isDirectory: true)

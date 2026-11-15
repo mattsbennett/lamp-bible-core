@@ -81,10 +81,53 @@ public struct LampTranslationSource: Equatable, Sendable {
     /// in BSBs come from …, matched by each verse's Strong's numbers when the
     /// module was built."
     public func disclosure(translationName: String, strongsKey: String) -> String {
-        let what = switch part {
+        "\(Self.subject(part, strongsKey: strongsKey)) in \(translationName) come from \(origin)."
+    }
+
+    /// What a text's sources say, one paragraph to a part, in the order the
+    /// module declares them. A part with one source is `disclosure`'s
+    /// sentence. A part with several is said once, then each source on a
+    /// line of its own, so a reader sees two origins rather than the same
+    /// sentence begun twice, as the tagged Septuagint's word and name tags
+    /// read when each had its own paragraph (owner, Nov 2026):
+    ///
+    ///     Strong’s numbers in LXX come from two sources:
+    ///     • STEPBible’s tagged Greek New Testament …, matched to each word …
+    ///     • STEPBible’s tagged Hebrew Old Testament …, for names …
+    public static func disclosures(
+        _ sources: [LampTranslationSource],
+        translationName: String,
+        strongsKey: String
+    ) -> [String] {
+        var parts: [Part] = []
+        for source in sources where !parts.contains(source.part) {
+            parts.append(source.part)
+        }
+        return parts.map { part in
+            let own = sources.filter { $0.part == part }
+            guard own.count > 1 else {
+                return own[0].disclosure(translationName: translationName, strongsKey: strongsKey)
+            }
+            let lead = "\(subject(part, strongsKey: strongsKey)) in \(translationName) come from "
+                + "\(count(own.count)) sources:"
+            return ([lead] + own.map { "• \($0.origin)." }).joined(separator: "\n")
+        }
+    }
+
+    /// The source, and how it was matched where the module says.
+    private var origin: String {
+        source + (method.map { ", \($0)" } ?? "")
+    }
+
+    private static func subject(_ part: Part, strongsKey: String) -> String {
+        switch part {
         case .strongs: "Strong’s numbers"
         case .forms: LampStrongsKey.normalized(strongsKey).first == "H" ? "Hebrew spellings" : "Greek spellings"
         }
-        return "\(what) in \(translationName) come from \(source)" + (method.map { ", \($0)" } ?? "") + "."
+    }
+
+    private static func count(_ count: Int) -> String {
+        let words = ["two", "three", "four", "five", "six", "seven", "eight", "nine"]
+        return (2...9).contains(count) ? words[count - 2] : String(count)
     }
 }
