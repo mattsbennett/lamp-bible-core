@@ -1912,6 +1912,10 @@ public actor LampLibrary {
             let storedMediaJSON: String? = prior?["media_json"]
             let now = Date()
             let created = devotional.created ?? now
+            // A conditional save — an import's, an undo's — writes exactly
+            // what it is given, so a copy with no media or blocks can be put
+            // back. An ordinary save keeps them when they were left out.
+            let exact = condition != nil
             let saved = LampDevotional(
                 id: identifier,
                 moduleID: "personal-devotionals",
@@ -1928,10 +1932,10 @@ public actor LampLibrary {
                 keyScriptures: devotional.keyScriptures,
                 summary: devotional.summary?.nilIfBlank,
                 content: devotional.content,
-                contentJSON: devotional.contentJSON
+                contentJSON: exact ? devotional.contentJSON : devotional.contentJSON
                     ?? (priorContent == devotional.content ? storedContentJSON : nil),
                 footnotes: devotional.footnotes?.nilIfBlank,
-                mediaJSON: devotional.mediaJSON ?? storedMediaJSON,
+                mediaJSON: exact ? devotional.mediaJSON : devotional.mediaJSON ?? storedMediaJSON,
                 created: created,
                 lastModified: preserveLastModified ? (devotional.lastModified ?? now) : now,
                 isEditable: true

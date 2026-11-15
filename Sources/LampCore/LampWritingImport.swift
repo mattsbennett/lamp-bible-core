@@ -125,14 +125,16 @@ public struct LampWritingImportPlan: Sendable {
     let decks: [String: PlannedDeck]
 
     /// For each writing, the links the plan made to other writings, by the
-    /// writing linked to, with the link as the file wrote it: put back if
-    /// that writing is not there when the import is applied.
-    let links: [String: [String: String]]
+    /// writing linked to, with each link as the file wrote it, in order: put
+    /// back if that writing is not there when the import is applied.
+    let links: [String: [String: [String]]]
 
     struct PlannedDeck: Sendable {
         let deck: LampPresentationDeck
         /// Each picture the deck names, by the path it is stored under.
         let assets: [String: URL]
+        /// What each picture's bytes were when planned.
+        let fingerprints: [String: String]
         /// The store's copy as the plan saw it, if it had one.
         let local: LampPresentationDeck?
     }
@@ -169,6 +171,9 @@ public struct LampWritingImportResult: Equatable, Sendable {
     /// Chosen, but not written, because something went wrong, said item by
     /// item; the rest of the import stands.
     public let failed: [LampWritingImportFailure]
+    /// Anything that went wrong after the writings were written, which the
+    /// person should hear of.
+    public let problems: [String]
     /// What to keep to undo this import.
     public let undo: LampWritingImportUndo
 }
@@ -398,9 +403,9 @@ public enum LampWritingImport {
         /// The same, named once the writing's id is settled.
         var media: [LampWritingImportMedia] = []
         var deck: LampWritingImportDeckFile?
-        /// Links made to other writings: the writing linked to, and the link
-        /// as written.
-        var links: [String: String] = [:]
+        /// Links made to other writings: the writing linked to, and each link
+        /// to it as written, in order.
+        var links: [String: [String]] = [:]
     }
 
     struct FoundMedia: Equatable, Sendable {
@@ -732,31 +737,56 @@ public enum LampWritingImport {
         return parts.joined(separator: "/")
     }
 
-    private static let inlineCode = try! NSRegularExpression(pattern: #"(`+)[^`].*?\1"#)
+    /// A code span: a run of backticks, then anything up to the same run,
+    /// across a line break but not a blank line.
+    private static let inlineCode = try! NSRegularExpression(
+        pattern: #"(`+)(?:(?!\n[ \t]*\n)[\s\S])+?\1"#
+    )
     private static let markdownLink = try! NSRegularExpression(
         pattern: #"(!?)\[([^\]]*)\]\(([^)\s]+)\)"#
     )
 
     /// Calls `transform` with each link outside code — whether it is a
     /// picture, its text, and its target — and puts any target it returns in
-    /// the link's place.
+    /// the link's place. Fenced blocks are left whole, and so is inline code,
+    /// which may run across a line break within its paragraph.
     static func rewritingLinks(
         in content: String,
         _ transform: (_ isImage: Bool, _ label: String, _ target: String) -> String?
     ) -> String {
+        guard content.contains("](") else { return content }
+        // The text in runs: fenced code kept apart from the prose around it.
+        var runs: [(text: String, isCode: Bool)] = []
         var fence = LampMarkdownCodeFence()
-        return content.components(separatedBy: "\n").map { line -> String in
-            guard !fence.contains(line), line.contains("](") else { return line }
-            let text = line as NSString
-            var result = line
-            // An example written in inline code is not the writing's own.
-            let code = inlineCode.matches(in: line, range: NSRange(location: 0, length: text.length)).map(\.range)
-            for match in markdownLink.matches(in: line, range: NSRange(location: 0, length: text.length)).reversed()
+        for line in content.components(separatedBy: "\n") {
+            let isCode = fence.contains(line)
+            if let last = runs.last, last.isCode == isCode {
+                runs[runs.count - 1].text += "\n" + line
+            } else {
+                runs.append((line, isCode))
+            }
+        }
+        return runs.map { run -> String in
+            guard !run.isCode, run.text.contains("](") else { return run.text }
+            let text = run.text as NSString
+            let whole = NSRange(location: 0, length: text.length)
+            let code = inlineCode.matches(in: run.text, range: whole).map(\.range)
+            // Asked in reading order, so the first of two links to one file
+            // is the one heard first; replaced from the end, so the earlier
+            // ranges still hold.
+            var replacements: [(NSRange, String)] = []
+            for match in markdownLink.matches(in: run.text, range: whole)
             where !code.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) {
                 let target = text.substring(with: match.range(at: 3))
-                guard let replacement = transform(
+                if let replacement = transform(
                     match.range(at: 1).length > 0, text.substring(with: match.range(at: 2)), target
-                ), let range = Range(match.range(at: 3), in: result) else { continue }
+                ) {
+                    replacements.append((match.range(at: 3), replacement))
+                }
+            }
+            var result = run.text
+            for (range, replacement) in replacements.reversed() {
+                guard let range = Range(range, in: result) else { continue }
                 result.replaceSubrange(range, with: replacement)
             }
             return result
@@ -799,11 +829,14 @@ public enum LampWritingImport {
         guard let writing = candidate.writing, !candidate.found.isEmpty else { return }
         var names: [String: LampWritingImportMedia] = [:]
         for item in candidate.found {
-            let bytes = (try? Data(contentsOf: item.url)) ?? Data()
-            let fingerprint = SHA256.hash(data: bytes).prefix(8).map { String(format: "%02x", $0) }.joined()
+            guard let bytes = try? Data(contentsOf: item.url) else {
+                candidate.errors.append("\(item.target) cannot be read.")
+                return
+            }
+            let fingerprint = fingerprint(bytes)
             names[item.target] = LampWritingImportMedia(
-                id: derivedID(path: "media\u{0}\(candidate.writingID)\u{0}\(item.target)\u{0}\(fingerprint)"),
-                url: item.url, type: item.type, alt: item.alt
+                id: derivedID(path: "media\u{0}\(candidate.writingID)\u{0}\(item.target)\u{0}\(fingerprint.prefix(16))"),
+                url: item.url, type: item.type, alt: item.alt, fingerprint: fingerprint
             )
         }
         candidate.media = candidate.found.compactMap { names[$0.target] }

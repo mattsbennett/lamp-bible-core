@@ -66,13 +66,15 @@ public enum LampPresentationAssetFiles {
 public extension LampPresentationDeckStore {
     /// Decode every stored deck before removing any image. A damaged deck is
     /// not evidence that its images are unused, so a failed read preserves them.
-    func pruneUnreferencedAssets(fileManager: FileManager = .default) throws {
+    /// `keeping` names images something else still needs, such as an undo
+    /// that would put back a deck showing them.
+    func pruneUnreferencedAssets(keeping: Set<String> = [], fileManager: FileManager = .default) throws {
         guard fileManager.fileExists(atPath: decksDirectoryURL.path) else { return }
         let files = try fileManager.contentsOfDirectory(
             at: decksDirectoryURL, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles]
         ).filter { $0.pathExtension.lowercased() == LampPresentationDeckPortableLayout.deckExtension }
-        var referenced = Set<String>()
+        var referenced = keeping
         for file in files {
             let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
             guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
