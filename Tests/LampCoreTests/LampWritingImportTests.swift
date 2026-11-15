@@ -700,10 +700,24 @@ struct LampWritingImportTests {
         var writings: [String: LampDevotional] = [:]
         var present: [String] = []
         func importableWritings() -> [LampDevotional] { Array(writings.values) }
+        /// The phone's subscription writings, held but not offered.
+        let held: Set<String> = ["subscribed"]
         func writingDeletion(id: String) -> LampPersonalDeletionLedger.Entry? { nil }
-        func saveImportedWriting(_ writing: LampDevotional) { writings[writing.id] = writing }
+        func writingRefusal(id: String) -> String? {
+            held.contains(id) ? "This is a subscribed writing, which an import leaves alone." : nil
+        }
+        func saveImportedWriting(_ writing: LampDevotional, expecting current: LampDevotional?) -> Bool {
+            guard writings[writing.id] == current else { return false }
+            writings[writing.id] = writing
+            return true
+        }
         func recordWritingsPresent(_ ids: [String]) { present += ids }
-        func deleteImportedWriting(id: String) { writings[id] = nil }
+        func deleteImportedWriting(id: String, expecting current: LampDevotional) -> Bool {
+            guard writings[id] == current else { return false }
+            writings[id] = nil
+            return true
+        }
+        func changeBehindTheImport(_ writing: LampDevotional) { writings[writing.id] = writing }
         func storeImportedMedia(from url: URL, writingID: String) -> String { url.lastPathComponent }
         func removeImportedMedia(writingID: String, filename: String) {}
         nonisolated var supportsDecks: Bool { false }
@@ -724,6 +738,49 @@ struct LampWritingImportTests {
         #expect(await store.present == [plan.items[0].writingID])
         let again = try await LampWritingImport.plan(LampWritingImport.files(at: folder), in: store)
         #expect(again.items[0].action == .unchanged)
+
+        // A writing the store holds but does not offer is refused by id.
+        let held = try await LampWritingImport.plan([LampWritingImportFile(
+            path: "talks/sub.md", markdown: "---\nid: subscribed\ntitle: Sub\n---\nText."
+        )], in: store)
+        #expect(held.items.map(\.action) == [.rejected])
+        #expect(held.items[0].errors == ["This is a subscribed writing, which an import leaves alone."])
+
+        // Changed by something else between the plan and the save: refused,
+        // not overwritten, though the plan's own check saw nothing.
+        try write("# Watch\n\nRevised.", to: "watch.md", in: folder, modified: Date().addingTimeInterval(60))
+        let revised = try await LampWritingImport.plan(LampWritingImport.files(at: folder), in: store)
+        #expect(revised.items[0].action == .update)
+        let racing = try #require(await store.writings.values.first)
+        let racedStore = RacingStore(inner: store, race: racing.withContent("Edited meanwhile."))
+        let raced = try await LampWritingImport.apply(
+            revised, selecting: [revised.items[0].id], to: racedStore
+        )
+        #expect(raced.imported.isEmpty)
+        #expect(raced.refused.map(\.id) == [revised.items[0].id])
+        #expect(await store.writings.values.first?.content == "Edited meanwhile.")
+    }
+
+    /// A store whose writing changes just after apply has read it, as a sync
+    /// on another thread can on the phone.
+    private struct RacingStore: LampWritingImportStore {
+        let inner: PhoneStore
+        let race: LampDevotional
+        func importableWritings() async throws -> [LampDevotional] {
+            let writings = await inner.importableWritings()
+            await inner.changeBehindTheImport(race)
+            return writings
+        }
+        func writingDeletion(id: String) async -> LampPersonalDeletionLedger.Entry? { nil }
+        func saveImportedWriting(_ writing: LampDevotional, expecting current: LampDevotional?) async -> Bool {
+            await inner.saveImportedWriting(writing, expecting: current)
+        }
+        func recordWritingsPresent(_ ids: [String]) async { await inner.recordWritingsPresent(ids) }
+        func deleteImportedWriting(id: String, expecting current: LampDevotional) async -> Bool {
+            await inner.deleteImportedWriting(id: id, expecting: current)
+        }
+        func storeImportedMedia(from url: URL, writingID: String) -> String { url.lastPathComponent }
+        func removeImportedMedia(writingID: String, filename: String) {}
     }
 
     @Test func aRowOfTheSyncFileReadsBackAsTheWritingItCameFrom() throws {

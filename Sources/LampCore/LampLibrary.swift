@@ -2131,6 +2131,14 @@ public actor LampLibrary {
         return imported
     }
 
+    /// One of the person's writings, by id.
+    public func personalDevotional(id: String) throws -> LampDevotional? {
+        try openUserDatabase().read { db in
+            try Row.fetchOne(db, sql: "SELECT * FROM personal_devotionals WHERE id = ?", arguments: [id])
+                .map(makePersonalDevotional)
+        }
+    }
+
     /// What the deletion ledger says of a writing, if anything.
     public func writingDeletion(id: String) throws -> LampPersonalDeletionLedger.Entry? {
         try openUserDatabase().read { db in

@@ -12,12 +12,21 @@ public protocol LampWritingImportStore {
     func importableWritings() async throws -> [LampDevotional]
     /// What the deletion ledger says of a writing, if anything.
     func writingDeletion(id: String) async throws -> LampPersonalDeletionLedger.Entry?
-    /// Saves a writing exactly as given, its `lastModified` included.
-    func saveImportedWriting(_ writing: LampDevotional) async throws
+    /// Why an import must leave a writing alone, if it must: one the store
+    /// holds but does not offer, such as the phone's subscription and
+    /// bundled writings, which a file with the same id would otherwise
+    /// overwrite. Nil lets it through.
+    func writingRefusal(id: String) async throws -> String?
+    /// Saves a writing exactly as given, its `lastModified` included — but
+    /// only if the store's copy is still `current` (nil: it has none), checked
+    /// and written in one step, so an edit or a sync landing meanwhile is not
+    /// overwritten. Says whether it saved.
+    func saveImportedWriting(_ writing: LampDevotional, expecting current: LampDevotional?) async throws -> Bool
     /// Records writings as present now, so sync keeps them.
     func recordWritingsPresent(_ ids: [String]) async throws
-    /// Deletes a writing an import made, as a deletion sync carries.
-    func deleteImportedWriting(id: String) async throws
+    /// Deletes a writing an import made, as a deletion sync carries, if the
+    /// store's copy is still `current`. Says whether it deleted.
+    func deleteImportedWriting(id: String, expecting current: LampDevotional) async throws -> Bool
     /// Copies a picture or recording into a writing's media and returns the
     /// file name it is kept under there.
     func storeImportedMedia(from url: URL, writingID: String) async throws -> String
@@ -34,6 +43,7 @@ public protocol LampWritingImportStore {
 }
 
 public extension LampWritingImportStore {
+    func writingRefusal(id: String) async throws -> String? { nil }
     var supportsDecks: Bool { false }
     func importableDecks() async throws -> [LampPresentationDeck] { [] }
     func saveImportedDeck(_ deck: LampPresentationDeck, assetsFrom directory: URL?) async throws {
@@ -161,6 +171,12 @@ public extension LampWritingImport {
                 $0.writingID == candidates[index].writingID && $0.key != candidates[index].key
             }.map(\.path)
             candidates[index].errors.append("Another file has the same id (\(others.joined(separator: ", "))).")
+        }
+
+        for index in candidates.indices where candidates[index].errors.isEmpty && candidates[index].writing != nil {
+            if let reason = try await store.writingRefusal(id: candidates[index].writingID) {
+                candidates[index].errors.append(reason)
+            }
         }
 
         linkWritings(&candidates)
@@ -425,7 +441,15 @@ public extension LampWritingImport {
             }
             stamped.mediaJSON = mediaJSON
 
-            try await store.saveImportedWriting(stamped)
+            guard try await store.saveImportedWriting(stamped, expecting: local) else {
+                // Changed while this ran: the copy stays, and so must not
+                // the files brought for it.
+                for filename in added {
+                    try? await store.removeImportedMedia(writingID: writing.id, filename: filename)
+                }
+                refused.append(item)
+                continue
+            }
             saved.append(writing.id)
             imported.append(item)
             undo.writings.append(.init(
@@ -487,15 +511,20 @@ public extension LampWritingImport {
                 kept.append(entry.title)
                 continue
             }
+            let done: Bool
             if let payload = entry.previous,
                let previous = LampSyncConflictPayload.devotional(from: payload) {
                 // Dated after the import, so sync carries the undoing too.
-                try await store.saveImportedWriting(previous.withLastModified(
+                done = try await store.saveImportedWriting(previous.withLastModified(
                     Date(timeIntervalSince1970: TimeInterval(max(now, entry.written + 1)))
-                ))
-                restored.append(entry.id)
+                ), expecting: writing)
+                if done { restored.append(entry.id) }
             } else {
-                try await store.deleteImportedWriting(id: entry.id)
+                done = try await store.deleteImportedWriting(id: entry.id, expecting: writing)
+            }
+            guard done else {
+                kept.append(entry.title)
+                continue
             }
             for filename in entry.addedMedia {
                 try? await store.removeImportedMedia(writingID: entry.id, filename: filename)
@@ -565,16 +594,22 @@ extension LampLibrary: LampWritingImportStore {
         try personalDevotionals()
     }
 
-    public func saveImportedWriting(_ writing: LampDevotional) throws {
+    /// Checked and saved within one call on the library's actor, so nothing
+    /// else the library does can land between the two.
+    public func saveImportedWriting(_ writing: LampDevotional, expecting current: LampDevotional?) throws -> Bool {
+        guard try personalDevotional(id: writing.id) == current else { return false }
         try savePersonalDevotional(writing, preserveLastModified: true)
+        return true
     }
 
     public func recordWritingsPresent(_ ids: [String]) throws {
         try recordPersonalDevotionalsPresent(ids)
     }
 
-    public func deleteImportedWriting(id: String) throws {
+    public func deleteImportedWriting(id: String, expecting current: LampDevotional) throws -> Bool {
+        guard try personalDevotional(id: id) == current else { return false }
         try deletePersonalDevotional(id: id)
+        return true
     }
 
     public func storeImportedMedia(from url: URL, writingID: String) throws -> String {
