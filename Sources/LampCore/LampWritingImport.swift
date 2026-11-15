@@ -27,12 +27,16 @@ public struct LampWritingImportFile: Equatable, Sendable {
     public let attachments: [String: URL]
     /// A deck delivered beside it, which becomes its deck.
     public let deck: LampWritingImportDeckFile?
+    /// Why the file could not be read, when it could not: it comes back as
+    /// a rejected row, so one bad file does not hide the rest of a folder.
+    public let readError: String?
 
     public init(
         path: String, markdown: String, modified: Date? = nil, created: Date? = nil,
         ancestry: [String] = [], attachments: [String: URL] = [:],
-        deck: LampWritingImportDeckFile? = nil
+        deck: LampWritingImportDeckFile? = nil, readError: String? = nil
     ) {
+        self.readError = readError
         self.path = path
         self.markdown = markdown
         self.modified = modified
@@ -120,9 +124,15 @@ public struct LampWritingImportPlan: Sendable {
     /// Each deck row's deck, ready to save.
     let decks: [String: PlannedDeck]
 
+    /// For each writing, the links the plan made to other writings, by the
+    /// writing linked to, with the link as the file wrote it: put back if
+    /// that writing is not there when the import is applied.
+    let links: [String: [String: String]]
+
     struct PlannedDeck: Sendable {
         let deck: LampPresentationDeck
-        let assetsDirectory: URL?
+        /// Each picture the deck names, by the path it is stored under.
+        let assets: [String: URL]
         /// The store's copy as the plan saw it, if it had one.
         let local: LampPresentationDeck?
     }
@@ -156,6 +166,9 @@ public struct LampWritingImportResult: Equatable, Sendable {
     /// Chosen, but not written: the library's copy changed after the plan was
     /// made, so the plan no longer says what importing would do.
     public let refused: [LampWritingImportItem]
+    /// Chosen, but not written, because something went wrong, said item by
+    /// item; the rest of the import stands.
+    public let failed: [LampWritingImportFailure]
     /// What to keep to undo this import.
     public let undo: LampWritingImportUndo
 }
@@ -287,7 +300,7 @@ public enum LampWritingImport {
         do {
             markdown = try String(contentsOf: url, encoding: .utf8)
         } catch {
-            throw LampLibraryError.invalidPersonalContent("\(path) is not UTF-8 text.")
+            return LampWritingImportFile(path: path, markdown: "", ancestry: ancestry, readError: "\(path) is not UTF-8 text.")
         }
         let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
         let text = markdown.replacingOccurrences(of: "\r\n", with: "\n")
@@ -380,8 +393,21 @@ public enum LampWritingImport {
         /// a Lamp export holding several.
         var identitySuffix = ""
         var ancestry: [String] = []
+        /// Pictures and recordings the text links to, found beside the file.
+        var found: [FoundMedia] = []
+        /// The same, named once the writing's id is settled.
         var media: [LampWritingImportMedia] = []
         var deck: LampWritingImportDeckFile?
+        /// Links made to other writings: the writing linked to, and the link
+        /// as written.
+        var links: [String: String] = [:]
+    }
+
+    struct FoundMedia: Equatable, Sendable {
+        let target: String
+        let url: URL
+        let type: LampMediaType
+        let alt: String?
     }
 
     static let knownKeys: Set<String> = [
@@ -391,6 +417,13 @@ public enum LampWritingImport {
 
     static func candidates(from file: LampWritingImportFile) -> [Candidate] {
         let filename = ((file.path as NSString).lastPathComponent as NSString).deletingPathExtension
+        if let readError = file.readError {
+            return [Candidate(
+                key: file.path, path: file.path, writing: nil,
+                writingID: derivedID(path: file.path), idDerived: true, title: filename,
+                errors: [readError]
+            )]
+        }
         let lines = LampPersonalMarkdownDocument.frontmatterLines(in: file.markdown)
         var metadata: [String: String] = [:]
         var body = file.markdown
@@ -699,6 +732,7 @@ public enum LampWritingImport {
         return parts.joined(separator: "/")
     }
 
+    private static let inlineCode = try! NSRegularExpression(pattern: #"(`+)[^`].*?\1"#)
     private static let markdownLink = try! NSRegularExpression(
         pattern: #"(!?)\[([^\]]*)\]\(([^)\s]+)\)"#
     )
@@ -715,7 +749,10 @@ public enum LampWritingImport {
             guard !fence.contains(line), line.contains("](") else { return line }
             let text = line as NSString
             var result = line
-            for match in markdownLink.matches(in: line, range: NSRange(location: 0, length: text.length)).reversed() {
+            // An example written in inline code is not the writing's own.
+            let code = inlineCode.matches(in: line, range: NSRange(location: 0, length: text.length)).map(\.range)
+            for match in markdownLink.matches(in: line, range: NSRange(location: 0, length: text.length)).reversed()
+            where !code.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) {
                 let target = text.substring(with: match.range(at: 3))
                 guard let replacement = transform(
                     match.range(at: 1).length > 0, text.substring(with: match.range(at: 2)), target
@@ -726,14 +763,13 @@ public enum LampWritingImport {
         }.joined(separator: "\n")
     }
 
-    /// The pictures and recordings a writing's text links to, named in the
-    /// text as Lamp names media (`media/<id>`), each with an id made from the
-    /// file's path and the link so a second import names it the same.
+    /// The pictures and recordings a writing's text links to, found in the
+    /// folder. One that is not there rejects the file.
     static func attachMedia(_ candidate: inout Candidate, from file: LampWritingImportFile) {
         guard let writing = candidate.writing else { return }
-        var media: [LampWritingImportMedia] = []
+        var found: [FoundMedia] = []
         var missing: [String] = []
-        let content = rewritingLinks(in: writing.content) { _, label, target in
+        _ = rewritingLinks(in: writing.content) { _, label, target in
             guard isRelativeLink(target) else { return nil }
             let type = mediaType(of: target)
             guard type != nil || target.hasPrefix("media/") else { return nil }
@@ -741,17 +777,39 @@ public enum LampWritingImport {
                 if !missing.contains(target) { missing.append(target) }
                 return nil
             }
-            let id = derivedID(path: "media\u{0}" + file.path + "\u{0}" + target)
-            if !media.contains(where: { $0.id == id }) {
+            if !found.contains(where: { $0.target == target }) {
                 let alt = label.trimmingCharacters(in: .whitespaces)
-                media.append(LampWritingImportMedia(id: id, url: url, type: kind, alt: alt.isEmpty ? nil : alt))
+                found.append(FoundMedia(target: target, url: url, type: kind, alt: alt.isEmpty ? nil : alt))
             }
-            return "media/\(id)"
+            return nil
         }
         if !missing.isEmpty {
             candidate.errors.append("Pictures or recordings not found in the folder: \(missing.joined(separator: ", ")). A document passed in, rather than a folder, cannot bring them.")
         }
-        candidate.media = media
+        candidate.found = found
+    }
+
+    /// Names each picture and recording in the text as Lamp names media,
+    /// `media/<id>`. The id is made from the writing's id, the link and the
+    /// file's bytes: the same picture in the same writing has the same id
+    /// however the folder was chosen, so a second import reads as unchanged,
+    /// and a picture replaced under the same name has a new one, so it comes
+    /// in.
+    static func nameMedia(_ candidate: inout Candidate) {
+        guard let writing = candidate.writing, !candidate.found.isEmpty else { return }
+        var names: [String: LampWritingImportMedia] = [:]
+        for item in candidate.found {
+            let bytes = (try? Data(contentsOf: item.url)) ?? Data()
+            let fingerprint = SHA256.hash(data: bytes).prefix(8).map { String(format: "%02x", $0) }.joined()
+            names[item.target] = LampWritingImportMedia(
+                id: derivedID(path: "media\u{0}\(candidate.writingID)\u{0}\(item.target)\u{0}\(fingerprint)"),
+                url: item.url, type: item.type, alt: item.alt
+            )
+        }
+        candidate.media = candidate.found.compactMap { names[$0.target] }
+        let content = rewritingLinks(in: writing.content) { _, _, target in
+            names[target].map { "media/\($0.id)" }
+        }
         if content != writing.content {
             candidate.writing = writing.withContent(content)
         }

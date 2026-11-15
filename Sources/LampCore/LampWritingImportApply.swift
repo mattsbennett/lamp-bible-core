@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import ImageIO
 import LampModuleKit
@@ -18,10 +19,11 @@ public protocol LampWritingImportStore {
     /// overwrite. Nil lets it through.
     func writingRefusal(id: String) async throws -> String?
     /// Saves a writing exactly as given, its `lastModified` included — but
-    /// only if the store's copy is still `current` (nil: it has none), checked
-    /// and written in one step, so an edit or a sync landing meanwhile is not
-    /// overwritten. Says whether it saved.
-    func saveImportedWriting(_ writing: LampDevotional, expecting current: LampDevotional?) async throws -> Bool
+    /// only if the store's copy is still `current` (nil: it has none),
+    /// checked and written in one transaction, so an edit or a sync landing
+    /// meanwhile is not overwritten. Returns the stored copy as read back, or
+    /// nil if it did not save.
+    func saveImportedWriting(_ writing: LampDevotional, expecting current: LampDevotional?) async throws -> LampDevotional?
     /// Records writings as present now, so sync keeps them.
     func recordWritingsPresent(_ ids: [String]) async throws
     /// Deletes a writing an import made, as a deletion sync carries, if the
@@ -35,21 +37,26 @@ public protocol LampWritingImportStore {
     /// Whether this store keeps decks. The phone only shows them.
     var supportsDecks: Bool { get }
     func importableDecks() async throws -> [LampPresentationDeck]
-    /// Saves a deck, bringing in the images it names from `directory`'s
-    /// `Assets` folder.
-    func saveImportedDeck(_ deck: LampPresentationDeck, assetsFrom directory: URL?) async throws
-    /// Deletes a deck an import made, as a deletion sync carries.
-    func deleteImportedDeck(id: String) async throws
+    /// Saves a deck, and the pictures it names (by the path each is stored
+    /// under), if the store's copy is still `current`. Says whether it saved.
+    func saveImportedDeck(
+        _ deck: LampPresentationDeck, assets: [String: URL], expecting current: LampPresentationDeck?
+    ) async throws -> Bool
+    /// Deletes a deck an import made, as a deletion sync carries, if the
+    /// store's copy is still `current`. Says whether it deleted.
+    func deleteImportedDeck(id: String, expecting current: LampPresentationDeck) async throws -> Bool
 }
 
 public extension LampWritingImportStore {
     func writingRefusal(id: String) async throws -> String? { nil }
     var supportsDecks: Bool { false }
     func importableDecks() async throws -> [LampPresentationDeck] { [] }
-    func saveImportedDeck(_ deck: LampPresentationDeck, assetsFrom directory: URL?) async throws {
+    func saveImportedDeck(
+        _ deck: LampPresentationDeck, assets: [String: URL], expecting current: LampPresentationDeck?
+    ) async throws -> Bool {
         throw LampLibraryError.invalidPersonalContent("Decks are imported on the Mac.")
     }
-    func deleteImportedDeck(id: String) async throws {}
+    func deleteImportedDeck(id: String, expecting current: LampPresentationDeck) async throws -> Bool { false }
 }
 
 /// What an import changed, kept so it can be undone: each writing and deck
@@ -58,15 +65,15 @@ public struct LampWritingImportUndo: Codable, Equatable, Identifiable, Sendable 
     public struct Writing: Codable, Equatable, Sendable {
         public let id: String
         public let title: String
-        /// The `lastModified` the import gave it, in seconds. A writing whose
-        /// time has moved since was changed after the import, and is left.
-        public let written: Int
+        /// The writing as the import left it in the store. One that differs
+        /// now in any way was changed since, and is left.
+        public var written: String
         /// The writing before the import, or nil for one it made.
         public let previous: String?
         /// Media files the import added to it.
         public let addedMedia: [String]
 
-        public init(id: String, title: String, written: Int, previous: String?, addedMedia: [String]) {
+        public init(id: String, title: String, written: String, previous: String?, addedMedia: [String]) {
             self.id = id
             self.title = title
             self.written = written
@@ -102,6 +109,21 @@ public struct LampWritingImportUndo: Codable, Equatable, Identifiable, Sendable 
     }
 
     public var isEmpty: Bool { writings.isEmpty && decks.isEmpty }
+
+    /// This record, told that a later import's undo put writings back as
+    /// they were: each that this import left as it was put back stands as
+    /// this import's own again, so this one can still be undone after it.
+    public func carrying(restored: [String: String]) -> LampWritingImportUndo {
+        var record = self
+        for index in record.writings.indices {
+            guard let copy = restored[record.writings[index].id],
+                  let now = LampSyncConflictPayload.devotional(from: copy),
+                  let then = LampSyncConflictPayload.devotional(from: record.writings[index].written),
+                  LampWritingImport.sameStoredCopy(now, then, ignoringTime: true) else { continue }
+            record.writings[index].written = copy
+        }
+        return record
+    }
 }
 
 /// What undoing an import did.
@@ -110,6 +132,15 @@ public struct LampWritingImportUndoResult: Equatable, Sendable {
     public let undone: [String]
     /// Titles changed since the import, so left as they are.
     public let kept: [String]
+    /// Each writing put back, as now stored, for an earlier import's record
+    /// (`LampWritingImportUndo.carrying(restored:)`).
+    public let restored: [String: String]
+}
+
+/// One chosen item that could not be imported, and why.
+public struct LampWritingImportFailure: Equatable, Sendable {
+    public let item: LampWritingImportItem
+    public let reason: String
 }
 
 public extension LampWritingImport {
@@ -201,7 +232,12 @@ public extension LampWritingImport {
             }
         }
 
-        linkWritings(&candidates)
+        // Ids settled, the pictures are named, and links between writings
+        // made.
+        for index in candidates.indices where candidates[index].errors.isEmpty {
+            nameMedia(&candidates[index])
+        }
+        linkWritings(&candidates, existing: Set(existing.keys))
 
         let existingDecks = comparingWithLibrary && store.supportsDecks
             ? Dictionary(try await store.importableDecks().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -212,7 +248,9 @@ public extension LampWritingImport {
         var locals: [String: LampDevotional] = [:]
         var restored: Set<String> = []
         var media: [String: [LampWritingImportMedia]] = [:]
+        var links: [String: [String: String]] = [:]
         var decks: [String: LampWritingImportPlan.PlannedDeck] = [:]
+        var deckIDs: [String: String] = [:]
         for candidate in candidates {
             var warnings = candidate.warnings
             var action = LampWritingImportItem.Action.rejected
@@ -257,6 +295,7 @@ public extension LampWritingImport {
                 }
                 writings[candidate.key] = writing
                 media[candidate.key] = candidate.media
+                links[candidate.key] = candidate.links
             }
             items.append(LampWritingImportItem(
                 id: candidate.key,
@@ -273,37 +312,50 @@ public extension LampWritingImport {
             ))
 
             if let deckFile = candidate.deck {
-                let planned = planDeck(
+                var planned = planDeck(
                     deckFile, for: candidate, writingAction: action,
                     store: store, existing: existingDecks
                 )
+                // Two decks with one id would each overwrite the other.
+                if let deck = planned.deck {
+                    if let other = deckIDs[deck.id] {
+                        planned.item = planned.item.rejecting("Another deck has the same id (\(other)).")
+                        planned.deck = nil
+                    } else {
+                        deckIDs[deck.id] = deckFile.path
+                    }
+                }
                 items.append(planned.item)
                 if let deck = planned.deck {
                     decks[planned.item.id] = .init(
-                        deck: deck, assetsDirectory: deckFile.assetsDirectory,
-                        local: existingDecks[deck.id]
+                        deck: deck, assets: planned.assets, local: existingDecks[deck.id]
                     )
                 }
             }
         }
         return LampWritingImportPlan(
             items: items, writings: writings, locals: locals, restored: restored,
-            media: media, decks: decks
+            media: media, decks: decks, links: links
         )
     }
 
-    /// A deck delivered beside a writing, as its own row.
+    /// A deck delivered beside a writing, as its own row. Its pictures are
+    /// stored under names of their own — the deck's id and the picture's
+    /// bytes — so a picture of the same name another deck shows is never
+    /// overwritten, and a replaced picture is a new file an undo can step
+    /// back from.
     private static func planDeck(
         _ file: LampWritingImportDeckFile,
         for candidate: Candidate,
         writingAction: LampWritingImportItem.Action,
         store: some LampWritingImportStore,
         existing: [String: LampPresentationDeck]
-    ) -> (item: LampWritingImportItem, deck: LampPresentationDeck?) {
+    ) -> (item: LampWritingImportItem, deck: LampPresentationDeck?, assets: [String: URL]) {
         var errors: [String] = []
         var title = (file.path as NSString).lastPathComponent
         var action = LampWritingImportItem.Action.rejected
         var planned: LampPresentationDeck?
+        var assets: [String: URL] = [:]
         if !store.supportsDecks {
             errors.append("Decks are imported on the Mac.")
         } else if writingAction == .rejected {
@@ -315,12 +367,29 @@ public extension LampWritingImport {
                 // The deck belongs to the writing it was delivered beside,
                 // whatever its file said.
                 deck.source = LampPresentationSource(kind: .writing, id: candidate.writingID)
-                errors += LampPresentationDeckValidator.errors(in: deck).map { "\($0.path): \($0.message)" }
-                let assets = Set(deck.slides.flatMap(\.blocks).compactMap(\.assetPath)).sorted()
-                let missing = assets.filter { path in
-                    guard let directory = file.assetsDirectory else { return true }
-                    return !FileManager.default.fileExists(atPath: directory.appendingPathComponent(path).path)
+                var renamed: [String: String] = [:]
+                var missing: [String] = []
+                for path in Set(deck.slides.flatMap(\.blocks).compactMap(\.assetPath)).sorted() {
+                    guard LampPresentationDeckValidator.isSafeAssetPath(path) else { continue }
+                    guard let directory = file.assetsDirectory,
+                          isFile(directory.appendingPathComponent(path), inside: directory),
+                          let bytes = try? Data(contentsOf: directory.appendingPathComponent(path)) else {
+                        missing.append(path)
+                        continue
+                    }
+                    let fingerprint = SHA256.hash(data: bytes).prefix(6).map { String(format: "%02x", $0) }.joined()
+                    let name = "\(LampPresentationDeckStore.assetsDirectoryName)/\(deck.id)-\(fingerprint)-\((path as NSString).lastPathComponent)"
+                    renamed[path] = name
+                    assets[name] = directory.appendingPathComponent(path)
                 }
+                for slide in deck.slides.indices {
+                    for block in deck.slides[slide].blocks.indices {
+                        if let path = deck.slides[slide].blocks[block].assetPath, let name = renamed[path] {
+                            deck.slides[slide].blocks[block].assetPath = name
+                        }
+                    }
+                }
+                errors += LampPresentationDeckValidator.errors(in: deck).map { "\($0.path): \($0.message)" }
                 if !missing.isEmpty {
                     errors.append("The deck's pictures are not beside it: \(missing.joined(separator: ", ")).")
                 }
@@ -351,13 +420,22 @@ public extension LampWritingImport {
             warnings: [],
             normalized: [],
             libraryModified: nil
-        ), planned)
+        ), planned, planned == nil ? [:] : assets)
+    }
+
+    /// A regular file, inside `folder` once links are followed.
+    private static func isFile(_ url: URL, inside folder: URL) -> Bool {
+        let base = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        return resolved.path.hasPrefix(base.hasSuffix("/") ? base : base + "/")
+            && (try? resolved.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
     }
 
     /// Links between files of the same import become links between their
-    /// writings; a link to a file left out, or not part of the import, stays
-    /// as written and is warned about.
-    internal static func linkWritings(_ candidates: inout [Candidate]) {
+    /// writings, and so does a link to a file an earlier import brought in,
+    /// found by the id its path gives. A link to anything else stays as
+    /// written and is warned about.
+    internal static func linkWritings(_ candidates: inout [Candidate], existing: Set<String>) {
         var byPath: [String: String] = [:]
         for candidate in candidates where candidate.errors.isEmpty && candidate.writing != nil {
             let path = candidate.path.precomposedStringWithCanonicalMapping.lowercased()
@@ -366,23 +444,29 @@ public extension LampWritingImport {
         for index in candidates.indices {
             guard let writing = candidates[index].writing else { continue }
             var unresolved: [String] = []
-            let path = candidates[index].path
+            var made: [String: String] = [:]
+            let candidate = candidates[index]
             let content = rewritingLinks(in: writing.content) { isImage, _, target in
                 guard !isImage, isRelativeLink(target) else { return nil }
                 let file = target.split(separator: "#", maxSplits: 1).first.map(String.init) ?? target
                 guard ["md", "markdown"].contains((file as NSString).pathExtension.lowercased()) else {
                     return nil
                 }
-                let resolved = resolve(file, from: path).precomposedStringWithCanonicalMapping.lowercased()
-                guard let id = byPath[resolved] else {
+                let resolved = resolve(file, from: candidate.path)
+                let earlier = ([resolved] + earlierPaths(of: resolved, ancestry: candidate.ancestry))
+                    .map { derivedID(path: $0) }
+                    .first(where: existing.contains)
+                guard let id = byPath[resolved.precomposedStringWithCanonicalMapping.lowercased()] ?? earlier else {
                     if !unresolved.contains(target) { unresolved.append(target) }
                     return nil
                 }
+                made[id] = target
                 return LampApplicationLink.writingURL(id: id).absoluteString
             }
+            candidates[index].links = made
             if content != writing.content {
                 candidates[index].writing = writing.withContent(content)
-                candidates[index].normalized.append("Links to other files of this import open their writings in Lamp.")
+                candidates[index].normalized.append("Links to other writings of this import open them in Lamp.")
             }
             if !unresolved.isEmpty {
                 candidates[index].warnings.append("Links to files not in this import will not open in Lamp: \(unresolved.prefix(5).joined(separator: ", "))\(unresolved.count > 5 ? ", and \(unresolved.count - 5) more" : "").")
@@ -390,10 +474,22 @@ public extension LampWritingImport {
         }
     }
 
+    /// Whether two stored copies of a writing are the same: every field a
+    /// person writes, its blocks, its media and, unless asked not to, when it
+    /// was last saved.
+    static func sameStoredCopy(_ a: LampDevotional, _ b: LampDevotional, ignoringTime: Bool = false) -> Bool {
+        a.differingAuthoredFields(from: b).isEmpty
+            && LampSyncJSONComparison.sameValue(a.contentJSON, b.contentJSON)
+            && LampSyncJSONComparison.sameValue(a.mediaJSON, b.mediaJSON)
+            && (ignoringTime || a.lastModified.map { Int($0.timeIntervalSince1970) }
+                == b.lastModified.map { Int($0.timeIntervalSince1970) })
+    }
+
     /// Writes the chosen items of a plan. Each is checked again first: one
     /// whose copy in the store changed after the plan was made is refused
     /// rather than overwritten, since the plan no longer describes what would
-    /// happen.
+    /// happen. One that fails is reported, and the rest go on, so what was
+    /// written can still be undone.
     ///
     /// Importing is the person's choice, so it counts as a fresh save for
     /// sync. A chosen conflict is stamped newer than both copies, so the
@@ -411,13 +507,17 @@ public extension LampWritingImport {
         )
         var imported: [LampWritingImportItem] = []
         var refused: [LampWritingImportItem] = []
+        var failed: [LampWritingImportFailure] = []
         var saved: [String] = []
         var undo = LampWritingImportUndo(id: UUID().uuidString, importedAt: Date(), writings: [], decks: [])
         let now = Date()
-        for item in plan.items where item.kind == .writing && itemIDs.contains(item.id) {
-            guard [.create, .update, .conflict].contains(item.action),
-                  let writing = plan.writings[item.id] else { continue }
-            let local = existing[writing.id]
+        let chosen = plan.items.filter { $0.kind == .writing && itemIDs.contains($0.id) && $0.canImport }
+        // The writings there will be: a link to one that will not be is put
+        // back as it was written.
+        let available = Set(existing.keys).union(chosen.map(\.writingID))
+        for item in chosen {
+            guard let planned = plan.writings[item.id] else { continue }
+            let local = existing[planned.id]
             // The whole copy, not only what an import compares: an edit in
             // the editor may change the structured body or media alone, in
             // the same second.
@@ -425,7 +525,12 @@ public extension LampWritingImport {
                 refused.append(item)
                 continue
             }
-            var stamped = writing
+            var writing = planned
+            for (id, target) in plan.links[item.id] ?? [:] where !available.contains(id) {
+                writing = writing.withContent(writing.content.replacingOccurrences(
+                    of: "](\(LampApplicationLink.writingURL(id: id).absoluteString))", with: "](\(target))"
+                ))
+            }
             switch item.action {
             case .conflict:
                 let resolved = LampSyncMerge.resolutionTimestamp(
@@ -433,88 +538,97 @@ public extension LampWritingImport {
                     incomingModified: writing.lastModified.map { Int($0.timeIntervalSince1970) },
                     now: Int(now.timeIntervalSince1970)
                 ) ?? Int(now.timeIntervalSince1970)
-                stamped = writing.withLastModified(Date(timeIntervalSince1970: TimeInterval(resolved)))
+                writing = writing.withLastModified(Date(timeIntervalSince1970: TimeInterval(resolved)))
             case .create where plan.restored.contains(item.id):
                 // After the deletion, as well as now: a copy another device
                 // kept is no later than the deletion, give or take its clock.
                 let deleted = try await store.writingDeletion(id: writing.id)?.deletedAt
                     .map { Int(($0 + 999) / 1_000) } ?? 0
-                stamped = writing.withLastModified(Date(timeIntervalSince1970: TimeInterval(
+                writing = writing.withLastModified(Date(timeIntervalSince1970: TimeInterval(
                     max(Int(now.timeIntervalSince1970), deleted + 1)
                 )))
             case .create where writing.lastModified == nil:
-                stamped = writing.withLastModified(now)
+                writing = writing.withLastModified(now)
             default:
                 break
             }
 
             // Pictures and recordings: copied in, and listed with the
-            // writing, under the ids its text already names. One an earlier
-            // import brought is kept as it is.
-            var mediaJSON = local?.mediaJSON
+            // writing, under the ids its text already names. One already
+            // listed is the same file, since its id holds its bytes.
             var added: [String] = []
-            let listed = Set((local?.mediaReferences ?? []).map(\.id))
-            for file in plan.media[item.id] ?? [] where !listed.contains(file.id) {
-                let filename = try await store.storeImportedMedia(from: file.url, writingID: writing.id)
-                added.append(filename)
-                mediaJSON = try LampPortableDevotionalMedia.appending(
-                    file.reference(storedAs: filename), to: mediaJSON
-                )
-            }
-            stamped.mediaJSON = mediaJSON
-
-            guard try await store.saveImportedWriting(stamped, expecting: local) else {
-                // Changed while this ran: the copy stays, and so must not
-                // the files brought for it.
-                for filename in added {
-                    try? await store.removeImportedMedia(writingID: writing.id, filename: filename)
+            do {
+                var mediaJSON = local?.mediaJSON
+                let listed = Set((local?.mediaReferences ?? []).map(\.id))
+                for file in plan.media[item.id] ?? [] where !listed.contains(file.id) {
+                    let filename = try await store.storeImportedMedia(from: file.url, writingID: writing.id)
+                    added.append(filename)
+                    mediaJSON = try LampPortableDevotionalMedia.appending(
+                        file.reference(storedAs: filename), to: mediaJSON
+                    )
                 }
-                refused.append(item)
-                continue
-            }
-            saved.append(writing.id)
-            imported.append(item)
-            undo.writings.append(.init(
-                id: writing.id,
-                title: writing.title,
-                written: Int((stamped.lastModified ?? now).timeIntervalSince1970),
-                previous: try local.map(LampSyncConflictPayload.encode),
-                addedMedia: added
-            ))
-        }
-        try await store.recordWritingsPresent(saved)
-
-        let deckItems = plan.items.filter { $0.kind == .deck && itemIDs.contains($0.id) }
-        if !deckItems.isEmpty, store.supportsDecks {
-            let present = Set(try await store.importableWritings().map(\.id))
-            let currentDecks = Dictionary(
-                try await store.importableDecks().map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            for item in deckItems {
-                guard [.create, .conflict].contains(item.action),
-                      let planned = plan.decks[item.id] else { continue }
-                // A deck goes in only beside its writing, and only over the
-                // copy the plan saw.
-                guard present.contains(item.writingID),
-                      currentDecks[planned.deck.id] == planned.local else {
+                writing.mediaJSON = mediaJSON
+                guard let stored = try await store.saveImportedWriting(writing, expecting: local) else {
+                    // Changed while this ran: the copy stays, and so must
+                    // not the files brought for it.
+                    for filename in added {
+                        try? await store.removeImportedMedia(writingID: writing.id, filename: filename)
+                    }
                     refused.append(item)
                     continue
                 }
-                try await store.saveImportedDeck(planned.deck, assetsFrom: planned.assetsDirectory)
+                saved.append(writing.id)
                 imported.append(item)
-                undo.decks.append(.init(
-                    id: planned.deck.id, title: planned.deck.title,
-                    written: planned.deck, previous: planned.local
+                undo.writings.append(.init(
+                    id: writing.id,
+                    title: writing.title,
+                    written: try LampSyncConflictPayload.encode(stored),
+                    previous: try local.map(LampSyncConflictPayload.encode),
+                    addedMedia: added
                 ))
+            } catch {
+                for filename in added {
+                    try? await store.removeImportedMedia(writingID: writing.id, filename: filename)
+                }
+                failed.append(.init(item: item, reason: error.localizedDescription))
             }
         }
-        return LampWritingImportResult(imported: imported, refused: refused, undo: undo)
+        try await store.recordWritingsPresent(saved)
+
+        let deckItems = plan.items.filter { $0.kind == .deck && itemIDs.contains($0.id) && $0.canImport }
+        if !deckItems.isEmpty, store.supportsDecks {
+            let present = Set(try await store.importableWritings().map(\.id))
+            for item in deckItems {
+                guard let planned = plan.decks[item.id] else { continue }
+                // A deck goes in only beside its writing, and only over the
+                // copy the plan saw.
+                guard present.contains(item.writingID) else {
+                    refused.append(item)
+                    continue
+                }
+                do {
+                    guard try await store.saveImportedDeck(
+                        planned.deck, assets: planned.assets, expecting: planned.local
+                    ) else {
+                        refused.append(item)
+                        continue
+                    }
+                    imported.append(item)
+                    undo.decks.append(.init(
+                        id: planned.deck.id, title: planned.deck.title,
+                        written: planned.deck, previous: planned.local
+                    ))
+                } catch {
+                    failed.append(.init(item: item, reason: error.localizedDescription))
+                }
+            }
+        }
+        return LampWritingImportResult(imported: imported, refused: refused, failed: failed, undo: undo)
     }
 
     /// Puts back what an import changed: a writing or deck it made goes, and
-    /// one it changed is restored. Anything changed since the import is left
-    /// as it is, and said.
+    /// one it changed is restored. Anything changed since the import, in any
+    /// way, is left as it is, and said.
     static func undo(
         _ record: LampWritingImportUndo,
         in store: some LampWritingImportStore
@@ -525,11 +639,13 @@ public extension LampWritingImport {
         )
         var undone: [String] = []
         var kept: [String] = []
-        var restored: [String] = []
+        var restoredIDs: [String] = []
+        var restored: [String: String] = [:]
         let now = Int(Date().timeIntervalSince1970)
         for entry in record.writings.reversed() {
             guard let writing = current[entry.id] else { continue }
-            guard writing.lastModified.map({ Int($0.timeIntervalSince1970) }) == entry.written else {
+            guard let written = LampSyncConflictPayload.devotional(from: entry.written),
+                  sameStoredCopy(writing, written) else {
                 kept.append(entry.title)
                 continue
             }
@@ -537,10 +653,17 @@ public extension LampWritingImport {
             if let payload = entry.previous,
                let previous = LampSyncConflictPayload.devotional(from: payload) {
                 // Dated after the import, so sync carries the undoing too.
-                done = try await store.saveImportedWriting(previous.withLastModified(
-                    Date(timeIntervalSince1970: TimeInterval(max(now, entry.written + 1)))
-                ), expecting: writing)
-                if done { restored.append(entry.id) }
+                let stamp = max(now, Int((written.lastModified ?? Date()).timeIntervalSince1970) + 1)
+                if let stored = try await store.saveImportedWriting(
+                    previous.withLastModified(Date(timeIntervalSince1970: TimeInterval(stamp))),
+                    expecting: writing
+                ) {
+                    restoredIDs.append(entry.id)
+                    restored[entry.id] = try LampSyncConflictPayload.encode(stored)
+                    done = true
+                } else {
+                    done = false
+                }
             } else {
                 done = try await store.deleteImportedWriting(id: entry.id, expecting: writing)
             }
@@ -553,7 +676,7 @@ public extension LampWritingImport {
             }
             undone.append(entry.title)
         }
-        try await store.recordWritingsPresent(restored)
+        try await store.recordWritingsPresent(restoredIDs)
 
         if !record.decks.isEmpty, store.supportsDecks {
             let decks = Dictionary(
@@ -566,22 +689,34 @@ public extension LampWritingImport {
                     kept.append(entry.title)
                     continue
                 }
-                if let previous = entry.previous {
-                    try await store.saveImportedDeck(previous, assetsFrom: nil)
+                // The pictures the earlier copy named are still there: an
+                // import stores a changed picture under a new name.
+                let done = if let previous = entry.previous {
+                    try await store.saveImportedDeck(previous, assets: [:], expecting: deck)
                 } else {
-                    try await store.deleteImportedDeck(id: entry.id)
+                    try await store.deleteImportedDeck(id: entry.id, expecting: deck)
                 }
-                undone.append(entry.title)
+                if done { undone.append(entry.title) } else { kept.append(entry.title) }
             }
         }
-        return LampWritingImportUndoResult(undone: undone, kept: kept)
+        return LampWritingImportUndoResult(undone: undone, kept: kept, restored: restored)
+    }
+}
+
+extension LampWritingImportItem {
+    /// The same row, refused for `reason`.
+    func rejecting(_ reason: String) -> LampWritingImportItem {
+        LampWritingImportItem(
+            id: id, kind: kind, path: path, writingID: writingID, idDerived: idDerived,
+            title: title, action: .rejected, changes: [], errors: errors + [reason],
+            warnings: warnings, normalized: normalized, libraryModified: libraryModified
+        )
     }
 }
 
 /// A picture or recording a writing's text names, found beside its file.
 public struct LampWritingImportMedia: Equatable, Sendable {
-    /// The id the writing's text names it by (`media/<id>`), made from the
-    /// file's path and the link, so a second import names it alike.
+    /// The id the writing's text names it by (`media/<id>`).
     public let id: String
     public let url: URL
     public let type: LampMediaType
@@ -616,12 +751,10 @@ extension LampLibrary: LampWritingImportStore {
         try personalDevotionals()
     }
 
-    /// Checked and saved within one call on the library's actor, so nothing
-    /// else the library does can land between the two.
-    public func saveImportedWriting(_ writing: LampDevotional, expecting current: LampDevotional?) throws -> Bool {
-        guard try personalDevotional(id: writing.id) == current else { return false }
-        try savePersonalDevotional(writing, preserveLastModified: true)
-        return true
+    public func saveImportedWriting(
+        _ writing: LampDevotional, expecting current: LampDevotional?
+    ) throws -> LampDevotional? {
+        try savePersonalDevotional(writing, preserveLastModified: true, onlyOver: current)
     }
 
     public func recordWritingsPresent(_ ids: [String]) throws {
@@ -629,9 +762,7 @@ extension LampLibrary: LampWritingImportStore {
     }
 
     public func deleteImportedWriting(id: String, expecting current: LampDevotional) throws -> Bool {
-        guard try personalDevotional(id: id) == current else { return false }
-        try deletePersonalDevotional(id: id)
-        return true
+        try deletePersonalDevotional(id: id, onlyIf: current)
     }
 
     public func storeImportedMedia(from url: URL, writingID: String) throws -> String {
@@ -655,18 +786,35 @@ extension LampLibrary: LampWritingImportStore {
         try LampPresentationDeckStore(rootURL: rootURL).decks()
     }
 
-    public func saveImportedDeck(_ deck: LampPresentationDeck, assetsFrom directory: URL?) throws {
+    /// Checked and saved within one call on the library's actor; decks are
+    /// files, which only the app's own windows write besides.
+    public func saveImportedDeck(
+        _ deck: LampPresentationDeck, assets: [String: URL], expecting current: LampPresentationDeck?
+    ) throws -> Bool {
         let store = LampPresentationDeckStore(rootURL: rootURL)
-        try store.save(deck)
-        if let directory {
-            try store.importAssets(from: directory, referencedBy: deck)
+        guard try store.deck(id: deck.id) == current else { return false }
+        for (path, source) in assets.sorted(by: { $0.key < $1.key }) {
+            guard LampPresentationDeckValidator.isSafeAssetPath(path) else { continue }
+            let destination = store.decksDirectoryURL.appendingPathComponent(path)
+            // Named by the deck and the picture's bytes, so a file already
+            // there is this very picture.
+            guard !FileManager.default.fileExists(atPath: destination.path) else { continue }
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try FileManager.default.copyItem(at: source, to: destination)
         }
+        try store.save(deck)
+        return true
     }
 
     /// Removes the deck's file only. A deletion other Macs must hear of is
     /// recorded by the app, which keeps the deck ledger.
-    public func deleteImportedDeck(id: String) throws {
-        try LampPresentationDeckStore(rootURL: rootURL).delete(id: id)
+    public func deleteImportedDeck(id: String, expecting current: LampPresentationDeck) throws -> Bool {
+        let store = LampPresentationDeckStore(rootURL: rootURL)
+        guard try store.deck(id: id) == current else { return false }
+        try store.delete(id: id)
+        return true
     }
 
     /// What importing these files would do, without writing anything.

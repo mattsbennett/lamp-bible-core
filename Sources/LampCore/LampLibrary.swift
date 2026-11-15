@@ -1851,6 +1851,31 @@ public actor LampLibrary {
         _ devotional: LampDevotional,
         preserveLastModified: Bool = false
     ) throws -> LampDevotional {
+        try writePersonalDevotional(
+            devotional, preserveLastModified: preserveLastModified, condition: nil
+        )!.saved
+    }
+
+    /// Saves a writing only if the stored copy is still `current` (nil: there
+    /// is none), checked and written in one transaction, so no other writer
+    /// to the database — another library, sync, the phone's own threads —
+    /// can land between the two. Returns the stored copy as read back, or nil
+    /// if it had changed.
+    func savePersonalDevotional(
+        _ devotional: LampDevotional,
+        preserveLastModified: Bool,
+        onlyOver current: LampDevotional?
+    ) throws -> LampDevotional? {
+        try writePersonalDevotional(
+            devotional, preserveLastModified: preserveLastModified, condition: .some(current)
+        )?.stored
+    }
+
+    private func writePersonalDevotional(
+        _ devotional: LampDevotional,
+        preserveLastModified: Bool,
+        condition: LampDevotional??
+    ) throws -> (saved: LampDevotional, stored: LampDevotional?)? {
         let title = devotional.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasAuthoredContent = [
             devotional.title,
@@ -1871,51 +1896,55 @@ public actor LampLibrary {
         let identifier = devotional.id.isEmpty ? UUID().uuidString : devotional.id
         try validateIdentifier(identifier)
         let queue = try openUserDatabase()
-        let prior = try queue.read { db in
-            try Row.fetchOne(
+        return try queue.write { db -> (saved: LampDevotional, stored: LampDevotional?)? in
+            if let condition {
+                let stored = try Row.fetchOne(
+                    db, sql: "SELECT * FROM personal_devotionals WHERE id = ?", arguments: [identifier]
+                ).map(makePersonalDevotional)
+                guard stored == condition else { return nil }
+            }
+            let prior = try Row.fetchOne(
                 db, sql: "SELECT content, content_json, media_json FROM personal_devotionals WHERE id = ?",
                 arguments: [identifier]
             )
-        }
-        let priorContent: String? = prior?["content"]
-        let storedContentJSON: String? = prior?["content_json"]
-        let storedMediaJSON: String? = prior?["media_json"]
-        let now = Date()
-        let created = devotional.created ?? now
-        let saved = LampDevotional(
-            id: identifier,
-            moduleID: "personal-devotionals",
-            moduleName: "My Writing",
-            title: title.isEmpty ? "Untitled" : title,
-            subtitle: devotional.subtitle?.nilIfBlank,
-            author: devotional.author?.nilIfBlank,
-            date: devotional.date?.nilIfBlank,
-            tags: devotional.tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty },
-            category: devotional.category?.nilIfBlank,
-            seriesName: devotional.seriesName?.nilIfBlank,
-            seriesOrder: devotional.seriesOrder,
-            keyScriptures: devotional.keyScriptures,
-            summary: devotional.summary?.nilIfBlank,
-            content: devotional.content,
-            contentJSON: devotional.contentJSON
-                ?? (priorContent == devotional.content ? storedContentJSON : nil),
-            footnotes: devotional.footnotes?.nilIfBlank,
-            mediaJSON: devotional.mediaJSON ?? storedMediaJSON,
-            created: created,
-            lastModified: preserveLastModified ? (devotional.lastModified ?? now) : now,
-            isEditable: true
-        )
-        let tagsJSON = String(decoding: try JSONEncoder().encode(saved.tags), as: UTF8.self)
-        let scriptures = saved.keyScriptures.map { scripture -> [String: Any] in
-            var value: [String: Any] = ["sv": scripture.startReference]
-            if let end = scripture.endReference { value["ev"] = end }
-            if let text = scripture.text { value["label"] = text }
-            return value
-        }
-        let scripturesData = try JSONSerialization.data(withJSONObject: scriptures, options: [.sortedKeys])
-        let scripturesJSON = String(decoding: scripturesData, as: UTF8.self)
-        try queue.write { db in
+            let priorContent: String? = prior?["content"]
+            let storedContentJSON: String? = prior?["content_json"]
+            let storedMediaJSON: String? = prior?["media_json"]
+            let now = Date()
+            let created = devotional.created ?? now
+            let saved = LampDevotional(
+                id: identifier,
+                moduleID: "personal-devotionals",
+                moduleName: "My Writing",
+                title: title.isEmpty ? "Untitled" : title,
+                subtitle: devotional.subtitle?.nilIfBlank,
+                author: devotional.author?.nilIfBlank,
+                date: devotional.date?.nilIfBlank,
+                tags: devotional.tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty },
+                category: devotional.category?.nilIfBlank,
+                seriesName: devotional.seriesName?.nilIfBlank,
+                seriesOrder: devotional.seriesOrder,
+                keyScriptures: devotional.keyScriptures,
+                summary: devotional.summary?.nilIfBlank,
+                content: devotional.content,
+                contentJSON: devotional.contentJSON
+                    ?? (priorContent == devotional.content ? storedContentJSON : nil),
+                footnotes: devotional.footnotes?.nilIfBlank,
+                mediaJSON: devotional.mediaJSON ?? storedMediaJSON,
+                created: created,
+                lastModified: preserveLastModified ? (devotional.lastModified ?? now) : now,
+                isEditable: true
+            )
+            let tagsJSON = String(decoding: try JSONEncoder().encode(saved.tags), as: UTF8.self)
+            let scriptures = saved.keyScriptures.map { scripture -> [String: Any] in
+                var value: [String: Any] = ["sv": scripture.startReference]
+                if let end = scripture.endReference { value["ev"] = end }
+                if let text = scripture.text { value["label"] = text }
+                return value
+            }
+            let scripturesData = try JSONSerialization.data(withJSONObject: scriptures, options: [.sortedKeys])
+            let scripturesJSON = String(decoding: scripturesData, as: UTF8.self)
             try db.execute(sql: """
                 INSERT INTO personal_devotionals (
                     id, title, subtitle, author, devotional_date, tags_json,
@@ -1961,8 +1990,11 @@ public actor LampLibrary {
             if !preserveLastModified {
                 try Self.recordPresence(db, .devotional, saved.id)
             }
+            let stored = condition == nil ? nil : try Row.fetchOne(
+                db, sql: "SELECT * FROM personal_devotionals WHERE id = ?", arguments: [saved.id]
+            ).map(makePersonalDevotional)
+            return (saved, stored)
         }
-        return saved
     }
 
     public func deletePersonalDevotional(id: String) throws {
@@ -1970,6 +2002,20 @@ public actor LampLibrary {
         try queue.write { db in
             try db.execute(sql: "DELETE FROM personal_devotionals WHERE id = ?", arguments: [id])
             try Self.recordDeletion(db, .devotional, id)
+        }
+    }
+
+    /// Deletes a writing only if the stored copy is still `current`, checked
+    /// and deleted in one transaction. Says whether it deleted.
+    func deletePersonalDevotional(id: String, onlyIf current: LampDevotional) throws -> Bool {
+        try openUserDatabase().write { db in
+            let stored = try Row.fetchOne(
+                db, sql: "SELECT * FROM personal_devotionals WHERE id = ?", arguments: [id]
+            ).map(makePersonalDevotional)
+            guard stored == current else { return false }
+            try db.execute(sql: "DELETE FROM personal_devotionals WHERE id = ?", arguments: [id])
+            try Self.recordDeletion(db, .devotional, id)
+            return true
         }
     }
 
