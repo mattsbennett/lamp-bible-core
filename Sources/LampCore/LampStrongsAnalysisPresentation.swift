@@ -1501,6 +1501,32 @@ public enum LampSeptuagintSection {
                 indirect: named(readersBible, or: indirect)
             )
         }
+
+        /// What the reading chosen marks, for the disclosure under the choice,
+        /// naming both texts as the picker does.
+        ///
+        /// Each by its name, never "your Bible" and "your translators": with
+        /// both installed both are the reader's Bibles, and the picker above
+        /// names them (owner, Nov 2026). Short, and only what tells the two
+        /// apart: which word each marks, and the one cost of each.
+        public static func note(
+            readsSeptuagintInEnglish direct: Bool,
+            septuagintInEnglish: String?,
+            readersBible: String?,
+            greek lemma: String?
+        ) -> String {
+            let names = titles(septuagintInEnglish: septuagintInEnglish, readersBible: readersBible)
+            let lemma = lemma.flatMap { $0.isEmpty ? nil : $0 } ?? "this Greek word"
+            if direct {
+                return "\(names.direct) translates the Septuagint itself, so the marked word "
+                    + "is the English for \(lemma). It numbers some verses differently "
+                    + "from \(names.indirect)."
+            }
+            return "\(names.indirect) translates the Hebrew, so the marked word is its English "
+                + "for the Hebrew word. Each verse listed is one where the Septuagint uses "
+                + "\(lemma), so it\u{2019}s close to that word\u{2019}s sense, but the wording is "
+                + "\(names.indirect)\u{2019}s, not the Greek\u{2019}s."
+        }
     }
 
     /// The Septuagint's own Greek under each verse of the section's lists.

@@ -201,6 +201,24 @@ import LampModuleKit
         #expect(unnamed.indirect == "Your Bible")
     }
 
+    /// The note under the choice names both texts, and never calls either
+    /// "your" Bible: with both installed, both are the reader's.
+    @Test func theEnglishNoteNamesBothTextsAndNeitherAsYours() {
+        let direct = LampSeptuagintSection.EnglishChoice.note(
+            readsSeptuagintInEnglish: true, septuagintInEnglish: "ABP", readersBible: "BSB", greek: "ἀγάπη"
+        )
+        #expect(direct == "ABP translates the Septuagint itself, so the marked word is the English "
+            + "for ἀγάπη. It numbers some verses differently from BSB.")
+        let indirect = LampSeptuagintSection.EnglishChoice.note(
+            readsSeptuagintInEnglish: false, septuagintInEnglish: "ABP", readersBible: "BSB", greek: "ἀγάπη"
+        )
+        #expect(indirect.hasPrefix("BSB translates the Hebrew"))
+        #expect(indirect.contains("uses ἀγάπη"))
+        for note in [direct, indirect] {
+            #expect(!note.lowercased().contains("your"), "\(note)")
+        }
+    }
+
     /// An interlinear's word-order numbers are told apart from numbers the
     /// verse means, by whether a letter follows them with no space.
     @Test func interlinearMarkersAreToldApartFromRealNumbers() {
