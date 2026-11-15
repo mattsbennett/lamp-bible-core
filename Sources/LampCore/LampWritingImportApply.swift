@@ -248,7 +248,7 @@ public extension LampWritingImport {
         var locals: [String: LampDevotional] = [:]
         var restored: Set<String> = []
         var media: [String: [LampWritingImportMedia]] = [:]
-        var links: [String: [String: [String]]] = [:]
+        var links: [String: [String: [Int: String]]] = [:]
         var decks: [String: LampWritingImportPlan.PlannedDeck] = [:]
         var deckIDs: [String: String] = [:]
         for candidate in candidates {
@@ -478,9 +478,16 @@ public extension LampWritingImport {
         for index in candidates.indices {
             guard let writing = candidates[index].writing else { continue }
             var unresolved: [String] = []
-            var made: [String: [String]] = [:]
+            var made: [String: [Int: String]] = [:]
+            var seen: [String: Int] = [:]
             let candidate = candidates[index]
             let content = rewritingLinks(in: writing.content) { isImage, _, target in
+                // A link the writer wrote to a writing counts in the places,
+                // so putting links back never takes one of theirs.
+                if let id = writingID(inLink: target) {
+                    seen[id, default: 0] += 1
+                    return nil
+                }
                 guard !isImage, isRelativeLink(target) else { return nil }
                 let file = target.split(separator: "#", maxSplits: 1).first.map(String.init) ?? target
                 guard ["md", "markdown"].contains((file as NSString).pathExtension.lowercased()) else {
@@ -494,7 +501,8 @@ public extension LampWritingImport {
                     if !unresolved.contains(target) { unresolved.append(target) }
                     return nil
                 }
-                made[id, default: []].append(target)
+                made[id, default: [:]][seen[id, default: 0]] = target
+                seen[id, default: 0] += 1
                 return LampApplicationLink.writingURL(id: id).absoluteString
             }
             candidates[index].links = made
@@ -508,23 +516,46 @@ public extension LampWritingImport {
         }
     }
 
+    /// A private copy of a file, made only if its bytes are still those the
+    /// plan named: what is checked is then what is stored, whatever happens
+    /// to the file meanwhile. The copy keeps the file's name, in a folder of
+    /// its own, for the caller to remove.
+    static func stage(_ url: URL, fingerprint expected: String) throws -> URL {
+        guard let bytes = try? Data(contentsOf: url), fingerprint(bytes) == expected else {
+            throw LampLibraryError.invalidPersonalContent(
+                "\(url.lastPathComponent) changed after the plan, or can no longer be read."
+            )
+        }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-writing-import-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appendingPathComponent(url.lastPathComponent)
+        try bytes.write(to: copy)
+        return copy
+    }
+
     /// The text with each link the import made to a writing not in
     /// `available` put back as the file wrote it, walking the links as the
     /// plan did, so code is left alone and each link gets its own target.
     static func restoringLinks(
-        in content: String, made: [String: [String]], available: Set<String>
+        in content: String, made: [String: [Int: String]], available: Set<String>
     ) -> String {
         let missing = made.filter { !available.contains($0.key) }
         guard !missing.isEmpty else { return content }
-        var remaining = missing
-        let byURL = Dictionary(uniqueKeysWithValues: missing.keys.map {
-            (LampApplicationLink.writingURL(id: $0).absoluteString, $0)
-        })
-        return rewritingLinks(in: content) { isImage, _, target in
-            guard !isImage, let id = byURL[target], let original = remaining[id]?.first else { return nil }
-            remaining[id]?.removeFirst()
-            return original
+        var seen: [String: Int] = [:]
+        return rewritingLinks(in: content) { _, _, target in
+            guard let id = writingID(inLink: target) else { return nil }
+            defer { seen[id, default: 0] += 1 }
+            return missing[id]?[seen[id, default: 0]]
         }
+    }
+
+    /// The writing a `lampbible://writing/<id>` link names.
+    static func writingID(inLink target: String) -> String? {
+        guard let url = URL(string: target), case .writing(let id)? = LampApplicationLink(url: url) else {
+            return nil
+        }
+        return id
     }
 
     /// Whether two stored copies of a writing are the same: every field a
@@ -620,12 +651,9 @@ public extension LampWritingImport {
                 var mediaJSON = local?.mediaJSON
                 let listed = Set((local?.mediaReferences ?? []).map(\.id))
                 for file in plan.media[item.id] ?? [] where !listed.contains(file.id) {
-                    guard let bytes = try? Data(contentsOf: file.url), fingerprint(bytes) == file.fingerprint else {
-                        throw LampLibraryError.invalidPersonalContent(
-                            "\(file.url.lastPathComponent) changed after the plan, or can no longer be read."
-                        )
-                    }
-                    let filename = try await store.storeImportedMedia(from: file.url, writingID: writing.id)
+                    let staged = try stage(file.url, fingerprint: file.fingerprint)
+                    defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+                    let filename = try await store.storeImportedMedia(from: staged, writingID: writing.id)
                     added.append(filename)
                     mediaJSON = try LampPortableDevotionalMedia.appending(
                         file.reference(storedAs: filename), to: mediaJSON
@@ -665,10 +693,13 @@ public extension LampWritingImport {
                   let made = plan.links[item.id], let stored = saved[entry.id],
                   made.keys.contains(where: { !arrived.contains($0) }) else { continue }
             do {
-                let restored = stored.withContent(restoringLinks(in: stored.content, made: made, available: arrived))
-                if let again = try await store.saveImportedWriting(restored, expecting: stored) {
+                let text = restoringLinks(in: stored.content, made: made, available: arrived)
+                guard text != stored.content else { continue }
+                if let again = try await store.saveImportedWriting(stored.withContent(text), expecting: stored) {
                     saved[entry.id] = again
                     undo.writings[index].written = try LampSyncConflictPayload.encode(again)
+                } else {
+                    problems.append("\(entry.title) still links to a writing that was not imported: it changed before the link could be put back.")
                 }
             } catch {
                 problems.append("\(entry.title) still links to a writing that was not imported: \(error.localizedDescription)")
@@ -691,17 +722,14 @@ public extension LampWritingImport {
                     refused.append(item)
                     continue
                 }
+                var staged: [String: URL] = [:]
+                defer { for url in staged.values { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) } }
                 do {
                     for (name, url) in planned.assets {
-                        guard let bytes = try? Data(contentsOf: url),
-                              fingerprint(bytes) == planned.fingerprints[name] else {
-                            throw LampLibraryError.invalidPersonalContent(
-                                "\(url.lastPathComponent) changed after the plan, or can no longer be read."
-                            )
-                        }
+                        staged[name] = try stage(url, fingerprint: planned.fingerprints[name] ?? "")
                     }
                     guard try await store.saveImportedDeck(
-                        planned.deck, assets: planned.assets, expecting: planned.local
+                        planned.deck, assets: staged, expecting: planned.local
                     ) else {
                         refused.append(item)
                         continue

@@ -610,7 +610,7 @@ struct LampWritingImportTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let folder = root.appendingPathComponent("talks")
         try write("# Watch\n\nBe ready.", to: "watch.md", in: folder)
-        try write(try deckJSON(id: "deck-watch", title: "Watch", asset: "Assets/cover.png"),
+        try write(try deckJSON(id: "talks/deck:watch", title: "Watch", asset: "Assets/cover.png"),
                   to: "watch.lampdeck", in: folder)
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("Assets"), withIntermediateDirectories: true)
         try onePixelPNG.write(to: folder.appendingPathComponent("Assets/cover.png"))
@@ -622,7 +622,7 @@ struct LampWritingImportTests {
         try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
 
         let store = LampPresentationDeckStore(rootURL: library.rootURL)
-        let deck = try #require(try store.deck(id: "deck-watch"))
+        let deck = try #require(try store.deck(id: "talks/deck:watch"))
         #expect(deck.source == LampPresentationSource(kind: .writing, id: plan.items[0].writingID))
         // Stored under a name of the deck's own, so another deck's
         // cover.png is never overwritten.
@@ -1016,6 +1016,44 @@ struct LampWritingImportTests {
         #expect(back.mediaJSON == nil, "no picture left listed with nothing to show")
         let oldest = try await library.undoWritingImport(created.undo.carrying(restored: newest.restored))
         #expect(oldest.undone == ["A"])
+        #expect(try await library.personalDevotionals().isEmpty)
+    }
+
+    @Test func puttingLinksBackKeepsTheWritersOwnLinksAndTheBlocks() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("study")
+        try write("# Two\n\nText.", to: "two.md", in: folder)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let twoID = try #require(try await library.planWritingImport(LampWritingImport.files(at: folder)).items.first?.writingID)
+        let text = "See [mine](lampbible://writing/\(twoID)) and [the file](two.md#part)."
+        try write("---\nid: one\ntitle: One\n---\n" + text, to: "one.md", in: folder,
+                  modified: Date(timeIntervalSince1970: 1_700_000_000))
+        // One is in Lamp already, with blocks from the phone.
+        try await library.savePersonalDevotional(LampDevotional(
+            id: "one", moduleID: "personal-devotionals", moduleName: "My Writing", title: "Two old",
+            content: text, contentJSON: #"[{"type":"paragraph"}]"#,
+            lastModified: Date(timeIntervalSince1970: 1_600_000_000)
+        ), preserveLastModified: true)
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        let one = try #require(plan.items.first { $0.writingID == "one" })
+        try await library.applyWritingImport(plan, selecting: [one.id])
+        let stored = try #require(try await library.personalDevotional(id: "one"))
+        #expect(stored.content == text, "the writer's own link is theirs, and Two's link goes back as written")
+        #expect(stored.contentJSON == #"[{"type":"paragraph"}]"#, "the text is the same, so the blocks stay")
+    }
+
+    @Test func aPictureChangedAfterThePlanIsRefused() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("talks")
+        try write("# Map\n\n![The journeys](map.png)", to: "map.md", in: folder)
+        try onePixelPNG.write(to: folder.appendingPathComponent("map.png"))
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        try (onePixelPNG + Data([0])).write(to: folder.appendingPathComponent("map.png"))
+        let result = try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+        #expect(result.failed.first?.reason.contains("changed after the plan") == true)
         #expect(try await library.personalDevotionals().isEmpty)
     }
 

@@ -124,10 +124,11 @@ public struct LampWritingImportPlan: Sendable {
     /// Each deck row's deck, ready to save.
     let decks: [String: PlannedDeck]
 
-    /// For each writing, the links the plan made to other writings, by the
-    /// writing linked to, with each link as the file wrote it, in order: put
-    /// back if that writing is not there when the import is applied.
-    let links: [String: [String: [String]]]
+    /// For each writing, the links the plan made to other writings: by the
+    /// writing linked to, each link's place among all the links to it, and
+    /// the link as the file wrote it. Put back if that writing is not there
+    /// when the import is applied.
+    let links: [String: [String: [Int: String]]]
 
     struct PlannedDeck: Sendable {
         let deck: LampPresentationDeck
@@ -403,9 +404,9 @@ public enum LampWritingImport {
         /// The same, named once the writing's id is settled.
         var media: [LampWritingImportMedia] = []
         var deck: LampWritingImportDeckFile?
-        /// Links made to other writings: the writing linked to, and each link
-        /// to it as written, in order.
-        var links: [String: [String]] = [:]
+        /// Links made to other writings: the writing linked to, each link's
+        /// place among all the links to it, and the link as written.
+        var links: [String: [Int: String]] = [:]
     }
 
     struct FoundMedia: Equatable, Sendable {
