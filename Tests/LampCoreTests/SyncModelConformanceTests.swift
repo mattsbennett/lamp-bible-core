@@ -108,7 +108,7 @@ struct SyncModelConformanceTests {
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
         "macMigrationStep", "writeOutcome", "passTrace",
-        "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourCopy",
+        "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourCopy", "fetchedForMerge",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
     ]
@@ -1353,6 +1353,13 @@ struct SyncModelConformanceTests {
                 present: f[0] == "true", same: f[1] == "true", ours: f[2] == "true", stillAsRead: f[3] == "true"
             )
             return "\(step)" == f[4]
+        }
+        try conform("fetchedForMerge") { f in
+            func digest(_ field: String) -> String? { field == "-" ? nil : "digest-\(field)" }
+            let found = LampSyncBundlePass.fetchedForMerge(
+                fetched: digest(f[0]), held: digest(f[1]), lastUpload: digest(f[2])
+            )
+            return "\(found)" == f[3]
         }
         try conform("formatFourMoveStep") { f in
             let outcome: LampSyncConditionalWrite.Outcome = switch f[1] {

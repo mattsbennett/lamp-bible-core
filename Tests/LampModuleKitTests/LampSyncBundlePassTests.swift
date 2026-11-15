@@ -371,6 +371,35 @@ struct LampSyncBundlePassTests {
         )
     }
 
+    /// A file changed here whose record lost its revision, as a rename of its
+    /// path loses it: the server's copy is fetched to compare, and found to be
+    /// what this client last uploaded, so nothing changed there and the copy
+    /// here goes up as it is, never merged with its own past. A workspace
+    /// document kept by its date would otherwise lose the edit.
+    @Test func aChangeHereOverWhatThisClientLastUploadedIsNotMerged() async throws {
+        let store = try seeded(path: "Workspaces/Writing/talk/Documents/outline.md", revision: "\"moved\"")
+        store.bodies["Workspaces/Writing/talk/Documents/outline.md"] = Data("outline".utf8)
+        let url = try makeFile("outline, edited offline")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let library = StubLibrary()
+        var records = LampSyncFileRecords()
+        // What this client uploaded before the rename, its revision left at the old path.
+        records.sources[source, default: .init()].files["Workspaces/Writing/talk/Documents/outline.md"] =
+            .init(uploadedDigest: LampSyncContentRevision.digest(for: Data("outline".utf8)))
+
+        // The Mac asks for an unlisted member's revision itself.
+        var held = gathered([local("Workspaces/Writing/talk/Documents/outline.md", url, "outline, edited offline")])
+        held.extraListing = ["Workspaces/Writing/talk/Documents/outline.md": "\"moved\""]
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(gathering: { held }, records: &records)
+
+        #expect(library.reconcileCalls == 0)
+        #expect(outcome.uploaded == ["Workspaces/Writing/talk/Documents/outline.md"])
+        #expect(store.bodies["Workspaces/Writing/talk/Documents/outline.md"] == Data("outline, edited offline".utf8))
+    }
+
     /// The first pass after a move has no records, so the plan calls every
     /// file changed on both sides. Each one is fetched — but a file whose
     /// bytes turn out to be the ones this client already holds is recorded

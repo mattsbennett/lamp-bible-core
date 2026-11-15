@@ -4024,6 +4024,29 @@ theorem aCopyPutBackIsAdoptedByTheMove (e : ManifestEntry) (c now : Nat) (h : en
 theorem anUnmovedEntryIsUntouched (e : ManifestEntry) (putBack : Bool) (copied : Option Nat) (now : Nat) :
     formatFourEntry e false putBack copied now = e := by simp [formatFourEntry]
 
+-- A file both sides were planned to have changed, once the server's copy is
+-- fetched: the copy held here, what this client last uploaded, or something
+-- else. Only the last is merged.
+inductive FetchedForMerge where
+  | inStep | ours | merge
+  deriving DecidableEq, Repr
+
+def fetchedForMerge (fetched : Option Nat) (held lastUpload : Option Nat) : FetchedForMerge :=
+  match fetched with
+  | none => .merge
+  | some f => if held = some f then .inStep else if lastUpload = some f then .ours else .merge
+
+-- The server's copy being what this client last uploaded means nothing changed
+-- there, so a change here is never merged with its own past.
+theorem aServerCopyThisClientUploadedIsNeverMergedOver (f : Nat) (held : Option Nat)
+    (h : held ≠ some f) : fetchedForMerge (some f) held (some f) = .ours := by
+  simp [fetchedForMerge, h]
+
+-- And a copy changed elsewhere is merged, never written over.
+theorem aCopyChangedElsewhereIsMerged (f : Nat) (held lastUpload : Option Nat)
+    (h1 : held ≠ some f) (h2 : lastUpload ≠ some f) : fetchedForMerge (some f) held lastUpload = .merge := by
+  simp [fetchedForMerge, h1, h2]
+
 inductive FormatFourCopy where
   | write | keep | replace
   deriving DecidableEq, Repr
@@ -5291,6 +5314,13 @@ def bundleCopies : List BundleCopy :=
           IO.println <| conformanceLine "formatFourCopy"
             [toString present, toString same, toString ours, toString stillAsRead,
              formatFourCopyName (formatFourCopy present same ours stillAsRead)]
+  for fetched in [none, some 1, some 2] do
+    for held in [none, some 1, some 3] do
+      for lastUpload in [none, some 1, some 2] do
+        IO.println <| conformanceLine "fetchedForMerge"
+          [optNat fetched, optNat held, optNat lastUpload,
+           match fetchedForMerge fetched held lastUpload with
+           | .inStep => "inStep" | .ours => "ours" | .merge => "merge"]
   for versions in [true, false] do
     for outcome in [WriteOutcome.written 4, .writtenUnconfirmed, .refused] do
       IO.println <| conformanceLine "formatFourMoveStep"

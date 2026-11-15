@@ -630,13 +630,18 @@ public struct LampSyncBundlePass {
         var scratch: [URL] = []
         defer { for url in scratch { try? FileManager.default.removeItem(at: url) } }
         var unchanged: [String] = []
+        var ahead: [String: URL] = [:]
         for path in merge.keys.sorted() {
             let url = LampSyncScratchFile.url()
             scratch.append(url)
             guard let file = try await store.read(path: path, into: url) else { continue }
-            if let held = local[path],
-               let fetched = try? LampSyncContentRevision.digest(forFileAt: file.url),
-               fetched == held.digest {
+            let fetched = try? LampSyncContentRevision.digest(forFileAt: file.url)
+            switch Self.fetchedForMerge(
+                fetched: fetched, held: local[path]?.digest,
+                lastUpload: records.record(path, in: source)?.uploadedDigest
+            ) {
+            case .inStep:
+                guard let held = local[path] else { continue }
                 records.recordUpload(
                     path, in: source, digest: held.digest, revision: file.revision
                 )
@@ -645,6 +650,14 @@ public struct LampSyncBundlePass {
                 )
                 unchanged.append(path)
                 continue
+            case .ours:
+                // The server holds what this client last uploaded, so only
+                // this side changed: its copy goes up as it is, under the
+                // revision the plan named, and nothing is merged.
+                if let held = local[path] { ahead[path] = held.url }
+                continue
+            case .merge:
+                break
             }
             downloaded[path] = file.url
             records.recordInstall(
@@ -653,10 +666,33 @@ public struct LampSyncBundlePass {
             )
         }
         outcome.alreadyInStep.append(contentsOf: unchanged)
-        guard !downloaded.isEmpty else { return [:] }
+        guard !downloaded.isEmpty else { return ahead }
         let republish = try await library.reconcile(downloaded)
         outcome.reconciled = downloaded.keys.sorted()
-        return republish
+        return republish.merging(ahead) { merged, _ in merged }
+    }
+
+    enum FetchedForMerge: Equatable {
+        /// The server's copy is the one held here.
+        case inStep
+        /// The server's copy is what this client last uploaded: it has not
+        /// changed since, and the copy here is ahead of it.
+        case ours
+        case merge
+    }
+
+    /// What a file both sides were planned to have changed turns out to be,
+    /// once the server's copy is fetched. A copy that is what this client
+    /// last uploaded was not changed elsewhere, whatever its revision says:
+    /// a revision this client recorded can be lost, as when a path is
+    /// renamed, and then a change here would otherwise be merged with its
+    /// own past, which for a file kept by its date can lose it.
+    /// (`Verification/SyncMerge.lean`: `fetchedForMerge`.)
+    static func fetchedForMerge(fetched: String?, held: String?, lastUpload: String?) -> FetchedForMerge {
+        guard let fetched else { return .merge }
+        if fetched == held { return .inStep }
+        if fetched == lastUpload { return .ours }
+        return .merge
     }
 }
 

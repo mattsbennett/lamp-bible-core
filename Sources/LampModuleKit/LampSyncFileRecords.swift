@@ -223,7 +223,28 @@ public struct LampSyncFileRecords: Codable, Equatable, Sendable {
               let records = try? JSONDecoder().decode(LampSyncFileRecords.self, from: data),
               records.formatVersion <= currentFormatVersion
         else { return LampSyncFileRecords() }
-        return records
+        return records.atFormatFourPaths()
+    }
+
+    /// These records with any kept at bundle format 3's writing paths carried
+    /// to format 4's. What this client last uploaded is the same bytes at the
+    /// new path, so its digest goes with it, and a change made here since is
+    /// still told from one made elsewhere (`fetchedForMerge`). Its revisions
+    /// were the old path's, and stay behind. A record already at the new
+    /// path is kept as it is.
+    func atFormatFourPaths() -> Self {
+        var moved = self
+        for (source, records) in sources {
+            for (path, record) in records.files {
+                guard let target = LampSyncFolderLayout.formatFourPath(ofFormatThree: path), target != path
+                else { continue }
+                moved.sources[source]?.files[path] = nil
+                if moved.sources[source]?.files[target] == nil {
+                    moved.sources[source]?.files[target] = Record(uploadedDigest: record.uploadedDigest)
+                }
+            }
+        }
+        return moved
     }
 
     public func save(

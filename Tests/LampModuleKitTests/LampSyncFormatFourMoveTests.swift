@@ -470,6 +470,22 @@ struct LampSyncFormatFourMoveTests {
         #expect(store.versions[LampSyncSettingsStore.path]?.isEmpty == true)
     }
 
+    /// A client's records at format 3's writing paths go to format 4's with
+    /// the digest of what it last uploaded, and without the old revisions.
+    @Test func recordsFollowTheRenameWithTheirLastUpload() {
+        var records = LampSyncFileRecords()
+        records.sources["webdav:x", default: .init()].files = [
+            "Workspaces/Devotionals/talk/Documents/a.md": .init(uploadedDigest: "d1", installedRevision: "\"r1\""),
+            "Devotionals/sermons.lamp": .init(uploadedDigest: "d2", installedRevision: "\"r2\"", pendingRevision: "\"p\""),
+            "Translations/kjv.lamp": .init(uploadedDigest: "d3", installedRevision: "\"r3\""),
+        ]
+        let moved = records.atFormatFourPaths().sources["webdav:x"]!.files
+        #expect(moved["Workspaces/Writing/talk/Documents/a.md"] == .init(uploadedDigest: "d1"))
+        #expect(moved["Writing/sermons.lamp"] == .init(uploadedDigest: "d2"))
+        #expect(moved["Translations/kjv.lamp"] == .init(uploadedDigest: "d3", installedRevision: "\"r3\""))
+        #expect(moved["Devotionals/sermons.lamp"] == nil)
+    }
+
     // MARK: - Fixtures
 
     /// A manifest as a format-3 client wrote it, at paths this version's
