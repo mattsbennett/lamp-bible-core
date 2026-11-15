@@ -252,15 +252,50 @@ public enum LampSyncFolderLayout {
     /// The format-3 paths among `paths` that would land on the same format-4
     /// path, sorted. Only the writing collection and an installed writing
     /// module with ID `writing` can: `Devotionals/devotionals.lamp` and
-    /// `Devotionals/writing.lamp`, or their media folders. Empty for any
-    /// library where the move is a renaming.
+    /// `Devotionals/writing.lamp`, or their media folders.
+    ///
+    /// With the collection there, a module of any kind called `writing`
+    /// collides too: the phone keeps one module per ID, whatever its kind, so
+    /// its collection could not take the name. Empty for any library where
+    /// the move is a renaming.
     public static func formatFourCollision(in paths: some Sequence<String>) -> [String] {
+        let paths = Set(paths)
         var byTarget: [String: [String]] = [:]
-        for path in Set(paths) {
+        for path in paths {
             guard let target = formatFourPath(ofFormatThree: path) else { continue }
             byTarget[target, default: []].append(path)
         }
-        return byTarget.values.filter { $0.count > 1 }.flatMap { $0 }.sorted()
+        var colliding = Set(byTarget.values.filter { $0.count > 1 }.flatMap { $0 })
+        let collection = "\(FormatThree.writingFolder)/\(FormatThree.writingCollectionID).\(moduleExtension)"
+        if paths.contains(collection) {
+            let calledWriting = paths.filter { path in
+                guard path != collection, let target = formatFourPath(ofFormatThree: path),
+                      case .module? = kind(of: target) else { return false }
+                return remoteModuleID(of: target) == LampSyncLocalDeletion.writingCollectionID
+            }
+            if !calledWriting.isEmpty { colliding.formUnion(calledWriting + [collection]) }
+        }
+        return colliding.sorted()
+    }
+
+    /// The format-3 path a format-4 writing path was moved from, the inverse
+    /// of `formatFourPath(ofFormatThree:)`; the path itself for any other in
+    /// format 4's layout, and nil for one outside it.
+    public static func formatThreePath(ofFormatFour path: String) -> String? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard kind(of: path) != nil else { return nil }
+        func original(_ id: String) -> String {
+            id == LampSyncLocalDeletion.writingCollectionID ? FormatThree.writingCollectionID : id
+        }
+        if components[0] == LampSyncContentKind.devotionals.folder,
+           let id = LampSyncModuleFiles.moduleID(from: components[1]) {
+            return "\(FormatThree.writingFolder)/\(original(id)).\(moduleExtension)"
+        }
+        if components[0] == devotionalMediaDirectory {
+            return ([FormatThree.writingMediaDirectory, original(components[1])] + components[2...])
+                .joined(separator: "/")
+        }
+        return path
     }
 
     private static func isModuleFilename(_ name: String) -> Bool {

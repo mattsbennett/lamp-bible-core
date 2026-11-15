@@ -730,27 +730,38 @@ A format-3 client finds format 4 newer and stops, and says to update. The
 first format-4 client to read a format-3 bundle moves the library, inside
 `LampSyncSettingsStore.read`, so every caller sees format 4:
 
-1. It copies each member the rename moves to its new path, written only where
-   absent, and any module in `Devotionals/` that no manifest names yet. The
-   collection is rewritten to say `writing` in `module_format`, `module_meta`
-   and each entry, because the phone checks that a module's file name and the
-   ID inside agree.
+1. It copies each member the rename moves to its new path, with every file at
+   format 3's writing paths the manifest does not account for: a module or a
+   writing's media no entry names, found by listing `Devotionals/` and walking
+   `DevotionalMedia/`, and a copy put back after a deletion. A copy already at
+   the new path is kept only if it holds what the old path holds now, and
+   replaced otherwise, since it can be an earlier attempt's made before a
+   format-3 device wrote again (`formatFourCopy`). The collection is rewritten
+   to say `writing` in `module_format`, `module_meta` and each entry, because
+   the phone checks that a module's file name and the ID inside agree. A
+   format-3 iCloud version of the bundle has its files copied too.
 2. It writes the bundle as format 4 under the revision it read, its manifest
-   re-keyed: a renamed entry keeps its times, a copy is recorded at the
-   revision it was written at, and a tombstone loses its revisions, which
-   deletes whatever copy turns up (`formatFourEntry`).
+   re-keyed: a renamed entry keeps its times, a member is recorded at the
+   revision of its copy, and a tombstone keeps the revisions it was of, so a
+   copy put back after it is adopted as it would have been at the old path
+   (`formatFourEntry`). Where a member and a tombstone meet, the member is
+   kept (`formatFourMeet`).
 3. If another device wrote the bundle first, it reads again, and moves again
    if that is still format 3 (`formatFourMoveStep`). Where iCloud holds
    versions of the bundle no write lands, so the moved bundle is returned for
-   the next `update` to write; a format-3 version is merged as format 4.
+   the next `update` to write.
 
-Nothing old is deleted. A file a format-3 device uploaded after the copies, and
-media no device copied, stay at the old paths; the device that wrote them
-holds them and publishes them by value once updated, since a path it has no
-record of is compared by value (`anUnknownFileIsAdopted`). Each device's own
-records were kept by path, so its records of the old paths are simply never
-asked for again.
+Nothing old is deleted. A member the move found no file for, as iCloud can
+deliver a bundle before its files, is copied once its file reaches the old
+path: every format-4 read looks for members with no revision whose file is
+missing at the new path and present at the old. A file a format-3 device
+uploaded after the move, beyond those, stays at the old path; the device that
+wrote it holds it and publishes it once updated, since a path it has no record
+of is compared by value (`anUnknownFileIsAdopted`). Each device's own records
+were kept by path, so its records of the old paths are never asked for again.
 
-An installed writing module whose ID is already `writing` would land on the
-collection's path. The move stops and says so rather than merge the two
-(`theRenameIsOneToOneWithoutAModuleCalledWriting`).
+A module whose ID is already `writing`, in any folder, collides with the
+collection: the phone keeps one module per ID, whatever its kind. The move
+stops and says so rather than merge the two
+(`theRenameIsOneToOneWithoutAModuleCalledWriting`); a deleted one does not
+stop it.

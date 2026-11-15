@@ -108,8 +108,12 @@ writing moves (`everythingElseStays`), each path keeps its kind
 (`theRenameKeepsTheKind`), and no two paths land on one unless a module is
 already called `writing` (`theRenameIsOneToOneWithoutAModuleCalledWriting`),
 which stops the move. A moved manifest entry keeps its membership
-(`theMoveKeepsMembership`), and a moved tombstone deletes whatever copy turns
-up (`aMovedTombstoneDeletesAnyCopy`). The move reads again when another device
+(`theMoveKeepsMembership`), a moved tombstone deletes exactly what it deleted,
+so a copy put back after it is adopted at the new path as at the old
+(`aMovedTombstoneDeletesWhatItDeleted`), and where a member and a tombstone
+meet the member is kept (`aDeletedModuleNeverDeletesTheCollection`). A copy
+already at a new path is kept only if it is what the old path holds now
+(`theMoveNeverKeepsAStaleCopy`). The move reads again when another device
 wrote first (`aMoveRefusedIsReadAgain`), leaves a bundle with iCloud versions
 to the next update (`aMoveBesideVersionsIsLeftForTheUpdate`), which writes a
 format-3 copy whatever its change did (`aFormatThreeCopyIsAlwaysWritten`).

@@ -491,7 +491,9 @@
         "thesameTimeAtAnotherRevisionIsRecorded",
         "formatFourEntry",
         "theMoveKeepsMembership",
-        "aMovedTombstoneDeletesAnyCopy"
+        "aMovedTombstoneDeletesWhatItDeleted",
+        "formatFourMeet",
+        "aDeletedModuleNeverDeletesTheCollection"
       ],
       "conformance": [
         "manifestMerge",
@@ -499,7 +501,8 @@
         "adoptFile",
         "pruneTombstone",
         "recordsAdeletion",
-        "formatFourEntry"
+        "formatFourEntry",
+        "formatFourMeet"
       ],
       "boundary": "Revisions compare as tokens here and as numbers in the model; the tables use single-digit revisions, where the two orders agree. Coding, path validation and sorting are Swift's. `recordsAdeletion` separates a deletion the manifest took from one a pass merely asked for: a client whose deletions come from a permanent ledger rather than a consumable queue asks for the same tombstones on every pass, so anything done because one was recorded must read this and not the plan's list."
     },
@@ -753,15 +756,21 @@
         "everythingElseStays",
         "formatFourEntry",
         "theMoveKeepsMembership",
-        "aMovedTombstoneDeletesAnyCopy",
         "anUnmovedEntryIsUntouched",
-        "aFormatThreeClientStopsAtFormatFour"
+        "aFormatThreeClientStopsAtFormatFour",
+        "aMovedTombstoneDeletesWhatItDeleted",
+        "formatFourMeet",
+        "aDeletedModuleNeverDeletesTheCollection",
+        "formatFourCopy",
+        "theMoveNeverKeepsAStaleCopy"
       ],
       "conformance": [
         "formatFourPath",
-        "formatFourEntry"
+        "formatFourEntry",
+        "formatFourMeet",
+        "formatFourCopy"
       ],
-      "boundary": "Which path each format-3 path becomes, and what its manifest entry becomes, are held by tables. Copying the files, rewriting the collection's module ID inside its SQLite, and listing format 3's writing folder for files no manifest names are Swift's, held by LampSyncFormatFourMoveTests."
+      "boundary": "Which path each format-3 path becomes, what its manifest entry becomes, which entry wins where two meet, and whether a copy already at the new path is kept or replaced are held by tables. Reading and writing the files, comparing their digests, rewriting the collection's module ID inside its SQLite, walking format 3's writing folders for files no manifest accounts for, and copying a member that arrives late are Swift's, held by LampSyncFormatFourMoveTests."
     }
   },
   "platformSources": {

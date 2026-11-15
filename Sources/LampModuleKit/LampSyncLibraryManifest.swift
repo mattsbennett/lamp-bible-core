@@ -227,16 +227,22 @@ public struct LampSyncLibraryManifest: Codable, Equatable, Sendable {
     /// (`LampSyncFolderLayout.formatFourPath(ofFormatThree:)`).
     ///
     /// A renamed entry keeps its times, so what was a member is one and what
-    /// was deleted stays deleted. Its revisions were the old path's, and mean
-    /// nothing at the new one: a copy the move wrote is recorded at the
-    /// revision `copied` gives for its old path, and anything else at none,
-    /// which reads as "compare by value" (`anUnknownFileIsAdopted`) and, for
-    /// a tombstone, as a deletion of whatever copy turns up. Paths the move
-    /// leaves alone keep everything. An entry format 3's layout didn't hold
-    /// is kept as it is, as any manifest keeps a later version's paths,
-    /// unless format 4's layout holds it, which no format-3 client could
-    /// have meant. Call only once `formatFourCollision(in:)` is empty: two
-    /// entries with one target would be merged. (`formatFourEntry`.)
+    /// was deleted stays deleted. A member's revision was the old path's copy,
+    /// so it is recorded at the revision of the copy the move made, `copied`
+    /// for its old path, or at none, which reads as "compare by value"
+    /// (`anUnknownFileIsAdopted`). A tombstone keeps the revisions it was
+    /// of: no copy it deleted is ever carried, and one the move carried was
+    /// put back after it, which a pass adopts as it would have at the old
+    /// path (`adoptFile`). Paths the move leaves alone keep everything. An
+    /// entry format 3's layout didn't hold is kept as it is, as any manifest
+    /// keeps a later version's paths, unless format 4's layout holds it,
+    /// which no format-3 client could have meant.
+    ///
+    /// Two entries land on one path only where a module called `writing` met
+    /// the collection, and the move stops for two members
+    /// (`formatFourCollision(in:)`). A member and a tombstone keep the member:
+    /// a deleted module called `writing` must not delete the collection.
+    /// (`formatFourEntry`.)
     public func formatFour(copied: [String: String] = [:]) -> Self {
         var moved = Self()
         for entry in entries.values {
@@ -249,9 +255,18 @@ public struct LampSyncLibraryManifest: Codable, Equatable, Sendable {
                 renamed = Entry(path: target)
                 renamed.presentSince = entry.presentSince
                 renamed.deletedAt = entry.deletedAt
-                renamed.revision = entry.isMember ? copied[entry.path] : nil
+                renamed.revision = entry.isMember ? copied[entry.path] : entry.revision
+                renamed.deletedRevision = entry.deletedRevision
             }
-            moved.entries[target] = moved.entries[target].map { $0.merged(with: renamed) } ?? renamed
+            if let there = moved.entries[target] {
+                switch (there.isMember, renamed.isMember) {
+                case (true, false): continue
+                case (false, true): moved.entries[target] = renamed
+                default: moved.entries[target] = there.merged(with: renamed)
+                }
+            } else {
+                moved.entries[target] = renamed
+            }
         }
         return moved
     }

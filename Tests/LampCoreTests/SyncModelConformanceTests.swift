@@ -108,7 +108,7 @@ struct SyncModelConformanceTests {
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
         "macMigrationStep", "writeOutcome", "passTrace",
-        "formatFourPath", "formatFourEntry", "formatFourMoveStep",
+        "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourMeet", "formatFourCopy",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
     ]
@@ -1343,6 +1343,18 @@ struct SyncModelConformanceTests {
             let moved = manifest(holding: f[0], at: path)
                 .formatFour(copied: f[2] == "-" ? [:] : [path: quoted(f[2])])
             return entryCode(moved.entry(at: target)) == f[3]
+        }
+        try conform("formatFourMeet") { f in
+            var manifest = LampSyncLibraryManifest()
+            let collection = "Devotionals/devotionals.lamp", calledWriting = "Devotionals/writing.lamp"
+            if f[0] != "-:-:-:-" { manifest.entries[collection] = manifestEntry(f[0], at: collection) }
+            if f[1] != "-:-:-:-" { manifest.entries[calledWriting] = manifestEntry(f[1], at: calledWriting) }
+            let met = manifest.formatFour().entry(at: "Writing/writing.lamp")
+            return entryCode(met) == f[2] || (met == nil && f[2] == "-:-:-:-")
+        }
+        try conform("formatFourCopy") { f in
+            let step = LampSyncFormatFourMove.formatFourCopy(present: f[0] == "true", same: f[1] == "true")
+            return "\(step)" == f[2]
         }
         try conform("formatFourMoveStep") { f in
             let outcome: LampSyncConditionalWrite.Outcome = switch f[1] {

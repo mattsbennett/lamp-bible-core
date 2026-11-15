@@ -3959,22 +3959,54 @@ theorem theRenameIsOneToOneWithoutAModuleCalledWriting (a b : FormatThreePath)
 theorem aModuleCalledWritingMeetsTheCollection :
     formatFourPath (.writingModule .calledWriting) = formatFourPath (.writingModule .collection) := rfl
 
--- One manifest entry moved. A renamed entry keeps its times; its revisions
--- were the old path's, so a member keeps only the revision of its copy, and a
--- tombstone none.
+-- One manifest entry moved. A renamed entry keeps its times. A member's
+-- revision was its old path's copy, so it takes the revision of the copy the
+-- move made; a tombstone keeps the revisions it was of, since no copy it
+-- deleted is ever carried, and one the move carried was put back after it.
 def formatFourEntry (e : ManifestEntry) (renamed : Bool) (copied : Option Nat) : ManifestEntry :=
-  if renamed then ⟨e.presentSince, if entryIsMember e then copied else none, e.deletedAt, none⟩ else e
+  if renamed then
+    ⟨e.presentSince, if entryIsMember e then copied else e.revision, e.deletedAt, e.deletedRevision⟩
+  else e
 
 -- What was a member still is, and what was deleted is still deleted.
 theorem theMoveKeepsMembership (e : ManifestEntry) (renamed : Bool) (copied : Option Nat) :
     entryIsMember (formatFourEntry e renamed copied) = entryIsMember e := by
   unfold formatFourEntry; split <;> simp [entryIsMember]
 
--- A moved tombstone deletes whatever copy turns up at the new path: nothing
--- of the old path's is left to spare one.
-theorem aMovedTombstoneDeletesAnyCopy (e : ManifestEntry) (copied : Option Nat) (r : Nat)
-    (h : entryIsMember e = false) : deletesRevision (formatFourEntry e true copied) r = true := by
+-- A moved tombstone deletes exactly the copies it deleted before, so a copy
+-- put back after it is adopted at the new path as it was at the old one.
+theorem aMovedTombstoneDeletesWhatItDeleted (e : ManifestEntry) (copied : Option Nat) (r : Nat)
+    (h : entryIsMember e = false) :
+    deletesRevision (formatFourEntry e true copied) r = deletesRevision e r := by
   simp [formatFourEntry, h, deletesRevision]
+
+-- Two entries meet at one path only where a module called `writing` met the
+-- collection. Two members stop the move; a member and a tombstone keep the
+-- member, so a deleted module called `writing` never deletes the collection.
+def formatFourMeet (a b : ManifestEntry) : ManifestEntry :=
+  match entryIsMember a, entryIsMember b with
+  | true, false => a
+  | false, true => b
+  | _, _ => mergeManifestEntry a b
+
+theorem aDeletedModuleNeverDeletesTheCollection (a b : ManifestEntry)
+    (ha : entryIsMember a = true) (hb : entryIsMember b = false) :
+    entryIsMember (formatFourMeet a b) = true ∧ entryIsMember (formatFourMeet b a) = true := by
+  simp [formatFourMeet, ha, hb]
+
+inductive FormatFourCopy where
+  | write | keep | replace
+  deriving DecidableEq, Repr
+
+-- At a file's new path: write where nothing is, keep what is there when it is
+-- what the move would write, replace it otherwise. A copy there can be an
+-- earlier attempt's, made before a format-3 device wrote the old path again.
+def formatFourCopy (present same : Bool) : FormatFourCopy :=
+  if !present then .write else if same then .keep else .replace
+
+-- The move never keeps a copy that differs from what the old path holds now.
+theorem theMoveNeverKeepsAStaleCopy (present : Bool) : formatFourCopy present false ≠ .keep := by
+  cases present <;> simp [formatFourCopy]
 
 -- A path the move leaves alone keeps everything.
 theorem anUnmovedEntryIsUntouched (e : ManifestEntry) (copied : Option Nat) :
@@ -4956,6 +4988,9 @@ def formatFourPathName : FormatFourPath → String
   | .writingMedia id f => "media:" ++ formatFourIDName id ++ ":" ++ toString f
   | .elsewhere n => "elsewhere:" ++ toString n
 
+def formatFourCopyName : FormatFourCopy → String
+  | .write => "write" | .keep => "keep" | .replace => "replace"
+
 def formatFourMoveStepName : FormatFourMoveStep → String
   | .moved r => "moved:" ++ toString r | .leftForTheUpdate => "leftForTheUpdate"
   | .readAgain => "readAgain" | .unconfirmed => "unconfirmed"
@@ -5207,6 +5242,14 @@ def bundleCopies : List BundleCopy :=
       for copied in [none, some 8] do
         IO.println <| conformanceLine "formatFourEntry"
           [entryCode e, toString renamed, optNat copied, entryCode (formatFourEntry e renamed copied)]
+  for a in manifestEntries do
+    for b in manifestEntries do
+      IO.println <| conformanceLine "formatFourMeet"
+        [entryCode a, entryCode b, entryCode (formatFourMeet (formatFourEntry a true none) (formatFourEntry b true none))]
+  for present in [true, false] do
+    for same in [true, false] do
+      IO.println <| conformanceLine "formatFourCopy"
+        [toString present, toString same, formatFourCopyName (formatFourCopy present same)]
   for versions in [true, false] do
     for outcome in [WriteOutcome.written 4, .writtenUnconfirmed, .refused] do
       IO.println <| conformanceLine "formatFourMoveStep"

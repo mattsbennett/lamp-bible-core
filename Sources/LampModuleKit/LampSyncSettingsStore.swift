@@ -39,10 +39,18 @@ public enum LampSyncSettingsStore {
         public let bundle: LampSyncSettingsBundle
         /// Names this version's bytes, for the store to resolve exactly it.
         public let revision: String
+        /// Read as format 3, its manifest at format 3's paths. Only inside
+        /// `read`, which moves it before returning it.
+        let isFormatThree: Bool
 
         public init(bundle: LampSyncSettingsBundle, revision: String) {
+            self.init(bundle: bundle, revision: revision, isFormatThree: false)
+        }
+
+        init(bundle: LampSyncSettingsBundle, revision: String, isFormatThree: Bool) {
             self.bundle = bundle
             self.revision = revision
+            self.isFormatThree = isFormatThree
         }
     }
 
@@ -191,7 +199,11 @@ public enum LampSyncSettingsStore {
             if snapshot == nil, try await holdsEarlierLibrary(store) {
                 throw StoreError.notMigrated(revision: nil)
             }
-            guard let found = snapshot, found.isFormatThree else { return snapshot }
+            guard let found = snapshot else { return nil }
+            guard found.isFormatThree || found.versions.contains(where: \.isFormatThree) else {
+                try await LampSyncFormatFourMove.copyLateArrivals(found.bundle.manifest, in: store, patience: patience)
+                return found
+            }
             if let moved = try await moveToFormatFour(found, in: store, patience: patience) {
                 return moved
             }
@@ -210,22 +222,33 @@ public enum LampSyncSettingsStore {
         in store: any LampSyncRemoteStore,
         patience: LampSyncConditionalWrite.Patience
     ) async throws -> Snapshot? {
-        let copied = try await LampSyncFormatFourMove.copy(
-            formatThree.bundle.manifest, in: store, patience: patience
-        )
-        let moved = LampSyncFormatFourMove.bundle(formatThree.bundle, copied: copied)
-        let outcome: LampSyncConditionalWrite.Outcome? = formatThree.versions.isEmpty
+        // The current copy and any iCloud version still at format 3, every
+        // one of whose files is copied: a version's files are as much the
+        // library's as the current copy's, and are merged in with it.
+        let threes = (formatThree.isFormatThree ? [formatThree.bundle] : [])
+            + formatThree.versions.filter(\.isFormatThree).map(\.bundle)
+        let manifest = threes.map(\.manifest).reduce(LampSyncLibraryManifest()) { $0.merged(with: $1) }
+        let copied = try await LampSyncFormatFourMove.copy(manifest, in: store, patience: patience)
+        let moved = formatThree.isFormatThree
+            ? LampSyncFormatFourMove.bundle(formatThree.bundle, copied: copied)
+            : formatThree.bundle
+        let versions = formatThree.versions.map { version in
+            version.isFormatThree
+                ? Version(bundle: LampSyncFormatFourMove.bundle(version.bundle, copied: copied), revision: version.revision)
+                : version
+        }
+        let outcome: LampSyncConditionalWrite.Outcome? = versions.isEmpty
             ? try await LampSyncConditionalWrite.write(
                 moved.encoded(), to: path, in: store,
                 condition: .ifRevision(formatThree.revision), patience: patience
             )
             : nil
-        switch formatFourMoveStep(versions: !formatThree.versions.isEmpty, outcome: outcome) {
+        switch formatFourMoveStep(versions: !versions.isEmpty, outcome: outcome) {
         case .moved(let revision): return Snapshot(bundle: moved, revision: revision)
         case .leftForTheUpdate:
             return Snapshot(
                 bundle: moved, revision: formatThree.revision,
-                versions: formatThree.versions, isFormatThree: true
+                versions: versions, isFormatThree: formatThree.isFormatThree
             )
         case .readAgain: return nil
         case .unconfirmed: throw LampSyncConditionalWrite.Unconfirmed(path: path)
@@ -561,13 +584,9 @@ public enum LampSyncSettingsStore {
             guard contents == .formatThreeBundle else {
                 return Version(bundle: try LampSyncSettingsBundle.decode(data), revision: revision)
             }
-            // Its files are where the copy it stands beside put them, or
-            // still on the device that wrote it.
+            // As it stands: `read` copies its files and moves it.
             return Version(
-                bundle: LampSyncFormatFourMove.bundle(
-                    try LampSyncSettingsBundle.decodeFormatThree(data), copied: [:]
-                ),
-                revision: revision
+                bundle: try LampSyncSettingsBundle.decodeFormatThree(data), revision: revision, isFormatThree: true
             )
         } catch {
             throw StoreError.unreadableVersion(revision)
