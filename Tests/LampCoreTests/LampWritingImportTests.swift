@@ -366,8 +366,11 @@ struct LampWritingImportTests {
 
         try write("# Talk\n\nOne, revised.", to: "exhortations/talk.md", in: studies,
                   modified: Date().addingTimeInterval(60))
+        // Found by its path, so offered for review rather than ticked: a path
+        // alone does not prove it is the same file.
         let alone = try await library.planWritingImport(LampWritingImport.files(at: talk))
-        #expect(alone.items.map(\.action) == [.update])
+        #expect(alone.items.map(\.action) == [.conflict])
+        #expect(!alone.items[0].importsByDefault)
         #expect(alone.items[0].writingID == whole.items[0].writingID)
         #expect(alone.items[0].normalized.contains { $0.contains("bible-studies/exhortations/talk.md") })
         let sub = try await library.planWritingImport(
@@ -452,9 +455,74 @@ struct LampWritingImportTests {
         try await library.deletePersonalDevotional(id: plan.items[0].writingID)
 
         let before = Date().addingTimeInterval(-1)
+        let deleted = try #require(try await library.personalDevotionalDeletedAt(id: plan.items[0].writingID))
         let again = try await library.planWritingImport(LampWritingImport.files(at: file))
         try await library.applyWritingImport(again, selecting: [again.items[0].id])
-        #expect(try #require(try await library.personalDevotionals().first?.lastModified) > before)
+        let stamp = try #require(try await library.personalDevotionals().first?.lastModified)
+        #expect(stamp > before)
+        #expect(Int(stamp.timeIntervalSince1970) > deleted, "dated after the deletion it undoes")
+    }
+
+    @Test func aPathMatchIsNeverTakenWhenItCouldBeMoreThanOneWritingOrAnotherFilesOwn() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        // Two earlier imports, each of which a file at a/b/talk.md could be.
+        let earlier = try await library.planWritingImport([
+            LampWritingImportFile(path: "b/talk.md", markdown: "# Short\n\nOne."),
+            LampWritingImportFile(path: "x/a/b/talk.md", markdown: "# Long\n\nTwo."),
+        ])
+        try await library.applyWritingImport(earlier, selecting: Set(earlier.items.map(\.id)))
+        let ambiguous = try await library.planWritingImport([LampWritingImportFile(
+            path: "a/b/talk.md", markdown: "# Talk\n\nThree.", ancestry: ["x"]
+        )])
+        #expect(ambiguous.items.map(\.action) == [.create])
+        #expect(ambiguous.items[0].warnings.contains { $0.contains("More than one writing") })
+
+        // A copy of the same path, rejected, does not stop the first finding
+        // its writing.
+        let twice = try await library.planWritingImport([
+            LampWritingImportFile(path: "y/b/talk.md", markdown: "# Short\n\nOne, again."),
+            LampWritingImportFile(path: "y/b/talk.md", markdown: "# Short\n\nOne, again."),
+        ])
+        #expect(twice.items.map(\.action) == [.conflict, .rejected])
+        #expect(twice.items[0].writingID == earlier.items[0].writingID)
+    }
+
+    @Test func aRowKeyNeverTakesAnotherFilesPath() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport([
+            LampWritingImportFile(path: "w/talk.md", markdown: "# One\n\nOne."),
+            LampWritingImportFile(path: "w/talk.md", markdown: "# Two\n\nTwo."),
+            LampWritingImportFile(path: "w/talk.md#copy2", markdown: "# Three\n\nThree."),
+        ])
+        #expect(Set(plan.items.map(\.id)).count == 3)
+        #expect(plan.items.map(\.action) == [.create, .rejected, .create])
+        #expect(plan.items[2].id == "w/talk.md#copy2")
+    }
+
+    @Test func aStructuredBodyChangedInTheSameSecondIsStillCaught() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        func save(_ blocks: String) async throws {
+            try await library.savePersonalDevotional(LampDevotional(
+                id: "watch", moduleID: "personal-devotionals", moduleName: "My Writing",
+                title: "Watch", content: "In Lamp.", contentJSON: blocks, lastModified: moment
+            ), preserveLastModified: true)
+        }
+        try await save(#"[{"type":"paragraph"}]"#)
+        let plan = try await library.planWritingImport([LampWritingImportFile(
+            path: "talks/watch.md", markdown: "---\nid: watch\ntitle: Watch\n---\nFrom the file.",
+            modified: moment.addingTimeInterval(60)
+        )])
+        try await save(#"[{"type":"heading"}]"#)
+        let result = try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+        #expect(result.imported.isEmpty)
+        #expect(try await library.personalDevotionals().first?.content == "In Lamp.")
     }
 
     @Test func lampsExportDetailsInsideACodeBlockDoNotMakeAnExport() {

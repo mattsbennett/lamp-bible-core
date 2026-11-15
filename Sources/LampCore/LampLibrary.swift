@@ -2139,6 +2139,15 @@ public actor LampLibrary {
         }
     }
 
+    /// When this device last deleted the writing, in seconds, if it has.
+    func personalDevotionalDeletedAt(id: String) throws -> Int? {
+        try openUserDatabase().read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT deleted_at FROM personal_sync_ledger WHERE kind = ? AND item_key = ?
+                """, arguments: [LampPersonalItemKind.devotional.rawValue, id])
+        }.map { ($0 + 999) / 1_000 }
+    }
+
     /// Records writings the person chose to import as present now, so sync
     /// keeps them, even ones deleted before.
     func recordPersonalDevotionalsPresent(_ ids: [String]) throws {

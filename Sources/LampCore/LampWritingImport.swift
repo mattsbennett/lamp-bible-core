@@ -428,14 +428,17 @@ public enum LampWritingImport {
         guard lines.count >= 3, lines[0].hasPrefix("# ") else { return false }
         if lines[1] == "---" { return lines[2].hasPrefix("## ") }
         guard lines[1].hasPrefix("## ") else { return false }
-        // Where Lamp writes them: straight under the heading, after a
-        // subtitle if there is one, before the prose.
-        return lines.dropFirst(2).prefix(3).contains { line in
-            line.range(
-                of: #"^(\*\*(Author|Date|Tags|Category|Series|Series Order|Scripture):\*\*|> \*\*Summary:\*\*)"#,
-                options: .regularExpression
-            ) != nil
+        // Where Lamp writes them: the line straight under the heading, or
+        // under its italic subtitle. Prose there first means it is not.
+        var next = lines.dropFirst(2).makeIterator()
+        guard var line = next.next() else { return false }
+        if line.hasPrefix("*"), !line.hasPrefix("**"), line.hasSuffix("*"), let after = next.next() {
+            line = after
         }
+        return line.range(
+            of: #"^(\*\*(Author|Date|Tags|Category|Series|Series Order|Scripture):\*\*|> \*\*Summary:\*\*)"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private static func exportCandidates(
@@ -618,12 +621,20 @@ public extension LampLibrary {
 
         // One row per path: two documents given the same path would share a
         // row's key, and ticking one would import the other.
-        var keyCounts: [String: Int] = [:]
+        let givenKeys = Set(candidates.map(\.key))
+        var usedKeys: Set<String> = []
         for index in candidates.indices {
             let key = candidates[index].key
-            keyCounts[key, default: 0] += 1
-            guard let count = keyCounts[key], count > 1 else { continue }
-            candidates[index].key = key + "#copy\(count)"
+            guard usedKeys.contains(key) else {
+                usedKeys.insert(key)
+                continue
+            }
+            var copy = 2
+            while usedKeys.contains("\(key)#copy\(copy)") || givenKeys.contains("\(key)#copy\(copy)") {
+                copy += 1
+            }
+            candidates[index].key = "\(key)#copy\(copy)"
+            usedKeys.insert(candidates[index].key)
             candidates[index].errors.append("Another file has the same path, \(candidates[index].path); only the first is imported.")
         }
 
@@ -632,25 +643,36 @@ public extension LampLibrary {
         ) : [:]
 
         // A derived id finds the writing an earlier import made from a
-        // longer or shorter path, when one exists; unless two files here
-        // would find the same one, when neither does.
+        // longer or shorter path. A path is not proof it is the same file —
+        // another folder may hold one of the same name — so a match is only
+        // offered, and a file that would change it waits to be ticked. No
+        // match is taken where more than one earlier writing would do, where
+        // another file here would find the same one, or where another file
+        // here already has that id.
+        let importable = candidates.indices.filter {
+            candidates[$0].errors.isEmpty && candidates[$0].writing != nil
+        }
+        let namedIDs = Set(importable.map { candidates[$0].writingID })
         var found: [Int: (id: String, path: String)] = [:]
-        for index in candidates.indices where candidates[index].idDerived && candidates[index].writing != nil {
+        for index in importable where candidates[index].idDerived {
             let candidate = candidates[index]
             guard existing[candidate.writingID] == nil else { continue }
-            for path in LampWritingImport.earlierPaths(of: candidate.path, ancestry: candidate.ancestry) {
-                let id = LampWritingImport.derivedID(path: path + candidate.identitySuffix)
-                if existing[id] != nil {
-                    found[index] = (id, path)
-                    break
-                }
+            let matches = LampWritingImport.earlierPaths(of: candidate.path, ancestry: candidate.ancestry)
+                .map { (id: LampWritingImport.derivedID(path: $0 + candidate.identitySuffix), path: $0) }
+                .filter { existing[$0.id] != nil && !namedIDs.contains($0.id) }
+            if matches.count == 1 {
+                found[index] = matches[0]
+            } else if matches.count > 1 {
+                candidates[index].warnings.append("More than one writing imported before could be this file (from \(matches.map(\.path).joined(separator: ", "))), so it is imported as new.")
             }
         }
         let claims = Dictionary(grouping: found.values.map(\.id), by: { $0 }).mapValues(\.count)
+        var matched: Set<String> = []
         for (index, match) in found where claims[match.id] == 1 {
             candidates[index].writingID = match.id
             candidates[index].writing = candidates[index].writing?.withID(match.id)
             candidates[index].normalized.append("Matched the writing imported before from \(match.path).")
+            matched.insert(candidates[index].key)
         }
 
         var idCounts: [String: Int] = [:]
@@ -685,6 +707,9 @@ public extension LampLibrary {
                     changes = local.differingAuthoredFields(from: writing)
                     if changes.isEmpty {
                         action = .unchanged
+                    } else if matched.contains(candidate.key) {
+                        action = .conflict
+                        warnings.append("Found by its path from an earlier import; tick it if it is the same writing.")
                     } else if incoming == nil {
                         // Nothing says the file is newer, so it must not
                         // overwrite an edit made in Lamp without being chosen.
@@ -761,8 +786,10 @@ public extension LampLibrary {
             switch (local, planned) {
             case (nil, nil): unchangedSincePlan = true
             case (let local?, let planned?):
-                unchangedSincePlan = local.lastModified == planned.lastModified
-                    && local.differingAuthoredFields(from: planned).isEmpty
+                // The whole copy, not only what an import compares: an edit
+                // in the editor may change the structured body or media
+                // alone, in the same second.
+                unchangedSincePlan = local == planned
             default: unchangedSincePlan = false
             }
             guard unchangedSincePlan else {
@@ -778,7 +805,14 @@ public extension LampLibrary {
                     now: Int(now.timeIntervalSince1970)
                 ) ?? Int(now.timeIntervalSince1970)
                 stamped = writing.withLastModified(Date(timeIntervalSince1970: TimeInterval(resolved)))
-            case .create where plan.restored.contains(item.id) || writing.lastModified == nil:
+            case .create where plan.restored.contains(item.id):
+                // After the deletion, as well as now: a copy another device
+                // kept is no later than the deletion, give or take its clock.
+                let deleted = try personalDevotionalDeletedAt(id: writing.id) ?? 0
+                stamped = writing.withLastModified(Date(timeIntervalSince1970: TimeInterval(
+                    max(Int(now.timeIntervalSince1970), deleted + 1)
+                )))
+            case .create where writing.lastModified == nil:
                 stamped = writing.withLastModified(now)
             default:
                 break
