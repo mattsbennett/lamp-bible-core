@@ -291,9 +291,8 @@ struct LampWritingImportTests {
         #expect(again.items[0].warnings.contains { $0.contains("deleted from Lamp") })
         try await library.applyWritingImport(again, selecting: [again.items[0].id])
         #expect(try await library.personalDevotionals().count == 1)
-        #expect(try await !library.isPersonalDevotionalDeleted(
-            id: plan.items[0].writingID, itemModified: 1_600_000_000
-        ))
+        #expect(try await library.writingDeletion(id: plan.items[0].writingID)?
+            .isDeleted(itemModified: 1_600_000_000) == false)
     }
 
     @Test func aManifestNamesTheWritingAmongWorkingFiles() throws {
@@ -455,7 +454,8 @@ struct LampWritingImportTests {
         try await library.deletePersonalDevotional(id: plan.items[0].writingID)
 
         let before = Date().addingTimeInterval(-1)
-        let deleted = try #require(try await library.personalDevotionalDeletedAt(id: plan.items[0].writingID))
+        let deletedAt = try #require(try await library.writingDeletion(id: plan.items[0].writingID)?.deletedAt)
+        let deleted = Int((deletedAt + 999) / 1_000)
         let again = try await library.planWritingImport(LampWritingImport.files(at: file))
         try await library.applyWritingImport(again, selecting: [again.items[0].id])
         let stamp = try #require(try await library.personalDevotionals().first?.lastModified)
@@ -557,6 +557,191 @@ struct LampWritingImportTests {
 
             **Author:** A Reader | **Date:** 2026-08-03
             """))
+    }
+
+    private let onePixelPNG = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+
+    @Test func picturesComeInWithTheirWritingAndASecondImportChangesNothing() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("talks")
+        try write("# Map\n\n![The journeys](images/map%20one.png)\n\nAgain: ![](images/map%20one.png)",
+                  to: "map.md", in: folder)
+        let image = folder.appendingPathComponent("images/map one.png")
+        try FileManager.default.createDirectory(at: image.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try onePixelPNG.write(to: image)
+        try write("# Lost\n\n![Gone](images/none.png)", to: "lost.md", in: folder)
+
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        #expect(plan.items.map(\.action) == [.rejected, .create])
+        #expect(plan.items[0].errors.first?.contains("images/none.png") == true)
+        try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+
+        let writing = try #require(try await library.personalDevotionals().first)
+        let reference = try #require(writing.mediaReferences.first)
+        #expect(writing.mediaReferences.count == 1, "the same picture twice is one file")
+        #expect(writing.content.contains("](media/\(reference.id))"))
+        #expect(!writing.content.contains("images/"))
+        #expect(reference.type == .image)
+        #expect(reference.width == 1)
+        #expect(reference.alt == "The journeys")
+        let stored = try #require(LampPortableDevotionalMedia.folderURL(
+            rootURL: library.rootURL, scope: .devotional, ownerID: writing.id
+        )).appendingPathComponent(reference.filename)
+        #expect(try Data(contentsOf: stored) == onePixelPNG)
+
+        let again = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        #expect(again.items.map(\.action) == [.rejected, .unchanged])
+    }
+
+    private func deckJSON(id: String, title: String, asset: String? = nil) throws -> String {
+        var blocks: [LampPresentationBlock] = [.init(kind: .title, text: title)]
+        if let asset { blocks.append(.init(kind: .image, assetPath: asset, altText: "Cover")) }
+        let deck = LampPresentationDeck(id: id, title: title, slides: [
+            LampPresentationSlide(layout: asset == nil ? .title : .image, blocks: blocks),
+        ])
+        return String(decoding: try JSONEncoder().encode(deck), as: UTF8.self)
+    }
+
+    @Test func aDeckBesideAWritingComesInAsItsDeckWithItsPictures() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("talks")
+        try write("# Watch\n\nBe ready.", to: "watch.md", in: folder)
+        try write(try deckJSON(id: "deck-watch", title: "Watch", asset: "Assets/cover.png"),
+                  to: "watch.lampdeck", in: folder)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("Assets"), withIntermediateDirectories: true)
+        try onePixelPNG.write(to: folder.appendingPathComponent("Assets/cover.png"))
+
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        #expect(plan.items.map(\.kind) == [.writing, .deck])
+        #expect(plan.items.map(\.action) == [.create, .create])
+        try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+
+        let store = LampPresentationDeckStore(rootURL: library.rootURL)
+        let deck = try #require(try store.deck(id: "deck-watch"))
+        #expect(deck.source == LampPresentationSource(kind: .writing, id: plan.items[0].writingID))
+        #expect(FileManager.default.fileExists(atPath: store.assetsDirectoryURL.appendingPathComponent("cover.png").path))
+
+        let again = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        #expect(again.items.map(\.action) == [.unchanged, .unchanged])
+
+        // Changed in Slide Studio since: the file's copy waits to be chosen.
+        var edited = deck
+        edited.title = "Watch, revised"
+        try store.save(edited)
+        let third = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        #expect(third.items.map(\.action) == [.unchanged, .conflict])
+        #expect(!third.items[1].importsByDefault)
+    }
+
+    @Test func linksBetweenFilesOfOneImportOpenTheirWritings() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("study")
+        try write("# One\n\nSee [the second](part/two.md#questions), not [this](../elsewhere.md).\n\n```\n[code](part/two.md)\n```",
+                  to: "one.md", in: folder)
+        try write("# Two\n\nBack to [one](../one.md).", to: "part/two.md", in: folder)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        let one = try #require(plan.items.first { $0.path == "study/one.md" })
+        let two = try #require(plan.items.first { $0.path == "study/part/two.md" })
+        #expect(one.warnings.contains { $0.contains("../elsewhere.md") })
+        try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+        let writings = Dictionary(uniqueKeysWithValues: try await library.personalDevotionals().map { ($0.id, $0) })
+        let first = try #require(writings[one.writingID])
+        #expect(first.content.contains("[the second](lampbible://writing/\(two.writingID))"))
+        #expect(first.content.contains("```\n[code](part/two.md)\n```"), "code is left as written")
+        #expect(writings[two.writingID]?.content.contains("lampbible://writing/\(one.writingID)") == true)
+        #expect(LampApplicationLink(url: LampApplicationLink.writingURL(id: two.writingID))
+            == .writing(id: two.writingID))
+    }
+
+    @Test func undoingAnImportPutsBackWhatItChangedAndLeavesWhatChangedSince() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("w")
+        let earlier = Date(timeIntervalSince1970: 1_700_000_000)
+        try write("# Kept\n\nFirst.", to: "kept.md", in: folder, modified: earlier)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let first = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        try await library.applyWritingImport(first, selecting: Set(first.items.map(\.id)))
+
+        try write("# Kept\n\nSecond.", to: "kept.md", in: folder, modified: earlier.addingTimeInterval(60))
+        try write("# New\n\nBrand new.", to: "new.md", in: folder, modified: earlier.addingTimeInterval(60))
+        try write("# Other\n\nAnother.", to: "other.md", in: folder, modified: earlier.addingTimeInterval(60))
+        let second = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        let result = try await library.applyWritingImport(second, selecting: Set(second.items.map(\.id)))
+        #expect(result.undo.writings.count == 3)
+
+        // Edited after the import: undo leaves it.
+        let other = try #require(try await library.personalDevotionals().first { $0.title == "Other" })
+        try await library.savePersonalDevotional(LampDevotional(
+            id: other.id, moduleID: other.moduleID, moduleName: other.moduleName,
+            title: "Other", content: "Edited after.", created: other.created
+        ))
+        let undone = try await library.undoWritingImport(result.undo)
+        #expect(Set(undone.undone) == ["Kept", "New"])
+        #expect(undone.kept == ["Other"])
+        let left = Dictionary(uniqueKeysWithValues: try await library.personalDevotionals().map { ($0.title, $0) })
+        #expect(left["Kept"]?.content == "First.")
+        #expect(left["New"] == nil)
+        #expect(left["Other"]?.content == "Edited after.")
+        #expect(try #require(left["Kept"]?.lastModified) > earlier.addingTimeInterval(60),
+                "the undoing is dated after the import, so sync carries it")
+    }
+
+    /// A store that is not a `LampLibrary`, as the phone's is, and keeps no
+    /// decks.
+    private actor PhoneStore: LampWritingImportStore {
+        var writings: [String: LampDevotional] = [:]
+        var present: [String] = []
+        func importableWritings() -> [LampDevotional] { Array(writings.values) }
+        func writingDeletion(id: String) -> LampPersonalDeletionLedger.Entry? { nil }
+        func saveImportedWriting(_ writing: LampDevotional) { writings[writing.id] = writing }
+        func recordWritingsPresent(_ ids: [String]) { present += ids }
+        func deleteImportedWriting(id: String) { writings[id] = nil }
+        func storeImportedMedia(from url: URL, writingID: String) -> String { url.lastPathComponent }
+        func removeImportedMedia(writingID: String, filename: String) {}
+        nonisolated var supportsDecks: Bool { false }
+    }
+
+    @Test func aStoreOtherThanTheLibraryPlansAndAppliesAlikeAndRefusesDecks() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("talks")
+        try write("# Watch\n\nBe ready.", to: "watch.md", in: folder)
+        try write(try deckJSON(id: "deck-watch", title: "Watch"), to: "watch.lampdeck", in: folder)
+        let store = PhoneStore()
+        let plan = try await LampWritingImport.plan(LampWritingImport.files(at: folder), in: store)
+        #expect(plan.items.map(\.action) == [.create, .rejected])
+        #expect(plan.items[1].errors == ["Decks are imported on the Mac."])
+        let result = try await LampWritingImport.apply(plan, selecting: Set(plan.items.map(\.id)), to: store)
+        #expect(result.imported.map(\.kind) == [.writing])
+        #expect(await store.present == [plan.items[0].writingID])
+        let again = try await LampWritingImport.plan(LampWritingImport.files(at: folder), in: store)
+        #expect(again.items[0].action == .unchanged)
+    }
+
+    @Test func aRowOfTheSyncFileReadsBackAsTheWritingItCameFrom() throws {
+        let writing = LampDevotional(
+            id: "w-1", moduleID: "personal-devotionals", moduleName: "My Writing",
+            title: "Watch", subtitle: "Two lessons", author: "M.", date: "2026-01-18",
+            tags: ["Matthew", "readiness"], category: "exhortation",
+            seriesName: "Parables", seriesOrder: 3,
+            keyScriptures: [LampScriptureLink(text: "Matthew 24:36", startReference: 40_024_036, endReference: nil)],
+            summary: "Be ready.", content: "As in the days of Noah.[^1]",
+            footnotes: "[^1]: Genesis 6.",
+            created: Date(timeIntervalSince1970: 1_700_000_000),
+            lastModified: Date(timeIntervalSince1970: 1_700_000_100), isEditable: true
+        )
+        let read = LampPersonalWritingFile.writing(from: try LampPersonalWritingFile.row(for: writing))
+        #expect(read.differingAuthoredFields(from: writing).isEmpty)
+        #expect(read.created == writing.created)
+        #expect(read.lastModified == writing.lastModified)
     }
 
     @Test func theOldMarkdownImportNoLongerAddsCopies() async throws {

@@ -12,6 +12,9 @@ public enum LampApplicationLink: Equatable, Sendable {
     case strongs(String)
     case reader(reference: Int?, translationID: String?)
     case book(moduleID: String?, sectionID: String?)
+    /// One of the person's writings, by id: what a link between imported
+    /// writings becomes.
+    case writing(id: String)
     case section(LampApplicationSection)
     case moduleFile(URL)
     case dataFile(URL)
@@ -58,6 +61,9 @@ public enum LampApplicationLink: Equatable, Sendable {
                 .flatMap(Int.init)
             self = .reader(reference: reference.flatMap { $0 > 0 ? $0 : nil },
                            translationID: translation)
+        case "writing":
+            guard let id = path.first?.removingPercentEncoding, !id.isEmpty else { return nil }
+            self = .writing(id: id)
         case "book", "books":
             let moduleID = query.first(where: { $0.name == "module" })?.value
                 .flatMap(Self.nonempty)
@@ -106,6 +112,15 @@ public enum LampApplicationLink: Equatable, Sendable {
                 translationID: translation
             )
         }
+    }
+
+    /// `lampbible://writing/<id>`, which opens one of the person's writings.
+    public static func writingURL(id: String) -> URL {
+        var components = URLComponents()
+        components.scheme = "lampbible"
+        components.host = "writing"
+        components.path = "/" + id
+        return components.url ?? URL(string: "lampbible://writing")!
     }
 
     public static func verseURL(

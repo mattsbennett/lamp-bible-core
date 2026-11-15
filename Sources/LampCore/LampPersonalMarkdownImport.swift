@@ -22,7 +22,7 @@ public extension LampLibrary {
     func importPersonalMarkdown(
         from sourceURL: URL,
         as kind: LampPersonalMarkdownKind
-    ) throws -> LampPersonalMarkdownImportResult {
+    ) async throws -> LampPersonalMarkdownImportResult {
         guard ["md", "markdown"].contains(sourceURL.pathExtension.lowercased()) else {
             throw LampLibraryError.invalidStudyDataExtension
         }
@@ -55,13 +55,13 @@ public extension LampLibrary {
             // The writing import's plan, taken whole: the same file imported
             // twice finds its writings again rather than adding copies, and a
             // writing changed in Lamp since is left alone.
-            let plan = try planWritingImport(LampWritingImport.files(at: sourceURL))
+            let plan = try await planWritingImport(LampWritingImport.files(at: sourceURL))
             if let rejected = plan.items.first(where: { $0.action == .rejected }) {
                 throw LampLibraryError.invalidPersonalContent(
                     rejected.errors.joined(separator: " ")
                 )
             }
-            let result = try applyWritingImport(
+            let result = try await applyWritingImport(
                 plan, selecting: Set(plan.items.filter(\.importsByDefault).map(\.id))
             )
             return LampPersonalMarkdownImportResult(kind: kind, importedCount: result.imported.count)

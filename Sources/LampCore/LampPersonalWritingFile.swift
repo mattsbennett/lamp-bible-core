@@ -344,6 +344,38 @@ public enum LampPersonalWritingFile {
         )
     }
 
+    /// A row of the file as a writing: the inverse of `row(for:)`, and how
+    /// either app reads a writing the other published, so the two compare
+    /// writings alike. Content held as one paragraph of plain text reads as
+    /// that text; richer blocks are kept beside it. A `created` of zero, which
+    /// `row(for:)` never writes, reads as none.
+    public static func writing(from row: Row, moduleName: String = "My Writing") -> LampDevotional {
+        LampDevotional(
+            id: row.id,
+            moduleID: "personal-devotionals",
+            moduleName: moduleName,
+            title: row.title,
+            subtitle: row.subtitle,
+            author: row.author,
+            date: row.date,
+            tags: row.tags?.split(separator: ",").map {
+                String($0).trimmingCharacters(in: .whitespaces)
+            } ?? [],
+            category: row.category,
+            seriesName: row.seriesName,
+            seriesOrder: row.seriesOrder,
+            keyScriptures: LampModuleText.scriptureLinks(fromJSONString: row.keyScripturesJSON),
+            summary: LampModuleText.plainText(fromJSONString: row.summaryJSON),
+            content: LampPortableDevotionalContent.plainText(from: row.contentJSON) ?? row.contentJSON,
+            contentJSON: LampPortableDevotionalContent.isStructured(row.contentJSON) ? row.contentJSON : nil,
+            footnotes: LampModuleText.plainText(fromJSONString: row.footnotesJSON),
+            mediaJSON: row.mediaJSON,
+            created: row.created == 0 ? nil : Date(timeIntervalSince1970: TimeInterval(row.created)),
+            lastModified: row.lastModified.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+            isEditable: true
+        )
+    }
+
     /// A writing's content and media as the file carries them.
     ///
     /// With no root given — a local backup — they are left as stored. With

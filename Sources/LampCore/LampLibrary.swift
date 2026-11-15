@@ -2131,21 +2131,14 @@ public actor LampLibrary {
         return imported
     }
 
-    /// Whether this device deleted the writing since a copy last modified
-    /// at `itemModified` (seconds), for an import to say so.
-    func isPersonalDevotionalDeleted(id: String, itemModified: Int?) throws -> Bool {
+    /// What the deletion ledger says of a writing, if anything.
+    public func writingDeletion(id: String) throws -> LampPersonalDeletionLedger.Entry? {
         try openUserDatabase().read { db in
-            try Self.isDeleted(db, .devotional, id, itemModified: itemModified)
-        }
-    }
-
-    /// When this device last deleted the writing, in seconds, if it has.
-    func personalDevotionalDeletedAt(id: String) throws -> Int? {
-        try openUserDatabase().read { db in
-            try Int.fetchOne(db, sql: """
-                SELECT deleted_at FROM personal_sync_ledger WHERE kind = ? AND item_key = ?
+            try Row.fetchOne(db, sql: """
+                SELECT present_since, deleted_at FROM personal_sync_ledger
+                WHERE kind = ? AND item_key = ?
                 """, arguments: [LampPersonalItemKind.devotional.rawValue, id])
-        }.map { ($0 + 999) / 1_000 }
+        }.map { LampPersonalDeletionLedger.Entry(presentSince: $0["present_since"], deletedAt: $0["deleted_at"]) }
     }
 
     /// Records writings the person chose to import as present now, so sync
@@ -6808,40 +6801,29 @@ public actor LampLibrary {
             let columns = try columnNames(in: db, table: "devotional_entries")
             let moduleName = try Row.fetchOne(db, sql: "SELECT name FROM module_meta LIMIT 1")
                 .flatMap { $0["name"] as String? } ?? "Imported Devotionals"
+            // Read as the sync file's rows are, through the one reader both
+            // apps use, so a writing compares alike wherever it came from.
             return try Row.fetchAll(db, sql: "SELECT * FROM devotional_entries ORDER BY title").map { row in
-                let scripturesJSON: String? = row["key_scriptures_json"]
-                let tags: String? = row["tags"]
-                let createdTimestamp: Int? = row["created"]
-                let modifiedTimestamp: Int? = row["last_modified"]
-                let contentJSON: String = row["content_json"]
-                let summaryJSON: String? = row["summary_json"]
-                let footnotesJSON: String? = row["footnotes_json"]
-                return LampDevotional(
+                let created: Int? = row["created"]
+                return LampPersonalWritingFile.writing(from: LampPersonalWritingFile.Row(
                     id: row["id"],
                     moduleID: "personal-devotionals",
-                    moduleName: moduleName,
                     title: row["title"],
                     subtitle: row["subtitle"],
                     author: row["author"],
                     date: row["date"],
-                    tags: tags?.split(separator: ",").map {
-                        String($0).trimmingCharacters(in: .whitespaces)
-                    } ?? [],
+                    tags: row["tags"],
                     category: row["category"],
                     seriesName: row["series_name"],
                     seriesOrder: row["series_order"],
-                    keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
-                    summary: plainText(fromJSONString: summaryJSON),
-                    content: LampPortableDevotionalContent.plainText(from: contentJSON)
-                        ?? contentJSON,
-                    contentJSON: LampPortableDevotionalContent.isStructured(contentJSON)
-                        ? contentJSON : nil,
-                    footnotes: plainText(fromJSONString: footnotesJSON),
-                    mediaJSON: columns.contains("media_json") ? row["media_json"] : nil,
-                    created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                    lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                    isEditable: true
-                )
+                    keyScripturesJSON: row["key_scriptures_json"],
+                    summaryJSON: row["summary_json"],
+                    contentJSON: row["content_json"],
+                    footnotesJSON: row["footnotes_json"],
+                    created: created ?? 0,
+                    lastModified: row["last_modified"],
+                    mediaJSON: columns.contains("media_json") ? row["media_json"] : nil
+                ), moduleName: moduleName)
             }
         }
     }
