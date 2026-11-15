@@ -228,7 +228,8 @@
                 "properties": {
                   "part": { "type": "string", "enum": ["strongs", "forms"], "description": "strongs: the Strong's numbers; forms: the original-language spellings in lemma" },
                   "source": { "type": "string", "description": "Where the data came from, named as it would be cited" },
-                  "method": { "type": "string", "description": "How it was matched, as one plain clause the app joins to the source: lower-case start, no closing full stop" }
+                  "method": { "type": "string", "description": "How it was matched, as one plain clause the app joins to the source: lower-case start, no closing full stop" },
+                  "scope": { "type": "string", "description": "Which words this source covers, where a part has several sources and each covers only some (\"most words\", \"names the New Testament does not use\"): lower-case start, no closing full stop. Apps put it first on the source's line" }
                 },
                 "required": ["part", "source", "method"]
               }

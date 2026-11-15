@@ -25,11 +25,18 @@ public struct LampTranslationSource: Equatable, Sendable {
     public var source: String
     /// How it was matched to the text, as one clause a reader can follow.
     public var method: String?
+    /// Which of the text's words this source covers, where it covers only
+    /// some ("names the New Testament does not use"), as a reader would
+    /// name them. Where a part has several sources this goes first on the
+    /// source's line, so the reader learns which words it covers before
+    /// where it came from.
+    public var scope: String?
 
-    public init(part: Part, source: String, method: String? = nil) {
+    public init(part: Part, source: String, method: String? = nil, scope: String? = nil) {
         self.part = part
         self.source = source
         self.method = method
+        self.scope = scope
     }
 
     /// The sources a module's `sourceTexts` declares for its tagging.
@@ -51,8 +58,10 @@ public struct LampTranslationSource: Equatable, Sendable {
                   let source = (entry["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !source.isEmpty
             else { return nil }
-            let method = (entry["method"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return LampTranslationSource(part: part, source: source, method: method?.isEmpty == false ? method : nil)
+            func text(_ key: String) -> String? {
+                (entry[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            }
+            return LampTranslationSource(part: part, source: source, method: text("method"), scope: text("scope"))
         }
     }
 
@@ -81,7 +90,8 @@ public struct LampTranslationSource: Equatable, Sendable {
     /// in BSBs come from …, matched by each verse's Strong's numbers when the
     /// module was built."
     public func disclosure(translationName: String, strongsKey: String) -> String {
-        "\(Self.subject(part, strongsKey: strongsKey)) in \(translationName) come from \(origin)."
+        "\(Self.subject(part, strongsKey: strongsKey)) in \(translationName)"
+            + (scope.map { " for \($0)" } ?? "") + " come from \(origin)."
     }
 
     /// What a text's sources say, one paragraph to a part, in the order the
@@ -92,8 +102,8 @@ public struct LampTranslationSource: Equatable, Sendable {
     /// read when each had its own paragraph (owner, Nov 2026):
     ///
     ///     Strong’s numbers in LXX come from two sources:
-    ///     • STEPBible’s tagged Greek New Testament …, matched to each word …
-    ///     • STEPBible’s tagged Hebrew Old Testament …, for names …
+    ///     • Most words: STEPBible’s tagged Greek New Testament …, matched …
+    ///     • Names the New Testament does not use: STEPBible’s tagged Hebrew …
     public static func disclosures(
         _ sources: [LampTranslationSource],
         translationName: String,
@@ -110,7 +120,8 @@ public struct LampTranslationSource: Equatable, Sendable {
             }
             let lead = "\(subject(part, strongsKey: strongsKey)) in \(translationName) come from "
                 + "\(count(own.count)) sources:"
-            return ([lead] + own.map { "• \($0.origin)." }).joined(separator: "\n")
+            return ([lead] + own.map { "• " + ($0.scope.map { "\($0.prefix(1).uppercased() + $0.dropFirst()): " } ?? "") + "\($0.origin)." })
+                .joined(separator: "\n")
         }
     }
 
@@ -130,4 +141,8 @@ public struct LampTranslationSource: Equatable, Sendable {
         let words = ["two", "three", "four", "five", "six", "seven", "eight", "nine"]
         return (2...9).contains(count) ? words[count - 2] : String(count)
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
