@@ -1,0 +1,345 @@
+import Foundation
+@testable import LampCore
+import LampModuleKit
+import Testing
+
+/// The writing import: a folder or a file of Markdown, planned against the
+/// library, then applied. Fixtures are cut from the shapes of the owner's own
+/// writing (bible-studies): files with no front matter, titled by a heading or
+/// not at all, with tables, HTML collapsibles and links to sibling files.
+struct LampWritingImportTests {
+    private func scratch() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-writing-import-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        return root
+    }
+
+    @discardableResult
+    private func write(
+        _ text: String, to path: String, in root: URL, modified: Date? = nil
+    ) throws -> URL {
+        let url = root.appendingPathComponent(path)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        if let modified {
+            try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+        }
+        return url
+    }
+
+    private let exhortation = """
+        For this morning’s exhortation, I’d like to take some thoughts from Matthew chapter 24-25.
+
+        (Matthew 24:1-3 ESV)
+
+        Jesus left the temple and was going away.
+        """
+
+    private let handout = """
+        # The Man of Sin: 2 Thessalonians 2
+
+        ## Class Outline
+
+        Victoria Christadelphian Ecclesia, Adult Sunday School, Feb. 2026
+
+        | Section | Format | Time |
+        |---------|--------|------|
+        | I. Review | Presentation | ~10 min |
+        """
+
+    @Test func aFolderOfPlainMarkdownImportsOnceAndThenReadsUnchanged() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let studies = root.appendingPathComponent("bible-studies")
+        try write(exhortation, to: "exhortations/2026JAN18.md", in: studies)
+        try write(handout, to: "studies/thessalonians/ManOfSin_Handout.md", in: studies)
+        try write("# Package\n\nNot writing.", to: "node_modules/pkg/README.md", in: studies)
+        try write("# Hidden\n\nNot writing.", to: ".obsidian/notes.md", in: studies)
+        try write("Not Markdown", to: "deck.txt", in: studies)
+
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let files = try LampWritingImport.files(at: studies)
+        #expect(files.map(\.path) == [
+            "bible-studies/exhortations/2026JAN18.md",
+            "bible-studies/studies/thessalonians/ManOfSin_Handout.md",
+        ])
+
+        let plan = try await library.planWritingImport(files)
+        #expect(plan.items.map(\.action) == [.create, .create])
+        let bare = try #require(plan.items.first)
+        #expect(bare.title == "2026JAN18")
+        #expect(bare.idDerived)
+        #expect(bare.warnings.contains { $0.contains("No title") })
+        let titled = plan.items[1]
+        #expect(titled.title == "The Man of Sin: 2 Thessalonians 2")
+        #expect(titled.normalized.contains { $0.contains("heading the file opens with") })
+
+        let result = try await library.applyWritingImport(
+            plan, selecting: Set(plan.items.map(\.id))
+        )
+        #expect(result.imported.count == 2)
+        let saved = try await library.personalDevotionals()
+        let man = try #require(saved.first { $0.title == titled.title })
+        #expect(man.content.hasPrefix("## Class Outline"))
+        #expect(man.content.contains("| Section | Format | Time |"))
+
+        let again = try await library.planWritingImport(LampWritingImport.files(at: studies))
+        #expect(again.items.map(\.action) == [.unchanged, .unchanged])
+        #expect(try await library.personalDevotionals().count == 2)
+    }
+
+    @Test func oneFileAndItsFolderGiveTheSameIDAndTwoTalksDoNot() throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try write("# Talk\n\nOne.", to: "howgodspoke/talk.md", in: root)
+        try write("# Talk\n\nTwo.", to: "manofsin/talk.md", in: root)
+
+        let alone = try LampWritingImport.files(at: first)
+        let inFolder = try LampWritingImport.files(at: root.appendingPathComponent("howgodspoke"))
+        #expect(alone.map(\.path) == ["howgodspoke/talk.md"])
+        #expect(alone.map(\.path) == inFolder.map(\.path))
+        let other = try LampWritingImport.files(at: root.appendingPathComponent("manofsin"))
+        #expect(LampWritingImport.derivedID(path: alone[0].path)
+            != LampWritingImport.derivedID(path: other[0].path))
+        #expect(LampWritingImport.derivedID(path: "HowGodSpoke/Talk.md")
+            == LampWritingImport.derivedID(path: "howgodspoke/talk.md"))
+        #expect(LampModuleIdentifier.isValid(LampWritingImport.derivedID(path: alone[0].path)))
+    }
+
+    @Test func aFileSavedLaterUpdatesButAnEditInLampIsAConflict() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("writing")
+        let earlier = Date(timeIntervalSince1970: 1_700_000_000)
+        try write("# Watch\n\nFirst draft.", to: "watch.md", in: folder, modified: earlier)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let first = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        try await library.applyWritingImport(first, selecting: Set(first.items.map(\.id)))
+        #expect(try await library.personalDevotionals().first?.lastModified == earlier)
+
+        // Saved again outside Lamp: newer than Lamp's copy, so an update.
+        let later = earlier.addingTimeInterval(3_600)
+        try write("# Watch\n\nSecond draft.", to: "watch.md", in: folder, modified: later)
+        let second = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        #expect(second.items.map(\.action) == [.update])
+        #expect(second.items[0].changes == ["text"])
+        #expect(second.items[0].importsByDefault)
+        try await library.applyWritingImport(second, selecting: Set(second.items.map(\.id)))
+        #expect(try await library.personalDevotionals().first?.content == "Second draft.")
+
+        // Edited in Lamp since: Lamp's copy is newer than the file.
+        let local = try #require(try await library.personalDevotionals().first)
+        try await library.savePersonalDevotional(LampDevotional(
+            id: local.id, moduleID: local.moduleID, moduleName: local.moduleName,
+            title: local.title, content: "Edited in Lamp.", created: local.created
+        ))
+        try write("# Watch\n\nThird draft.", to: "watch.md", in: folder, modified: later.addingTimeInterval(60))
+        let third = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        #expect(third.items.map(\.action) == [.conflict])
+        #expect(!third.items[0].importsByDefault)
+        try await library.applyWritingImport(third, selecting: [])
+        #expect(try await library.personalDevotionals().first?.content == "Edited in Lamp.")
+
+        // Chosen, it replaces Lamp's copy and is dated after both, so sync
+        // carries the choice to the other devices.
+        let edited = try #require(try await library.personalDevotionals().first?.lastModified)
+        try await library.applyWritingImport(third, selecting: Set(third.items.map(\.id)))
+        let replaced = try #require(try await library.personalDevotionals().first)
+        #expect(replaced.content == "Third draft.")
+        #expect(try #require(replaced.lastModified) > edited)
+    }
+
+    @Test func aPlanIsRefusedWhereTheLibraryChangedAfterIt() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = try write("# Note\n\nFrom the file.", to: "w/note.md", in: root)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: file))
+        let id = plan.items[0].writingID
+        try await library.savePersonalDevotional(LampDevotional(
+            id: id, moduleID: "personal-devotionals", moduleName: "My Writing",
+            title: "Note", content: "Written in Lamp meanwhile."
+        ))
+        let result = try await library.applyWritingImport(plan, selecting: [plan.items[0].id])
+        #expect(result.imported.isEmpty)
+        #expect(result.refused.map(\.id) == [plan.items[0].id])
+        #expect(try await library.personalDevotionals().first?.content == "Written in Lamp meanwhile.")
+    }
+
+    @Test func frontMatterIsHonouredAndTidiedAndSaysWhatItChanged() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = try write("""
+            ---
+            id: "exhortation-2026-01-18"
+            title: "The Days of Noah"
+            author: Matthew Bennett
+            date: 2026-01-18
+            category: Sermon
+            tags: [Matthew, preparedness]
+            series:
+              name: Parables
+              order: 3
+            keyScriptures:
+              - ref: "Matthew 24:36-44"
+              - ref: "Psalm 23"
+              - ref: "Hezekiah 4:1"
+            created: 2026-01-18T09:00:00Z
+            lastModified: 2026-01-19T09:00:00Z
+            source: exhortations/2026JAN18.md
+            mood: hopeful
+            ---
+            # The Days of Noah
+
+            As it was in the days of Noah.
+            """, to: "bundle/noah.md", in: root)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: file))
+        let item = try #require(plan.items.first)
+        #expect(item.action == .create)
+        #expect(item.writingID == "exhortation-2026-01-18")
+        #expect(!item.idDerived)
+        #expect(item.normalized.contains { $0.contains("repeated the title") })
+        #expect(item.normalized.contains { $0.contains("“Sermon” filed as “exhortation”") })
+        #expect(item.warnings.contains { $0.contains("mood") })
+        #expect(item.warnings.contains { $0.contains("Hezekiah 4:1") })
+        #expect(!item.warnings.contains { $0.contains("source") })
+
+        try await library.applyWritingImport(plan, selecting: [item.id])
+        let writing = try #require(try await library.personalDevotionals().first)
+        #expect(writing.content == "As it was in the days of Noah.")
+        #expect(writing.author == "Matthew Bennett")
+        #expect(writing.date == "2026-01-18")
+        #expect(writing.category == "exhortation")
+        #expect(writing.tags == ["Matthew", "preparedness"])
+        #expect(writing.seriesName == "Parables")
+        #expect(writing.seriesOrder == 3)
+        #expect(writing.keyScriptures.map(\.startReference) == [40_024_036, 19_023_001])
+        #expect(writing.keyScriptures.map(\.endReference) == [40_024_044, 19_023_006])
+        #expect(writing.created == LampWritingImport.timestamp("2026-01-18T09:00:00Z"))
+        #expect(writing.lastModified == LampWritingImport.timestamp("2026-01-19T09:00:00Z"))
+    }
+
+    @Test func problemsRejectAFileOrWarnAboutIt() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("bundle")
+        try write("---\nid: \"bad/id\"\ntitle: Bad id\n---\nText.", to: "a-bad-id.md", in: folder)
+        try write("# Verse\n\nSee [Matthew 99:1](lampbible://verse/40099001).", to: "b-verse.md", in: folder)
+        try write("# Picture\n\n![A map](media/map.png)", to: "c-media.md", in: folder)
+        try write("---\nid: same\ntitle: One\n---\nOne.", to: "d-one.md", in: folder)
+        try write("---\nid: same\ntitle: Two\n---\nTwo.", to: "e-two.md", in: folder)
+        try write("# Empty\n\n", to: "f-empty.md", in: folder)
+        try write("""
+            # Discussion
+
+            See [Matthew 24:36](lampbible://verse/40024036) and [the audit](../audits/2PE.md).
+
+            <details>
+            <summary>Lecturer notes</summary>
+
+            A point.[^1] Another.[^missing]
+            </details>
+
+            ```
+            <div>an example, not the writing's own HTML</div>
+            ```
+
+            ---
+
+            [^1]: Defined.
+            """, to: "g-warnings.md", in: folder)
+
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        let byFile = Dictionary(uniqueKeysWithValues: plan.items.map {
+            (($0.path as NSString).lastPathComponent, $0)
+        })
+        #expect(byFile["a-bad-id.md"]?.action == .rejected)
+        #expect(byFile["b-verse.md"]?.errors.first?.contains("not a verse") == true)
+        #expect(byFile["c-media.md"]?.errors.first?.contains("media/map.png") == true)
+        #expect(byFile["d-one.md"]?.errors.first?.contains("e-two.md") == true)
+        #expect(byFile["e-two.md"]?.action == .rejected)
+        #expect(byFile["f-empty.md"]?.errors == ["The writing has no text."])
+
+        let warned = try #require(byFile["g-warnings.md"])
+        #expect(warned.action == .create)
+        #expect(warned.errors.isEmpty)
+        #expect(warned.warnings.contains { $0.contains("../audits/2PE.md") })
+        #expect(warned.warnings.contains { $0.contains("<details>, <summary>") && !$0.contains("<div>") })
+        #expect(warned.warnings.contains { $0.contains("[^missing]") && !$0.contains("[^1]") })
+
+        let result = try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+        #expect(result.imported.map(\.path) == [warned.path])
+    }
+
+    @Test func aDeletedWritingComesBackWhenImportedAgainAndSaysSo() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = try write("# Kept\n\nText.", to: "w/kept.md", in: root,
+                             modified: Date(timeIntervalSince1970: 1_600_000_000))
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: file))
+        try await library.applyWritingImport(plan, selecting: [plan.items[0].id])
+        try await library.deletePersonalDevotional(id: plan.items[0].writingID)
+
+        let again = try await library.planWritingImport(LampWritingImport.files(at: file))
+        #expect(again.items[0].action == .create)
+        #expect(again.items[0].warnings.contains { $0.contains("deleted from Lamp") })
+        try await library.applyWritingImport(again, selecting: [again.items[0].id])
+        #expect(try await library.personalDevotionals().count == 1)
+        #expect(try await !library.isPersonalDevotionalDeleted(
+            id: plan.items[0].writingID, itemModified: 1_600_000_000
+        ))
+    }
+
+    @Test func aManifestNamesTheWritingAmongWorkingFiles() throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("bundle")
+        try write("# Kept\n\nText.", to: "out/kept.md", in: folder)
+        try write("# Notes to self\n\nScratch.", to: "STATUS.md", in: folder)
+        try write(#"{"formatVersion": 1, "writings": [{"file": "out/kept.md"}]}"#,
+                  to: "lamp-import.json", in: folder)
+        #expect(try LampWritingImport.files(at: folder).map(\.path) == ["bundle/out/kept.md"])
+
+        try write(#"{"writings": [{"file": "../outside.md"}]}"#, to: "lamp-import.json", in: folder)
+        #expect(throws: LampLibraryError.self) { try LampWritingImport.files(at: folder) }
+    }
+
+    @Test func lampsOwnMarkdownExportComesBackAsItsWritings() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let entries = ["Morning", "Evening"].map { title in
+            LampPersonalMarkdownWriter.devotionalEntry(LampMarkdownDevotionalEntry(
+                title: title, author: "M.", tags: ["daily"], content: "\(title) text."
+            ))
+        }
+        let markdown = (["# My Writing"] + entries).joined(separator: "\n\n---\n\n")
+        let file = try write(markdown, to: "export/My Writing.md", in: root)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: file))
+        #expect(plan.items.map(\.title) == ["Morning", "Evening"])
+        #expect(plan.items.map(\.action) == [.create, .create])
+        #expect(Set(plan.items.map(\.id)).count == 2)
+        try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+        #expect(try await library.personalDevotionals().first { $0.title == "Morning" }?.tags == ["daily"])
+        let again = try await library.planWritingImport(LampWritingImport.files(at: file))
+        #expect(again.items.map(\.action) == [.unchanged, .unchanged])
+    }
+
+    @Test func theOldMarkdownImportNoLongerAddsCopies() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = try write(handout, to: "w/handout.md", in: root)
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let first = try await library.importPersonalMarkdown(from: file, as: .devotionals)
+        let second = try await library.importPersonalMarkdown(from: file, as: .devotionals)
+        #expect(first.importedCount == 1)
+        #expect(second.importedCount == 0)
+        #expect(try await library.personalDevotionals().count == 1)
+    }
+}

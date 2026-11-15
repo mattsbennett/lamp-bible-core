@@ -52,33 +52,19 @@ public extension LampLibrary {
             return LampPersonalMarkdownImportResult(kind: kind, importedCount: drafts.count)
 
         case .devotionals:
-            let drafts = try LampPersonalMarkdownParser.devotionals(
-                from: markdown,
-                filename: filename
-            )
-            for draft in drafts {
-                _ = try savePersonalDevotional(LampDevotional(
-                    id: UUID().uuidString,
-                    moduleID: "personal-devotionals",
-                    moduleName: "My Writing",
-                    title: draft.title,
-                    subtitle: draft.subtitle,
-                    author: draft.author,
-                    date: draft.date,
-                    tags: draft.tags,
-                    category: draft.category,
-                    seriesName: draft.seriesName,
-                    seriesOrder: draft.seriesOrder,
-                    keyScriptures: draft.keyScriptures,
-                    summary: draft.summary,
-                    content: draft.content,
-                    footnotes: draft.footnotes,
-                    created: Date(),
-                    lastModified: Date(),
-                    isEditable: true
-                ))
+            // The writing import's plan, taken whole: the same file imported
+            // twice finds its writings again rather than adding copies, and a
+            // writing changed in Lamp since is left alone.
+            let plan = try planWritingImport(LampWritingImport.files(at: sourceURL))
+            if let rejected = plan.items.first(where: { $0.action == .rejected }) {
+                throw LampLibraryError.invalidPersonalContent(
+                    rejected.errors.joined(separator: " ")
+                )
             }
-            return LampPersonalMarkdownImportResult(kind: kind, importedCount: drafts.count)
+            let result = try applyWritingImport(
+                plan, selecting: Set(plan.items.filter(\.importsByDefault).map(\.id))
+            )
+            return LampPersonalMarkdownImportResult(kind: kind, importedCount: result.imported.count)
         }
     }
 }
@@ -432,7 +418,7 @@ public enum LampPersonalMarkdownParser {
         return drafts
     }
 
-    private static func devotional(
+    static func devotional(
         title: String,
         content: String,
         metadata: [String: String],

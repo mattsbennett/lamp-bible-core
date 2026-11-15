@@ -2079,24 +2079,7 @@ public actor LampLibrary {
                 return nil
             }
             if let local = existing[devotional.id] {
-                // An empty field and a missing one are the same: export leaves
-                // out empty fields, so writing that stored "" must still match
-                // its own copy coming back.
-                func same(_ a: String?, _ b: String?) -> Bool { a?.nilIfBlank == b?.nilIfBlank }
-                let sameCore = local.title == devotional.title
-                    && same(local.subtitle, devotional.subtitle)
-                    && same(local.author, devotional.author)
-                    && same(local.date, devotional.date)
-                    && local.tags == devotional.tags
-                    && same(local.category, devotional.category)
-                    && same(local.seriesName, devotional.seriesName)
-                    && local.seriesOrder == devotional.seriesOrder
-                    && local.keyScriptures == devotional.keyScriptures
-                    && same(local.summary, devotional.summary)
-                    && local.content == devotional.content
-                    && LampSyncJSONComparison.sameValue(
-                        local.footnotes, devotional.footnotes
-                    )
+                let sameCore = local.differingAuthoredFields(from: devotional).isEmpty
                 if sameCore,
                    (local.mediaJSON == nil && devotional.mediaJSON != nil
                     || local.contentJSON == nil && devotional.contentJSON != nil) {
@@ -2146,6 +2129,23 @@ public actor LampLibrary {
             }
         }
         return imported
+    }
+
+    /// Whether this device deleted the writing since a copy last modified
+    /// at `itemModified` (seconds), for an import to say so.
+    func isPersonalDevotionalDeleted(id: String, itemModified: Int?) throws -> Bool {
+        try openUserDatabase().read { db in
+            try Self.isDeleted(db, .devotional, id, itemModified: itemModified)
+        }
+    }
+
+    /// Records writings the person chose to import as present now, so sync
+    /// keeps them, even ones deleted before.
+    func recordPersonalDevotionalsPresent(_ ids: [String]) throws {
+        guard !ids.isEmpty else { return }
+        try openUserDatabase().write { db in
+            for id in ids { try Self.recordPresence(db, .devotional, id) }
+        }
     }
 
     // MARK: - Sync conflicts

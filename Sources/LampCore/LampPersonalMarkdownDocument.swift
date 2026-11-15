@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 
 /// Markdown document framing shared by the personal-content importers. The
 /// body parser remains free to interpret notes or devotionals differently.
@@ -215,23 +216,44 @@ public struct LampDevotionalFrontmatter: Equatable, Sendable {
     public var tags: [String] = []
     public var series: [String: String] = [:]
     public var scriptures: [LampMarkdownScripture] = []
+    /// Entries with a `ref` Lamp could not read and no `sv`, as written.
+    public var unresolvedScriptures: [String] = []
 
     public init(lines: [String]) {
         enum Section { case none, series, scriptures }
         var section: Section = .none
         var scripture: [String: String] = [:]
 
+        // An entry may give the verses as numbers (`sv`, `ev`) or only as a
+        // reference (`ref: "Matthew 24:36-44"`), which is read here, so a
+        // writer or an agent need not encode BBCCCVVV by hand.
         func appendScripture() {
-            guard let start = scripture["sv"].flatMap(Int.init) else {
-                scripture = [:]
+            defer { scripture = [:] }
+            if let start = scripture["sv"].flatMap(Int.init) {
+                scriptures.append(LampMarkdownScripture(
+                    label: scripture["ref"],
+                    startReference: start,
+                    endReference: scripture["ev"].flatMap(Int.init)
+                ))
                 return
             }
+            guard let label = scripture["ref"], !label.isEmpty else { return }
+            // A whole chapter, "Psalm 23", runs from its first verse to its last.
+            guard let range = try? LampReferenceParser.parse(label),
+                  let lastVerse = LampCanonicalBooks.book(range.end.book)?
+                    .verseCounts[safe: range.end.chapter - 1] else {
+                unresolvedScriptures.append(label)
+                return
+            }
+            let start = range.start.book * 1_000_000 + range.start.chapter * 1_000
+                + (range.start.verse ?? 1)
+            let end = range.end.book * 1_000_000 + range.end.chapter * 1_000
+                + (range.end.verse ?? lastVerse)
             scriptures.append(LampMarkdownScripture(
-                label: scripture["ref"],
+                label: label,
                 startReference: start,
-                endReference: scripture["ev"].flatMap(Int.init)
+                endReference: end == start ? nil : end
             ))
-            scripture = [:]
         }
 
         for line in lines {
@@ -286,4 +308,8 @@ public struct LampDevotionalFrontmatter: Equatable, Sendable {
                || value.hasPrefix("'") && value.hasSuffix("'")) else { return value }
         return String(value.dropFirst().dropLast())
     }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
