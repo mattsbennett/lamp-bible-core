@@ -17,12 +17,21 @@ public struct LampWritingImportFile: Equatable, Sendable {
     /// than the file.
     public let modified: Date?
     public let created: Date?
+    /// The folders above the one chosen, nearest first. A writing imported
+    /// before from a folder further up took its id from a longer path; these
+    /// let the same file, imported alone or from a folder inside that one,
+    /// find it again rather than become a copy.
+    public let ancestry: [String]
 
-    public init(path: String, markdown: String, modified: Date? = nil, created: Date? = nil) {
+    public init(
+        path: String, markdown: String, modified: Date? = nil, created: Date? = nil,
+        ancestry: [String] = []
+    ) {
         self.path = path
         self.markdown = markdown
         self.modified = modified
         self.created = created
+        self.ancestry = ancestry
     }
 }
 
@@ -69,6 +78,11 @@ public struct LampWritingImportItem: Codable, Equatable, Identifiable, Sendable 
 public struct LampWritingImportPlan: Sendable {
     public let items: [LampWritingImportItem]
     let writings: [String: LampDevotional]
+    /// The library's copy of each writing as the plan saw it, so applying
+    /// can tell whether it has changed since, even within the same second.
+    let locals: [String: LampDevotional]
+    /// Items bringing back a writing deleted here.
+    let restored: Set<String>
 
     public func count(_ action: LampWritingImportItem.Action) -> Int {
         items.filter { $0.action == action }.count
@@ -125,15 +139,19 @@ public enum LampWritingImport {
             guard markdownExtensions.contains(url.pathExtension.lowercased()) else {
                 throw LampLibraryError.invalidStudyDataExtension
             }
-            let folder = url.deletingLastPathComponent().lastPathComponent
-            return [try file(at: url, path: folder + "/" + url.lastPathComponent)]
+            let folder = url.resolvingSymlinksInPath().standardizedFileURL.deletingLastPathComponent()
+            return [try file(
+                at: url, path: folder.lastPathComponent + "/" + url.lastPathComponent,
+                ancestry: ancestry(of: folder.deletingLastPathComponent())
+            )]
         }
 
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let rootName = root.lastPathComponent
+        let above = ancestry(of: root.deletingLastPathComponent())
         let manifestURL = root.appendingPathComponent("lamp-import.json")
         if fileManager.fileExists(atPath: manifestURL.path) {
-            return try manifestFiles(manifestURL, root: root, rootName: rootName)
+            return try manifestFiles(manifestURL, root: root, rootName: rootName, ancestry: above)
         }
 
         guard let enumerator = fileManager.enumerator(
@@ -156,7 +174,7 @@ public enum LampWritingImport {
                 )
             }
             let relative = relativePath(of: fileURL, in: root)
-            found.append(try file(at: fileURL, path: rootName + "/" + relative))
+            found.append(try file(at: fileURL, path: rootName + "/" + relative, ancestry: above))
         }
         return found.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
@@ -167,7 +185,7 @@ public enum LampWritingImport {
     }
 
     private static func manifestFiles(
-        _ manifestURL: URL, root: URL, rootName: String
+        _ manifestURL: URL, root: URL, rootName: String, ancestry: [String]
     ) throws -> [LampWritingImportFile] {
         let manifest: Manifest
         do {
@@ -185,7 +203,9 @@ public enum LampWritingImport {
                     "lamp-import.json names \(entry.file), which is not a Markdown file in the folder."
                 )
             }
-            return try file(at: fileURL, path: rootName + "/" + relativePath(of: fileURL, in: root))
+            return try file(
+                at: fileURL, path: rootName + "/" + relativePath(of: fileURL, in: root), ancestry: ancestry
+            )
         }
     }
 
@@ -194,7 +214,12 @@ public enum LampWritingImport {
         return path.hasPrefix(root.path + "/") ? String(path.dropFirst(root.path.count + 1)) : fileURL.lastPathComponent
     }
 
-    private static func file(at url: URL, path: String) throws -> LampWritingImportFile {
+    /// The folders above `folder`, nearest first, as far as eight.
+    static func ancestry(of folder: URL) -> [String] {
+        Array(folder.pathComponents.dropFirst().reversed().prefix(8))
+    }
+
+    private static func file(at url: URL, path: String, ancestry: [String]) throws -> LampWritingImportFile {
         let markdown: String
         do {
             markdown = try String(contentsOf: url, encoding: .utf8)
@@ -206,7 +231,8 @@ public enum LampWritingImport {
             path: path,
             markdown: markdown.replacingOccurrences(of: "\r\n", with: "\n"),
             modified: values?.contentModificationDate,
-            created: values?.creationDate
+            created: values?.creationDate,
+            ancestry: ancestry
         )
     }
 
@@ -224,6 +250,24 @@ public enum LampWritingImport {
         return parts.joined(separator: "-")
     }
 
+    /// The other paths a file's id may have been made from at an earlier
+    /// import: shorter, as when it was imported from a folder inside this
+    /// one, or alone; and longer, from a folder above. Shorter first, then
+    /// longer, each nearest first. Never fewer than a folder and a name.
+    static func earlierPaths(of path: String, ancestry: [String]) -> [String] {
+        let components = path.split(separator: "/").map(String.init)
+        var paths: [String] = []
+        if components.count > 2 {
+            for drop in 1...(components.count - 2) {
+                paths.append(components.dropFirst(drop).joined(separator: "/"))
+            }
+        }
+        for count in ancestry.indices.map({ $0 + 1 }) {
+            paths.append((ancestry.prefix(count).reversed() + components).joined(separator: "/"))
+        }
+        return paths
+    }
+
     // MARK: - Reading one file
 
     /// One writing read from a file, before it is compared with the library.
@@ -237,6 +281,10 @@ public enum LampWritingImport {
         var errors: [String] = []
         var warnings: [String] = []
         var normalized: [String] = []
+        /// Added to the path a derived id is made from: a writing's place in
+        /// a Lamp export holding several.
+        var identitySuffix = ""
+        var ancestry: [String] = []
     }
 
     static let knownKeys: Set<String> = [
@@ -309,6 +357,7 @@ public enum LampWritingImport {
         } else {
             candidate.writingID = derivedID(path: file.path)
             candidate.idDerived = true
+            candidate.ancestry = file.ancestry
         }
 
         let content = body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -370,13 +419,18 @@ public enum LampWritingImport {
     /// own that opens `# Title` then `## Section` has neither, and is one
     /// writing.
     static func isLampMarkdownExport(_ body: String) -> Bool {
-        let lines = body.components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        var fence = LampMarkdownCodeFence()
+        var lines: [String] = []
+        for line in body.components(separatedBy: "\n") where !fence.contains(line) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { lines.append(trimmed) }
+        }
         guard lines.count >= 3, lines[0].hasPrefix("# ") else { return false }
         if lines[1] == "---" { return lines[2].hasPrefix("## ") }
         guard lines[1].hasPrefix("## ") else { return false }
-        return lines.contains { line in
+        // Where Lamp writes them: straight under the heading, after a
+        // subtitle if there is one, before the prose.
+        return lines.dropFirst(2).prefix(3).contains { line in
             line.range(
                 of: #"^(\*\*(Author|Date|Tags|Category|Series|Series Order|Scripture):\*\*|> \*\*Summary:\*\*)"#,
                 options: .regularExpression
@@ -401,12 +455,14 @@ public enum LampWritingImport {
         return drafts.enumerated().map { index, draft in
             seen[draft.title, default: 0] += 1
             let occurrence = seen[draft.title]!
-            let identity = file.path + "#" + draft.title + (occurrence > 1 ? "#\(occurrence)" : "")
+            let suffix = "#" + draft.title + (occurrence > 1 ? "#\(occurrence)" : "")
             var candidate = Candidate(
                 key: index == 0 ? file.path : file.path + "#\(index + 1)",
                 path: file.path, writing: nil,
-                writingID: derivedID(path: identity), idDerived: true, title: draft.title
+                writingID: derivedID(path: file.path + suffix), idDerived: true, title: draft.title
             )
+            candidate.identitySuffix = suffix
+            candidate.ancestry = file.ancestry
             candidate.normalized.append("Read as one of \(drafts.count) writings in a Lamp Markdown export.")
             candidate.writing = LampDevotional(
                 id: candidate.writingID,
@@ -559,38 +615,81 @@ public extension LampLibrary {
         comparingWithLibrary: Bool = true
     ) throws -> LampWritingImportPlan {
         var candidates = files.flatMap(LampWritingImport.candidates(from:))
-        var counts: [String: Int] = [:]
-        for candidate in candidates where candidate.errors.isEmpty {
-            counts[candidate.writingID, default: 0] += 1
+
+        // One row per path: two documents given the same path would share a
+        // row's key, and ticking one would import the other.
+        var keyCounts: [String: Int] = [:]
+        for index in candidates.indices {
+            let key = candidates[index].key
+            keyCounts[key, default: 0] += 1
+            guard let count = keyCounts[key], count > 1 else { continue }
+            candidates[index].key = key + "#copy\(count)"
+            candidates[index].errors.append("Another file has the same path, \(candidates[index].path); only the first is imported.")
         }
-        for index in candidates.indices where (counts[candidates[index].writingID] ?? 0) > 1 {
+
+        let existing = comparingWithLibrary ? Dictionary(
+            try personalDevotionals().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        ) : [:]
+
+        // A derived id finds the writing an earlier import made from a
+        // longer or shorter path, when one exists; unless two files here
+        // would find the same one, when neither does.
+        var found: [Int: (id: String, path: String)] = [:]
+        for index in candidates.indices where candidates[index].idDerived && candidates[index].writing != nil {
+            let candidate = candidates[index]
+            guard existing[candidate.writingID] == nil else { continue }
+            for path in LampWritingImport.earlierPaths(of: candidate.path, ancestry: candidate.ancestry) {
+                let id = LampWritingImport.derivedID(path: path + candidate.identitySuffix)
+                if existing[id] != nil {
+                    found[index] = (id, path)
+                    break
+                }
+            }
+        }
+        let claims = Dictionary(grouping: found.values.map(\.id), by: { $0 }).mapValues(\.count)
+        for (index, match) in found where claims[match.id] == 1 {
+            candidates[index].writingID = match.id
+            candidates[index].writing = candidates[index].writing?.withID(match.id)
+            candidates[index].normalized.append("Matched the writing imported before from \(match.path).")
+        }
+
+        var idCounts: [String: Int] = [:]
+        for candidate in candidates where candidate.errors.isEmpty {
+            idCounts[candidate.writingID, default: 0] += 1
+        }
+        for index in candidates.indices where (idCounts[candidates[index].writingID] ?? 0) > 1
+            && candidates[index].errors.isEmpty {
             let others = candidates.filter {
                 $0.writingID == candidates[index].writingID && $0.key != candidates[index].key
             }.map(\.path)
             candidates[index].errors.append("Another file has the same id (\(others.joined(separator: ", "))).")
         }
 
-        let existing = comparingWithLibrary ? Dictionary(
-            try personalDevotionals().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
-        ) : [:]
-        let now = Date()
         var items: [LampWritingImportItem] = []
         var writings: [String: LampDevotional] = [:]
+        var locals: [String: LampDevotional] = [:]
+        var restored: Set<String> = []
         for candidate in candidates {
             var warnings = candidate.warnings
             var action = LampWritingImportItem.Action.rejected
             var changes: [String] = []
             var libraryModified: Date?
-            if candidate.errors.isEmpty, var writing = candidate.writing {
-                if writing.lastModified == nil {
-                    writing = writing.withLastModified(now)
-                }
+            if candidate.errors.isEmpty, let writing = candidate.writing {
+                // When the file was last changed, if anything says: its front
+                // matter, else its own save time. A document handed in with
+                // neither is dated when it is imported.
                 let incoming = writing.lastModified.map { Int($0.timeIntervalSince1970) }
                 if let local = existing[writing.id] {
+                    locals[candidate.key] = local
                     libraryModified = local.lastModified
                     changes = local.differingAuthoredFields(from: writing)
                     if changes.isEmpty {
                         action = .unchanged
+                    } else if incoming == nil {
+                        // Nothing says the file is newer, so it must not
+                        // overwrite an edit made in Lamp without being chosen.
+                        action = .conflict
+                        warnings.append("The file does not say when it was last changed, so Lamp cannot tell which copy is newer.")
                     } else {
                         let decision = LampSyncMerge.decide(
                             localModified: local.lastModified.map { Int($0.timeIntervalSince1970) },
@@ -605,6 +704,7 @@ public extension LampLibrary {
                 } else {
                     action = .create
                     if try isPersonalDevotionalDeleted(id: writing.id, itemModified: incoming) {
+                        restored.insert(candidate.key)
                         warnings.append("This writing was deleted from Lamp; importing it brings it back.")
                     }
                 }
@@ -624,17 +724,22 @@ public extension LampLibrary {
                 libraryModified: libraryModified
             ))
         }
-        return LampWritingImportPlan(items: items, writings: writings)
+        return LampWritingImportPlan(
+            items: items, writings: writings, locals: locals, restored: restored
+        )
     }
 
     /// Writes the chosen items of a plan. Each is checked again first: one
-    /// whose library copy changed after the plan was made is refused rather
-    /// than overwritten, since the plan no longer describes what would happen.
+    /// whose library copy changed after the plan was made — in any field, or
+    /// in when it was saved — is refused rather than overwritten, since the
+    /// plan no longer describes what would happen.
     ///
     /// Importing is the person's choice, so it counts as a fresh save for
-    /// sync, and brings back a writing that was deleted. A chosen conflict is
-    /// stamped newer than both copies, so the other devices take it too
-    /// (`LampSyncMerge.resolutionTimestamp`).
+    /// sync. A chosen conflict is stamped newer than both copies, so the
+    /// other devices take it too (`LampSyncMerge.resolutionTimestamp`); a
+    /// writing brought back after a deletion, and one whose file gave no
+    /// time, are stamped now, so a copy another device kept from before the
+    /// deletion cannot win over it.
     @discardableResult
     func applyWritingImport(
         _ plan: LampWritingImportPlan,
@@ -646,23 +751,37 @@ public extension LampLibrary {
         var imported: [LampWritingImportItem] = []
         var refused: [LampWritingImportItem] = []
         var saved: [String] = []
+        let now = Date()
         for item in plan.items where itemIDs.contains(item.id) {
             guard [.create, .update, .conflict].contains(item.action),
                   let writing = plan.writings[item.id] else { continue }
             let local = existing[writing.id]
-            guard local?.lastModified == item.libraryModified,
-                  (local == nil) == (item.action == .create) else {
+            let planned = plan.locals[item.id]
+            let unchangedSincePlan: Bool
+            switch (local, planned) {
+            case (nil, nil): unchangedSincePlan = true
+            case (let local?, let planned?):
+                unchangedSincePlan = local.lastModified == planned.lastModified
+                    && local.differingAuthoredFields(from: planned).isEmpty
+            default: unchangedSincePlan = false
+            }
+            guard unchangedSincePlan else {
                 refused.append(item)
                 continue
             }
             var stamped = writing
-            if item.action == .conflict, let local {
+            switch item.action {
+            case .conflict:
                 let resolved = LampSyncMerge.resolutionTimestamp(
-                    localModified: local.lastModified.map { Int($0.timeIntervalSince1970) },
+                    localModified: local?.lastModified.map { Int($0.timeIntervalSince1970) },
                     incomingModified: writing.lastModified.map { Int($0.timeIntervalSince1970) },
-                    now: Int(Date().timeIntervalSince1970)
-                ) ?? Int(Date().timeIntervalSince1970)
+                    now: Int(now.timeIntervalSince1970)
+                ) ?? Int(now.timeIntervalSince1970)
                 stamped = writing.withLastModified(Date(timeIntervalSince1970: TimeInterval(resolved)))
+            case .create where plan.restored.contains(item.id) || writing.lastModified == nil:
+                stamped = writing.withLastModified(now)
+            default:
+                break
             }
             try savePersonalDevotional(stamped, preserveLastModified: true)
             saved.append(writing.id)
@@ -697,6 +816,19 @@ extension LampDevotional {
         if content != other.content { fields.append("text") }
         if !LampSyncJSONComparison.sameValue(footnotes, other.footnotes) { fields.append("footnotes") }
         return fields
+    }
+}
+
+extension LampDevotional {
+    /// The same writing under another id.
+    func withID(_ newID: String) -> LampDevotional {
+        LampDevotional(
+            id: newID, moduleID: moduleID, moduleName: moduleName, title: title,
+            subtitle: subtitle, author: author, date: date, tags: tags, category: category,
+            seriesName: seriesName, seriesOrder: seriesOrder, keyScriptures: keyScriptures,
+            summary: summary, content: content, contentJSON: contentJSON, footnotes: footnotes,
+            mediaJSON: mediaJSON, created: created, lastModified: lastModified, isEditable: isEditable
+        )
     }
 }
 
