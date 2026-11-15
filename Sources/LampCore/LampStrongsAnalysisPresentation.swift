@@ -1510,7 +1510,11 @@ public enum LampSeptuagintSection {
     /// every row, and a reader who does not read Greek never wants it. So it
     /// is offered rather than given, and the control says what it would add.
     public enum OriginalLanguage {
-        public static let title = "Greek"
+        /// Says what the switch does, so the sentence below is a hint rather
+        /// than a line of prose standing in front of the figures. "Greek"
+        /// alone left a reader to guess whether it meant the Greek text, a
+        /// Greek font, or Greek word order.
+        public static let title = "Greek under each verse"
         public static let note =
             "The Septuagint's own words under each verse, marked where this Greek word stands."
     }
