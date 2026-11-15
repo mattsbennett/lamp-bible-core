@@ -168,6 +168,14 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         /// again, and companions are not counts at all.
         public var isPartOfWhole: Bool { self != .translation && self != .companion }
 
+        /// Whether its divisions each hold a verse count. A book, a canon
+        /// section and a translation do; a rendering, a spelling and a
+        /// grammatical value are counts of occurrences, and the verses
+        /// behind them are not divided the same way.
+        public var countsVerses: Bool {
+            self == .book || self == .section || self == .translation
+        }
+
         /// Whether "per 1,000 words" means anything. A companion is measured
         /// by how many times chance it keeps the key company.
         public var usesMeasure: Bool { self != .companion }
@@ -175,9 +183,24 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
 
     public enum Measure: String, Codable, CaseIterable, Identifiable, Sendable {
         case occurrences
+        /// Verses holding the key, which is not the same figure: a word
+        /// standing twice in a verse counts twice as an occurrence and once
+        /// as a verse. The analysis pane counts verses in several places —
+        /// the two Testaments side by side, a Hebrew word's list — and a
+        /// chart that could only count occurrences could not draw them.
+        case verses
         case perThousandWords
 
         public var id: String { rawValue }
+
+        /// What a chart of this measure counts, for a caption or a label.
+        public var title: String {
+            switch self {
+            case .occurrences: "Occurrences"
+            case .verses: "Verses"
+            case .perThousandWords: "Per 1,000 Words"
+            }
+        }
     }
 
     /// How the values are drawn.
@@ -385,10 +408,11 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         LampStrongsCardChoice.figures(named: figures ?? [])
     }
 
-    /// Whether values print as whole counts. A share is always of occurrences:
-    /// rates per thousand words do not add up to a whole.
+    /// Whether values print as whole counts. Occurrences and verses are both
+    /// whole things; only a rate per thousand words is not. A share is always
+    /// of occurrences, because rates do not add up to a whole.
     public var countsOccurrences: Bool {
-        by != .companion && (measure == .occurrences || drawnStyle == .share)
+        by != .companion && (measure != .perThousandWords || drawnStyle == .share)
     }
 
     /// The values a set of analyses gives this chart: one per translation for
@@ -404,7 +428,8 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         return analyses.map { analysis in
             Value(
                 label: analysis.translationAbbreviation ?? analysis.translationName,
-                value: measured(analysis.occurrenceCount, of: analysis.wordCount),
+                value: measured(analysis.occurrenceCount, verses: analysis.verseCount,
+                                of: analysis.wordCount),
                 detail: LampStrongsRenderingSummary.line(of: analysis)
             )
         }
@@ -435,10 +460,17 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
                 let last = chapters.keys.max() ?? 0
                 return .init(
                     label: book.name,
-                    value: measured(book.occurrenceCount, of: book.wordCount),
+                    value: measured(book.occurrenceCount, verses: book.verseCount, of: book.wordCount),
                     standing: standing(book),
                     chapters: last > 0
-                        ? (1...last).map { chapters[$0].map { measured($0.occurrenceCount, of: $0.wordCount) } ?? 0 }
+                        ? (1...last).map { chapters[$0].map {
+                            // A chapter holds no verse count, so a grid
+                            // cannot be drawn by verses. The validator
+                            // refuses that pairing; this is the fallback
+                            // if one ever reaches here.
+                            measured($0.occurrenceCount, verses: $0.occurrenceCount,
+                                     of: $0.wordCount)
+                        } ?? 0 }
                         : []
                 )
             }
@@ -449,7 +481,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
                 .map {
                     .init(
                         label: $0.name,
-                        value: measured($0.occurrenceCount, of: $0.wordCount),
+                        value: measured($0.occurrenceCount, verses: $0.verseCount, of: $0.wordCount),
                         standing: standing($0),
                         share: share($0.occurrenceCount, of: analysis.occurrenceCount)
                     )
@@ -458,7 +490,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             return analysis.sections.map {
                 .init(
                     label: $0.name,
-                    value: measured($0.occurrenceCount, of: $0.wordCount),
+                    value: measured($0.occurrenceCount, verses: $0.verseCount, of: $0.wordCount),
                     standing: standing($0),
                     share: share($0.occurrenceCount, of: analysis.occurrenceCount)
                 )
@@ -467,7 +499,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             return analysis.renderings.prefix(Self.rankedLimit).map {
                 .init(
                     label: $0.text.isEmpty ? "(no English)" : $0.text,
-                    value: measured($0.count, of: analysis.wordCount),
+                    value: measured($0.count, verses: $0.count, of: analysis.wordCount),
                     // A Greek text's own Greek, said in Latin letters, as
                     // its forms are.
                     detail: LampGreekTransliteration.latinIfGreek($0.text),
@@ -480,7 +512,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             return analysis.forms.prefix(Self.rankedLimit).map {
                 .init(
                     label: $0.text,
-                    value: measured($0.count, of: analysis.wordCount),
+                    value: measured($0.count, verses: $0.count, of: analysis.wordCount),
                     detail: readings[$0.id],
                     share: share($0.count, of: total)
                 )
@@ -491,7 +523,7 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
             return counts.prefix(Self.rankedLimit).map {
                 .init(
                     label: $0.value,
-                    value: measured($0.count, of: analysis.wordCount),
+                    value: measured($0.count, verses: $0.count, of: analysis.wordCount),
                     share: share($0.count, of: total)
                 )
             }
@@ -566,10 +598,23 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         return keys
     }
 
-    private func measured(_ count: Int, of words: Int) -> Double {
-        guard measure == .perThousandWords, by.usesMeasure else { return Double(count) }
-        guard words > 0 else { return 0 }
-        return (Double(count) * 100_000 / Double(words)).rounded() / 100
+    /// A value in whichever measure the chart counts.
+    ///
+    /// Both counts are asked for because they are different figures and the
+    /// caller knows them both; passing one and deriving the other is what a
+    /// chart cannot do.
+    private func measured(_ occurrences: Int, verses: Int, of words: Int) -> Double {
+        guard by.usesMeasure else { return Double(occurrences) }
+        switch measure {
+        case .occurrences: return Double(occurrences)
+        // A grouping whose divisions hold no verse count falls back rather
+        // than inventing one; the validator refuses the combination before
+        // a deck gets here.
+        case .verses: return Double(by.countsVerses ? verses : occurrences)
+        case .perThousandWords:
+            guard words > 0 else { return 0 }
+            return (Double(occurrences) * 100_000 / Double(words)).rounded() / 100
+        }
     }
 
     /// A bar's part of the whole, for bars of occurrences only: a rate per
@@ -650,8 +695,12 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         if let filter = source.filter, !filter.isEmpty { what += ", \(filter.narrowing)" }
         if let range = source.range { what += ", \(range)" }
         if by == .grammar, let feature { what += ", by \(feature.title.lowercased())" }
-        if measure == .perThousandWords, by.usesMeasure, drawnStyle != .share {
-            what += ", per thousand words"
+        if by.usesMeasure, drawnStyle != .share {
+            switch measure {
+            case .perThousandWords: what += ", per thousand words"
+            case .verses: what += ", by verses"
+            case .occurrences: break
+            }
         }
         return what
     }

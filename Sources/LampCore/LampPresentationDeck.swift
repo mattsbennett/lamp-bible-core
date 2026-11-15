@@ -807,6 +807,28 @@ public enum LampPresentationDeckValidator {
                     : "Companions are measured against chance, not counted, so they make no ring."
             ))
         }
+        // Verses are only countable where a division holds them. A
+        // rendering or a grammatical value is a count of occurrences, and
+        // the verses behind it are not divided that way, so the chart would
+        // silently draw occurrences under a verses label.
+        if chart.measure == .verses && !chart.by.countsVerses {
+            issues.append((
+                .error,
+                "chart.measure",
+                "Only a chart by book, section or translation can count verses; "
+                    + "\(chart.by.title.lowercased()) groups occurrences, which are not "
+                    + "divided into verses."
+            ))
+        }
+        // A grid shades each chapter, and a chapter holds no verse count.
+        if chart.measure == .verses && chart.drawnStyle == .grid {
+            issues.append((
+                .error,
+                "chart.measure",
+                "A grid shades chapters, which hold no verse count; count occurrences "
+                    + "or draw it as bars."
+            ))
+        }
         if chart.by == .companion && chart.measure == .perThousandWords {
             issues.append((
                 .warning,
