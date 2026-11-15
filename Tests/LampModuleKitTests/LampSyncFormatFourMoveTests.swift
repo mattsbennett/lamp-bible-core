@@ -255,8 +255,9 @@ struct LampSyncFormatFourMoveTests {
         #expect(store.data("Devotionals/writing.lamp") == Data("someone's".utf8))
     }
 
-    /// A file another device put at a new path, a second device moving or a
-    /// format-4 pass, is never written over, even where it differs.
+    /// Once another device has moved the library, a file at a new path may
+    /// be one a format-4 device published since, and is never written over,
+    /// even where it differs.
     @Test func aFileAnotherDeviceWroteIsNeverWrittenOver() async throws {
         let store = MoveStore()
         store.put("Devotionals/sermons.lamp", Data("sermons".utf8), "\"b\"")
@@ -264,12 +265,35 @@ struct LampSyncFormatFourMoveTests {
         store.put(LampSyncSettingsStore.path, try LampSyncSettingsBundle(manifest: try formatThreeManifest([
             ("Devotionals/sermons.lamp", 6, "\"b\"", nil, nil),
         ])).encoded(version: 3), "\"bundle3\"")
+        // Another device's move lands while this one looks at the new path.
+        store.beforeReading["Writing/sermons.lamp"] = {
+            store.put(LampSyncSettingsStore.path, try LampSyncSettingsBundle(manifest: LampSyncLibraryManifest()).encoded(), "\"bundle4\"")
+        }
 
         let snapshot = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
 
         #expect(store.data("Writing/sermons.lamp") == Data("sermons, published since".utf8))
         #expect(store.conditions["Writing/sermons.lamp"] == nil)
-        #expect(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp")?.revision == "\"x\"")
+        #expect(snapshot.revision == "\"bundle4\"")
+    }
+
+    /// A move cut short before it wrote the bundle left a copy; a format-3
+    /// device then wrote the old path again. While that format-3 bundle still
+    /// stands, the copy left is a move's, and it is replaced with what the old
+    /// path holds now.
+    @Test func aCopyAMoveCutShortLeftIsReplaced() async throws {
+        let store = MoveStore()
+        store.put("Devotionals/sermons.lamp", Data("sermons, edited".utf8), "\"b2\"")
+        store.put("Writing/sermons.lamp", Data("sermons".utf8), "\"x\"")
+        store.put(LampSyncSettingsStore.path, try LampSyncSettingsBundle(manifest: try formatThreeManifest([
+            ("Devotionals/sermons.lamp", 9, "\"b2\"", nil, nil),
+        ])).encoded(version: 3), "\"bundle3\"")
+
+        let snapshot = try #require(try await LampSyncSettingsStore.read(from: store, patience: .immediate))
+
+        #expect(store.data("Writing/sermons.lamp") == Data("sermons, edited".utf8))
+        #expect(store.conditions["Writing/sermons.lamp"] == [.ifRevision("\"x\"")])
+        #expect(snapshot.bundle.manifest.entry(at: "Writing/sermons.lamp")?.revision == store.revision(of: "Writing/sermons.lamp"))
     }
 
     /// A format-3 bundle written over by `update` is a format-4 one, even
@@ -498,6 +522,7 @@ private class MoveStore: LampSyncRemoteStore, @unchecked Sendable {
     private(set) var conditions: [String: [LampSyncWriteCondition]] = [:]
     private(set) var writeCount = 0
     var beforeBundleWrite: (() throws -> Void)?
+    var beforeReading: [String: () throws -> Void] = [:]
     private var counter = 0
 
     func put(_ path: String, _ data: Data, _ revision: String) { files[path] = (data, revision) }
@@ -520,7 +545,8 @@ private class MoveStore: LampSyncRemoteStore, @unchecked Sendable {
     }
 
     func read(path: String) async throws -> LampSyncRemoteFile? {
-        files[path].map { LampSyncRemoteFile(data: $0.0, revision: $0.1) }
+        if let hook = beforeReading.removeValue(forKey: path) { try hook() }
+        return files[path].map { LampSyncRemoteFile(data: $0.0, revision: $0.1) }
     }
 
     func revision(path: String) async throws -> String? { files[path]?.1 }

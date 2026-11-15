@@ -733,11 +733,13 @@ first format-4 client to read a format-3 bundle moves the library, inside
 1. It copies each member the rename moves to its new path, with every file at
    format 3's writing paths the manifest does not account for: a module or a
    writing's media no entry names, found by listing `Devotionals/` and walking
-   `DevotionalMedia/`, and a copy put back after a deletion. It never writes
-   over a file it did not write: what is at a new path is another device's, a
-   second device moving or a format-4 pass, and is kept. Only a copy the same
-   move made, from what the old path held before a format-3 device wrote it
-   again, is replaced (`formatFourCopy`). The collection is rewritten to say
+   `DevotionalMedia/`, and a copy put back after a deletion. It writes over a
+   file at a new path only when it can tell it is a copy of what the old path
+   no longer holds: its own, made before a format-3 device wrote again, or one
+   a move cut short left, while the format-3 bundle it read still stands and
+   no device can have published there yet. Anything else, once the bundle has
+   moved or beside iCloud versions, may be a format-4 device's and is kept
+   (`formatFourCopy`). The collection is rewritten to say
    `writing` in `module_format`, `module_meta` and each entry, because the
    phone checks that a module's file name and the ID inside agree. A format-3
    iCloud version of the bundle has its files copied too.

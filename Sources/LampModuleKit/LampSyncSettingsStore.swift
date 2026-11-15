@@ -241,6 +241,7 @@ public enum LampSyncSettingsStore {
         let threes = (formatThree.isFormatThree ? [formatThree.bundle] : [])
             + formatThree.versions.filter(\.isFormatThree).map(\.bundle)
         let manifest = threes.map(\.manifest).reduce(LampSyncLibraryManifest()) { $0.merged(with: $1) }
+        copies.asRead = formatThree.isFormatThree && formatThree.versions.isEmpty ? formatThree.revision : nil
         let carried = try await LampSyncFormatFourMove.copy(manifest, in: store, copies: copies, patience: patience)
         let moved = formatThree.isFormatThree
             ? LampSyncFormatFourMove.bundle(formatThree.bundle, carried: carried)

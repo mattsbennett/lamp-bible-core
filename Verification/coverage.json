@@ -765,7 +765,7 @@
         "anUnmovedEntryIsUntouched",
         "formatFourCopy",
         "theMoveNeverWritesOverAnotherDevicesFile",
-        "theMoveReplacesItsOwnStaleCopy",
+        "theMoveReplacesAStaleCopy",
         "aFormatThreeClientStopsAtFormatFour"
       ],
       "conformance": [

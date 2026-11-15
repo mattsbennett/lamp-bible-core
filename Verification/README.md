@@ -111,10 +111,11 @@ writing moves (`everythingElseStays`), each path keeps its kind
 `formatThreeOfUndoesTheRename`). A moved manifest entry keeps its membership
 (`theMoveKeepsMembership`), a moved tombstone deletes whatever copy turns up,
 an earlier attempt's among them (`aMovedTombstoneDeletesAnyCopy`), and a copy
-put back after a deletion is adopted (`aCopyPutBackIsAdoptedByTheMove`). The
-move never writes over a file another device wrote
-(`theMoveNeverWritesOverAnotherDevicesFile`), and replaces its own copy of what
-the old path no longer holds (`theMoveReplacesItsOwnStaleCopy`). It reads again
+put back after a deletion is adopted (`aCopyPutBackIsAdoptedByTheMove`). Once the
+bundle has moved, the move never writes over a file it did not write
+(`theMoveNeverWritesOverAnotherDevicesFile`), and it replaces a copy of what
+the old path no longer holds, its own or one a move cut short left while the
+format-3 bundle it read still stands (`theMoveReplacesAStaleCopy`). It reads again
 when another device wrote first (`aMoveRefusedIsReadAgain`), leaves a bundle
 with iCloud versions to the next update (`aMoveBesideVersionsIsLeftForTheUpdate`),
 which writes it whatever its change did (`aFormatThreeCopyIsAlwaysWritten`).

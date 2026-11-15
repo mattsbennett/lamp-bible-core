@@ -1349,9 +1349,9 @@ struct SyncModelConformanceTests {
         }
         try conform("formatFourCopy") { f in
             let step = LampSyncFormatFourMove.formatFourCopy(
-                present: f[0] == "true", same: f[1] == "true", ours: f[2] == "true"
+                present: f[0] == "true", same: f[1] == "true", ours: f[2] == "true", stillAsRead: f[3] == "true"
             )
-            return "\(step)" == f[3]
+            return "\(step)" == f[4]
         }
         try conform("formatFourMoveStep") { f in
             let outcome: LampSyncConditionalWrite.Outcome = switch f[1] {

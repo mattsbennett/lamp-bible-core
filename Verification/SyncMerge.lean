@@ -4021,19 +4021,23 @@ inductive FormatFourCopy where
   deriving DecidableEq, Repr
 
 -- At a file's new path: write where nothing is; keep what is there when it is
--- the same, or when this move did not write it; replace only this move's own
--- copy of what the old path held before a format-3 device wrote it again.
-def formatFourCopy (present same ours : Bool) : FormatFourCopy :=
-  if !present then .write else if same || !ours then .keep else .replace
+-- the same; replace it when this move wrote it, or while the format-3 bundle
+-- it read still stands, when no device can have published there yet and what
+-- is there is a copy a move cut short left; keep it otherwise.
+def formatFourCopy (present same ours stillAsRead : Bool) : FormatFourCopy :=
+  if !present then .write else if same || !(ours || stillAsRead) then .keep else .replace
 
--- The move never writes over a file another device wrote: a second device
--- moving, or a format-4 pass, whose publication is newer than any copy.
+-- Once the bundle has moved, the move never writes over a file it did not
+-- write: another device may have published it since, newer than any copy.
 theorem theMoveNeverWritesOverAnotherDevicesFile (same : Bool) :
-    formatFourCopy true same false = .keep := by
+    formatFourCopy true same false false = .keep := by
   cases same <;> rfl
 
--- And never keeps its own copy of what the old path no longer holds.
-theorem theMoveReplacesItsOwnStaleCopy : formatFourCopy true false true = .replace := rfl
+-- And never keeps a copy of what the old path no longer holds, its own or
+-- one a move cut short left, while it can tell that is what it is.
+theorem theMoveReplacesAStaleCopy (ours stillAsRead : Bool) (h : (ours || stillAsRead) = true) :
+    formatFourCopy true false ours stillAsRead = .replace := by
+  simp [formatFourCopy, h]
 
 inductive FormatFourMoveStep where
   | moved (r : Nat) | leftForTheUpdate | readAgain | unconfirmed
@@ -5271,8 +5275,10 @@ def bundleCopies : List BundleCopy :=
   for present in [true, false] do
     for same in [true, false] do
       for ours in [true, false] do
-        IO.println <| conformanceLine "formatFourCopy"
-          [toString present, toString same, toString ours, formatFourCopyName (formatFourCopy present same ours)]
+        for stillAsRead in [true, false] do
+          IO.println <| conformanceLine "formatFourCopy"
+            [toString present, toString same, toString ours, toString stillAsRead,
+             formatFourCopyName (formatFourCopy present same ours stillAsRead)]
   for versions in [true, false] do
     for outcome in [WriteOutcome.written 4, .writtenUnconfirmed, .refused] do
       IO.println <| conformanceLine "formatFourMoveStep"

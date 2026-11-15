@@ -13,13 +13,13 @@ import SQLite3
 /// module ID rewritten inside, then writes the bundle as format 4 with its
 /// manifest at the new paths, under the revision it read.
 ///
-/// It never writes over a file it did not write itself. A file already at a
-/// new path is another device's: a second device moving at the same time, or
-/// a format-4 pass that ran while iCloud held versions of the bundle. Only a
-/// copy this same move made, from what the old path held before a format-3
-/// device wrote it again, is replaced (`formatFourCopy`). So a move retried
-/// after another device wrote the bundle carries the newer file, and nothing a
-/// format-4 device published is lost to an old copy.
+/// It writes over a file at a new path only when it can tell the file is a
+/// copy of what the old path no longer holds: one this same move made before
+/// a format-3 device wrote the old path again, or one a move cut short left,
+/// while the format-3 bundle this move read still stands, so no device can
+/// have published there yet (`formatFourCopy`). Anything else is kept: once
+/// the bundle has moved, or beside iCloud versions of it, a file at a new path
+/// may be a format-4 device's, newer than any copy.
 ///
 /// Nothing old is deleted. A format-3 client finds format 4 newer and stops
 /// rather than writing to paths nobody reads, so its edits wait on the device
@@ -39,11 +39,19 @@ public enum LampSyncFormatFourMove {
         }
     }
 
-    /// What one move has written, by new path, at the revision it wrote:
-    /// the only files it may write over. Kept across the attempts of one
+    /// What one move has written, by new path, at the revision it wrote,
+    /// which it may write over. Kept across the attempts of one
     /// `LampSyncSettingsStore.read`, and no longer.
+    ///
+    /// `asRead` is the revision of the format-3 bundle this attempt read,
+    /// when iCloud holds no versions of it. While the bundle is still there
+    /// at that revision, no device has moved the library, and none has
+    /// published to format 4's paths, so anything at one is a copy a move
+    /// left, one cut short before it wrote the bundle, and it may be written
+    /// over with what the old path holds now. Nil where that cannot be known.
     final class Copies: @unchecked Sendable {
         var written: [String: String] = [:]
+        var asRead: String?
         init() {}
     }
 
@@ -159,8 +167,10 @@ public enum LampSyncFormatFourMove {
 
     /// One file, to its new path: the old file, or the collection with its
     /// ID rewritten. Where nothing is, it is written. What is there is kept
-    /// when it holds the same, and when another device wrote it; only a copy
-    /// this move wrote, from what the old path held before, is replaced.
+    /// when it holds the same, and when another device may have published
+    /// it; a copy this move wrote, from what the old path held before, is
+    /// replaced, and so is one a move left while the bundle is still the
+    /// format-3 one this move read (`Copies.asRead`).
     /// Returns the revision at the new path afterwards: nil when the old path
     /// holds nothing, or the server took the copy without showing it back.
     /// (`Verification/SyncMerge.lean`: `formatFourCopy`.)
@@ -188,7 +198,15 @@ public enum LampSyncFormatFourMove {
                 let ours = existing.flatMap(\.revision).map {
                     LampSyncConditionalWrite.namesSameRevision(copies.written[target], $0)
                 } ?? false
-                switch formatFourCopy(present: existing != nil, same: existing?.digest == expected, ours: ours) {
+                let same = existing?.digest == expected
+                // Asked only where it decides anything.
+                var stillAsRead = false
+                if existing != nil, !same, !ours, let asRead = copies.asRead {
+                    stillAsRead = LampSyncConditionalWrite.namesSameRevision(
+                        try await store.revision(path: LampSyncSettingsStore.path), asRead
+                    )
+                }
+                switch formatFourCopy(present: existing != nil, same: same, ours: ours, stillAsRead: stillAsRead) {
                 case .keep:
                     return existing?.revision
                 case .write, .replace:
@@ -217,12 +235,13 @@ public enum LampSyncFormatFourMove {
     }
 
     /// What the move does at a file's new path: write where nothing is; keep
-    /// what is there when it holds the same, or when this move did not write
-    /// it; replace only its own copy of what the old path held before.
+    /// what is there when it holds the same; replace it when this move wrote
+    /// it, or while the format-3 bundle this move read still stands; keep it
+    /// otherwise, since another device may have published it.
     /// (`Verification/SyncMerge.lean`: `formatFourCopy`.)
-    static func formatFourCopy(present: Bool, same: Bool, ours: Bool) -> FormatFourCopy {
+    static func formatFourCopy(present: Bool, same: Bool, ours: Bool, stillAsRead: Bool) -> FormatFourCopy {
         guard present else { return .write }
-        return same || !ours ? .keep : .replace
+        return same || !(ours || stillAsRead) ? .keep : .replace
     }
 
     /// Members at format 4's writing paths with no revision: a member the move
