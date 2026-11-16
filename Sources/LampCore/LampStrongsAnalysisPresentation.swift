@@ -42,11 +42,25 @@ public enum LampStrongsPresence {
     }
 
     /// Why nothing was found, which is a different thing in a narrowed
-    /// search: a key may be tagged all through the Bible and still reach none
-    /// of the books being searched, and saying there that no translation tags
-    /// it would be false.
-    public static func reason(narrowed: Bool) -> String {
-        narrowed
+    /// search.
+    ///
+    /// Each narrowing makes the plain sentence false in its own way. A key
+    /// may be tagged all through the Bible and still reach none of the books
+    /// being searched. And a search narrowed to a chosen translation says
+    /// nothing whatever about the others, so "no installed translation"
+    /// would be a claim about a library the search never looked at — and
+    /// worse, it would offer to install what is installed already.
+    ///
+    /// `toTranslations` carries a default so that an app narrowing only by
+    /// book keeps its wording without naming a scope it does not have.
+    public static func reason(narrowed: Bool, toTranslations: Bool = false) -> String {
+        if toTranslations {
+            return narrowed
+                ? "No translation searched tags this key in the chosen books."
+                : "No translation searched tags this key. Another may: this "
+                    + "search is narrowed to a chosen translation."
+        }
+        return narrowed
             ? "No installed translation tags this key in the chosen books."
             : "No installed translation tags this key. Check the number, or "
                 + "install a translation that carries tags."

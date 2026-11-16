@@ -117,6 +117,23 @@ struct StrongsAnalysisSupportTests {
         #expect(LampStrongsPresence.title(key: "H0") == "No Tags for H0")
     }
 
+    /// A search narrowed to one translation has looked at one translation,
+    /// so it may not speak for the library: saying no installed translation
+    /// tags the key would be a claim about texts it never opened, and the
+    /// advice to install one would be addressed to someone who already has.
+    @Test func theReasonDoesNotSpeakForTranslationsItDidNotSearch() {
+        for narrowed in [true, false] {
+            let chosen = LampStrongsPresence.reason(narrowed: narrowed, toTranslations: true)
+            #expect(!chosen.contains("installed"))
+            #expect(chosen.contains("searched"))
+            #expect(chosen.contains("chosen books") == narrowed)
+        }
+        // The default is the unnarrowed wording, so an app that narrows only
+        // by book keeps what it had.
+        #expect(LampStrongsPresence.reason(narrowed: true)
+            == LampStrongsPresence.reason(narrowed: true, toTranslations: false))
+    }
+
     /// Books the key is in, out of the books in range that tag its language —
     /// a zero is a book that could have had it and does not.
     @Test func booksWithOccurrencesCountsOnlyBooksTheKeyIsIn() {
