@@ -78,8 +78,12 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         /// its Hebrew or Greek bar. The owner was asked and said plainly that
         /// old comparison slides need no support (2026-11-15), so this is
         /// settled rather than an oversight: do not add a migration, and do
-        /// not make absence mean "include" to spare them. Slide Studio turns
-        /// the texts back on for any such slide.
+        /// not make absence mean "include" to spare them.
+        ///
+        /// Both apps draw slides through this, so both lose the bar. Only the
+        /// Mac can put it back, in Slide Studio: the phone draws decks and
+        /// does not edit their charts, so a slide met there is simply the
+        /// comparison without it.
         public init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             strongs = try values.decode(String.self, forKey: .strongs)
