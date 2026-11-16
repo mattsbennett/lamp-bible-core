@@ -72,11 +72,14 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         /// Written out by hand only so that the new option may be absent.
         ///
         /// A deck written before it existed has no such key, and a synthesised
-        /// decoder would refuse the whole deck over it. Absent reads as off,
-        /// which does change what those decks draw: a comparison they made
-        /// with the Hebrew or Greek text among the bars loses it. That is the
-        /// same answer the option gives everywhere else, and turning it back
-        /// on is one toggle.
+        /// decoder would refuse the whole deck over it.
+        ///
+        /// Absent reads as off, so a comparison slide made before today loses
+        /// its Hebrew or Greek bar. The owner was asked and said plainly that
+        /// old comparison slides need no support (2026-11-15), so this is
+        /// settled rather than an oversight: do not add a migration, and do
+        /// not make absence mean "include" to spare them. Slide Studio turns
+        /// the texts back on for any such slide.
         public init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             strongs = try values.decode(String.self, forKey: .strongs)
