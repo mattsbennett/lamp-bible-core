@@ -959,22 +959,39 @@ public enum LampModuleSearch {
     /// name their dictionary results by these, so a search orders its
     /// entries alike on each.
     public static func glossNames(of senses: [LampDictionarySense], limit: Int = 16) -> [String] {
+        guard limit > 0 else { return [] }
         var names: [String] = []
+        var seen: Set<String> = []
         for sense in senses {
             guard let text = [sense.gloss, sense.shortDefinition]
                 .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
                 .first(where: { !$0.isEmpty }) else { continue }
-            // Brackets first: a comma inside one, as in "thank(-s, -worthy)",
-            // is not between two glosses.
-            let unbracketed = text.replacingOccurrences(of: "\\([^)]*\\)", with: "", options: .regularExpression)
-            for piece in unbracketed.split(whereSeparator: { $0 == "," || $0 == ";" }) {
-                let name = piece.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
-                guard !name.isEmpty, !names.contains(name) else { continue }
+            for piece in withoutBrackets(text).split(whereSeparator: { $0 == "," || $0 == ";" }) {
+                let name = piece.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+                    .trimmingCharacters(in: .punctuationCharacters)
+                // Once each, whatever its case: the rank folds case, and
+                // "God" and "god" would count the entry named twice.
+                guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { continue }
                 names.append(name)
                 if names.count == limit { return names }
             }
         }
         return names
+    }
+
+    /// `text` with its bracketed asides gone, innermost first, as Strong's
+    /// "come (go, (flee)) before" and "[idiom] patrimony" carry them: a
+    /// comma inside one is not between two glosses.
+    private static func withoutBrackets(_ text: String) -> String {
+        var text = text
+        while true {
+            let stripped = text
+                .replacingOccurrences(of: "\\([^()]*\\)", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "\\[[^\\[\\]]*\\]", with: " ", options: .regularExpression)
+            if stripped == text { break }
+            text = stripped
+        }
+        return text.filter { !"()[]".contains($0) }
     }
 
     /// The order ties between kinds are broken in, and kinds searched and

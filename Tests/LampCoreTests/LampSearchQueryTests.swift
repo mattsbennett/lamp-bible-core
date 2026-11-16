@@ -122,6 +122,15 @@ private struct FTS5Probe {
         #expect(found("grace") == ["Grace", "grace", "grace"])
         #expect(found("\"grace\"") == ["Grace", "grace"])
         #expect(found("*grace").count == 4)
+        // A quoted phrase across a line break, as the snippet marks it.
+        let broken = "the kingdom\nof  God is near"
+        let phrase = LampSearchQuery("\"kingdom of God\"").matchRanges(in: broken)
+        #expect(phrase.count == 1)
+        if let range = phrase.first {
+            let start = broken.index(broken.startIndex, offsetBy: range.lowerBound)
+            let end = broken.index(broken.startIndex, offsetBy: range.upperBound)
+            #expect(String(broken[start..<end]) == "kingdom\nof  God")
+        }
     }
 
 }

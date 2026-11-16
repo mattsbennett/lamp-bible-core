@@ -442,6 +442,14 @@ struct LampModuleSearchTests {
             LampDictionarySense(definition: "a long article with no gloss"),
         ])
         #expect(names == ["favour", "grace", "charm", "thank"])
+        // Strong's nests its asides and flags some in square brackets.
+        #expect(LampModuleSearch.glossNames(of: [LampDictionarySense(shortDefinition: "come (go, (flee)) before")])
+            == ["come before"])
+        #expect(LampModuleSearch.glossNames(of: [LampDictionarySense(shortDefinition: "[idiom] patrimony")])
+            == ["patrimony"])
+        // Once each whatever the case, and nothing for no room.
+        #expect(LampModuleSearch.glossNames(of: [LampDictionarySense(gloss: "God, god, gods")]) == ["God", "gods"])
+        #expect(LampModuleSearch.glossNames(of: [LampDictionarySense(gloss: "grace")], limit: 0).isEmpty)
     }
 
     /// The index tells a unit or section holding the words together from one

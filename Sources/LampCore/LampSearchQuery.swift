@@ -349,6 +349,34 @@ public struct LampSearchQuery: Equatable, Sendable {
     /// or phrase. For marking a match in a text shown whole, as a dictionary
     /// entry opened from a hit, so it marks what the hit's snippet marked.
     public func matchRanges(in text: String) -> [Range<Int>] {
+        // A phrase may cross a line break or a run of spaces, as
+        // markedSnippet allows: found in the text with its whitespace
+        // collapsed, and mapped back to the text's own offsets.
+        if terms.contains(where: { $0.text.contains(where: \.isWhitespace) }),
+           text.contains("  ") || text.contains(where: { $0.isWhitespace && $0 != " " }) {
+            var collapsed = ""
+            var origin: [Int] = []
+            var lastWasSpace = false
+            for (offset, character) in text.enumerated() {
+                if character.isWhitespace {
+                    if lastWasSpace { continue }
+                    collapsed.append(" ")
+                    lastWasSpace = true
+                } else {
+                    collapsed.append(character)
+                    lastWasSpace = false
+                }
+                origin.append(offset)
+            }
+            return ranges(in: collapsed).compactMap { range in
+                guard range.lowerBound < origin.count, range.upperBound - 1 < origin.count, !range.isEmpty else { return nil }
+                return origin[range.lowerBound] ..< origin[range.upperBound - 1] + 1
+            }
+        }
+        return ranges(in: text)
+    }
+
+    private func ranges(in text: String) -> [Range<Int>] {
         terms.flatMap { term in
             let starts = term.ranges(in: text, wordStartsOnly: true)
             return starts.isEmpty ? term.ranges(in: text, wordStartsOnly: false) : starts
