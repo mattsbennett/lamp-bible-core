@@ -131,6 +131,8 @@ private struct FTS5Probe {
             let end = broken.index(broken.startIndex, offsetBy: range.upperBound)
             #expect(String(broken[start..<end]) == "kingdom\nof  God")
         }
+        // And one typed with a run of spaces finds the text as written.
+        #expect(LampSearchQuery("\"holy  spirit\"").matchRanges(in: "the holy  spirit came").count == 1)
     }
 
 }

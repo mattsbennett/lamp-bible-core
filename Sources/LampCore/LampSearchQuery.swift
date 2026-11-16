@@ -368,10 +368,15 @@ public struct LampSearchQuery: Equatable, Sendable {
                 }
                 origin.append(offset)
             }
-            return ranges(in: collapsed).compactMap { range in
+            let mapped = ranges(in: collapsed).compactMap { range -> Range<Int>? in
                 guard range.lowerBound < origin.count, range.upperBound - 1 < origin.count, !range.isEmpty else { return nil }
                 return origin[range.lowerBound] ..< origin[range.upperBound - 1] + 1
             }
+            // A phrase typed with its own run of spaces still finds the text
+            // as written.
+            var found = ranges(in: text)
+            for range in mapped where !found.contains(range) { found.append(range) }
+            return found.sorted { $0.lowerBound < $1.lowerBound }
         }
         return ranges(in: text)
     }

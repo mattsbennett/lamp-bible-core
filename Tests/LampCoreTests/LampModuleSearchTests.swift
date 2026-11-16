@@ -449,6 +449,7 @@ struct LampModuleSearchTests {
             == ["patrimony"])
         // Once each whatever the case, and nothing for no room.
         #expect(LampModuleSearch.glossNames(of: [LampDictionarySense(gloss: "God, god, gods")]) == ["God", "gods"])
+        #expect(LampModuleSearch.glossNames(of: [LampDictionarySense(gloss: "— grace; grace")]) == ["grace"])
         #expect(LampModuleSearch.glossNames(of: [LampDictionarySense(gloss: "grace")], limit: 0).isEmpty)
     }
 

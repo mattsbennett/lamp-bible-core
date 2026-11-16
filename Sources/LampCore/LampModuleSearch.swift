@@ -968,7 +968,7 @@ public enum LampModuleSearch {
                 .first(where: { !$0.isEmpty }) else { continue }
             for piece in withoutBrackets(text).split(whereSeparator: { $0 == "," || $0 == ";" }) {
                 let name = piece.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-                    .trimmingCharacters(in: .punctuationCharacters)
+                    .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
                 // Once each, whatever its case: the rank folds case, and
                 // "God" and "god" would count the entry named twice.
                 guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { continue }
