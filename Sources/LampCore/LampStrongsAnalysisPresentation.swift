@@ -6,6 +6,53 @@ import LampModuleKit
 // and the Septuagint section's wording. Pure, so the Mac and the phone draw
 // the same figures and say the same things about them.
 
+/// A comparison's two halves: the translations, and the texts in the
+/// biblical languages themselves.
+///
+/// They answer different questions, and the second is barely a comparison.
+/// A Hebrew or Greek text does not render the word — it *is* the word, so
+/// its count is the tagging restated rather than a translator's choice.
+/// Listed among the English Bibles it reads as one more opinion, and being
+/// usually the largest count it sets the scale the real translations are
+/// then measured against.
+///
+/// They are kept, not dropped: how often a text uses a word is worth
+/// knowing. They are simply held back, and the owner asked for them folded
+/// away on 2026-11-15.
+public enum LampStrongsComparison {
+    public struct Split: Equatable, Sendable {
+        /// The translations, in the order they came.
+        public let translations: [LampStrongsAnalysis]
+        /// The original-language texts, in the order they came.
+        public let originalLanguages: [LampStrongsAnalysis]
+    }
+
+    /// Takes the module IDs rather than reading a language itself, because
+    /// each app already knows its own modules and the library is an actor:
+    /// asking it again here would make a pure split an await.
+    public static func split(
+        _ analyses: [LampStrongsAnalysis],
+        originalLanguageIDs: Set<String>
+    ) -> Split {
+        Split(
+            translations: analyses.filter { !originalLanguageIDs.contains($0.translationID) },
+            originalLanguages: analyses.filter { originalLanguageIDs.contains($0.translationID) }
+        )
+    }
+
+    /// What the fold is called. It names no language, because which ones are
+    /// there depends on what is installed and on the key.
+    public static func foldTitle(count: Int) -> String {
+        count == 1 ? "The original-language text" : "The original-language texts (\(count))"
+    }
+
+    /// Why they are apart, said once inside the fold rather than against
+    /// every row.
+    public static let foldNote =
+        "A Hebrew or Greek text tags the word as the word, so its count says how "
+        + "often that text uses it — not how a translator chose to render it."
+}
+
 /// Whether a key's analyses amount to a finding at all.
 ///
 /// A translation answers for every key asked of it, because most of what a

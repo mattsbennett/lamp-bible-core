@@ -758,6 +758,13 @@ public enum LampPresentationDeckValidator {
                 "Only a chart by translation compares translations; this one counts translationID."
             ))
         }
+        if chart.source.includesOriginalLanguages && chart.by != .translation {
+            issues.append((
+                .warning,
+                "chart.source.includesOriginalLanguages",
+                "Only a chart by translation can hold the Hebrew and Greek texts back, or let them in."
+            ))
+        }
         if let filter = chart.source.filter {
             if filter.isEmpty {
                 issues.append((

@@ -31,19 +31,61 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
         /// The translations a chart by translation compares, or every tagged
         /// one in the library when absent.
         public var translations: [String]?
+        /// Whether a chart by translation counts the texts in the biblical
+        /// languages themselves — the Hebrew Bible, the Greek New
+        /// Testament, the Septuagint.
+        ///
+        /// Off unless asked for, because such a text does not render the
+        /// word: it *is* the word, and its count is the tagging restated
+        /// rather than a translator's choice. Standing it beside the English
+        /// Bibles invites it to be read as one more opinion among them, and
+        /// it is usually the tallest bar, so it sets the scale every real
+        /// translation is then measured against.
+        ///
+        /// Read only where `translations` is absent, which is where the
+        /// chart means "every tagged translation". Naming a translation is
+        /// asking for it, so a named list is drawn as given and this is not
+        /// consulted.
+        public var includesOriginalLanguages: Bool
 
         public init(
             strongs: String,
             translationID: String,
             range: String? = nil,
             filter: Filter? = nil,
-            translations: [String]? = nil
+            translations: [String]? = nil,
+            includesOriginalLanguages: Bool = false
         ) {
             self.strongs = strongs
             self.translationID = translationID
             self.range = range
             self.filter = filter
             self.translations = translations
+            self.includesOriginalLanguages = includesOriginalLanguages
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case strongs, translationID, range, filter, translations
+            case includesOriginalLanguages
+        }
+
+        /// Written out by hand only so that the new option may be absent.
+        ///
+        /// A deck written before it existed has no such key, and a synthesised
+        /// decoder would refuse the whole deck over it. Absent reads as off,
+        /// which does change what those decks draw: a comparison they made
+        /// with the Hebrew or Greek text among the bars loses it. That is the
+        /// same answer the option gives everywhere else, and turning it back
+        /// on is one toggle.
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            strongs = try values.decode(String.self, forKey: .strongs)
+            translationID = try values.decode(String.self, forKey: .translationID)
+            range = try values.decodeIfPresent(String.self, forKey: .range)
+            filter = try values.decodeIfPresent(Filter.self, forKey: .filter)
+            translations = try values.decodeIfPresent([String].self, forKey: .translations)
+            includesOriginalLanguages = try values.decodeIfPresent(
+                Bool.self, forKey: .includesOriginalLanguages) ?? false
         }
     }
 
@@ -780,7 +822,7 @@ public extension LampLibrary {
     ) throws -> LampPresentationChart? {
         let books = try chart.source.range.map(LampReferenceParser.books)
         let keeping = chart.source.filter?.keeping(key: chart.source.strongs)
-        let analyses: [LampStrongsAnalysis]
+        var analyses: [LampStrongsAnalysis]
         if chart.by == .translation {
             var compared = chart.source.translations.map(Set.init)
             if let translationIDs { compared = compared?.intersection(translationIDs) ?? translationIDs }
@@ -794,6 +836,39 @@ public extension LampLibrary {
                 bookRange: books,
                 keeping: keeping
             )
+        }
+        // Asked for by the owner, 2026-11-15: a comparison is about how
+        // translations differ, and a Hebrew or Greek text is not one of them
+        // — it does not render the word, it is the word.
+        //
+        // Only where the chart compares *every* tagged translation. Naming a
+        // translation is asking for it, so a named list is honoured as given:
+        // without that rule "the word in each Testament", which names the
+        // Greek New Testament and the Septuagint on purpose, lost both of its
+        // bars and drew nothing. Done by filtering rather than by narrowing
+        // the list, so that a translation installed later still joins a chart
+        // that named none.
+        var excludedAll = false
+        if chart.by == .translation, chart.source.translations == nil,
+           !chart.source.includesOriginalLanguages {
+            let originalLanguages = Set(
+                try installedModules()
+                    .filter { LampTranslationLanguages.strongsSide(of: $0.language) != nil }
+                    .map(\.id)
+            )
+            let kept = analyses.filter { !originalLanguages.contains($0.translationID) }
+            excludedAll = kept.isEmpty && !analyses.isEmpty
+            analyses = kept
+        }
+        // Nothing left because nothing was asked for is a different answer
+        // from nothing left because the library holds nothing: the caller
+        // keeps a chart's old values when this returns nil, which would draw
+        // the very bars the exclusion removed. An emptied chart is returned
+        // empty so that what it carries is cleared.
+        if excludedAll {
+            var emptied = chart
+            emptied.values = []
+            return emptied
         }
         guard !analyses.isEmpty else { return nil }
 
