@@ -396,13 +396,17 @@ struct StrongsAnalysisSupportTests {
     @Test func theHeadingSaysTheVersesAreTheHebrewWords() {
         let hebrew = LampSeptuagintHebrew(text: "אַהֲבָה", strongs: "H160")
         #expect(LampSeptuagintSection.heading(hebrew, verses: 40)
-            == "Hebrew אַהֲבָה (H160) · 40 verses")
+            == "Hebrew \u{2068}אַהֲבָה\u{2069} (H160) · 40 verses")
         #expect(LampSeptuagintSection.heading(hebrew, verses: 1)
-            == "Hebrew אַהֲבָה (H160) · 1 verse")
-        // No number to show, and nothing to follow: the word still names itself.
+            == "Hebrew \u{2068}אַהֲבָה\u{2069} (H160) · 1 verse")
+        // No number to count by: the word still names itself, and gives no
+        // count, since the note under it says its verses can't be counted.
         #expect(LampSeptuagintSection.heading(
             LampSeptuagintHebrew(text: "רנן", stem: "pi."), verses: 0
-        ) == "Hebrew רנן pi. · 0 verses")
+        ) == "Hebrew \u{2068}רנן\u{2069} pi.")
+        #expect(LampSeptuagintSection.heading(
+            LampSeptuagintHebrew(text: "רנן"), rendering: "sing", verses: 0
+        ) == "\u{2068}רנן\u{2069} “sing”")
     }
 
     /// A missing verse names the text that is missing it. Brenton prints
@@ -1295,24 +1299,24 @@ struct SeptuagintEnglishTests {
             word, transliteration: "ʼahăbâh", rendering: "love", verses: 40
         ) == "ʼahăbâh “love” (H160) · in 40 Hebrew verses")
         #expect(LampSeptuagintSection.heading(word, rendering: "love", verses: 1)
-            == "אַהֲבָה “love” (H160) · in 1 Hebrew verse")
+            == "\u{2068}אַהֲבָה\u{2069} “love” (H160) · in 1 Hebrew verse")
         #expect(LampSeptuagintSection.heading(word, verses: 40)
-            == "Hebrew אַהֲבָה (H160) · 40 verses", "unchanged without English")
+            == "Hebrew \u{2068}אַהֲבָה\u{2069} (H160) · 40 verses", "unchanged without English")
         // Narrowed, the heading says from how many: the list holds the
         // verses that use the Greek word, not all the Hebrew word's.
         #expect(LampSeptuagintSection.heading(
             word, transliteration: "ʼahăbâh", rendering: "love", verses: 14, of: 35, usingGreek: "ἀγάπη"
         ) == "ʼahăbâh “love” (H160) · 14 of 35 verses using ἀγάπη")
         #expect(LampSeptuagintSection.heading(word, verses: 1, of: 3, usingGreek: "ἀγάπη")
-            == "Hebrew אַהֲבָה (H160) · 1 of 3 verses using ἀγάπη")
+            == "Hebrew \u{2068}אַהֲבָה\u{2069} (H160) · 1 of 3 verses using ἀγάπη")
         // Never "35 of 35", and never a total without the Greek word.
         #expect(LampSeptuagintSection.heading(
             word, rendering: "love", verses: 35, of: 35, usingGreek: "ἀγάπη"
-        ) == "אַהֲבָה “love” (H160) · 35 verses using ἀγάπη")
+        ) == "\u{2068}אַהֲבָה\u{2069} “love” (H160) · 35 verses using ἀγάπη")
         #expect(LampSeptuagintSection.heading(word, rendering: "love", verses: 1, of: nil, usingGreek: "ἀγάπη")
-            == "אַהֲבָה “love” (H160) · 1 verse using ἀγάπη")
+            == "\u{2068}אַהֲבָה\u{2069} “love” (H160) · 1 verse using ἀγάπη")
         #expect(LampSeptuagintSection.heading(word, rendering: "love", verses: 14, of: 35)
-            == "אַהֲבָה “love” (H160) · in 14 Hebrew verses")
+            == "\u{2068}אַהֲבָה\u{2069} “love” (H160) · in 14 Hebrew verses")
         let analysis = Self.analysis(occurrences: [], verseTexts: [:], renderings: [
             .init(id: "", text: "", count: 9, variants: []),
             .init(id: "love", text: "love", count: 8, variants: []),

@@ -1337,6 +1337,12 @@ public enum LampSeptuagintSection {
     /// 158 verses using ὀργή" keeps in the heading the fact that the list
     /// is narrowed, and from how many, which a sentence above the lists
     /// once said.
+    ///
+    /// The Hebrew is isolated, so the count after it stays on its English
+    /// side: bare, "· 0 verses" joined the Hebrew's right-to-left run and was
+    /// drawn before it, "Hebrew 0 · יָד תְּשׂוּמֶת verses". A word with no
+    /// Strong's number has nothing to count by, so it gives no count rather
+    /// than a 0 that the note beneath it says is not one.
     public static func heading(
         _ hebrew: LampSeptuagintHebrew,
         transliteration: String? = nil,
@@ -1353,16 +1359,18 @@ public enum LampSeptuagintSection {
         let verseWord = (ofTotal.isEmpty ? verses : total ?? verses) == 1 ? "verse" : "verses"
         let counted = greek.map { "\(verses)\(ofTotal) \(verseWord) using \($0)" }
             ?? "in \(verses) Hebrew \(verseWord)"
+        let printed = isolated(hebrew.text) + (hebrew.stem.map { " \($0)" } ?? "")
         guard transliteration != nil || rendering != nil else {
-            let name = hebrew.strongs.map { "\(word(hebrew)) (\($0))" } ?? word(hebrew)
+            guard let strongs = hebrew.strongs else { return "Hebrew \(printed)" }
+            let name = "\(printed) (\(strongs))"
             return greek.map { "Hebrew \(name) · \(verses)\(ofTotal) \(verseWord) using \($0)" }
                 ?? "Hebrew \(name) · \(verses) \(verseWord)"
         }
-        var name = [transliteration ?? word(hebrew), rendering.map { "“\($0)”" }]
+        var name = [transliteration ?? printed, rendering.map { "“\($0)”" }]
             .compactMap { $0 }
             .joined(separator: " ")
-        if let strongs = hebrew.strongs { name += " (\(strongs))" }
-        return "\(name) · \(counted)"
+        guard let strongs = hebrew.strongs else { return name }
+        return "\(name) (\(strongs)) · \(counted)"
     }
 
     /// The section's title. It is the Hebrew a Greek word translates, which
