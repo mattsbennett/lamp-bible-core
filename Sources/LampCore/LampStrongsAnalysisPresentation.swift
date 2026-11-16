@@ -565,6 +565,25 @@ public enum LampStrongsCompanionStrength {
         guard strongest > 0 else { return 0 }
         return min(max(companion.keyness / strongest, 0), 1)
     }
+
+    /// Under the list: what the multiple beside each word is, and why the
+    /// list isn't in its order. For a reader with no statistics.
+    public static let explanation = "The multiple is how many times more often the two words "
+        + "share a verse than they would by chance. The bar also counts how many verses they "
+        + "share, and sets the order, so a big multiple from a few verses can rank below a "
+        + "smaller one from many."
+}
+
+/// Under the translations compared: why their counts for one word differ,
+/// in terms a reader can check against what they see.
+public enum LampStrongsCompareNote {
+    public static let text = "Each translation’s tags were added separately: one may leave "
+        + "this word untagged in a verse, or tag it on two English words of one phrase, and "
+        + "some follow a slightly different Greek or Hebrew text. So counts can differ even "
+        + "where the original has the word the same number of times."
+
+    /// The same, short enough for a slide's caption.
+    public static let caption = "Each translation was tagged separately, so counts can differ"
 }
 
 /// Every chapter of every book, shaded by how often the key occurs.
@@ -1275,18 +1294,18 @@ public enum LampSeptuagintSection {
         let word = word.trimmingCharacters(in: .whitespacesAndNewlines)
         var doubts: [String] = []
         if hebrewOccurrences > 1 {
-            doubts.append("\(word.isEmpty ? "the Hebrew word" : Self.isolated(word)) stands "
+            doubts.append("\(word.isEmpty ? "the Hebrew word" : Self.isolated(word)) occurs "
                 + "\(Self.times(hebrewOccurrences)) in this verse")
         }
         if greekOccurrences > 1 {
-            doubts.append("\(lemma) stands \(Self.times(greekOccurrences)) in the Greek")
+            doubts.append("\(lemma) occurs \(Self.times(greekOccurrences)) in the Greek")
         }
         let competing = alsoRendered
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         if !competing.isEmpty {
             doubts.append("\(lemma) also renders \(Self.joined(competing.map(Self.isolated))), "
-                + "which stands here too")
+                + "which also occurs in this verse")
         }
         guard !doubts.isEmpty else { return nil }
         // Read as an English sentence, whatever it opens with. A sentence

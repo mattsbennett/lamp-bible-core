@@ -62,7 +62,7 @@ import LampModuleKit
         let doubt = try! #require(crossing.doubts["w1"]?[verse])
         #expect(doubt.contains("twice in this verse"))
         #expect(doubt.contains("twice in the Greek"))
-        #expect(doubt.contains("which stands here too"), "B stands in it as well")
+        #expect(doubt.contains("which also occurs in this verse"), "B stands in it as well")
         #expect(crossing.competing["w1"]?[verse]?.words == ["B"])
     }
 
@@ -120,7 +120,7 @@ import LampModuleKit
         )
         let kept = try! #require(withCompeting[verse])
         let note = try! #require(kept)
-        #expect(note.contains("which stands here too"))
+        #expect(note.contains("which also occurs in this verse"))
         #expect(!note.contains("twice"), "the counts were settled, and only those")
     }
 
