@@ -635,7 +635,7 @@ public extension LampWritingImport {
                     in: writing.content, made: plan.links[item.id] ?? [:], available: hoped
                 ))
                 // Blocks kept from the phone stay while the text is the same.
-                if let local, local.content == writing.content || asWritten(local).content == writing.content {
+                if let local, asWritten(local).content == writing.content {
                     writing = writing.withContent(local.content)
                     writing.contentJSON = local.contentJSON
                 }
@@ -716,8 +716,12 @@ public extension LampWritingImport {
             let pending = made.filter { hoped.contains($0.key) && !arrived.contains($0.key) }
             guard !pending.isEmpty else { continue }
             do {
-                let text = restoringLinks(in: stored.content, made: pending, available: arrived)
-                guard text != stored.content else { continue }
+                // Read as written: a writing that kept its blocks shows their
+                // text, which is where the links are; repairing it means
+                // saving that text, without the blocks.
+                let shown = asWritten(stored).content
+                let text = restoringLinks(in: shown, made: pending, available: arrived)
+                guard text != shown else { continue }
                 if let again = try await store.saveImportedWriting(stored.withContent(text), expecting: stored) {
                     saved[entry.id] = again
                     undo.writings[index].written = try LampSyncConflictPayload.encode(again)

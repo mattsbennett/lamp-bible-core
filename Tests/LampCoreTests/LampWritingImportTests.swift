@@ -1124,6 +1124,16 @@ struct LampWritingImportTests {
         #expect(stored.title == "On Grace")
         #expect(stored.contentJSON == blocks)
         #expect(stored.content == "Grace\n\nText.")
+
+        // A file whose text is the plain text — the heading gone — changes
+        // the text, and the blocks with their heading go with it.
+        let flattened = try await library.planWritingImport([LampWritingImportFile(
+            path: "w/grace.md", markdown: "---\nid: grace\ntitle: On Grace\n---\nGrace\n\nText.",
+            modified: Date().addingTimeInterval(120)
+        )])
+        #expect(flattened.items[0].changes == ["text"])
+        try await library.applyWritingImport(flattened, selecting: Set(flattened.items.map(\.id)))
+        #expect(try await library.personalDevotional(id: "grace")?.contentJSON == nil)
     }
 
     @Test func theOldMarkdownImportNoLongerAddsCopies() async throws {
