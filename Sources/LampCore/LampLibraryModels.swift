@@ -360,6 +360,10 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
     /// again, or analyses it. Not in `id`, whose entry part is the row's own
     /// id and, for a bundled dictionary, a row number.
     public let entryKey: String?
+    /// What a dictionary entry means, in the words it is glossed with: names
+    /// it goes by in the search's language, which the merge ranks as names
+    /// (`LampModuleSearch.glossNames`). Empty for everything else.
+    public let glosses: [String]
 
     public init(
         id: String,
@@ -373,7 +377,8 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         endReference: Int? = nil,
         highlightColor: String? = nil,
         holdsPhrase: Bool = false,
-        entryKey: String? = nil
+        entryKey: String? = nil,
+        glosses: [String] = []
     ) {
         self.id = id
         self.kind = kind
@@ -387,6 +392,7 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         self.highlightColor = highlightColor
         self.holdsPhrase = holdsPhrase
         self.entryKey = entryKey
+        self.glosses = glosses
     }
 
     public var referenceDescription: String? {

@@ -343,6 +343,18 @@ public struct LampSearchQuery: Equatable, Sendable {
         }
     }
 
+    /// Where the query's words fall in `text`, as Character offsets, by the
+    /// rule `markedSnippet` marks them by: a typed word where a word starts
+    /// with it, or anywhere when it starts none; a quoted one as a whole word
+    /// or phrase. For marking a match in a text shown whole, as a dictionary
+    /// entry opened from a hit, so it marks what the hit's snippet marked.
+    public func matchRanges(in text: String) -> [Range<Int>] {
+        terms.flatMap { term in
+            let starts = term.ranges(in: text, wordStartsOnly: true)
+            return starts.isEmpty ? term.ranges(in: text, wordStartsOnly: false) : starts
+        }
+    }
+
     /// `text` cut to about `limit` characters around its first match, with
     /// every match wrapped in `<mark>`: the words the search found, marked as
     /// it matched them. A typed word is marked where a word starts with it, as

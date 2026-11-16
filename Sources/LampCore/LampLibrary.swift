@@ -2809,7 +2809,8 @@ public actor LampLibrary {
                         subtitle: match.transliteration,
                         snippet: snippet(definition.isEmpty ? match.key : definition),
                         holdsPhrase: parsedQuery.holdsPhrase(definition),
-                        entryKey: match.key
+                        entryKey: match.key,
+                        glosses: LampModuleSearch.glossNames(of: match.senses)
                     )
                 }
             },

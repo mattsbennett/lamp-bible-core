@@ -107,4 +107,21 @@ private struct FTS5Probe {
             try String.fetchAll(db, sql: "SELECT text FROM v WHERE v MATCH ?", arguments: [query])
         }
     }
+
+    /// Matches in a whole text follow the snippet's rule: word starts for a
+    /// typed word, a whole word for a quoted one, and a typed `*word` anywhere.
+    @Test func matchRangesFollowTheSnippetsRule() {
+        let text = "Grace upon grace; gracefulness, disgrace."
+        func found(_ query: String) -> [String] {
+            LampSearchQuery(query).matchRanges(in: text).map { range in
+                let start = text.index(text.startIndex, offsetBy: range.lowerBound)
+                let end = text.index(text.startIndex, offsetBy: range.upperBound)
+                return String(text[start..<end])
+            }
+        }
+        #expect(found("grace") == ["Grace", "grace", "grace"])
+        #expect(found("\"grace\"") == ["Grace", "grace"])
+        #expect(found("*grace").count == 4)
+    }
+
 }

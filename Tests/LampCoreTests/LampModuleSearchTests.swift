@@ -407,6 +407,43 @@ struct LampModuleSearchTests {
         #expect(merged.map(\.id) == ["kingdom", "daniel", "chapter", "queen"])
     }
 
+    /// A lexicon entry's glosses name it: the entries that mean the word come
+    /// before one whose article only mentions it. BDB's entry for the
+    /// conjunction וְ ("so, then, and") says "grace" in passing, and led a
+    /// search for "grace" over the entries glossed with it.
+    @Test func aDictionaryEntryIsNamedByItsGlosses() {
+        func entry(_ id: String, lemma: String, senses: [LampDictionarySense], snippet: String) -> LampModuleSearchResult {
+            LampModuleSearchResult(
+                id: id, kind: .dictionary, moduleID: "bdb", moduleName: "BDB", title: lemma,
+                snippet: snippet, glosses: LampModuleSearch.glossNames(of: senses)
+            )
+        }
+        let merged = LampModuleSearch.ranked([
+            entry("vav", lemma: "וְ", senses: [LampDictionarySense(gloss: "so, then, and")],
+                  snippet: "…the lightness and <mark>grace</mark> of movement…"),
+            entry("beauty", lemma: "εὐπρέπεια", senses: [LampDictionarySense(gloss: "beauty, gracefulness")],
+                  snippet: "beauty, <mark>grace</mark>fulness"),
+            entry("chen", lemma: "חֵן", senses: [LampDictionarySense(gloss: "favour, grace")],
+                  snippet: "favour, <mark>grace</mark>"),
+            entry("charis", lemma: "χάρις",
+                  senses: [LampDictionarySense(shortDefinition: "acceptable, benefit, favour, gift, grace(-ious), joy")],
+                  snippet: "acceptable, benefit, favour, gift, <mark>grace</mark>(-ious)"),
+        ], by: LampSearchQuery("grace"), limit: 10)
+        #expect(Set(merged.prefix(2).map(\.id)) == ["chen", "charis"])
+        #expect(merged.last?.id == "vav")
+    }
+
+    /// Glosses are cut at commas and semicolons, a bracketed ending left
+    /// off, a sense without a gloss read by its short definition.
+    @Test func glossNamesAreTheGlossesWords() {
+        let names = LampModuleSearch.glossNames(of: [
+            LampDictionarySense(gloss: "favour, grace; charm"),
+            LampDictionarySense(shortDefinition: "grace(-ious), thank(-s, -worthy)"),
+            LampDictionarySense(definition: "a long article with no gloss"),
+        ])
+        #expect(names == ["favour", "grace", "charm", "thank"])
+    }
+
     /// The index tells a unit or section holding the words together from one
     /// with them apart, and the merge puts it first.
     @Test func theIndexFindsTheWordsTogether() throws {

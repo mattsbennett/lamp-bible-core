@@ -937,12 +937,44 @@ public enum LampModuleSearch {
         ranked(
             results, by: query, limit: limit,
             // A quiz result's title is its question, a sentence rather than a
-            // name: it counts as what the result shows.
-            named: { $0.kind == .quiz ? [$0.subtitle ?? ""] : [$0.title, $0.subtitle ?? ""] },
+            // name: it counts as what the result shows. A dictionary entry
+            // is named by its glosses too.
+            named: { $0.kind == .quiz ? [$0.subtitle ?? ""] : [$0.title, $0.subtitle ?? ""] + $0.glosses },
             shown: { $0.kind == .quiz ? [$0.title, $0.snippet] : [$0.snippet] },
             holdingPhrase: \.holdsPhrase,
             from: { ($0.kind.rawValue, $0.moduleID) }
         )
+    }
+
+    /// The words a dictionary entry is glossed with, each one a name the
+    /// entry goes by: its senses' glosses, or their short definitions where
+    /// they have none, cut at their commas and semicolons, with a bracketed
+    /// ending such as "(-ious)" left off.
+    ///
+    /// A headword is Greek or Hebrew and its transliteration is neither, so
+    /// an English word never named an entry, and every entry tied as a name:
+    /// an entry glossed "favour, grace" ranked with one that said "grace" in
+    /// passing, pages into its article, and the passing mention could lead.
+    /// Ranked as names, the entries that mean the word come first. Both apps
+    /// name their dictionary results by these, so a search orders its
+    /// entries alike on each.
+    public static func glossNames(of senses: [LampDictionarySense], limit: Int = 16) -> [String] {
+        var names: [String] = []
+        for sense in senses {
+            guard let text = [sense.gloss, sense.shortDefinition]
+                .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .first(where: { !$0.isEmpty }) else { continue }
+            // Brackets first: a comma inside one, as in "thank(-s, -worthy)",
+            // is not between two glosses.
+            let unbracketed = text.replacingOccurrences(of: "\\([^)]*\\)", with: "", options: .regularExpression)
+            for piece in unbracketed.split(whereSeparator: { $0 == "," || $0 == ";" }) {
+                let name = piece.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                guard !name.isEmpty, !names.contains(name) else { continue }
+                names.append(name)
+                if names.count == limit { return names }
+            }
+        }
+        return names
     }
 
     /// The order ties between kinds are broken in, and kinds searched and
@@ -1243,7 +1275,8 @@ extension LampModuleSearchResult {
             id: id, kind: kind, moduleID: moduleID, moduleName: moduleName,
             title: title, subtitle: subtitle, snippet: snippet,
             startReference: startReference, endReference: endReference,
-            highlightColor: highlightColor, holdsPhrase: holdsPhrase, entryKey: entryKey
+            highlightColor: highlightColor, holdsPhrase: holdsPhrase, entryKey: entryKey,
+            glosses: glosses
         )
     }
 
@@ -1253,7 +1286,8 @@ extension LampModuleSearchResult {
             id: id, kind: kind, moduleID: moduleID, moduleName: moduleName,
             title: title, subtitle: subtitle, snippet: snippet,
             startReference: startReference, endReference: endReference,
-            highlightColor: highlightColor, holdsPhrase: true, entryKey: entryKey
+            highlightColor: highlightColor, holdsPhrase: true, entryKey: entryKey,
+            glosses: glosses
         )
     }
 }

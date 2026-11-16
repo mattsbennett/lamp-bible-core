@@ -157,7 +157,7 @@ extension LampModuleSearchResultShape where Result == LampModuleSearchResult {
             module: \.moduleID,
             // A quiz result's title is its question, a sentence rather than a
             // name: it counts as what the result shows.
-            named: { $0.kind == .quiz ? [$0.subtitle ?? ""] : [$0.title, $0.subtitle ?? ""] },
+            named: { $0.kind == .quiz ? [$0.subtitle ?? ""] : [$0.title, $0.subtitle ?? ""] + $0.glosses },
             shown: { $0.kind == .quiz ? [$0.title, $0.snippet] : [$0.snippet] },
             holdsPhrase: \.holdsPhrase,
             withSnippet: { $0.withSnippet($1) }
