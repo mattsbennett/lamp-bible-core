@@ -1027,12 +1027,15 @@ struct LampWritingImportTests {
         let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
         let twoID = try #require(try await library.planWritingImport(LampWritingImport.files(at: folder)).items.first?.writingID)
         let text = "See [mine](lampbible://writing/\(twoID)) and [the file](two.md#part)."
+        let blocks = String(decoding: try JSONSerialization.data(
+            withJSONObject: [["type": "paragraph", "content": text]]
+        ), as: UTF8.self)
         try write("---\nid: one\ntitle: One\n---\n" + text, to: "one.md", in: folder,
                   modified: Date(timeIntervalSince1970: 1_700_000_000))
         // One is in Lamp already, with blocks from the phone.
         try await library.savePersonalDevotional(LampDevotional(
             id: "one", moduleID: "personal-devotionals", moduleName: "My Writing", title: "Two old",
-            content: text, contentJSON: #"[{"type":"paragraph"}]"#,
+            content: text, contentJSON: blocks,
             lastModified: Date(timeIntervalSince1970: 1_600_000_000)
         ), preserveLastModified: true)
         let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
@@ -1040,7 +1043,7 @@ struct LampWritingImportTests {
         try await library.applyWritingImport(plan, selecting: [one.id])
         let stored = try #require(try await library.personalDevotional(id: "one"))
         #expect(stored.content == text, "the writer's own link is theirs, and Two's link goes back as written")
-        #expect(stored.contentJSON == #"[{"type":"paragraph"}]"#, "the text is the same, so the blocks stay")
+        #expect(stored.contentJSON == blocks, "the text is the same, so the blocks stay")
     }
 
     @Test func aWritersOwnLinkAfterAGeneratedOneIsLeftWhenAnotherWritingFails() async throws {
@@ -1089,6 +1092,38 @@ struct LampWritingImportTests {
         )])
         #expect(plan.items.map(\.action) == [.create])
         #expect(plan.items[0].errors.isEmpty)
+    }
+
+    @Test func aPhoneWritingsOwnMarkdownComesBackUnchangedAndKeepsItsBlocks() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        // As a writing made on the phone reaches the Mac: blocks, with their
+        // plain text beside them.
+        let blocks = #"[{"type":"heading","level":2,"content":"Grace"},{"type":"paragraph","content":"Text."}]"#
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        try await library.savePersonalDevotional(LampDevotional(
+            id: "grace", moduleID: "personal-devotionals", moduleName: "My Writing",
+            title: "Grace", content: "Grace\n\nText.", contentJSON: blocks, lastModified: moment
+        ), preserveLastModified: true)
+        let export = "---\nid: grace\ntitle: Grace\n---\n## Grace\n\nText."
+        let unchanged = try await library.planWritingImport([LampWritingImportFile(
+            path: "w/grace.md", markdown: export, modified: moment.addingTimeInterval(60)
+        )])
+        #expect(unchanged.items.map(\.action) == [.unchanged])
+
+        // Retitled in the file only: an update that keeps the blocks.
+        let retitled = try await library.planWritingImport([LampWritingImportFile(
+            path: "w/grace.md", markdown: export.replacingOccurrences(of: "title: Grace", with: "title: On Grace"),
+            modified: moment.addingTimeInterval(60)
+        )])
+        #expect(retitled.items.map(\.action) == [.update])
+        #expect(retitled.items[0].changes == ["title"])
+        try await library.applyWritingImport(retitled, selecting: Set(retitled.items.map(\.id)))
+        let stored = try #require(try await library.personalDevotional(id: "grace"))
+        #expect(stored.title == "On Grace")
+        #expect(stored.contentJSON == blocks)
+        #expect(stored.content == "Grace\n\nText.")
     }
 
     @Test func theOldMarkdownImportNoLongerAddsCopies() async throws {

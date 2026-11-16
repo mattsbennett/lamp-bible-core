@@ -264,7 +264,7 @@ public extension LampWritingImport {
                 if let local = existing[writing.id] {
                     locals[candidate.key] = local
                     libraryModified = local.lastModified
-                    changes = local.differingAuthoredFields(from: writing)
+                    changes = asWritten(local).differingAuthoredFields(from: writing)
                     if changes.isEmpty {
                         action = .unchanged
                     } else if matched.contains(candidate.key) {
@@ -563,6 +563,19 @@ public extension LampWritingImport {
         return id
     }
 
+    /// A writing as its Markdown reads, for comparing with a file. One made
+    /// on the phone is kept as blocks, with only their plain text beside
+    /// them — "## Grace" stored as "Grace" — so its own Markdown export,
+    /// imported again unchanged, would otherwise read as changed, and taking
+    /// it would drop the blocks.
+    static func asWritten(_ writing: LampDevotional) -> LampDevotional {
+        guard let blocks = writing.contentJSON,
+              LampPortableDevotionalContent.isStructured(blocks),
+              let markdown = LampPortableDevotionalContent.markdown(from: blocks),
+              !markdown.isEmpty, markdown != writing.content else { return writing }
+        return writing.withContent(markdown)
+    }
+
     /// Whether two stored copies of a writing are the same: every field a
     /// person writes, its blocks, its media and, unless asked not to, when it
     /// was last saved.
@@ -622,7 +635,8 @@ public extension LampWritingImport {
                     in: writing.content, made: plan.links[item.id] ?? [:], available: hoped
                 ))
                 // Blocks kept from the phone stay while the text is the same.
-                if let local, local.content == writing.content {
+                if let local, local.content == writing.content || asWritten(local).content == writing.content {
+                    writing = writing.withContent(local.content)
                     writing.contentJSON = local.contentJSON
                 }
                 switch item.action {
