@@ -226,7 +226,13 @@ struct USFMTranslationReader {
             // Inside a note every marker is a part of the note; only the
             // origin reference (\fr 3:16) repeats what the reader shows.
             note = .footnote(text: text, awaitingCaller: false, skippingReference: name == "fr" || name == "xo")
-            noteWordNeedsSpace = name != "fr" && name != "xo"
+            // Only a new part runs on. A word's own marker inside the note
+            // (`“\+wh אֱלֹהִ֑ים\+wh*”`) leaves the spacing as it was.
+            if name == "fr" || name == "xo" {
+                noteWordNeedsSpace = false
+            } else if Self.notePartMarkers.contains(name) {
+                noteWordNeedsSpace = true
+            }
             return
         }
         if note != nil { return }
@@ -323,7 +329,11 @@ struct USFMTranslationReader {
         }
         if case .footnote(let text, _, _) = note {
             note = .footnote(text: text, awaitingCaller: false, skippingReference: false)
-            noteWordNeedsSpace = name == "fv"
+            if name == "fv" {
+                noteWordNeedsSpace = true
+            } else if Self.notePartMarkers.contains(name) {
+                noteWordNeedsSpace = false
+            }
             return
         }
         if note != nil { return }
@@ -508,6 +518,13 @@ struct USFMTranslationReader {
     /// written like them but dropped.
     private static let noteMarkers: Set<String> = ["f", "fe", "ef", "x", "ex", "fig"]
     private static let footnoteMarkers: Set<String> = ["f", "fe", "ef"]
+    /// The markers that begin a note's parts: its text, quotations, keywords,
+    /// labels, verse numbers and cross-references' targets. A word after one
+    /// is a new word even where the source runs it on.
+    private static let notePartMarkers: Set<String> = [
+        "ft", "fq", "fqa", "fk", "fl", "fw", "fp", "fv", "fdc",
+        "xk", "xq", "xt", "xta", "xop", "xot", "xnt", "xdc",
+    ]
 
     private static let styles: [String: SpanStyle] = [
         "wj": .redLetter, "add": .added, "nd": .divineName, "qs": .selah,

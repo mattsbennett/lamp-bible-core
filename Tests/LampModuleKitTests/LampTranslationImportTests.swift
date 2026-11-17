@@ -140,6 +140,23 @@ struct LampTranslationImportTests {
         #expect(verse(imported, 40_017_022)?.footnotes.map(\.content) == ["transgressors.” See Isaiah 53:12"])
     }
 
+    /// The WEB's Hebrew in its notes: a word's own marker inside a note is
+    /// not a new part, so nothing comes between it and the quotation mark
+    /// before it; a word marked inside a new part still gets its space.
+    @Test func usfmNoteWordsInsideTheirOwnMarkerKeepTheSourcesSpacing() throws {
+        let imported = try read(#"""
+            \id GEN
+            \c 1
+            \p
+            \v 1 In the beginning, God\f + \fr 1:1 \ft The Hebrew word rendered “God” is “\+wh אֱלֹהִ֑ים\+wh*” (Elohim).\f* created.
+            \v 2 The earth was formless.\f + \fr 1:2 \fq formless.”\ft \+it See\+it* Jeremiah 4:23\f*
+            """#)
+
+        #expect(verse(imported, 1_001_001)?.footnotes.map(\.content)
+            == ["The Hebrew word rendered “God” is “אֱלֹהִ֑ים” (Elohim)."])
+        #expect(verse(imported, 1_001_002)?.footnotes.map(\.content) == ["formless.” See Jeremiah 4:23"])
+    }
+
     @Test func usfmWordsOfChristRunAcrossVersesAndAroundNotes() throws {
         let imported = try read(#"""
             \id MRK

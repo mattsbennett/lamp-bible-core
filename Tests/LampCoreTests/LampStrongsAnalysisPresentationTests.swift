@@ -1987,10 +1987,10 @@ struct TranslationSourceTests {
                   method: "matched by each verse's Strong's numbers when the module was built"),
             .init(part: .strongs, source: "the WEB USFM's machine alignment"),
         ])
-        #expect(sources[0].disclosure(translationName: "BSBs", strongsKey: "G26")
-            == "Greek spellings in BSBs come from an earlier BSB module, matched by each verse's Strong's numbers when the module was built.")
-        #expect(sources[1].disclosure(translationName: "WEBs", strongsKey: "H160")
-            == "Strong’s numbers in WEBs come from the WEB USFM's machine alignment.")
+        #expect(sources[0].disclosure(translationName: "BSB", strongsKey: "G26")
+            == "Greek spellings in BSB come from an earlier BSB module, matched by each verse's Strong's numbers when the module was built.")
+        #expect(sources[1].disclosure(translationName: "WEB", strongsKey: "H160")
+            == "Strong’s numbers in WEB come from the WEB USFM's machine alignment.")
         #expect(LampTranslationSource.parsed(nil).isEmpty)
         #expect(LampTranslationSource.parsed(#"{"part": "forms"}"#).isEmpty)
     }
