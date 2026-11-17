@@ -69,7 +69,10 @@ extension LampModuleSearch {
             """
         var conditions: [String] = []
         var filters = StatementArguments()
-        if shared, let translations {
+        if shared, let asked = translations {
+            // Each read as the translation the file lists under it
+            // (`LampTranslationCoverage.listedID`).
+            let translations = try asked.map { try LampTranslationCoverage.listedID($0, in: db) }
             conditions.append("v.translation_id IN (\(translations.map { _ in "?" }.joined(separator: ", ")))")
             filters += StatementArguments(translations)
         }

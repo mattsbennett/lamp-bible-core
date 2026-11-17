@@ -13,10 +13,15 @@ public enum LampModuleSelection {
     /// Missing preferences are ignored; new items retain the caller's default
     /// order. Multiple entries from the same dictionary stay together without
     /// dropping any of them or duplicating items for repeated preference IDs.
+    ///
+    /// Each preference names the item it names, or, where none has it, the
+    /// one its name now belongs to (`LampTranslationID.held`), so an order
+    /// saved before a translation was renamed still holds after.
     public static func ordered<Item>(
         _ items: [Item], preferredIDs: [String], id: (Item) -> String
     ) -> [Item] {
         var ranks: [String: Int] = [:]
+        let preferredIDs = LampTranslationID.held(preferredIDs, among: items.map(id))
         for (rank, identifier) in preferredIDs.enumerated() where ranks[identifier] == nil {
             ranks[identifier] = rank
         }

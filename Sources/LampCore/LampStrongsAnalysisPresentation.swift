@@ -1620,9 +1620,10 @@ public enum LampSeptuagintSection {
             readersTranslationID: String?
         ) -> Bool {
             guard let septuagintInEnglish, !septuagintInEnglish.isEmpty else { return false }
-            guard let readersTranslationID else { return true }
-            // One translation under either of its IDs is still one.
-            return !LampTranslationID.sameTranslation(septuagintInEnglish, readersTranslationID)
+            // Both are installed modules' IDs, read as held ones where they
+            // were stored (`LampTranslationID.held`): with both spellings of
+            // one installed, they are two texts, and each may be offered.
+            return septuagintInEnglish != readersTranslationID
         }
 
         /// The two labels, each named for its text.

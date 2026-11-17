@@ -85,9 +85,19 @@ public actor LampLibrary {
     /// rename, or an import made before it, may hold. An ID never renamed is
     /// itself, at no cost, and one nothing holds is returned as it is, for
     /// the lookup to report.
+    ///
+    /// Asked on every read of a renamed translation, so it asks no more than
+    /// a read does: whether each spelling has a database file, and the
+    /// bundle's list of its own, which is cached.
     func heldTranslationID(_ id: String) -> String {
-        guard LampTranslationID.equivalents(of: id).count > 1 else { return id }
-        let held = ((try? installedModules()) ?? []).filter { $0.kind == .translation }.map(\.id)
+        let ids = LampTranslationID.equivalents(of: id)
+        guard ids.count > 1 else { return id }
+        let bundled = Set(((try? bundledModules()) ?? []).filter { $0.kind == .translation }.map(\.id))
+        let held = ([id] + ids).filter { candidate in
+            bundled.contains(candidate) || fileManager.fileExists(atPath: databasesURL
+                .appendingPathComponent(storageKey(for: candidate))
+                .appendingPathExtension("sqlite").path)
+        }
         return LampTranslationID.held(id, among: held) ?? id
     }
 
@@ -2946,7 +2956,9 @@ public actor LampLibrary {
                 moduleID: hit.setID,
                 moduleName: names[hit.setID] ?? hit.setID,
                 title: LampBibleReferenceFormatter.describeRange(from: highlight.reference, to: highlight.reference),
-                subtitle: abbreviations[heldTranslationID(highlight.translationID)],
+                subtitle: abbreviations[
+                    LampTranslationID.held(highlight.translationID, among: abbreviations.keys) ?? highlight.translationID
+                ],
                 snippet: query.map { $0.markedSnippet(hit.text) } ?? LampHighlightSearch.markedSnippet(
                     text: hit.text,
                     startOffset: highlight.startOffset,
@@ -4266,9 +4278,10 @@ public actor LampLibrary {
     /// The default set is named by the translation's first ID
     /// (`LampTranslationID.original`), whichever of its IDs the file gives.
     public static func canonicalHighlightSetID(_ setID: String, translationID: String) -> String {
-        let original = LampTranslationID.original(translationID)
-        let flattened = Set([translationID, original].map { "personal-highlights-\(safeExportIdentifier($0))" })
-        return flattened.contains(setID) ? "personal-highlights:\(original)" : setID
+        let flattened = Set(LampTranslationID.equivalents(of: translationID).map {
+            "personal-highlights-\(safeExportIdentifier($0))"
+        })
+        return flattened.contains(setID) ? "personal-highlights:\(LampTranslationID.original(translationID))" : setID
     }
 
     private func prettyJSONData(_ object: Any) throws -> Data {
@@ -5318,6 +5331,11 @@ public actor LampLibrary {
     /// publishes it back, so it returns there too. ios-56 raised it and
     /// left it, for the ambiguity above; the ambiguity is answerable from
     /// what this device holds.
+    ///
+    /// For a renamed translation, every flattened spelling of either ID goes
+    /// to the set named by its first ID, exactly as
+    /// `canonicalHighlightSetID` sends a file's contents there: a deletion
+    /// must land in the set its highlight did.
     private func highlightSetRenamings() throws -> [String: String] {
         let sets = try highlightSets()
         let present = Set(sets.map(\.id))
@@ -5326,9 +5344,12 @@ public actor LampLibrary {
             let prefix = "personal-highlights:"
             guard set.id.hasPrefix(prefix) else { continue }
             let translation = String(set.id.dropFirst(prefix.count))
-            let flattened = "personal-highlights-\(Self.safeExportIdentifier(translation))"
-            guard !present.contains(flattened) else { continue }
-            renamings[flattened] = set.id
+            let target = "personal-highlights:\(LampTranslationID.original(translation))"
+            for spelling in Set([translation] + LampTranslationID.equivalents(of: translation)) {
+                let flattened = "personal-highlights-\(Self.safeExportIdentifier(spelling))"
+                guard !present.contains(flattened) else { continue }
+                renamings[flattened] = target
+            }
         }
         return renamings
     }

@@ -93,13 +93,93 @@ struct LampTranslationRenameTests {
         #expect(both.sorted() == ["BSB", "NASB"])
     }
 
-    /// Access given to a translation under one of its IDs holds under the
-    /// other.
+    /// Access given to a translation before it was renamed holds after;
+    /// with both spellings installed, only the one allowed is.
     @Test func accessGivenBeforeTheRenameHoldsAfter() {
-        let policy = LampAgentAccessPolicy(allowedModuleIDs: ["KJVs"])
-        #expect(policy.allows(moduleID: "KJV"))
-        #expect(policy.allows(moduleID: "KJVs"))
-        #expect(!policy.allows(moduleID: "BSB"))
+        let policy = LampAgentAccessPolicy(allowedModuleIDs: ["KJVs", "ESVs"])
+        #expect(policy.allowedModuleIDs(holding: ["KJV", "BSB"]) == ["KJV", "ESVs"])
+        #expect(policy.allowedModuleIDs(holding: ["ESVs", "ESV"])?.contains("ESV") == false)
+        #expect(policy.allowedModuleIDs(holding: ["ESVs", "ESV"])?.contains("ESVs") == true)
+        #expect(LampAgentAccessPolicy().allowedModuleIDs(holding: ["ESV"]) == nil)
+    }
+
+    /// An agent reads a translation asked for by its old ID, and with both
+    /// installed is refused the one it was not given.
+    @Test func anAgentFindsATranslationByEitherIDButOnlyTheOneAllowed() async throws {
+        let (library, root) = try await library(installing: [("ESVs", "the old import"), ("KJV", "the new bundle")])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let open = LampAgentLibrary(library: library, policy: LampAgentAccessPolicy(allowedModuleIDs: ["KJVs", "ESVs"]))
+        let kjv = try await open.readPassage(reference: "John 1:1", translationIDs: ["KJVs"])
+        #expect(kjv.flatMap(\.verses).map(\.text) == ["the new bundle"])
+
+        let (both, bothRoot) = try await self.library(installing: [("ESVs", "the old import"), ("ESV", "the new import")])
+        defer { try? FileManager.default.removeItem(at: bothRoot) }
+        let narrow = LampAgentLibrary(library: both, policy: LampAgentAccessPolicy(allowedModuleIDs: ["ESVs"]))
+        await #expect(throws: LampAgentError.self) {
+            _ = try await narrow.readPassage(reference: "John 1:1", translationIDs: ["ESV"])
+        }
+        #expect(try await narrow.readPassage(reference: "John 1:1", translationIDs: ["ESVs"]).flatMap(\.verses).map(\.text)
+            == ["the old import"])
+        #expect(try await narrow.readPassage(reference: "John 1:1").map(\.translationID) == ["ESVs"])
+    }
+
+    /// A saved order names the translation it was saved for under its new
+    /// ID, and a list naming one translation twice keeps it once.
+    @Test func aSavedOrderHoldsAfterTheRename() {
+        #expect(LampModuleSelection.ordered(["NASB", "BSB"], preferredIDs: ["BSBs"], id: { $0 }) == ["BSB", "NASB"])
+        #expect(LampModuleSelection.ordered(["NASB", "BSBs", "BSB"], preferredIDs: ["BSB"], id: { $0 })
+            == ["BSB", "NASB", "BSBs"])
+    }
+
+    /// With both installed, a translation's highlights are one set, shown
+    /// and removed under either: they belong to the translation.
+    @Test func bothSpellingsInstalledShareTheTranslationsHighlights() async throws {
+        let (library, root) = try await library(installing: [("ESVs", "the old import"), ("ESV", "the new import")])
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try await library.saveVerseHighlight(translationID: "ESV", reference: 43_001_001, startOffset: 0, endOffset: 3)
+        _ = try await library.saveVerseHighlight(translationID: "ESVs", reference: 43_001_001, startOffset: 4, endOffset: 7)
+        #expect(try await library.highlightSets().map(\.id) == ["personal-highlights:ESVs"])
+        #expect(try await library.verseHighlights(translationID: "ESV", reference: 43_001_001).count == 2)
+        try await library.deleteVerseHighlights(translationID: "ESV", reference: 43_001_001)
+        #expect(try await library.verseHighlights(translationID: "ESVs", reference: 43_001_001).isEmpty)
+    }
+
+    /// A shared database, as the bundle and the phone's are, answers for a
+    /// translation under the ID it lists, whichever the caller has.
+    @Test func aSharedDatabaseAnswersUnderTheIDItLists() throws {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE translations (id TEXT, name TEXT, abbreviation TEXT, language TEXT,
+                    versification TEXT, source_texts_json TEXT);
+                INSERT INTO translations VALUES ('KJVs', 'King James', 'KJV', 'en', 'org', NULL);
+                CREATE TABLE translation_verses (translation_id TEXT, ref INTEGER, book INTEGER,
+                    chapter INTEGER, verse INTEGER, text TEXT, annotations_json TEXT);
+                INSERT INTO translation_verses VALUES ('KJVs', 43001001, 43, 1, 1, 'In the beginning was the Word', NULL);
+                """)
+        }
+        let found = try queue.read { db in
+            (try LampVersification.declared(in: db, translationID: "KJV").scheme,
+             try LampVersification.declared(in: db, translationID: "KJVs").scheme,
+             try LampStrongsAnalysisReader.VerseSource.find(in: db, translationID: "KJV")?.translationID,
+             try LampModuleSearch.verses(in: db, translations: ["KJV"], query: LampSearchQuery("beginning"), limit: 5)
+                .map(\.translationID))
+        }
+        #expect(found.0 == .original)
+        #expect(found.1 == .original)
+        #expect(found.2 == "KJVs")
+        #expect(found.3 == ["KJVs"])
+    }
+
+    /// The shared writer records a set's translation by its first ID,
+    /// whichever the caller gives, so both apps publish the same file.
+    @Test func aHighlightsFileRecordsTheFirstID() throws {
+        let document = try LampPersonalHighlightsFile.document(for: .init(
+            id: "personal-highlights:BSBs", moduleID: "personal-highlights-BSBs", name: "Mine", translationID: "BSB",
+            highlights: []
+        ))
+        let meta = try #require(document["meta"] as? [String: Any])
+        #expect(meta["translationId"] as? String == "BSBs")
     }
 
     /// A bundle built with either spelling lists its books under the ID asked.

@@ -660,6 +660,7 @@ public actor LampAgentLibrary {
     public func workingOutCharts(in deck: LampPresentationDeck) async throws -> LampPresentationChartReport {
         try requireEnabled()
         let permitted = Set(try await permittedInstalledModules(kinds: [.translation]).map(\.id))
+        let installed = try await library.installedModules().filter { $0.kind == .translation }.map(\.id)
         let dictionaries = Set(try await permittedInstalledModules(kinds: [.dictionary]).map(\.id))
         var screened = deck
         var withheld: [(slide: Int, block: Int)] = []
@@ -672,7 +673,9 @@ public actor LampAgentLibrary {
                 let named = chart.by == .translation
                     ? chart.source.translations ?? []
                     : [chart.source.translationID]
-                let refused = named.filter { !permitted.contains($0) }
+                // Each read as the installed translation it names, which is
+                // the one the chart would be worked out from.
+                let refused = named.filter { !permitted.contains(installedID($0, among: installed)) }
                 guard !refused.isEmpty else { continue }
                 // Without its chart the library passes the block by.
                 screened.slides[slideIndex].blocks[blockIndex].chart = nil
@@ -714,9 +717,17 @@ public actor LampAgentLibrary {
         kinds: Set<LampModuleKind>? = nil
     ) async throws -> [LampInstalledModule] {
         try requireEnabled()
-        return try await library.installedModules().filter {
-            policy.allows(moduleID: $0.id) && (kinds == nil || kinds?.contains($0.kind) == true)
+        let installed = try await library.installedModules()
+        let allowed = policy.allowedModuleIDs(holding: installed.map(\.id))
+        return installed.filter {
+            (allowed?.contains($0.id) ?? true) && (kinds == nil || kinds?.contains($0.kind) == true)
         }
+    }
+
+    /// `id` read as the installed module it names (`LampTranslationID.held`),
+    /// or as it is where none is installed.
+    private func installedID(_ id: String, among installed: [String]) -> String {
+        LampTranslationID.held(id, among: installed) ?? id
     }
 
     private func selectedModules(
@@ -726,17 +737,21 @@ public actor LampAgentLibrary {
     ) async throws -> [LampInstalledModule] {
         let permitted = try await permittedInstalledModules(kinds: [kind])
         if let requestedIDs {
-            // Each asked-for ID read as a held module (`LampTranslationID`),
-            // so one asked for by an ID it no longer goes by is still found.
-            let permittedIDs = permitted.map(\.id)
-            let resolved = Set(requestedIDs.map { LampTranslationID.held($0, among: permittedIDs) ?? $0 })
-            let selected = permitted.filter { resolved.contains($0.id) }
-            for requested in requestedIDs where LampTranslationID.held(requested, among: selected.map(\.id)) == nil {
-                if !policy.allows(moduleID: requested) {
-                    throw LampAgentError.moduleNotAllowed(requested)
-                }
+            // Each asked-for ID read as the installed module it names
+            // (`LampTranslationID`), so one asked for by an ID it no longer
+            // goes by is still found, and with both spellings installed it
+            // is the one named, permitted or not.
+            let installed = try await library.installedModules().filter { $0.kind == kind }.map(\.id)
+            let permittedIDs = Set(permitted.map(\.id))
+            for requested in requestedIDs {
+                let id = installedID(requested, among: installed)
+                let refused = installed.contains(id)
+                    ? !permittedIDs.contains(id)
+                    : !policy.allows(moduleID: requested)
+                if refused { throw LampAgentError.moduleNotAllowed(requested) }
             }
-            return selected
+            let resolved = Set(requestedIDs.map { installedID($0, among: installed) })
+            return permitted.filter { resolved.contains($0.id) }
         }
         return defaultLimit.map { Array(permitted.prefix($0)) } ?? permitted
     }
@@ -762,7 +777,11 @@ public actor LampAgentLibrary {
                 allowed.formUnion(setIDs)
             }
         }
-        return requested.map { allowed.intersection($0) } ?? allowed
+        // Each asked-for ID read as the module it names, as a search would.
+        let installed = try await library.installedModules().map(\.id)
+        return requested.map { asked in
+            allowed.intersection(asked.map { installedID($0, among: installed) })
+        } ?? allowed
     }
 
     private static func agentModule(_ module: LampInstalledModule) -> LampAgentModule {

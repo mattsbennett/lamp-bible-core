@@ -164,10 +164,10 @@ public enum LampWebDAVPersonalArchiveAdapter {
         func safe(_ id: String) -> String {
             String(id.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : "-" })
         }
-        // Named by the translation's first ID, whichever the file gives.
-        let original = LampTranslationID.original(translationID)
-        let flattened = Set([translationID, original].map { "personal-highlights-\(safe($0))" })
-        return flattened.contains(setID) ? "personal-highlights:\(original)" : setID
+        // Named by the translation's first ID, whichever of its IDs the file
+        // gives, and whichever its name was flattened from.
+        let flattened = Set(LampTranslationID.equivalents(of: translationID).map { "personal-highlights-\(safe($0))" })
+        return flattened.contains(setID) ? "personal-highlights:\(LampTranslationID.original(translationID))" : setID
     }
 
     private static func updateModuleID(

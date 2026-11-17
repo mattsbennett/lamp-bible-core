@@ -37,7 +37,10 @@ public enum LampStrongsAnalysisReader {
             if tables.contains("verses"), tables.contains("books") {
                 source = VerseSource(table: "verses", translationID: nil)
             } else if tables.contains("translation_verses") {
-                source = VerseSource(table: "translation_verses", translationID: translationID)
+                source = VerseSource(
+                    table: "translation_verses",
+                    translationID: try LampTranslationCoverage.listedID(translationID, in: db)
+                )
             } else {
                 return nil
             }
@@ -160,7 +163,7 @@ extension LampVersification {
                 let row = try Row.fetchOne(
                     db,
                     sql: "SELECT versification\(hasDepartures ? ", versification_mappings" : "") FROM translations WHERE id = ?",
-                    arguments: [translationID]
+                    arguments: [try LampTranslationCoverage.listedID(translationID, in: db)]
                 )
                 scheme = row?["versification"]
                 departures = hasDepartures ? row?["versification_mappings"] : nil

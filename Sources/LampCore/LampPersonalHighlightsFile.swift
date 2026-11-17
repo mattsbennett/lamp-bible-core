@@ -84,7 +84,9 @@ public enum LampPersonalHighlightsFile {
             "setId": set.id,
             "type": "highlights",
             "name": set.name,
-            "translationId": set.translationID,
+            // By the translation's first ID (`LampTranslationID.original`),
+            // which every device writes alike, whichever ID the caller has.
+            "translationId": LampTranslationID.original(set.translationID),
         ]
         if let created = set.created { meta["created"] = created }
         if let lastModified = set.lastModified { meta["lastModified"] = lastModified }

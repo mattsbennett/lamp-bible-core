@@ -492,4 +492,41 @@ struct LampPersonalDeletionSyncTests {
             "and it is there under the set's real name"
         )
     }
+
+    /// A renamed translation's default set is named by its first ID, and a
+    /// deletion recorded under the flattened name of either ID lands in it,
+    /// as a file published under either lands its highlights there.
+    @Test(arguments: ["personal-highlights-ESV", "personal-highlights-ESVs"])
+    func aDeletionUnderEitherSpellingOfARenamedSetLands(_ spelling: String) async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("renamed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mine = LampLibrary(rootURL: root)
+        let saved = try await mine.saveVerseHighlight(
+            translationID: "ESV", reference: verse, startOffset: 0, endOffset: 3,
+            color: "#FFCC00"
+        )
+        #expect(saved.setID == "personal-highlights:ESVs")
+        #expect(LampLibrary.canonicalHighlightSetID(spelling, translationID: "ESVs") == saved.setID)
+        #expect(LampLibrary.canonicalHighlightSetID(spelling, translationID: "ESV") == saved.setID)
+
+        let flattened = LampLibrary.highlightKey(
+            setID: spelling, reference: verse,
+            start: saved.startOffset, end: saved.endOffset,
+            style: saved.style.rawValue, color: saved.color
+        )
+        var incoming = LampPersonalDeletionLedger()
+        incoming.recordDeletion(
+            .highlight, flattened,
+            at: Int64(Date().timeIntervalSince1970 * 1_000) + 60 * 60 * 1_000
+        )
+        try await mine.mergePersonalDeletionLedger(incoming)
+        try await mine.applyPersonalDeletionLedger()
+
+        #expect(try await mine.verseHighlights(translationID: "ESV", reference: verse).isEmpty)
+        let ledger = try await mine.personalDeletionLedger()
+        #expect(ledger.entry(.highlight, flattened) == nil)
+        #expect(ledger.entries(of: .highlight).keys.contains { $0.hasPrefix("personal-highlights:ESVs\u{1F}") })
+    }
 }

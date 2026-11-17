@@ -58,12 +58,19 @@ public struct LampAgentAccessPolicy: Codable, Equatable, Sendable {
 
     public static let disabled = LampAgentAccessPolicy(isEnabled: false)
 
-    /// A translation allowed under any of its IDs is allowed under the
-    /// others (`LampTranslationID`): access given before it was renamed is
-    /// not taken away by the rename.
+    /// Whether `moduleID` is allowed as it is named. For modules a library
+    /// holds, `allowedModuleIDs(holding:)`, which follows a rename.
     public func allows(moduleID: String) -> Bool {
-        guard let allowedModuleIDs else { return true }
-        return LampTranslationID.equivalents(of: moduleID).contains(where: allowedModuleIDs.contains)
-            || allowedModuleIDs.contains(moduleID)
+        allowedModuleIDs?.contains(moduleID) ?? true
+    }
+
+    /// The modules among `installed` this allows, nil for all: each allowed
+    /// ID read as the held module it names (`LampTranslationID.held`), so
+    /// access given to a translation before it was renamed holds after, and
+    /// with both spellings installed only the one allowed is.
+    public func allowedModuleIDs(holding installed: some Collection<String>) -> Set<String>? {
+        allowedModuleIDs.map { allowed in
+            Set(allowed.map { LampTranslationID.held($0, among: installed) ?? $0 })
+        }
     }
 }

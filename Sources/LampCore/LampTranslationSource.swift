@@ -80,7 +80,7 @@ public struct LampTranslationSource: Equatable, Sendable {
             return parsed(try Row.fetchOne(
                 db,
                 sql: "SELECT source_texts_json FROM translations WHERE id = ?",
-                arguments: [translationID]
+                arguments: [try LampTranslationCoverage.listedID(translationID, in: db)]
             )?["source_texts_json"])
         }
         return []

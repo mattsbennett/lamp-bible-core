@@ -21,6 +21,12 @@ import Foundation
 ///   two things are the same, a highlight set's ID and the translation it
 ///   records, is built from `original(_:)`, which every device, built before
 ///   the change or after, computes alike. Nothing synced is rewritten.
+///
+/// Highlights belong to a translation, not to one module of it: a reader's
+/// default set is one per translation under either ID. With both spellings
+/// installed, each shows the translation's highlights, and removing those at
+/// a verse removes them for both. That is the price of one set every device
+/// agrees on; the two are one translation, imported twice.
 public enum LampTranslationID {
     /// Old ID to new.
     public static let renamed: [String: String] = [

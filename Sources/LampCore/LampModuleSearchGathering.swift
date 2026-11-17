@@ -367,7 +367,11 @@ extension LampModuleSearch {
             let installed = try sources.translations()
             let asked = request.moduleIDs.map { Set(LampTranslationID.held(Array($0).sorted(), among: installed)) }
             let order = installed.filter { asked?.contains($0) ?? true }
-            if let preferred = request.preferredTranslationID.map({ LampTranslationID.held($0, among: order) ?? $0 }),
+            // The preferred one read against every installed translation, not
+            // only those searched: with both spellings installed and one left
+            // out, a preference for it stays outside the search rather than
+            // passing to the other.
+            if let preferred = request.preferredTranslationID.map({ LampTranslationID.held($0, among: installed) ?? $0 }),
                order.count > 1 {
                 if let chosen = try LampScriptureChoice.choose(
                     preferred: preferred, order: order, limit: limit,

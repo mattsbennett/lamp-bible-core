@@ -29,14 +29,23 @@ public enum LampTranslationCoverage {
     /// The translation in a file of several that `translationID` reads as:
     /// itself where the file lists it, or else the ID its name now has or
     /// had (`LampTranslationID.held`), as a bundle built before or after a
-    /// rename lists it.
+    /// rename lists it. The file's `translations` table says which it holds,
+    /// or, without one, its `translation_books`. An ID never renamed, or a
+    /// file listing neither, is the ID as given.
     static func listedID(_ translationID: String, in db: Database) throws -> String {
         let ids = LampTranslationID.equivalents(of: translationID)
         guard ids.count > 1 else { return translationID }
+        let tables = try LampModuleText.tableNames(in: db)
+        let sql: String
+        if tables.contains("translations") {
+            sql = "SELECT EXISTS(SELECT 1 FROM translations WHERE id = ?)"
+        } else if tables.contains("translation_books") {
+            sql = "SELECT EXISTS(SELECT 1 FROM translation_books WHERE translation_id = ?)"
+        } else {
+            return translationID
+        }
         let listed = try ([translationID] + ids).filter {
-            try Bool.fetchOne(
-                db, sql: "SELECT EXISTS(SELECT 1 FROM translation_books WHERE translation_id = ?)", arguments: [$0]
-            ) == true
+            try Bool.fetchOne(db, sql: sql, arguments: [$0]) == true
         }
         return LampTranslationID.held(translationID, among: listed) ?? translationID
     }
