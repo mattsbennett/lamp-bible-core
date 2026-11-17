@@ -399,7 +399,7 @@ struct USFMTranslationReader {
             }
             if !skippingReference {
                 if noteWordNeedsSpace, let first = text.first, first.isLetter || first.isNumber || "“‘\"'(".contains(first),
-                   let last = noteText.last, !last.isWhitespace, !"“‘([{".contains(last) {
+                   let last = noteText.last, !last.isWhitespace, !Self.endsInAnOpening(noteText) {
                     noteText += " "
                 }
                 noteWordNeedsSpace = false
@@ -442,6 +442,18 @@ struct USFMTranslationReader {
             return
         }
         collector.appendText(text)
+    }
+
+    /// Whether a note's text so far ends by opening a quotation or bracket,
+    /// after which a part runs on with no space: `The word “\fq God`. A “ or
+    /// ‘ opens only after a space or another opening, since German closes
+    /// with them: `„Gott“\ft bedeutet` needs its space.
+    private static func endsInAnOpening(_ text: String) -> Bool {
+        guard let last = text.last else { return false }
+        if "([{".contains(last) { return true }
+        guard "“‘".contains(last) else { return false }
+        guard let before = text.dropLast().last else { return true }
+        return before.isWhitespace || "([{“‘\"'—–".contains(before)
     }
 
     /// `strong="H1234" x-morph="…"`, or a bare value for the marker's

@@ -151,6 +151,7 @@ struct LampTranslationImportTests {
             \v 1 In the beginning, God\f + \fr 1:1 \ft The Hebrew word rendered “God” is “\+wh אֱלֹהִ֑ים\+wh*” (Elohim).\f* created.
             \v 2 The earth was formless.\f + \fr 1:2 \fq formless.”\ft \+it See\+it* Jeremiah 4:23\f*
             \v 3 God said.\f + \ft The word “\fq God\ft ” means deity. Literally (\fqa mighty one\fqa*).\f*
+            \v 4 Gott.\f + \fq „Gott“\ft bedeutet Gottheit.\f*
             """#)
 
         #expect(verse(imported, 1_001_001)?.footnotes.map(\.content)
@@ -159,6 +160,8 @@ struct LampTranslationImportTests {
         // Nor does a new part straight after an opening quotation mark or bracket.
         #expect(verse(imported, 1_001_003)?.footnotes.map(\.content)
             == ["The word “God” means deity. Literally (mighty one)."])
+        // German closes a quotation with “, and a part after it is a new word.
+        #expect(verse(imported, 1_001_004)?.footnotes.map(\.content) == ["„Gott“ bedeutet Gottheit."])
     }
 
     @Test func usfmWordsOfChristRunAcrossVersesAndAroundNotes() throws {
