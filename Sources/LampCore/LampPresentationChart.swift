@@ -737,10 +737,20 @@ public struct LampPresentationChart: Codable, Equatable, Sendable {
     }
 
     /// What the chart counts, in words: "G26 in ESV, rendered “love”, NT".
-    public var subject: String {
+    ///
+    /// Without a name this falls back to the module's ID, which is the app
+    /// saying an internal name out loud: the ID of the Berean Standard Bible
+    /// is "BSBs", and a reader meeting that in a warning has been shown
+    /// plumbing. Callers holding a library should pass the abbreviation.
+    public var subject: String { subject(translationNamed: nil) }
+
+    /// - Parameter translationNamed: the translation as the reader knows it,
+    ///   or nil where the caller has no library to ask. The ID then stands
+    ///   in, which is at least unambiguous about what was named.
+    public func subject(translationNamed name: String?) -> String {
         var what = by == .translation
             ? "\(source.strongs) across translations"
-            : "\(source.strongs) in \(source.translationID)"
+            : "\(source.strongs) in \(name ?? source.translationID)"
         if let filter = source.filter, !filter.isEmpty { what += ", \(filter.narrowing)" }
         if let range = source.range { what += ", \(range)" }
         if by == .grammar, let feature { what += ", by \(feature.title.lowercased())" }
@@ -924,14 +934,28 @@ public extension LampLibrary {
         var result = deck
         var issues: [LampPresentationDeckIssue] = []
         var changed = false
+        // Read once for the deck, not per chart: these messages name a
+        // translation, and naming it by module ID said "no tagged ESVs",
+        // which is the ID of a thing called the English Standard Version.
+        // Nil for a translation this library does not hold, where the ID is
+        // all anyone has to go on.
+        let installedNames = Dictionary(
+            ((try? installedModules()) ?? [])
+                .filter { $0.kind == .translation }
+                .map { ($0.id, $0.abbreviation ?? $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        func translationName(_ id: String) -> String? { installedNames[id] }
         for (slideIndex, slide) in deck.slides.enumerated() {
             for (blockIndex, block) in slide.blocks.enumerated() {
                 guard block.kind == .chart, let chart = block.chart else { continue }
                 let path = "slides[\(slideIndex)].blocks[\(blockIndex)].chart"
-                let named = chart.subject
+                let named = chart.subject(
+                    translationNamed: translationName(chart.source.translationID)
+                )
                 let counted = chart.by == .translation
                     ? "translation it compares"
-                    : chart.source.translationID
+                    : translationName(chart.source.translationID) ?? chart.source.translationID
                 // An unreadable range is the validator's to report.
                 guard let worked = try? workedOut(
                     chart, translationIDs: translationIDs, dictionaryIDs: dictionaryIDs
