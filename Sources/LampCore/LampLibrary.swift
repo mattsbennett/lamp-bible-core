@@ -444,15 +444,25 @@ public actor LampLibrary {
     /// shipped inside the app from the bundle's; installed wins, as in
     /// `installedModules`. Nil for a module the library doesn't hold.
     ///
-    /// Read on request, not with the list: it hashes the module's file.
-    public func moduleRecord(kind: LampModuleKind, id: String) throws -> LampModuleRecord? {
+    /// Read on request, not with the list: it hashes the module's file, and
+    /// does so off the library, so a large file keeps no read waiting.
+    public nonisolated func moduleRecord(kind: LampModuleKind, id: String) async throws -> LampModuleRecord? {
+        guard let record = try await unhashedModuleRecord(kind: kind, id: id) else { return nil }
+        guard case .installed(let moduleFile?, let database) = record.storage else { return record }
+        let hashed = LampModuleRecord.File(
+            url: moduleFile.url, byteCount: moduleFile.byteCount, modifiedAt: moduleFile.modifiedAt,
+            sha256: try? LampSyncContentRevision.digest(forFileAt: moduleFile.url)
+        )
+        return LampModuleRecord(
+            module: record.module, storage: .installed(moduleFile: hashed, database: database), tables: record.tables
+        )
+    }
+
+    private func unhashedModuleRecord(kind: LampModuleKind, id: String) throws -> LampModuleRecord? {
         func file(_ url: URL, hashed: Bool) -> LampModuleRecord.File? {
             guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             else { return nil }
-            return .init(
-                url: url, byteCount: values.fileSize, modifiedAt: values.contentModificationDate,
-                sha256: hashed ? try? LampSyncContentRevision.digest(forFileAt: url) : nil
-            )
+            return .init(url: url, byteCount: values.fileSize, modifiedAt: values.contentModificationDate, sha256: nil)
         }
         if let installed = try installedDatabases().first(where: { $0.module.kind == kind && $0.module.id == id }) {
             let databaseURL = databasesURL.appendingPathComponent(storageKey(for: id)).appendingPathExtension("sqlite")
@@ -483,22 +493,29 @@ public actor LampLibrary {
     /// tables (verses, entries, highlights) are not metadata.
     private static let installedRecordTables = [
         "module_format", "translation_meta", "translations", "module_metadata", "series_meta",
-        "module_meta", "note_book_meta", "highlight_meta", "commentary_books", "book_modules",
-        "plans", "quiz_modules",
+        "module_meta", "note_book_meta", "highlight_meta", "highlight_sets", "highlight_themes",
+        "commentary_books", "book_modules", "plans", "quiz_modules",
     ]
 
-    /// Where the bundle keeps a module of each kind: its row by ID, and a
-    /// commentary's series by the ID its row names.
+    /// Where the bundle keeps a module of each kind: its row by ID — in the
+    /// shared `modules` table, the row of its own type, since two kinds may
+    /// share an ID — and a commentary's series by the ID its row names.
     private static func bundledRecordTables(for kind: LampModuleKind) -> [(table: String, condition: String)] {
+        let types = switch kind {
+        case .dictionary: "'dictionary', 'lexicon'"
+        case .notes: "'notes', 'note'"
+        default: "'\(kind.rawValue)'"
+        }
+        let registry = ("modules", "id = ? AND type IN (\(types))")
         switch kind {
-        case .translation: [("translations", "id = ?")]
-        case .dictionary: [("lexicons", "id = ?"), ("modules", "id = ?")]
+        case .translation: return [("translations", "id = ?")]
+        case .dictionary: return [("lexicons", "id = ?"), registry]
         case .commentary:
-            [("modules", "id = ?"), ("commentary_series", "id = (SELECT series_id FROM modules WHERE id = ?)")]
-        case .book: [("book_modules", "id = ?")]
-        case .plan: [("plans", "id = ?")]
-        case .quiz: [("quiz_modules", "id = ?")]
-        case .devotional, .notes, .highlights: [("modules", "id = ?")]
+            return [registry, ("commentary_series", "id = (SELECT series_id FROM modules WHERE id = ? AND type IN (\(types)))")]
+        case .book: return [("book_modules", "id = ?")]
+        case .plan: return [("plans", "id = ?")]
+        case .quiz: return [("quiz_modules", "id = ?")]
+        case .devotional, .notes, .highlights: return [registry]
         }
     }
 

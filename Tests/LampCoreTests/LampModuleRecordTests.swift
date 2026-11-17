@@ -68,6 +68,10 @@ struct LampModuleRecordTests {
                     file_path TEXT, file_hash TEXT, series_abbrev TEXT, series_id TEXT
                 );
                 INSERT INTO modules VALUES ('tske', 'commentary', 'Treasury of Scripture Knowledge', NULL, '1', 'tske.json', 'fff', 'TSK', 'tsk');
+                INSERT INTO modules VALUES ('bdb', 'dictionary', 'Brown-Driver-Briggs', NULL, '2', 'bdb.json', 'bbb', NULL, NULL);
+                INSERT INTO modules VALUES ('BSB', 'devotional', 'A devotional sharing an ID', NULL, '1', 'd.json', 'ddd', NULL, NULL);
+                CREATE TABLE lexicons (id TEXT PRIMARY KEY, name TEXT, language TEXT, key_type TEXT);
+                INSERT INTO lexicons VALUES ('bdb', 'Brown-Driver-Briggs', 'he', 'bdb');
                 CREATE TABLE commentary_series (id TEXT PRIMARY KEY, name TEXT, editor TEXT, website TEXT);
                 INSERT INTO commentary_series VALUES ('tsk', 'Treasury', 'R. A. Torrey', NULL);
                 """)
@@ -93,5 +97,12 @@ struct LampModuleRecordTests {
         #expect(tske.value(of: "editor") == .text("R. A. Torrey"))
         #expect(tske.value(of: "author") == .null)
         #expect(tske.value(of: "isbn") == nil)
+
+        // A kind's own row in the shared registry, never another kind's
+        // under the same ID.
+        let bdb = try #require(try await library.moduleRecord(kind: .dictionary, id: "bdb"))
+        #expect(bdb.tables.map(\.name) == ["lexicons", "modules"])
+        #expect(bdb.value(of: "key_type") == .text("bdb"))
+        #expect(bsb.tables.allSatisfy { $0.name != "modules" })
     }
 }
