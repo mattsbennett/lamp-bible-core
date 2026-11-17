@@ -111,4 +111,31 @@ struct LampModuleRecordTests {
         #expect(bdb.value(of: "key_type") == .text("bdb"))
         #expect(bsb.tables.allSatisfy { $0.name != "modules" })
     }
+
+    /// The phone keeps every installed module in one database in the
+    /// bundle's layout, with no library around it: the same read, called on
+    /// its database, and a layout missing a column skips what needs it.
+    @Test func aSharedDatabaseIsReadByTheSameRules() throws {
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE modules (id TEXT PRIMARY KEY, type TEXT, name TEXT, author TEXT);
+                INSERT INTO modules VALUES ('my-highlights', 'highlights', 'My highlights', NULL);
+                INSERT INTO modules VALUES ('nic', 'commentary', 'NIC', 'Various');
+                CREATE TABLE highlight_sets (id TEXT PRIMARY KEY, module_id TEXT, name TEXT, translation_id TEXT);
+                INSERT INTO highlight_sets VALUES ('s1', 'my-highlights', 'Study', 'BSBs');
+                INSERT INTO highlight_sets VALUES ('s2', 'other', 'Not this one', 'KJV');
+                CREATE TABLE commentary_series (id TEXT PRIMARY KEY, name TEXT);
+                """)
+        }
+        try queue.read { db in
+            let highlights = try LampModuleRecord.tables(sharedLayoutIn: db, kind: .highlights, id: "my-highlights")
+            #expect(highlights.map(\.name) == ["modules", "highlight_sets"])
+            #expect(highlights.last?.rows.count == 1)
+            // No `series_id` in this layout: the series is skipped, not an error.
+            let commentary = try LampModuleRecord.tables(sharedLayoutIn: db, kind: .commentary, id: "nic")
+            #expect(commentary.map(\.name) == ["modules"])
+            #expect(try LampModuleRecord.tables(sharedLayoutIn: db, kind: .translation, id: "BSB").isEmpty)
+        }
+    }
 }

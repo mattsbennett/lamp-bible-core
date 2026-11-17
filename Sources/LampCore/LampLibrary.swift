@@ -484,7 +484,7 @@ public actor LampLibrary {
             let databaseURL = databasesURL.appendingPathComponent(storageKey(for: id)).appendingPathExtension("sqlite")
             guard let database = file(databaseURL, hashed: false) else { return nil }
             let tables = try openReadOnlyDatabase(at: databaseURL).read { db in
-                try Self.recordTables(in: db, Self.installedRecordTables.map { ($0, "1 = 1", []) })
+                try LampModuleRecord.tables(moduleDatabase: db)
             }
             return LampModuleRecord(
                 module: installed.module,
@@ -499,73 +499,9 @@ public actor LampLibrary {
               let databaseURL = try preparedBundledDatabaseURL(),
               let database = file(databaseURL, hashed: false) else { return nil }
         let tables = try openReadOnlyDatabase(at: databaseURL).read { db in
-            try Self.recordTables(in: db, Self.bundledRecordTables(for: kind).map { ($0.table, $0.condition, [id]) })
+            try LampModuleRecord.tables(sharedLayoutIn: db, kind: kind, id: id)
         }
         return LampModuleRecord(module: module, storage: .bundled(database: database), tables: tables)
-    }
-
-    /// The metadata tables an installed module's database may have, one
-    /// module to a database, in the order a record shows them. Content
-    /// tables (verses, entries, highlights) are not metadata.
-    private static let installedRecordTables = [
-        "module_format", "translation_meta", "translations", "module_metadata", "series_meta",
-        "module_meta", "note_book_meta", "highlight_meta", "highlight_sets", "highlight_themes",
-        "commentary_books", "book_modules", "plans", "quiz_modules",
-    ]
-
-    /// Where the bundle keeps a module of each kind: its row by ID — in the
-    /// shared `modules` table, the row of its own type, since two kinds may
-    /// share an ID — and a commentary's series by the ID its row names.
-    private static func bundledRecordTables(for kind: LampModuleKind) -> [(table: String, condition: String)] {
-        let types = switch kind {
-        case .dictionary: "'dictionary', 'lexicon'"
-        case .notes: "'notes', 'note'"
-        default: "'\(kind.rawValue)'"
-        }
-        let registry = ("modules", "id = ? AND type IN (\(types))")
-        switch kind {
-        case .translation: return [("translations", "id = ?")]
-        case .dictionary: return [("lexicons", "id = ?"), registry]
-        case .commentary:
-            return [
-                registry,
-                ("commentary_series", "id = (SELECT series_id FROM modules WHERE id = ? AND type IN (\(types)))"),
-                ("commentary_books", "module_id = ?"),
-            ]
-        case .book: return [("book_modules", "id = ?")]
-        case .plan: return [("plans", "id = ?")]
-        case .quiz: return [("quiz_modules", "id = ?")]
-        case .devotional, .notes, .highlights: return [registry]
-        }
-    }
-
-    /// Each of `tables` the database has, with its matching rows and every
-    /// column. A table with no matching row is left out; one module's
-    /// database holds few metadata rows, and a record shows at most 100.
-    private static func recordTables(
-        in db: Database, _ tables: [(name: String, condition: String, arguments: [String])]
-    ) throws -> [LampModuleRecord.Table] {
-        let present = try LampModuleText.tableNames(in: db)
-        return try tables.compactMap { table in
-            guard present.contains(table.name) else { return nil }
-            let rows = try Row.fetchAll(
-                db, sql: "SELECT * FROM \(table.name) WHERE \(table.condition) LIMIT 100",
-                arguments: StatementArguments(table.arguments)
-            )
-            guard !rows.isEmpty else { return nil }
-            return LampModuleRecord.Table(name: table.name, rows: rows.map { row in
-                zip(row.columnNames, row.databaseValues).map { name, value in
-                    let recorded: LampModuleRecord.Value = switch value.storage {
-                    case .null: .null
-                    case .int64(let integer): .integer(integer)
-                    case .double(let real): .real(real)
-                    case .string(let text): .text(text)
-                    case .blob(let data): .blob(byteCount: data.count)
-                    }
-                    return LampModuleRecord.Field(name: name, value: recorded)
-                }
-            })
-        }
     }
 
     /// The genres books are grouped by, from the bundle, in catalog order;
