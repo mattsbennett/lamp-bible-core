@@ -150,6 +150,44 @@ struct LampTranslationImportTests {
         #expect(verse(imported, 19_119_003)?.text == "How can a young man keep his way pure?")
     }
 
+    /// What else can stand between a `\d` line and the next verse number.
+    @Test func usfmDescriptiveLineAmongPartsHeadingsAndParagraphs() throws {
+        let imported = try read(#"""
+            \id PSA
+            \c 1
+            \v 1a First.
+            \d Middle.
+            \q1 \v 1b Rest.
+            \v 2 Second.
+            \d Closing.
+            \s1 Section
+            \q1 still verse two.
+            \v 3 Third.
+            \c 119
+            \v 8 Eighth.
+            \s1 Section
+            \s2 Subsection
+            \d Hebrew label
+            \d BETH
+            \p \v 9 Ninth.
+            \v 10 Tenth.
+            \p
+            \d GIMEL
+            \v 11 Eleventh.
+            """#)
+
+        // A part of the same verse continues it, so the line stays.
+        #expect(verse(imported, 19_001_001)?.text == "First. Middle. Rest.")
+        // The verse's own words after a heading keep the line in it.
+        #expect(verse(imported, 19_001_002)?.text == "Second. Closing. still verse two.")
+        // Every line, in order, after the headings already waiting.
+        #expect(headings(imported, book: 19, chapter: 119).map { "\($0.beforeVerse) \($0.text)" }
+            == ["9 Section", "9 Subsection", "9 Hebrew label", "9 BETH", "11 GIMEL"])
+        #expect(verse(imported, 19_119_008)?.text == "Eighth.")
+        // A paragraph marked before a line still opens the verse after it.
+        #expect(verse(imported, 19_119_011)?.paragraph == true)
+    }
+
     /// A closing line keeps its words' tags (the BSB tags Hab 3:19's), and
     /// one with the verse's own words after it stays in the verse.
     @Test func usfmClosingLineKeepsItsTagsAndItsPlace() throws {

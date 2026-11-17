@@ -244,13 +244,16 @@ struct TranslationCollector {
         /// then where in the verse's text it ends.
         var titleIsOpen = false
         var titleEnd: Int?
-        /// Where a `\d` written after the verse's words begins: the verse's
-        /// closing line unless a verse follows in the chapter, when it is
-        /// cut off as a heading over that verse.
-        var trailingStart: Int?
-        /// The `\d`'s line has ended; words after it are the verse's own,
-        /// and make the line part of the verse.
+        /// Where each `\d` written after the verse's words begins: the
+        /// verse's closing lines unless a new verse follows in the chapter,
+        /// when they are cut off as headings over that verse.
+        var trailingStarts: [Int] = []
+        /// The last `\d` line has ended; words after it are the verse's
+        /// own, and make the lines part of the verse.
         var trailingClosed = false
+        /// How many headings were waiting when the first `\d` line began:
+        /// the lines, made headings, go before any that came after them.
+        var headingsBeforeTrailing = 0
 
         /// Whether nothing but the title has been written: a paragraph or
         /// line marked now opens the verse.
@@ -393,9 +396,13 @@ struct TranslationCollector {
         text.makeContiguousUTF8()
         if text.contains(where: { !VerseTextBuilder.isSpace($0) }) {
             if verse?.trailingClosed == true {
-                verse?.trailingStart = nil
+                verse?.trailingStarts = []
                 verse?.trailingClosed = false
             }
+        }
+        // A `\d` line's words may yet be a heading over the next verse, so
+        // they leave what waits for that verse as it is.
+        if verse?.trailingStarts.isEmpty == true, text.contains(where: { !VerseTextBuilder.isSpace($0) }) {
             // Anything still pending was marked inside this verse.
             pendingParagraph = false
             pendingPoetryIndent = 0
@@ -450,28 +457,40 @@ struct TranslationCollector {
     /// A `\d` begins after the open verse's words, on a line of its own.
     mutating func beginTrailingLine() {
         guard var open = verse else { return }
-        open.trailingStart = open.text.length
+        if open.trailingStarts.isEmpty { open.headingsBeforeTrailing = pendingHeadings.count }
+        open.trailingStarts.append(open.text.length)
         open.trailingClosed = false
         verse = open
         breakLine()
     }
 
     mutating func closeTrailingLine() {
-        if verse?.trailingStart != nil { verse?.trailingClosed = true }
+        if verse?.trailingStarts.isEmpty == false { verse?.trailingClosed = true }
     }
 
-    /// The open verse's `\d` line, cut off and set as a heading before the
-    /// next verse, with the verse's tags and notes kept to what is left.
-    mutating func takeTrailingLineAsHeading(level: Int) {
-        guard var open = verse, let start = open.trailingStart else { return }
-        open.trailingStart = nil
+    /// The open verse's `\d` lines, cut off and set as headings before the
+    /// verse `number` about to start, with the open verse's tags and notes
+    /// kept to what is left. Not for a part of the open verse or another
+    /// copy of its number, which continue it: the lines stay its own.
+    mutating func takeTrailingLinesAsHeadings(level: Int, before number: Int, continuing: Bool) {
+        guard var open = verse, let start = open.trailingStarts.first else { return }
+        guard !continuing, number != open.number else {
+            closeTrailingLine()
+            return
+        }
+        let starts = open.trailingStarts
+        open.trailingStarts = []
         open.trailingClosed = false
         let characters = open.text.characters
         guard start < characters.count else {
             verse = open
             return
         }
-        let line = Self.collapsingWhitespace(String(characters[start...]))
+        let lines = zip(starts, starts.dropFirst() + [characters.count]).compactMap { from, to -> String? in
+            guard from < to, to <= characters.count else { return nil }
+            let line = Self.collapsingWhitespace(String(characters[from..<to]))
+            return line.isEmpty ? nil : line
+        }
         var kept = VerseTextBuilder()
         kept.append(String(characters[..<start]))
         open.text = kept
@@ -486,9 +505,8 @@ struct TranslationCollector {
             ImportedFootnote(id: note.id, kind: note.kind, content: note.content, offset: min(note.offset, start))
         }
         verse = open
-        if !line.isEmpty {
-            pendingHeadings.append((level: level, text: line, midVerse: true))
-        }
+        let at = min(open.headingsBeforeTrailing, pendingHeadings.count)
+        pendingHeadings.insert(contentsOf: lines.map { (level: level, text: $0, midVerse: true) }, at: at)
     }
 
     /// The open verse starts with a psalm's title, read as its text until
