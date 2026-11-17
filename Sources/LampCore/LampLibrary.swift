@@ -446,16 +446,30 @@ public actor LampLibrary {
     ///
     /// Read on request, not with the list: it hashes the module's file, and
     /// does so off the library, so a large file keeps no read waiting.
+    ///
+    /// A module installed again while its file is hashed is read again, so
+    /// the hash is never one revision's and the rest another's.
     public nonisolated func moduleRecord(kind: LampModuleKind, id: String) async throws -> LampModuleRecord? {
-        guard let record = try await unhashedModuleRecord(kind: kind, id: id) else { return nil }
-        guard case .installed(let moduleFile?, let database) = record.storage else { return record }
-        let hashed = LampModuleRecord.File(
-            url: moduleFile.url, byteCount: moduleFile.byteCount, modifiedAt: moduleFile.modifiedAt,
-            sha256: try? LampSyncContentRevision.digest(forFileAt: moduleFile.url)
-        )
-        return LampModuleRecord(
-            module: record.module, storage: .installed(moduleFile: hashed, database: database), tables: record.tables
-        )
+        func stamp(_ url: URL) -> (Int?, Date?) {
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            return (values?.fileSize, values?.contentModificationDate)
+        }
+        var record: LampModuleRecord?
+        for _ in 0..<3 {
+            record = try await unhashedModuleRecord(kind: kind, id: id)
+            guard let read = record, case .installed(let moduleFile?, let database) = read.storage else { return record }
+            let sha256 = try? LampSyncContentRevision.digest(forFileAt: moduleFile.url)
+            guard stamp(moduleFile.url) == (moduleFile.byteCount, moduleFile.modifiedAt) else { continue }
+            let hashed = LampModuleRecord.File(
+                url: moduleFile.url, byteCount: moduleFile.byteCount, modifiedAt: moduleFile.modifiedAt, sha256: sha256
+            )
+            return LampModuleRecord(
+                module: read.module, storage: .installed(moduleFile: hashed, database: database), tables: read.tables
+            )
+        }
+        // Replaced on every try: the record as last read, without a hash
+        // that might not be its own.
+        return record
     }
 
     private func unhashedModuleRecord(kind: LampModuleKind, id: String) throws -> LampModuleRecord? {
@@ -511,7 +525,11 @@ public actor LampLibrary {
         case .translation: return [("translations", "id = ?")]
         case .dictionary: return [("lexicons", "id = ?"), registry]
         case .commentary:
-            return [registry, ("commentary_series", "id = (SELECT series_id FROM modules WHERE id = ? AND type IN (\(types)))")]
+            return [
+                registry,
+                ("commentary_series", "id = (SELECT series_id FROM modules WHERE id = ? AND type IN (\(types)))"),
+                ("commentary_books", "module_id = ?"),
+            ]
         case .book: return [("book_modules", "id = ?")]
         case .plan: return [("plans", "id = ?")]
         case .quiz: return [("quiz_modules", "id = ?")]

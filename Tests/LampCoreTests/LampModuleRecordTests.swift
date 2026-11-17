@@ -74,6 +74,10 @@ struct LampModuleRecordTests {
                 INSERT INTO lexicons VALUES ('bdb', 'Brown-Driver-Briggs', 'he', 'bdb');
                 CREATE TABLE commentary_series (id TEXT PRIMARY KEY, name TEXT, editor TEXT, website TEXT);
                 INSERT INTO commentary_series VALUES ('tsk', 'Treasury', 'R. A. Torrey', NULL);
+                CREATE TABLE commentary_books (id TEXT PRIMARY KEY, module_id TEXT, book_number INTEGER, year INTEGER);
+                INSERT INTO commentary_books VALUES ('tske-1', 'tske', 1, 1880);
+                INSERT INTO commentary_books VALUES ('tske-2', 'tske', 2, 1880);
+                INSERT INTO commentary_books VALUES ('crossrefs-1', 'crossrefs', 1, NULL);
                 """)
         }
         let archiveURL = root.appendingPathComponent("bundled_modules.db.zlib")
@@ -93,7 +97,9 @@ struct LampModuleRecordTests {
         #expect(bsb.value(of: "publisher") == .null)
 
         let tske = try #require(try await library.moduleRecord(kind: .commentary, id: "tske"))
-        #expect(tske.tables.map(\.name) == ["modules", "commentary_series"])
+        #expect(tske.tables.map(\.name) == ["modules", "commentary_series", "commentary_books"])
+        #expect(tske.tables.last?.rows.count == 2)
+        #expect(tske.value(of: "year") == .integer(1880))
         #expect(tske.value(of: "editor") == .text("R. A. Torrey"))
         #expect(tske.value(of: "author") == .null)
         #expect(tske.value(of: "isbn") == nil)
