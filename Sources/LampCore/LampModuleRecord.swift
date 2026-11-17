@@ -23,6 +23,10 @@ public struct LampModuleRecord: Equatable, Sendable {
         self.tables = tables
     }
 
+    /// Tables whose rows describe a module's parts, each with its own name
+    /// and description, not the module.
+    public static let partTables: Set<String> = ["highlight_sets", "highlight_themes"]
+
     public enum Storage: Equatable, Sendable {
         /// Installed from a `.lamp` file: that file, kept for sync, where
         /// there is one, and the database it was unpacked to.
@@ -87,10 +91,12 @@ public struct LampModuleRecord: Equatable, Sendable {
     /// name: the first that isn't empty, since a registry may leave empty
     /// what the module's own table holds (an app's commentary keeps its
     /// publisher in `commentary_books`); `.null` where every table with the
-    /// column has it empty; nil where none has it.
+    /// column has it empty; nil where none has it. Only the tables that
+    /// describe the module: a highlight set's or theme's description is not
+    /// the module's.
     public func value(of column: String) -> Value? {
         var found: Value?
-        for table in tables {
+        for table in tables where !Self.partTables.contains(table.name) {
             for row in table.rows {
                 guard let field = row.first(where: { $0.name == column }) else { continue }
                 if field.value != .null { return field.value }

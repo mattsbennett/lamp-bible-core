@@ -137,6 +137,14 @@ struct LampModuleRecordTests {
             let highlights = try LampModuleRecord.tables(sharedLayoutIn: db, kind: .highlights, id: "my-highlights")
             #expect(highlights.map(\.name) == ["modules", "highlight_sets", "highlight_themes"])
             #expect(highlights.map(\.rows.count) == [1, 1, 1])
+            // A theme's name is not the module's.
+            let highlightRecord = LampModuleRecord(
+                module: .init(id: "my-highlights", kind: .highlights, name: "My highlights"),
+                storage: .shared(database: .init(url: URL(fileURLWithPath: "/m.sqlite"), byteCount: nil, modifiedAt: nil, sha256: nil)),
+                tables: highlights
+            )
+            #expect(highlightRecord.value(of: "name") == .text("My highlights"))
+            #expect(highlightRecord.value(of: "color") == nil)
             // No `series_id` in this layout: the series is skipped, not an error.
             let commentary = try LampModuleRecord.tables(sharedLayoutIn: db, kind: .commentary, id: "nic")
             #expect(commentary.map(\.name) == ["modules", "commentary_books"])
