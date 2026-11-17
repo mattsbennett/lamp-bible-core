@@ -135,7 +135,7 @@ extension LampModuleRecord {
         case .notes: "'notes', 'note'"
         default: "'\(kind.rawValue)'"
         }
-        let registry = ("modules", "id = ? AND type IN (\(types))", [("modules", "type")])
+        let registry = ("modules", "id = ? AND type IN (\(types))", [("modules", "id"), ("modules", "type")])
         switch kind {
         case .translation: return [("translations", "id = ?", [("translations", "id")])]
         case .dictionary: return [("lexicons", "id = ?", [("lexicons", "id")]), registry]
@@ -143,12 +143,14 @@ extension LampModuleRecord {
             return [
                 registry,
                 ("commentary_series", "id = (SELECT series_id FROM modules WHERE id = ? AND type IN (\(types)))",
-                 [("commentary_series", "id"), ("modules", "series_id"), ("modules", "type")]),
+                 [("commentary_series", "id"), ("modules", "id"), ("modules", "series_id"), ("modules", "type")]),
                 ("commentary_books", "module_id = ?", [("commentary_books", "module_id")]),
             ]
-        case .book: return [("book_modules", "id = ?", [("book_modules", "id")])]
-        case .plan: return [("plans", "id = ?", [("plans", "id")])]
-        case .quiz: return [("quiz_modules", "id = ?", [("quiz_modules", "id")])]
+        // An app's own database may keep a book's, plan's or quiz's file and
+        // sync columns in the registry, beside its own table.
+        case .book: return [("book_modules", "id = ?", [("book_modules", "id")]), registry]
+        case .plan: return [("plans", "id = ?", [("plans", "id")]), registry]
+        case .quiz: return [("quiz_modules", "id = ?", [("quiz_modules", "id")]), registry]
         case .highlights: return [registry, ("highlight_sets", "module_id = ?", [("highlight_sets", "module_id")])]
         case .devotional, .notes: return [registry]
         }
@@ -166,11 +168,15 @@ extension LampModuleRecord {
     /// Each of `queries`' tables the database has, with its matching rows and
     /// every column. A table with no matching row is left out.
     private static func tables(in db: Database, _ queries: [Query]) throws -> [Table] {
-        try queries.compactMap { query in
-            guard try db.tableExists(query.table) else { return nil }
+        // Views as well as tables, and names as SQLite matches them, without case.
+        let present = try LampModuleText.tableNames(in: db)
+        func has(_ table: String) -> Bool { present.contains { $0.caseInsensitiveCompare(table) == .orderedSame } }
+        return try queries.compactMap { query in
+            guard has(query.table) else { return nil }
             for need in query.needs {
-                guard try db.tableExists(need.table),
-                      try db.columns(in: need.table).contains(where: { $0.name == need.column }) else { return nil }
+                guard has(need.table), try db.columns(in: need.table).contains(where: {
+                    $0.name.caseInsensitiveCompare(need.column) == .orderedSame
+                }) else { return nil }
             }
             let rows = try Row.fetchAll(
                 db, sql: "SELECT * FROM \(query.table) WHERE \(query.condition) LIMIT 100",

@@ -137,5 +137,30 @@ struct LampModuleRecordTests {
             #expect(commentary.map(\.name) == ["modules"])
             #expect(try LampModuleRecord.tables(sharedLayoutIn: db, kind: .translation, id: "BSB").isEmpty)
         }
+        // A book's file and sync columns in the registry, a translation kept
+        // as a view, column names in another case, and a registry with no `id`.
+        let other = try DatabaseQueue()
+        try other.write { db in
+            try db.execute(sql: """
+                CREATE TABLE book_modules (id TEXT PRIMARY KEY, title TEXT);
+                INSERT INTO book_modules VALUES ('b', 'A Book');
+                CREATE TABLE modules (id TEXT, type TEXT, file_hash TEXT);
+                INSERT INTO modules VALUES ('b', 'book', 'abc');
+                CREATE TABLE source (ID TEXT, name TEXT);
+                INSERT INTO source VALUES ('T', 'Test');
+                CREATE VIEW translations AS SELECT ID, name FROM source;
+                """)
+        }
+        try other.read { db in
+            let book = try LampModuleRecord.tables(sharedLayoutIn: db, kind: .book, id: "b")
+            #expect(book.map(\.name) == ["book_modules", "modules"])
+            #expect(try LampModuleRecord.tables(sharedLayoutIn: db, kind: .translation, id: "T").first?.rows.count == 1)
+        }
+        let unkeyed = try DatabaseQueue()
+        try unkeyed.write { db in
+            try db.execute(sql: "CREATE TABLE modules (type TEXT, name TEXT); INSERT INTO modules VALUES ('notes', 'N');")
+        }
+        let notes = try unkeyed.read { db in try LampModuleRecord.tables(sharedLayoutIn: db, kind: .notes, id: "N") }
+        #expect(notes.isEmpty)
     }
 }
