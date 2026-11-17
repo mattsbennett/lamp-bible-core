@@ -28,9 +28,10 @@ public actor LampLibrary {
     /// asks for it on every chapter.
     private var versifications: [String: LampVersification] = [:]
     /// The translations installed as files, as `heldTranslationID` last
-    /// read them, and the modification date of the folder they were read
-    /// from: a module installed or removed changes it.
-    private var installedTranslationIDs: (folderModified: Date, ids: Set<String>)?
+    /// read them, and the names of the files in the folder they were read
+    /// from: a module installed or removed, by this library or another
+    /// open on the same folder, changes them.
+    private var installedTranslationIDs: (files: Set<String>, ids: Set<String>)?
     private var strongsIndexQueue: DatabaseQueue?
     /// The personal indexes opened, by path.
     private var personalIndexQueues: [String: DatabaseQueue] = [:]
@@ -91,8 +92,8 @@ public actor LampLibrary {
     /// the lookup to report.
     ///
     /// Asked on every read of a renamed translation, so it reads the
-    /// installed translations once and again only when the folder holding
-    /// them changes, and the bundle's list, which is cached. Translations
+    /// installed translations once and again only when the files in the
+    /// folder holding them change, and the bundle's list, which is cached. Translations
     /// only: a dictionary that happens to share the other spelling is not
     /// the translation asked for.
     func heldTranslationID(_ id: String) -> String {
@@ -103,12 +104,12 @@ public actor LampLibrary {
     }
 
     private func installedTranslationFileIDs() -> Set<String> {
-        let modified = (try? fileManager.attributesOfItem(atPath: databasesURL.path))?[.modificationDate] as? Date
-        if let modified, let known = installedTranslationIDs, known.folderModified == modified {
+        let files = (try? fileManager.contentsOfDirectory(atPath: databasesURL.path)).map(Set.init)
+        if let files, let known = installedTranslationIDs, known.files == files {
             return known.ids
         }
         let ids = Set(((try? installedDatabases()) ?? []).map(\.module).filter { $0.kind == .translation }.map(\.id))
-        if let modified { installedTranslationIDs = (modified, ids) }
+        if let files { installedTranslationIDs = (files, ids) }
         return ids
     }
 
