@@ -112,10 +112,43 @@ struct LampSyncBundlePassTests {
         #expect(manifest.entry(at: "Translations/ESVs.lamp")?.isMember == true)
     }
 
+    /// Deleted on another device between this pass's read and its update:
+    /// the update takes the deletion, and the module is gone, not missing.
+    @Test func aModuleDeletedElsewhereDuringThePassIsNotReportedMissing() async throws {
+        let store = try seeded(path: "Translations/ESVs.lamp", revision: "\"esvs-1\"")
+        store.bodies["Translations/ESVs.lamp"] = nil
+        store.revisions["Translations/ESVs.lamp"] = nil
+        store.bodies["Translations/ESV.lamp"] = Data("the new ESV".utf8)
+        store.revisions["Translations/ESV.lamp"] = "\"esv-1\""
+        var records = LampSyncFileRecords()
+        records.recordInstall("Translations/ESVs.lamp", in: source, revision: "\"esvs-1\"")
+        // The other device's update lands after this pass's first read.
+        store.beforeRead = { path, count in
+            guard path == bundlePath, count == 1,
+                  var bundle = try? LampSyncSettingsBundle.decode(store.bodies[bundlePath]!),
+                  let manifest = try? bundle.manifest.removing("Translations/ESVs.lamp", at: 1_500, revision: "\"esvs-1\"")
+            else { return }
+            bundle.manifest = manifest
+            store.bodies[bundlePath] = try? bundle.encoded()
+            store.revisions[bundlePath] = "\"bundle-elsewhere\""
+        }
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: {
+            var held = LampSyncBundlePass.Gathered()
+            held.heldWithoutAFile = ["Translations/ESVs.lamp"]
+            return held
+        }, records: &records)
+
+        #expect(outcome.written?.bundle.manifest.entry(at: "Translations/ESVs.lamp")?.isMember == false)
+        #expect(outcome.missing.isEmpty)
+    }
+
     /// Who is missing, and why, path by path.
     @Test func whatTheListingDidNotFind() {
         var manifest = LampSyncLibraryManifest()
-        for path in ["Translations/a.lamp", "Translations/changed.lamp", "Translations/unrecorded.lamp",
+        for path in ["Translations/a.lamp", "Translations/gone.lamp", "Translations/changed.lamp", "Translations/unrecorded.lamp",
                      "Translations/listed.lamp", "Translations/deleted.lamp", "Dictionaries/d.lamp",
                      "Workspaces/Presentations/talk.lampdeck"] {
             manifest = (try? manifest.recordingWrite(path, revision: "\"r\"", replacing: nil, at: 1_000)) ?? manifest
@@ -127,6 +160,7 @@ struct LampSyncBundlePassTests {
             manifest: manifest,
             local: [
                 held("Translations/a.lamp"),
+                held("Translations/gone.lamp"),
                 // Going back up in this pass, so not missing for long.
                 held("Translations/changed.lamp", changed: true),
                 held("Translations/unrecorded.lamp", revision: nil),
@@ -137,11 +171,12 @@ struct LampSyncBundlePassTests {
                 held("Workspaces/Presentations/talk.lampdeck"),
             ],
             deletedLocally: ["Translations/deleted.lamp": 1_500],
-            listing: ["Translations/listed.lamp": "\"r\""],
+            // One found with no revision, and one renamed only in case.
+            found: ["Translations/listed.lamp", "Translations/changed.lamp", "Translations/A.LAMP"],
             listedFolders: ["Translations", LampSyncFolderLayout.decksDirectory]
         )
         #expect(missing == [
-            "Translations/a.lamp": .notOnServer,
+            "Translations/gone.lamp": .notOnServer,
             "Dictionaries/d.lamp": .folderNotListed,
             "Workspaces/Presentations/talk.lampdeck": .notOnServer,
         ])

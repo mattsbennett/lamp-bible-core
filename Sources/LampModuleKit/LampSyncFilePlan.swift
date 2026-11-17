@@ -229,20 +229,23 @@ public enum LampSyncFilePlan {
         try await listingAndFolders(in: store, manifest: manifest).listing
     }
 
-    /// The listing, with the folders the store listed. A folder it has no
-    /// listing for (nil, not empty) is left out.
+    /// The listing, with the folders the store listed — a folder it has no
+    /// listing for (nil, not empty) is left out — and every listed file,
+    /// including one no revision could be found for.
     static func listingAndFolders(
         in store: any LampSyncRemoteStore,
         manifest: LampSyncLibraryManifest
-    ) async throws -> (listing: [String: String], folders: Set<String>) {
+    ) async throws -> (listing: [String: String], folders: Set<String>, found: Set<String>) {
         var listing: [String: String] = [:]
         var folders = Set<String>()
+        var found = Set<String>()
         for directory in LampSyncFolderLayout.listedDirectories {
             guard let items = try await store.list(directory: directory + "/") else { continue }
             folders.insert(directory)
             for item in items where !item.isDirectory {
                 let path = "\(directory)/\(item.name)"
                 guard LampSyncFolderLayout.kind(of: path)?.isListed == true else { continue }
+                found.insert(path)
                 let entry = manifest.entry(at: path)
                 let recorded = entry?.isMember == true ? entry?.revision : nil
                 if let revision = item.revision ?? recorded {
@@ -252,7 +255,7 @@ public enum LampSyncFilePlan {
                 }
             }
         }
-        return (listing, folders)
+        return (listing, folders, found)
     }
 }
 
@@ -280,15 +283,21 @@ extension LampSyncFilePlan {
     /// Left out: a copy changed here, or one with no record of agreeing,
     /// which this pass sends back (`.ifAbsent`); a path deleted here; media
     /// and workspace files, which are never listed.
+    ///
+    /// `found` is every path the listing held, with a revision or without.
+    /// A name found in another case counts as found: on a store that
+    /// ignores case it is the same file, renamed only in case.
     public static func missing(
         manifest: LampSyncLibraryManifest,
         local: [Local],
         deletedLocally: [String: Int64],
-        listing: [String: String],
+        found: Set<String>,
         listedFolders: Set<String>
     ) -> [String: Missing] {
+        let foundIgnoringCase = Set(found.map { $0.lowercased() })
         var missing: [String: Missing] = [:]
-        for held in local where listing[held.path] == nil && deletedLocally[held.path] == nil {
+        for held in local
+        where !foundIgnoringCase.contains(held.path.lowercased()) && deletedLocally[held.path] == nil {
             guard LampSyncFolderLayout.kind(of: held.path)?.isListed == true,
                   manifest.entry(at: held.path)?.isMember == true,
                   !held.changedSinceUpload, held.lastRevision != nil else { continue }

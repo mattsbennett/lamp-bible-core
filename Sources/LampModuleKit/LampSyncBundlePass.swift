@@ -280,7 +280,7 @@ public struct LampSyncBundlePass {
             manifest: opened.bundle.manifest,
             local: locals,
             deletedLocally: gathered.deletedLocally,
-            listing: listing,
+            found: listed.found.union(gathered.extraListing.keys),
             listedFolders: listed.folders
         ).filter { LampSyncFolderLayout.kind(of: $0.key).map(plannedKinds) ?? false }
 
@@ -504,6 +504,12 @@ public struct LampSyncBundlePass {
         }
         guard let snapshot else { throw LampSyncSettingsStore.StoreError.tooManyAttempts }
         outcome.bundleRevision = snapshot.revision
+        // Still members once the update took in what other devices did: one
+        // deleted elsewhere meanwhile is not missing but gone, and the next
+        // pass deletes it here.
+        outcome.missing = outcome.missing.filter {
+            snapshot.bundle.manifest.entry(at: $0.key)?.isMember == true
+        }
         outcome.written = snapshot
         // What the manifest took, not what the plan asked for
         // (`recordsAdeletion`). A client whose deletions come from a ledger
