@@ -20,8 +20,14 @@ public enum LampModuleSelection {
     public static func ordered<Item>(
         _ items: [Item], preferredIDs: [String], id: (Item) -> String
     ) -> [Item] {
+        exactlyOrdered(items, preferredIDs: LampTranslationID.held(preferredIDs, among: items.map(id)), id: id)
+    }
+
+    /// `ordered` with each preference naming exactly the item it names.
+    private static func exactlyOrdered<Item>(
+        _ items: [Item], preferredIDs: [String], id: (Item) -> String
+    ) -> [Item] {
         var ranks: [String: Int] = [:]
-        let preferredIDs = LampTranslationID.held(preferredIDs, among: items.map(id))
         for (rank, identifier) in preferredIDs.enumerated() where ranks[identifier] == nil {
             ranks[identifier] = rank
         }
@@ -52,6 +58,9 @@ public enum LampModuleSelection {
     ) -> [Item] {
         let ids = items.map(id)
         let hidden = Set(hiddenIDs.compactMap { LampTranslationID.held($0, among: ids) })
-        return ordered(items.filter { !hidden.contains(id($0)) }, preferredIDs: preferredIDs, id: id)
+        // Preferences read against every item, hidden or not: a preference
+        // for a hidden one goes with it, not to the other spelling.
+        let preferred = LampTranslationID.held(preferredIDs, among: ids)
+        return exactlyOrdered(items.filter { !hidden.contains(id($0)) }, preferredIDs: preferred, id: id)
     }
 }

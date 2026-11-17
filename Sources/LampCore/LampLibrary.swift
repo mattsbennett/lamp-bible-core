@@ -27,6 +27,10 @@ public actor LampLibrary {
     /// Each translation's verse numbering, read once: comparing translations
     /// asks for it on every chapter.
     private var versifications: [String: LampVersification] = [:]
+    /// The translations installed as files, as `heldTranslationID` last
+    /// read them, and the modification date of the folder they were read
+    /// from: a module installed or removed changes it.
+    private var installedTranslationIDs: (folderModified: Date, ids: Set<String>)?
     private var strongsIndexQueue: DatabaseQueue?
     /// The personal indexes opened, by path.
     private var personalIndexQueues: [String: DatabaseQueue] = [:]
@@ -86,19 +90,26 @@ public actor LampLibrary {
     /// itself, at no cost, and one nothing holds is returned as it is, for
     /// the lookup to report.
     ///
-    /// Asked on every read of a renamed translation, so it asks no more than
-    /// a read does: whether each spelling has a database file, and the
-    /// bundle's list of its own, which is cached.
+    /// Asked on every read of a renamed translation, so it reads the
+    /// installed translations once and again only when the folder holding
+    /// them changes, and the bundle's list, which is cached. Translations
+    /// only: a dictionary that happens to share the other spelling is not
+    /// the translation asked for.
     func heldTranslationID(_ id: String) -> String {
         let ids = LampTranslationID.equivalents(of: id)
         guard ids.count > 1 else { return id }
-        let bundled = Set(((try? bundledModules()) ?? []).filter { $0.kind == .translation }.map(\.id))
-        let held = ([id] + ids).filter { candidate in
-            bundled.contains(candidate) || fileManager.fileExists(atPath: databasesURL
-                .appendingPathComponent(storageKey(for: candidate))
-                .appendingPathExtension("sqlite").path)
+        let bundled = ((try? bundledModules()) ?? []).filter { $0.kind == .translation }.map(\.id)
+        return LampTranslationID.held(id, among: installedTranslationFileIDs().union(bundled)) ?? id
+    }
+
+    private func installedTranslationFileIDs() -> Set<String> {
+        let modified = (try? fileManager.attributesOfItem(atPath: databasesURL.path))?[.modificationDate] as? Date
+        if let modified, let known = installedTranslationIDs, known.folderModified == modified {
+            return known.ids
         }
-        return LampTranslationID.held(id, among: held) ?? id
+        let ids = Set(((try? installedDatabases()) ?? []).map(\.module).filter { $0.kind == .translation }.map(\.id))
+        if let modified { installedTranslationIDs = (modified, ids) }
+        return ids
     }
 
     /// `heldTranslationID` of each, for a lookup that filters by ID.
@@ -5344,7 +5355,11 @@ public actor LampLibrary {
             let prefix = "personal-highlights:"
             guard set.id.hasPrefix(prefix) else { continue }
             let translation = String(set.id.dropFirst(prefix.count))
-            let target = "personal-highlights:\(LampTranslationID.original(translation))"
+            // The set named by the first ID where this device holds it, else
+            // the set itself: one made under another ID before sets were
+            // named by the first keeps its own deletions.
+            let original = "personal-highlights:\(LampTranslationID.original(translation))"
+            let target = present.contains(original) ? original : set.id
             for spelling in Set([translation] + LampTranslationID.equivalents(of: translation)) {
                 let flattened = "personal-highlights-\(Self.safeExportIdentifier(spelling))"
                 guard !present.contains(flattened) else { continue }

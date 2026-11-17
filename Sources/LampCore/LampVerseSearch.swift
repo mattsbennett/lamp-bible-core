@@ -67,12 +67,14 @@ extension LampModuleSearch {
             \(translationColumn) AS translation_id, v.ref, v.book, v.chapter, v.verse,
             \(books.isEmpty ? "NULL" : "b.name") AS book_name, v.text
             """
+        // In a file of several, each read as the translation the file lists
+        // under it (`LampTranslationCoverage.listedID`).
+        let listed = try translations.map { asked in
+            shared ? try asked.map { try LampTranslationCoverage.listedID($0, in: db) } : asked
+        }
         var conditions: [String] = []
         var filters = StatementArguments()
-        if shared, let asked = translations {
-            // Each read as the translation the file lists under it
-            // (`LampTranslationCoverage.listedID`).
-            let translations = try asked.map { try LampTranslationCoverage.listedID($0, in: db) }
+        if shared, let translations = listed {
             conditions.append("v.translation_id IN (\(translations.map { _ in "?" }.joined(separator: ", ")))")
             filters += StatementArguments(translations)
         }
@@ -132,7 +134,7 @@ extension LampModuleSearch {
         var counts: [String: Int] = [:]
         // Done once each translation asked for has its fill, rather than at
         // the end of every verse LIKE finds.
-        let wanted = ownID.map { [$0] } ?? translations.map(Set.init).map(Array.init)
+        let wanted = ownID.map { [$0] } ?? listed.map(Set.init).map(Array.init)
         while let row = try rows.next() {
             let translationID: String = row["translation_id"]
             guard counts[translationID, default: 0] < limit, query.matches(row["text"]) else { continue }

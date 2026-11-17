@@ -718,7 +718,9 @@ public actor LampAgentLibrary {
     ) async throws -> [LampInstalledModule] {
         try requireEnabled()
         let installed = try await library.installedModules()
-        let allowed = policy.allowedModuleIDs(holding: installed.map(\.id))
+        // Read against translations only: a rename is a translation's, and
+        // a commentary that happens to share the other spelling is not it.
+        let allowed = policy.allowedModuleIDs(holding: installed.filter { $0.kind == .translation }.map(\.id))
         return installed.filter {
             (allowed?.contains($0.id) ?? true) && (kinds == nil || kinds?.contains($0.kind) == true)
         }
@@ -741,7 +743,12 @@ public actor LampAgentLibrary {
             // (`LampTranslationID`), so one asked for by an ID it no longer
             // goes by is still found, and with both spellings installed it
             // is the one named, permitted or not.
+            // A translation's rename is followed; any other kind is named
+            // exactly.
             let installed = try await library.installedModules().filter { $0.kind == kind }.map(\.id)
+            func installedID(_ id: String, among installed: [String]) -> String {
+                kind == .translation ? self.installedID(id, among: installed) : id
+            }
             let permittedIDs = Set(permitted.map(\.id))
             for requested in requestedIDs {
                 let id = installedID(requested, among: installed)
@@ -778,7 +785,7 @@ public actor LampAgentLibrary {
             }
         }
         // Each asked-for ID read as the module it names, as a search would.
-        let installed = try await library.installedModules().map(\.id)
+        let installed = try await library.installedModules().filter { $0.kind == .translation }.map(\.id)
         return requested.map { asked in
             allowed.intersection(asked.map { installedID($0, among: installed) })
         } ?? allowed

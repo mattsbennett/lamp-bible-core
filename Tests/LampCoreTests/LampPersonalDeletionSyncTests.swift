@@ -529,4 +529,32 @@ struct LampPersonalDeletionSyncTests {
         #expect(ledger.entry(.highlight, flattened) == nil)
         #expect(ledger.entries(of: .highlight).keys.contains { $0.hasPrefix("personal-highlights:ESVs\u{1F}") })
     }
+
+    /// A set named before sets were named by a translation's first ID keeps
+    /// its own deletions where this device holds no set under the first.
+    @Test func aSetNamedUnderTheNewIDKeepsItsDeletions() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("renamed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mine = LampLibrary(rootURL: root)
+        let saved = try await mine.saveVerseHighlight(
+            translationID: "ESV", reference: verse,
+            startOffset: 0, endOffset: 3, color: "#FFCC00", setID: "personal-highlights:ESV"
+        )
+        #expect(saved.setID == "personal-highlights:ESV")
+        var incoming = LampPersonalDeletionLedger()
+        incoming.recordDeletion(
+            .highlight,
+            LampLibrary.highlightKey(
+                setID: "personal-highlights-ESV", reference: verse,
+                start: saved.startOffset, end: saved.endOffset,
+                style: saved.style.rawValue, color: saved.color
+            ),
+            at: Int64(Date().timeIntervalSince1970 * 1_000) + 60 * 60 * 1_000
+        )
+        try await mine.mergePersonalDeletionLedger(incoming)
+        try await mine.applyPersonalDeletionLedger()
+        #expect(try await mine.verseHighlights(translationID: "ESV", reference: verse).isEmpty)
+    }
 }

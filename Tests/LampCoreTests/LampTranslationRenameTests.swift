@@ -31,6 +31,57 @@ struct LampTranslationRenameTests {
         return (library, root)
     }
 
+    /// A dictionary that happens to have the other spelling of a renamed
+    /// translation's ID.
+    private func installDictionary(id: String, into library: LampLibrary, at root: URL) async throws {
+        let folder = root.appendingPathComponent("dictionaries", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let archive = folder.appendingPathComponent("\(id).lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {"meta": {"schemaVersion": "2.1", "id": "\#(id)", "type": "dictionary", "name": "Lexicon"},
+             "entries": [{"key": "G26", "lemma": "ἀγάπη", "senses": [{"shortDefinition": "love"}]}]}
+            """#.utf8),
+            sourceFilename: "\(id).json", destinationURL: archive
+        )
+        _ = try await library.install(from: archive)
+    }
+
+    /// A rename is a translation's: another kind of module with the other
+    /// spelling is neither read nor allowed in its place.
+    @Test func anotherKindWithTheOtherSpellingIsNotTheTranslation() async throws {
+        let (library, root) = try await library(installing: [("ESVs", "the old import")])
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await installDictionary(id: "ESV", into: library, at: root)
+
+        #expect(try await library.chapter(moduleID: "ESV", bookNumber: 43, chapterNumber: 1).verses.first?.text
+            == "the old import")
+
+        let (other, otherRoot) = try await self.library(installing: [])
+        defer { try? FileManager.default.removeItem(at: otherRoot) }
+        try await installDictionary(id: "ESV", into: other, at: otherRoot)
+        let agent = LampAgentLibrary(library: other, policy: LampAgentAccessPolicy(allowedModuleIDs: ["ESVs"]))
+        #expect(try await agent.listModules().isEmpty)
+    }
+
+    /// A translation installed after the first renamed lookup is found by
+    /// the next.
+    @Test func aTranslationInstalledLaterIsFound() async throws {
+        let (library, root) = try await library(installing: [])
+        defer { try? FileManager.default.removeItem(at: root) }
+        await #expect(throws: (any Error).self) {
+            _ = try await library.chapter(moduleID: "ESV", bookNumber: 43, chapterNumber: 1)
+        }
+        let archive = root.appendingPathComponent("ESVs.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(translation(id: "ESVs", abbreviation: "ESV", text: "installed later").utf8),
+            sourceFilename: "ESVs.json", destinationURL: archive
+        )
+        _ = try await library.install(from: archive)
+        #expect(try await library.chapter(moduleID: "ESV", bookNumber: 43, chapterNumber: 1).verses.first?.text
+            == "installed later")
+    }
+
     /// An import made before the rename is read by the ID the apps now use,
     /// and answers to the ID it was asked by.
     @Test func aTranslationImportedBeforeTheRenameIsReadByItsNewID() async throws {
@@ -129,6 +180,9 @@ struct LampTranslationRenameTests {
         #expect(LampModuleSelection.ordered(["NASB", "BSB"], preferredIDs: ["BSBs"], id: { $0 }) == ["BSB", "NASB"])
         #expect(LampModuleSelection.ordered(["NASB", "BSBs", "BSB"], preferredIDs: ["BSB"], id: { $0 })
             == ["BSB", "NASB", "BSBs"])
+        // A preference for a hidden one goes with it.
+        #expect(LampModuleSelection.visible(["NASB", "ESVs", "ESV"], hiddenIDs: ["ESV"], preferredIDs: ["ESV"], id: { $0 })
+            == ["NASB", "ESVs"])
     }
 
     /// With both installed, a translation's highlights are one set, shown
