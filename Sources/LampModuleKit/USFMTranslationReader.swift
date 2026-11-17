@@ -399,7 +399,7 @@ struct USFMTranslationReader {
             }
             if !skippingReference {
                 if noteWordNeedsSpace, let first = text.first, first.isLetter || first.isNumber || "“‘\"'(".contains(first),
-                   let last = noteText.last, !last.isWhitespace {
+                   let last = noteText.last, !last.isWhitespace, !"“‘([{".contains(last) {
                     noteText += " "
                 }
                 noteWordNeedsSpace = false

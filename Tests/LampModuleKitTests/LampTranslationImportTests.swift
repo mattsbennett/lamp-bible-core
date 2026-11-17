@@ -150,11 +150,15 @@ struct LampTranslationImportTests {
             \p
             \v 1 In the beginning, God\f + \fr 1:1 \ft The Hebrew word rendered “God” is “\+wh אֱלֹהִ֑ים\+wh*” (Elohim).\f* created.
             \v 2 The earth was formless.\f + \fr 1:2 \fq formless.”\ft \+it See\+it* Jeremiah 4:23\f*
+            \v 3 God said.\f + \ft The word “\fq God\ft ” means deity. Literally (\fqa mighty one\fqa*).\f*
             """#)
 
         #expect(verse(imported, 1_001_001)?.footnotes.map(\.content)
             == ["The Hebrew word rendered “God” is “אֱלֹהִ֑ים” (Elohim)."])
         #expect(verse(imported, 1_001_002)?.footnotes.map(\.content) == ["formless.” See Jeremiah 4:23"])
+        // Nor does a new part straight after an opening quotation mark or bracket.
+        #expect(verse(imported, 1_001_003)?.footnotes.map(\.content)
+            == ["The word “God” means deity. Literally (mighty one)."])
     }
 
     @Test func usfmWordsOfChristRunAcrossVersesAndAroundNotes() throws {
