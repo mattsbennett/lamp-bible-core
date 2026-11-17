@@ -285,9 +285,12 @@ public enum LampStrongsAnalysisOrder {
         _ analyses: [LampStrongsAnalysis],
         activeTranslationID: String?
     ) -> [LampStrongsAnalysis] {
+        // The active one by its own ID, or, where none has it, by the ID its
+        // name now has or had (`LampTranslationID`).
         guard
             let activeTranslationID,
             let index = analyses.firstIndex(where: { $0.translationID == activeTranslationID })
+                ?? analyses.firstIndex(where: { LampTranslationID.sameTranslation($0.translationID, activeTranslationID) })
         else { return analyses }
         var ordered = analyses
         ordered.insert(ordered.remove(at: index), at: 0)
@@ -1617,7 +1620,9 @@ public enum LampSeptuagintSection {
             readersTranslationID: String?
         ) -> Bool {
             guard let septuagintInEnglish, !septuagintInEnglish.isEmpty else { return false }
-            return septuagintInEnglish != readersTranslationID
+            guard let readersTranslationID else { return true }
+            // One translation under either of its IDs is still one.
+            return !LampTranslationID.sameTranslation(septuagintInEnglish, readersTranslationID)
         }
 
         /// The two labels, each named for its text.

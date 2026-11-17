@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 
 /// Visibility and stable preference ordering, independent of platform storage.
 public enum LampModuleSelection {
@@ -36,10 +37,16 @@ public enum LampModuleSelection {
     /// early in the alphabet — which is what Dodson had been doing.
     public static let preferredGreekDictionaryIDs = ["strongs_greek", "tbesg"]
 
+    /// A hidden ID hides the item it names, and, where no item has it, the
+    /// one its name now belongs to (`LampTranslationID.held`): a translation
+    /// hidden before it was renamed stays hidden after, and with both
+    /// spellings installed only the one hidden goes.
     public static func visible<Item>(
         _ items: [Item], hiddenIDs: Set<String>, preferredIDs: [String] = [],
         id: (Item) -> String
     ) -> [Item] {
-        ordered(items.filter { !hiddenIDs.contains(id($0)) }, preferredIDs: preferredIDs, id: id)
+        let ids = items.map(id)
+        let hidden = Set(hiddenIDs.compactMap { LampTranslationID.held($0, among: ids) })
+        return ordered(items.filter { !hidden.contains(id($0)) }, preferredIDs: preferredIDs, id: id)
     }
 }

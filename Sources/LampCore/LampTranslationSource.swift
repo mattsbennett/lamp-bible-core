@@ -87,7 +87,7 @@ public struct LampTranslationSource: Equatable, Sendable {
     }
 
     /// The sentence that says it, where the part is shown: "Greek spellings
-    /// in BSBs come from …, matched by each verse's Strong's numbers when the
+    /// in BSB come from …, matched by each verse's Strong's numbers when the
     /// module was built."
     public func disclosure(translationName: String, strongsKey: String) -> String {
         "\(Self.subject(part, strongsKey: strongsKey)) in \(translationName)"

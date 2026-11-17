@@ -841,8 +841,12 @@ public extension LampLibrary {
         let keeping = chart.source.filter?.keeping(key: chart.source.strongs)
         var analyses: [LampStrongsAnalysis]
         if chart.by == .translation {
-            var compared = chart.source.translations.map(Set.init)
-            if let translationIDs { compared = compared?.intersection(translationIDs) ?? translationIDs }
+            // Both read as held translations first, so a deck naming one by
+            // an ID it no longer goes by still meets the one permitted.
+            var compared = heldTranslationIDs(chart.source.translations.map(Set.init))
+            if let permitted = heldTranslationIDs(translationIDs) {
+                compared = compared?.intersection(permitted) ?? permitted
+            }
             analyses = try strongsAnalyses(
                 key: chart.source.strongs, moduleIDs: compared, bookRange: books, keeping: keeping
             )

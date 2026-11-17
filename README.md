@@ -68,7 +68,7 @@ swift run lamp-module import ~/Downloads/ESV2011.zip /tmp --key UNLOCK-KEY
 swift run lamp-module inspect ../lamp-bible-modules/outputs/ESV.json
 swift run lamp-module build ../lamp-bible-modules/outputs/ESV.json /tmp/ESV.lamp
 swift run lamp-module verify /tmp/ESV.lamp
-swift run lamp-module convert ../lamp-bible-modules/sources/bibles/BSB_strongs_usfm /tmp/BSBs.json --id BSBs
+swift run lamp-module convert ../lamp-bible-modules/sources/bibles/BSB_strongs_usfm /tmp/BSB.json --id BSB
 ```
 
 The output filename must match the module ID because Lamp Bible uses the `.lamp` filename as part of its import identity.

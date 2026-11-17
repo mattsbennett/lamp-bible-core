@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 
 public struct LampAgentAccessPolicy: Codable, Equatable, Sendable {
     public var isEnabled: Bool
@@ -57,7 +58,12 @@ public struct LampAgentAccessPolicy: Codable, Equatable, Sendable {
 
     public static let disabled = LampAgentAccessPolicy(isEnabled: false)
 
+    /// A translation allowed under any of its IDs is allowed under the
+    /// others (`LampTranslationID`): access given before it was renamed is
+    /// not taken away by the rename.
     public func allows(moduleID: String) -> Bool {
-        allowedModuleIDs?.contains(moduleID) ?? true
+        guard let allowedModuleIDs else { return true }
+        return LampTranslationID.equivalents(of: moduleID).contains(where: allowedModuleIDs.contains)
+            || allowedModuleIDs.contains(moduleID)
     }
 }

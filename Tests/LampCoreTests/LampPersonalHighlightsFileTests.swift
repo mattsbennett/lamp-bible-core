@@ -16,7 +16,7 @@ struct LampPersonalHighlightsFileTests {
         _ reference: Int, _ start: Int, _ end: Int, color: String? = "#ffcc00"
     ) -> LampVerseHighlight {
         LampVerseHighlight(
-            id: Int64(reference &+ start), setID: "set", translationID: "ESV",
+            id: Int64(reference &+ start), setID: "set", translationID: "NASB",
             reference: reference, startOffset: start, endOffset: end,
             style: .highlight, color: color
         )
@@ -28,10 +28,10 @@ struct LampPersonalHighlightsFileTests {
 
     @Test func theDocumentNamesTheSetAndItsSpans() throws {
         let document = try LampPersonalHighlightsFile.document(for: .init(
-            id: "personal-highlights:ESV",
+            id: "personal-highlights:NASB",
             moduleID: "esvs-highlights",
             name: "Mine",
-            translationID: "ESV",
+            translationID: "NASB",
             description: "A set",
             created: 1_700_000_000,
             lastModified: 1_700_000_001,
@@ -45,7 +45,7 @@ struct LampPersonalHighlightsFileTests {
         let meta = object(document, "meta")
         #expect(meta["id"] as? String == "esvs-highlights", "the module's id, not the set's")
         #expect(meta["type"] as? String == "highlights")
-        #expect(meta["translationId"] as? String == "ESV")
+        #expect(meta["translationId"] as? String == "NASB")
         #expect(meta["created"] as? Int == 1_700_000_000)
         #expect(meta["lastModified"] as? Int == 1_700_000_001)
 
@@ -69,7 +69,7 @@ struct LampPersonalHighlightsFileTests {
     /// having none. So a field with nothing to say is **absent**.
     @Test func aFieldWithNothingToSayIsLeftOut() throws {
         let document = try LampPersonalHighlightsFile.document(for: .init(
-            id: "set", moduleID: "m", name: "Mine", translationID: "ESV",
+            id: "set", moduleID: "m", name: "Mine", translationID: "NASB",
             highlights: [highlight(43_003_016, 0, 3, color: nil)]
         ))
         let meta = object(document, "meta")
@@ -94,14 +94,14 @@ struct LampPersonalHighlightsFileTests {
     /// stayed there for good. Owner approved the format change.
     @Test func theSetSaysWhoItIs() throws {
         let document = try LampPersonalHighlightsFile.document(for: .init(
-            id: "personal-highlights:ESV",
-            moduleID: "personal-highlights-ESV",
-            name: "Mine", translationID: "ESV",
+            id: "personal-highlights:NASB",
+            moduleID: "personal-highlights-NASB",
+            name: "Mine", translationID: "NASB",
             highlights: [highlight(43_003_016, 0, 3)]
         ))
         let meta = object(document, "meta")
-        #expect(meta["setId"] as? String == "personal-highlights:ESV", "colon and all")
-        #expect(meta["id"] as? String == "personal-highlights-ESV", "the module is still named")
+        #expect(meta["setId"] as? String == "personal-highlights:NASB", "colon and all")
+        #expect(meta["id"] as? String == "personal-highlights-NASB", "the module is still named")
     }
 
     /// Compiled, the set's own name is what a reader finds — and a document
@@ -118,12 +118,12 @@ struct LampPersonalHighlightsFileTests {
             // carries the ID the document declares.
             let out = fixture
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                .appendingPathComponent("personal-highlights-ESV.lamp")
+                .appendingPathComponent("personal-highlights-NASB.lamp")
             try FileManager.default.createDirectory(
                 at: out.deletingLastPathComponent(), withIntermediateDirectories: true
             )
             _ = try LampModuleCompiler().compile(
-                data: json, sourceFilename: "personal-highlights-ESV.json", destinationURL: out
+                data: json, sourceFilename: "personal-highlights-NASB.json", destinationURL: out
             )
             return try LampWebDAVPersonalArchiveAdapter.highlightSetID(
                 in: try Data(contentsOf: out)
@@ -131,12 +131,12 @@ struct LampPersonalHighlightsFileTests {
         }
 
         var document = try LampPersonalHighlightsFile.document(for: .init(
-            id: "personal-highlights:ESV",
-            moduleID: "personal-highlights-ESV",
-            name: "Mine", translationID: "ESV",
+            id: "personal-highlights:NASB",
+            moduleID: "personal-highlights-NASB",
+            name: "Mine", translationID: "NASB",
             highlights: [highlight(43_003_016, 0, 3)]
         ))
-        #expect(try compiledSetID(from: document) == "personal-highlights:ESV")
+        #expect(try compiledSetID(from: document) == "personal-highlights:NASB")
 
         // A file from before the change said nothing, and spelled the set
         // with the module's name. Read back it gives the same answer, since
@@ -149,7 +149,7 @@ struct LampPersonalHighlightsFileTests {
         var meta = object(document, "meta")
         meta.removeValue(forKey: "setId")
         document["meta"] = meta
-        #expect(try compiledSetID(from: document) == "personal-highlights:ESV")
+        #expect(try compiledSetID(from: document) == "personal-highlights:NASB")
 
         // Where the stated set id and the module's are the *same* string
         // the file is genuinely ambiguous — it is exactly what the old
@@ -166,7 +166,7 @@ struct LampPersonalHighlightsFileTests {
     @Test func theOrderTheyArrivedInDoesNotReachTheFile() throws {
         func spans(_ highlights: [LampVerseHighlight]) throws -> [[String: Any]] {
             let document = try LampPersonalHighlightsFile.document(for: .init(
-                id: "set", moduleID: "m", name: "Mine", translationID: "ESV",
+                id: "set", moduleID: "m", name: "Mine", translationID: "NASB",
                 highlights: highlights
             ))
             let verses = document["verses"] as? [[String: Any]] ?? []
@@ -215,17 +215,17 @@ struct LampPersonalHighlightsFileTests {
         let library = LampLibrary(rootURL: root)
 
         try await install(try LampPersonalHighlightsFile.document(for: .init(
-            id: "personal-highlights:ESV",
-            moduleID: "personal-highlights-ESV",
-            name: "Mine", translationID: "ESV",
+            id: "personal-highlights:NASB",
+            moduleID: "personal-highlights-NASB",
+            name: "Mine", translationID: "NASB",
             highlights: [highlight(43_003_016, 0, 3)],
             themes: [LampHighlightTheme(
-                setID: "personal-highlights:ESV", color: "#ffcc00",
+                setID: "personal-highlights:NASB", color: "#ffcc00",
                 style: .highlight, name: "Promise", description: nil
             )]
-        )), moduleID: "personal-highlights-ESV", into: library, at: root)
+        )), moduleID: "personal-highlights-NASB", into: library, at: root)
 
-        let themes = try await library.highlightThemes(setID: "personal-highlights:ESV")
+        let themes = try await library.highlightThemes(setID: "personal-highlights:NASB")
         #expect(themes.map(\.name) == ["Promise"], "the theme belongs to the set it arrived with")
     }
 
@@ -248,15 +248,15 @@ struct LampPersonalHighlightsFileTests {
         // lost. The set id differing from the module id is what says it was
         // stated rather than flattened.
         try await install(try LampPersonalHighlightsFile.document(for: .init(
-            id: "personal-highlights-ESV", moduleID: "my-esv-set",
-            name: "My own", translationID: "ESV",
+            id: "personal-highlights-NASB", moduleID: "my-esv-set",
+            name: "My own", translationID: "NASB",
             highlights: [highlight(43_003_016, 0, 3)]
         )), moduleID: "my-esv-set", into: library, at: root)
 
         let ids = try await library.highlightSets().map(\.id)
-        #expect(ids.contains("personal-highlights-ESV"), "taken at its word")
+        #expect(ids.contains("personal-highlights-NASB"), "taken at its word")
         #expect(
-            !ids.contains("personal-highlights:ESV"),
+            !ids.contains("personal-highlights:NASB"),
             "and not folded into the default set"
         )
     }
@@ -267,7 +267,7 @@ struct LampPersonalHighlightsFileTests {
     @Test func aMissingColourAndAnEmptyOneAreNotTheSame() throws {
         func colours(_ highlights: [LampVerseHighlight]) throws -> [String?] {
             let document = try LampPersonalHighlightsFile.document(for: .init(
-                id: "set", moduleID: "m", name: "Mine", translationID: "ESV",
+                id: "set", moduleID: "m", name: "Mine", translationID: "NASB",
                 highlights: highlights
             ))
             let verses = document["verses"] as? [[String: Any]] ?? []

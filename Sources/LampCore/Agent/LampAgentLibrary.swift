@@ -536,7 +536,7 @@ public actor LampAgentLibrary {
             kind: .translation,
             requestedIDs: [translationID],
             defaultLimit: nil
-        ).contains(where: { $0.id == translationID }) else {
+        ).contains(where: { LampTranslationID.held(translationID, among: [$0.id]) != nil }) else {
             throw LampAgentError.moduleNotAllowed(translationID)
         }
 
@@ -726,8 +726,12 @@ public actor LampAgentLibrary {
     ) async throws -> [LampInstalledModule] {
         let permitted = try await permittedInstalledModules(kinds: [kind])
         if let requestedIDs {
-            let selected = permitted.filter { requestedIDs.contains($0.id) }
-            for requested in requestedIDs where !selected.contains(where: { $0.id == requested }) {
+            // Each asked-for ID read as a held module (`LampTranslationID`),
+            // so one asked for by an ID it no longer goes by is still found.
+            let permittedIDs = permitted.map(\.id)
+            let resolved = Set(requestedIDs.map { LampTranslationID.held($0, among: permittedIDs) ?? $0 })
+            let selected = permitted.filter { resolved.contains($0.id) }
+            for requested in requestedIDs where LampTranslationID.held(requested, among: selected.map(\.id)) == nil {
                 if !policy.allows(moduleID: requested) {
                     throw LampAgentError.moduleNotAllowed(requested)
                 }

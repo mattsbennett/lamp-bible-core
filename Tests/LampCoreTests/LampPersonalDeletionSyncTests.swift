@@ -438,7 +438,7 @@ struct LampPersonalDeletionSyncTests {
     /// A highlight deleted on a device that had not yet learned a set's
     /// real name is still deleted here.
     ///
-    /// A ledger key names the set and no module, so `personal-highlights-ESV`
+    /// A ledger key names the set and no module, so `personal-highlights-NASB`
     /// could be the default set under its old flattened name or a set the
     /// reader genuinely called that. This device's own sets settle it:
     /// holding the colon form and nothing named the flattened one, there is
@@ -454,15 +454,15 @@ struct LampPersonalDeletionSyncTests {
         let (mine, root) = try library(at: "spelling")
         defer { try? FileManager.default.removeItem(at: root) }
         let saved = try await mine.saveVerseHighlight(
-            translationID: "ESV", reference: verse, startOffset: 0, endOffset: 3,
+            translationID: "NASB", reference: verse, startOffset: 0, endOffset: 3,
             color: "#FFCC00"
         )
-        #expect(saved.setID == "personal-highlights:ESV", "the set this device holds")
+        #expect(saved.setID == "personal-highlights:NASB", "the set this device holds")
 
         // A deletion recorded by a device that knew the set only as the
         // flattened module name.
         let flattened = LampLibrary.highlightKey(
-            setID: "personal-highlights-ESV", reference: verse,
+            setID: "personal-highlights-NASB", reference: verse,
             start: saved.startOffset, end: saved.endOffset,
             style: saved.style.rawValue, color: saved.color
         )
@@ -475,7 +475,7 @@ struct LampPersonalDeletionSyncTests {
         try await mine.applyPersonalDeletionLedger()
 
         #expect(
-            try await mine.verseHighlights(translationID: "ESV", reference: verse).isEmpty,
+            try await mine.verseHighlights(translationID: "NASB", reference: verse).isEmpty,
             "the deletion lands, rather than naming a set this device does not have"
         )
 
@@ -487,7 +487,7 @@ struct LampPersonalDeletionSyncTests {
         #expect(ledger.entry(.highlight, flattened) == nil, "moved, not copied")
         #expect(
             ledger.entries(of: .highlight).keys.contains {
-                $0.hasPrefix("personal-highlights:ESV\u{1F}")
+                $0.hasPrefix("personal-highlights:NASB\u{1F}")
             },
             "and it is there under the set's real name"
         )

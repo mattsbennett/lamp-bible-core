@@ -361,8 +361,14 @@ extension LampModuleSearch {
         var scripture: LampScriptureChoice?
         if (request.hasWords || request.strongsKey != nil) && request.wants(.translation),
            let verses = sources.verses {
-            let order = try sources.translations().filter { request.includes(moduleID: $0) }
-            if let preferred = request.preferredTranslationID, order.count > 1 {
+            // The translations asked for, and the one preferred, read as held
+            // ones (`LampTranslationID.held`), so an ID saved before a
+            // translation was renamed still finds it.
+            let installed = try sources.translations()
+            let asked = request.moduleIDs.map { Set(LampTranslationID.held(Array($0).sorted(), among: installed)) }
+            let order = installed.filter { asked?.contains($0) ?? true }
+            if let preferred = request.preferredTranslationID.map({ LampTranslationID.held($0, among: order) ?? $0 }),
+               order.count > 1 {
                 if let chosen = try LampScriptureChoice.choose(
                     preferred: preferred, order: order, limit: limit,
                     verses: { id, limit in

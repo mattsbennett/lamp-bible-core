@@ -39,7 +39,7 @@ The translation schema supports Bible translations with offset-based annotations
 ```
 Module (one file per translation)
 ├── meta                        # Translation metadata
-│   ├── id                      # Unique identifier (e.g., "KJV", "BSBs")
+│   ├── id                      # Unique identifier (e.g., "KJV", "BSB")
 │   ├── type                    # "translation"
 │   ├── name                    # Display name (e.g., "King James Version")
 │   ├── abbreviation            # Short code (e.g., "KJV")
@@ -131,8 +131,8 @@ Headings are stored separately from verse text and reference which verse they pr
 
 ### Translation ID Conventions
 
-- Strong's-enabled translations use an 's' suffix: `KJVs`, `BSBs`, `ASVs`, `WEBs`
-- Non-Strong's translations use plain IDs: `NIV`, `ESV`, `YLT`, `BBE`
+- A translation's ID is its plain abbreviation, whether or not it carries Strong's numbers: `KJV`, `BSB`, `ESV`, `NIV`.
+- Some once carried an `s` for their Strong's tags: `ASVs`, `BSBs`, `KJVs`, `WEBs`, `ESVs`, `NETs` and `ABPs`. Lamp still reads data that names them that way, through `LampTranslationID` in lamp-bible-core, and names a highlight set by a translation's first ID.
 
 ---
 
@@ -993,7 +993,7 @@ Highlights
 │   ├── type                    # "highlights"
 │   ├── name                    # Display name (e.g., "My Highlights")
 │   ├── description             # Optional description
-│   ├── translationId           # Associated translation (e.g., "ESV", "BSBs")
+│   ├── translationId           # Associated translation (e.g., "ESV", "BSB")
 │   ├── created                 # Unix timestamp
 │   └── lastModified            # Unix timestamp
 │

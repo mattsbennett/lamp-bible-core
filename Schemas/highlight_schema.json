@@ -87,7 +87,7 @@
         "type": { "type": "string", "const": "highlights" },
         "name": { "type": "string", "description": "Display name (e.g., 'My Highlights')" },
         "description": { "type": "string", "description": "Optional description of this highlight set" },
-        "translationId": { "type": "string", "description": "Associated translation ID (e.g., 'ESV', 'BSBs')" },
+        "translationId": { "type": "string", "description": "Associated translation ID (e.g., 'ESV', 'BSB')" },
         "created": { "type": "integer", "description": "Unix timestamp when created" },
         "lastModified": { "type": "integer", "description": "Unix timestamp of last modification" },
         "themes": {

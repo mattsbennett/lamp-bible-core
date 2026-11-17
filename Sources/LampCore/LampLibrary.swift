@@ -78,6 +78,24 @@ public actor LampLibrary {
             }
     }
 
+    /// The ID of the held translation a reference to `id` reads as: `id`
+    /// itself when it is held, so two translations held side by side are
+    /// never confused, and otherwise the one its name now belongs to
+    /// (`LampTranslationID.held`), as a bundle built before or after the
+    /// rename, or an import made before it, may hold. An ID never renamed is
+    /// itself, at no cost, and one nothing holds is returned as it is, for
+    /// the lookup to report.
+    func heldTranslationID(_ id: String) -> String {
+        guard LampTranslationID.equivalents(of: id).count > 1 else { return id }
+        let held = ((try? installedModules()) ?? []).filter { $0.kind == .translation }.map(\.id)
+        return LampTranslationID.held(id, among: held) ?? id
+    }
+
+    /// `heldTranslationID` of each, for a lookup that filters by ID.
+    func heldTranslationIDs(_ ids: Set<String>?) -> Set<String>? {
+        ids.map { Set($0.map(heldTranslationID)) }
+    }
+
     /// Each installed module with the `.lamp` file that holds it, for a sync
     /// that publishes modules as files. Modules shipped inside the app are
     /// not here: they have no file of their own, and are never published.
@@ -377,7 +395,8 @@ public actor LampLibrary {
     /// bundled one in the bundle's `translations` table, which may also list
     /// its departures as a JSON array of mapping lines in
     /// `versification_mappings`.
-    public func versification(moduleID: String) throws -> LampVersification {
+    public func versification(moduleID requested: String) throws -> LampVersification {
+        let moduleID = heldTranslationID(requested)
         let queue = try openDatabase(moduleID: moduleID)
         if let known = versifications[moduleID] { return known }
         let versification = try queue.read { db in
@@ -390,8 +409,9 @@ public actor LampLibrary {
     /// The sources a translation declares for its tagging
     /// (`LampTranslationSource`); empty where it declares none, which is to
     /// say its source printed what it carries.
-    public func translationSources(moduleID: String) throws -> [LampTranslationSource] {
-        try openDatabase(moduleID: moduleID).read { db in
+    public func translationSources(moduleID requested: String) throws -> [LampTranslationSource] {
+        let moduleID = heldTranslationID(requested)
+        return try openDatabase(moduleID: moduleID).read { db in
             try LampTranslationSource.declared(in: db, translationID: moduleID)
         }
     }
@@ -405,7 +425,8 @@ public actor LampLibrary {
         }
     }
 
-    public func translationBooks(moduleID: String) throws -> [LampTranslationBook] {
+    public func translationBooks(moduleID requested: String) throws -> [LampTranslationBook] {
+        let moduleID = heldTranslationID(requested)
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in
             let tables = try tableNames(in: db)
@@ -429,10 +450,11 @@ public actor LampLibrary {
     }
 
     public func chapter(
-        moduleID: String,
+        moduleID requested: String,
         bookNumber: Int,
         chapterNumber: Int
     ) throws -> LampChapter {
+        let moduleID = heldTranslationID(requested)
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in
             let tables = try tableNames(in: db)
@@ -518,7 +540,7 @@ public actor LampLibrary {
                 throw LampLibraryError.emptyChapter(book: bookNumber, chapter: chapterNumber)
             }
             return LampChapter(
-                translationID: moduleID,
+                translationID: requested,
                 book: book,
                 number: chapterNumber,
                 verses: verses,
@@ -528,9 +550,10 @@ public actor LampLibrary {
     }
 
     public func verseStudyData(
-        moduleID: String,
+        moduleID requested: String,
         reference: Int
     ) throws -> LampVerseStudyData? {
+        let moduleID = heldTranslationID(requested)
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in
             let tables = try tableNames(in: db)
@@ -571,7 +594,7 @@ public actor LampLibrary {
             let footnoteReferencesJSON: String? = row["footnote_refs_json"]
             let verseText: String = row["text"]
             return LampVerseStudyData(
-                translationID: moduleID,
+                translationID: requested,
                 reference: reference,
                 annotations: verseAnnotations(from: annotationsJSON, verseText: verseText),
                 footnotes: verseFootnotes(from: footnotesJSON),
@@ -581,10 +604,11 @@ public actor LampLibrary {
     }
 
     public func translationWordCount(
-        moduleID: String,
+        moduleID requested: String,
         startReference: Int,
         endReference: Int
     ) throws -> Int {
+        let moduleID = heldTranslationID(requested)
         let lowerBound = min(startReference, endReference)
         let upperBound = max(startReference, endReference)
         let queue = try openDatabase(moduleID: moduleID)
@@ -627,6 +651,7 @@ public actor LampLibrary {
         let resultLimit = min(max(limit, 1), 500)
         let parsedQuery = LampSearchQuery(query)
         guard !parsedQuery.isEmpty, !parsedQuery.plainText.isEmpty else { return [] }
+        let moduleIDs = heldTranslationIDs(moduleIDs)
         let translations = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
@@ -704,6 +729,7 @@ public actor LampLibrary {
         let firstBook = bookRange?.lowerBound ?? Int.min
         let lastBook = bookRange?.upperBound ?? Int.max
         let prefilter = LampStrongsSearch.sqlPrefilter(for: normalized, column: "v.annotations_json")
+        let moduleIDs = heldTranslationIDs(moduleIDs)
         let modules = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
@@ -1151,6 +1177,7 @@ public actor LampLibrary {
     /// it builds, and finds its verses by reading them until the index is
     /// whole. A translation no longer installed leaves the index.
     public func buildStrongsIndexes(moduleIDs: Set<String>? = nil) async throws {
+        let moduleIDs = heldTranslationIDs(moduleIDs)
         for module in try prunedStrongsIndex() where (moduleIDs == nil || moduleIDs?.contains(module.id) == true)
             && !strongsIndexesBuilding.contains(module.id) {
             try Task.checkCancellation()
@@ -1242,6 +1269,7 @@ public actor LampLibrary {
         keeping: (@Sendable (LampStrongsAnalysis.Occurrence) -> Bool)? = nil
     ) throws -> [LampStrongsAnalysis] {
         guard !LampStrongsKey.normalized(key).isEmpty else { return [] }
+        let moduleIDs = heldTranslationIDs(moduleIDs)
         let modules = try installedModules().filter {
             $0.kind == .translation && (moduleIDs == nil || moduleIDs?.contains($0.id) == true)
         }
@@ -2918,7 +2946,7 @@ public actor LampLibrary {
                 moduleID: hit.setID,
                 moduleName: names[hit.setID] ?? hit.setID,
                 title: LampBibleReferenceFormatter.describeRange(from: highlight.reference, to: highlight.reference),
-                subtitle: abbreviations[highlight.translationID],
+                subtitle: abbreviations[heldTranslationID(highlight.translationID)],
                 snippet: query.map { $0.markedSnippet(hit.text) } ?? LampHighlightSearch.markedSnippet(
                     text: hit.text,
                     startOffset: highlight.startOffset,
@@ -2933,7 +2961,9 @@ public actor LampLibrary {
 
     /// The text of each verse of a translation in `references`, read a few
     /// hundred at a time rather than a chapter at a time.
-    private func verseTexts(moduleID: String, references: Set<Int>) throws -> [Int: String] {
+    private func verseTexts(moduleID requested: String, references: Set<Int>) throws -> [Int: String] {
+        // A highlight records the translation it was made in by its first ID.
+        let moduleID = heldTranslationID(requested)
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in
             let tables = try tableNames(in: db)
@@ -3553,14 +3583,23 @@ public actor LampLibrary {
         )
     }
 
+    /// A highlight set records its translation by the ID it had first
+    /// (`LampTranslationID.original`), so one asked for by either of its IDs
+    /// is matched by every ID it has gone by.
+    private static func translationIDs(_ translationID: String) -> (placeholders: String, arguments: StatementArguments) {
+        let ids = LampTranslationID.equivalents(of: translationID)
+        return (Array(repeating: "?", count: ids.count).joined(separator: ", "), StatementArguments(ids))
+    }
+
     public func highlightSets(translationID: String? = nil) throws -> [LampHighlightSet] {
         let queue = try openUserDatabase()
         return try queue.read { db in
             var sql = "SELECT * FROM highlight_sets"
             var arguments = StatementArguments()
             if let translationID {
-                sql += " WHERE translation_id = ?"
-                arguments = [translationID]
+                let ids = Self.translationIDs(translationID)
+                sql += " WHERE translation_id IN (\(ids.placeholders))"
+                arguments = ids.arguments
             }
             sql += " ORDER BY name COLLATE NOCASE, created"
             return try Row.fetchAll(db, sql: sql, arguments: arguments).map { row in
@@ -3587,11 +3626,13 @@ public actor LampLibrary {
         try validateIdentifier(set.id)
         let now = Date(timeIntervalSince1970: TimeInterval(Int(Date().timeIntervalSince1970)))
         let created = Date(timeIntervalSince1970: TimeInterval(Int(set.created.timeIntervalSince1970)))
+        // Recorded by the translation's first ID, which every device writes
+        // alike, so sync never sees two sets disagree about it.
         let saved = LampHighlightSet(
             id: set.id,
             name: name,
             description: set.description?.nilIfBlank,
-            translationID: set.translationID,
+            translationID: LampTranslationID.original(set.translationID),
             created: created,
             lastModified: now
         )
@@ -3706,9 +3747,9 @@ public actor LampLibrary {
                        h.sc, h.ec, h.style, h.color
                 FROM highlights h
                 JOIN highlight_sets s ON s.id = h.set_id
-                WHERE s.translation_id = ? AND h.ref = ?
+                WHERE s.translation_id IN (\(Self.translationIDs(translationID).placeholders)) AND h.ref = ?
                 ORDER BY h.sc, h.ec, h.id
-                """, arguments: [translationID, reference]).map(makeVerseHighlight)
+                """, arguments: Self.translationIDs(translationID).arguments + [reference]).map(makeVerseHighlight)
         }
     }
 
@@ -3749,9 +3790,11 @@ public actor LampLibrary {
                        h.sc, h.ec, h.style, h.color
                 FROM highlights h
                 JOIN highlight_sets s ON s.id = h.set_id
-                WHERE s.translation_id = ? AND h.ref BETWEEN ? AND ?
+                WHERE s.translation_id IN (\(Self.translationIDs(translationID).placeholders))
+                  AND h.ref BETWEEN ? AND ?
                 ORDER BY h.ref, h.sc, h.ec, h.id
-                """, arguments: [translationID, startReference, endReference]).map(makeVerseHighlight)
+                """, arguments: Self.translationIDs(translationID).arguments + [startReference, endReference])
+                .map(makeVerseHighlight)
         }
     }
 
@@ -3770,6 +3813,9 @@ public actor LampLibrary {
         }
         let normalizedStartOffset = max(startOffset, 0)
         let normalizedEndOffset = max(endOffset, normalizedStartOffset)
+        // A translation's default set is named, and records it, by its first
+        // ID, which every device computes alike, before a rename or after.
+        let translationID = LampTranslationID.original(translationID)
         let resolvedSetID = setID ?? "personal-highlights:\(translationID)"
         let now = Int(Date().timeIntervalSince1970)
         let queue = try openUserDatabase()
@@ -3835,17 +3881,18 @@ public actor LampLibrary {
     public func deleteVerseHighlights(translationID: String, reference: Int) throws {
         let queue = try openUserDatabase()
         try queue.write { db in
+            let ids = Self.translationIDs(translationID)
             try Self.recordHighlightDeletions(
                 db,
-                matching: "ref = ? AND set_id IN (SELECT id FROM highlight_sets WHERE translation_id = ?)",
-                arguments: [reference, translationID]
+                matching: "ref = ? AND set_id IN (SELECT id FROM highlight_sets WHERE translation_id IN (\(ids.placeholders)))",
+                arguments: [reference] + ids.arguments
             )
             try db.execute(sql: """
                 DELETE FROM highlights
                 WHERE ref = ? AND set_id IN (
-                    SELECT id FROM highlight_sets WHERE translation_id = ?
+                    SELECT id FROM highlight_sets WHERE translation_id IN (\(ids.placeholders))
                 )
-                """, arguments: [reference, translationID])
+                """, arguments: [reference] + ids.arguments)
         }
     }
 
@@ -3961,11 +4008,14 @@ public actor LampLibrary {
     }
 
     public func personalHighlightsDocument(
-        translationID: String,
+        translationID requestedTranslationID: String,
         moduleID requestedModuleID: String? = nil,
         name requestedName: String? = nil,
         setID requestedSetID: String? = nil
     ) throws -> LampPortableStudyDocument {
+        // The default set, and the file it is published as, are named by the
+        // translation's first ID, as every device names them.
+        let translationID = LampTranslationID.original(requestedTranslationID)
         let setID = requestedSetID ?? "personal-highlights:\(translationID)"
         let queue = try openUserDatabase()
         let export = try queue.read { db -> (name: String?, description: String?, created: Int?, modified: Int?, highlights: [LampVerseHighlight], themes: [LampHighlightTheme]) in
@@ -4212,10 +4262,13 @@ public actor LampLibrary {
     /// back out of a flattened module ID. Public so the phone can read
     /// those older files the same way rather than guessing differently,
     /// which is how the two apps came to name one set two things.
+    ///
+    /// The default set is named by the translation's first ID
+    /// (`LampTranslationID.original`), whichever of its IDs the file gives.
     public static func canonicalHighlightSetID(_ setID: String, translationID: String) -> String {
-        setID == "personal-highlights-\(safeExportIdentifier(translationID))"
-            ? "personal-highlights:\(translationID)"
-            : setID
+        let original = LampTranslationID.original(translationID)
+        let flattened = Set([translationID, original].map { "personal-highlights-\(safeExportIdentifier($0))" })
+        return flattened.contains(setID) ? "personal-highlights:\(original)" : setID
     }
 
     private func prettyJSONData(_ object: Any) throws -> Data {
@@ -4610,7 +4663,10 @@ public actor LampLibrary {
                         setID,
                         metadata?.name ?? name ?? "My Highlights",
                         metadata?.description ?? description,
-                        translationID,
+                        // Its first ID, as this device writes it: a copy
+                        // naming the translation otherwise would set the two
+                        // devices writing it back and forth.
+                        LampTranslationID.original(translationID),
                         metadata?.created ?? created ?? now,
                         metadata?.lastModified ?? lastModified ?? now,
                     ])
@@ -6305,7 +6361,7 @@ public actor LampLibrary {
                         set.id,
                         set.name,
                         set.description,
-                        set.translationID,
+                        LampTranslationID.original(set.translationID),
                         Int(set.created.timeIntervalSince1970),
                         Int(set.lastModified.timeIntervalSince1970),
                     ])

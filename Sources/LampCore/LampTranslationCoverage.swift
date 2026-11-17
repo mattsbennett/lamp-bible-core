@@ -26,6 +26,21 @@ public enum LampTranslationCoverage {
         return try chapterCountsByTranslation(in: db, tables: tables)
     }
 
+    /// The translation in a file of several that `translationID` reads as:
+    /// itself where the file lists it, or else the ID its name now has or
+    /// had (`LampTranslationID.held`), as a bundle built before or after a
+    /// rename lists it.
+    static func listedID(_ translationID: String, in db: Database) throws -> String {
+        let ids = LampTranslationID.equivalents(of: translationID)
+        guard ids.count > 1 else { return translationID }
+        let listed = try ([translationID] + ids).filter {
+            try Bool.fetchOne(
+                db, sql: "SELECT EXISTS(SELECT 1 FROM translation_books WHERE translation_id = ?)", arguments: [$0]
+            ) == true
+        }
+        return LampTranslationID.held(translationID, among: listed) ?? translationID
+    }
+
     static func chapterCounts(in db: Database, tables: Set<String>, translationID: String?) throws -> [Int: Int] {
         // The several-translation layout first: the bundle also has a
         // `books` table, the canonical list, which counts no chapters.
@@ -33,7 +48,7 @@ public enum LampTranslationCoverage {
             return counts(try Row.fetchAll(
                 db,
                 sql: "SELECT book_number AS book, chapter_count FROM translation_books WHERE translation_id = ?",
-                arguments: [translationID]
+                arguments: [try listedID(translationID, in: db)]
             ))
         }
         if tables.contains("books"),
@@ -65,7 +80,7 @@ public enum LampTranslationCoverage {
             rows = try Row.fetchAll(
                 db,
                 sql: "SELECT book_number AS book, name FROM translation_books WHERE translation_id = ?",
-                arguments: [translationID]
+                arguments: [try listedID(translationID, in: db)]
             )
         } else if tables.contains("books"),
                   try LampModuleText.columnNames(in: db, table: "books").contains("chapter_count") {
