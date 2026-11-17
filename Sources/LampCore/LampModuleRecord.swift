@@ -83,16 +83,21 @@ public struct LampModuleRecord: Equatable, Sendable {
         case blob(byteCount: Int)
     }
 
-    /// The first value of a column across the tables, for a caller after one
-    /// field by name; nil where no table has the column, `.null` where one
-    /// has it empty.
+    /// A column's value across the tables, for a caller after one field by
+    /// name: the first that isn't empty, since a registry may leave empty
+    /// what the module's own table holds (an app's commentary keeps its
+    /// publisher in `commentary_books`); `.null` where every table with the
+    /// column has it empty; nil where none has it.
     public func value(of column: String) -> Value? {
+        var found: Value?
         for table in tables {
             for row in table.rows {
-                if let field = row.first(where: { $0.name == column }) { return field.value }
+                guard let field = row.first(where: { $0.name == column }) else { continue }
+                if field.value != .null { return field.value }
+                found = .null
             }
         }
-        return nil
+        return found
     }
 }
 
@@ -151,7 +156,13 @@ extension LampModuleRecord {
         case .book: return [("book_modules", "id = ?", [("book_modules", "id")]), registry]
         case .plan: return [("plans", "id = ?", [("plans", "id")]), registry]
         case .quiz: return [("quiz_modules", "id = ?", [("quiz_modules", "id")]), registry]
-        case .highlights: return [registry, ("highlight_sets", "module_id = ?", [("highlight_sets", "module_id")])]
+        case .highlights:
+            return [
+                registry,
+                ("highlight_sets", "module_id = ?", [("highlight_sets", "module_id")]),
+                ("highlight_themes", "set_id IN (SELECT id FROM highlight_sets WHERE module_id = ?)",
+                 [("highlight_themes", "set_id"), ("highlight_sets", "id"), ("highlight_sets", "module_id")]),
+            ]
         case .devotional, .notes: return [registry]
         }
     }

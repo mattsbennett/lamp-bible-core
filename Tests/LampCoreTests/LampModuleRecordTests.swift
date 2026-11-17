@@ -126,15 +126,28 @@ struct LampModuleRecordTests {
                 INSERT INTO highlight_sets VALUES ('s1', 'my-highlights', 'Study', 'BSBs');
                 INSERT INTO highlight_sets VALUES ('s2', 'other', 'Not this one', 'KJV');
                 CREATE TABLE commentary_series (id TEXT PRIMARY KEY, name TEXT);
+                CREATE TABLE highlight_themes (id TEXT PRIMARY KEY, set_id TEXT, color TEXT, name TEXT);
+                INSERT INTO highlight_themes VALUES ('s1_yellow', 's1', '#ff0', 'Promises');
+                INSERT INTO highlight_themes VALUES ('s2_red', 's2', '#f00', 'Not this one');
+                CREATE TABLE commentary_books (id TEXT PRIMARY KEY, module_id TEXT, publisher TEXT, author TEXT);
+                INSERT INTO commentary_books VALUES ('nic-1', 'nic', 'Eerdmans', NULL);
                 """)
         }
         try queue.read { db in
             let highlights = try LampModuleRecord.tables(sharedLayoutIn: db, kind: .highlights, id: "my-highlights")
-            #expect(highlights.map(\.name) == ["modules", "highlight_sets"])
-            #expect(highlights.last?.rows.count == 1)
+            #expect(highlights.map(\.name) == ["modules", "highlight_sets", "highlight_themes"])
+            #expect(highlights.map(\.rows.count) == [1, 1, 1])
             // No `series_id` in this layout: the series is skipped, not an error.
             let commentary = try LampModuleRecord.tables(sharedLayoutIn: db, kind: .commentary, id: "nic")
-            #expect(commentary.map(\.name) == ["modules"])
+            #expect(commentary.map(\.name) == ["modules", "commentary_books"])
+            // The registry's empty column doesn't hide the book row's value.
+            let record = LampModuleRecord(
+                module: .init(id: "nic", kind: .commentary, name: "NIC"),
+                storage: .shared(database: .init(url: URL(fileURLWithPath: "/m.sqlite"), byteCount: nil, modifiedAt: nil, sha256: nil)),
+                tables: commentary
+            )
+            #expect(record.value(of: "publisher") == .text("Eerdmans"))
+            #expect(record.value(of: "author") == .text("Various"))
             #expect(try LampModuleRecord.tables(sharedLayoutIn: db, kind: .translation, id: "BSB").isEmpty)
         }
         // A book's file and sync columns in the registry, a translation kept
