@@ -104,6 +104,12 @@ public struct LampSyncBundlePass {
         /// nothing else says why a thing deleted on one device is still on
         /// this one after pass upon pass.
         public var deletionsNotCarriedOut: [String] = []
+        /// Modules and decks this client holds, as the server last had them,
+        /// that the server's listing did not find, and why
+        /// (`LampSyncFilePlan.missing`). Nothing is done about them: show
+        /// them, and let the person delete one if it is gone for good. A
+        /// path leaves the set when a pass finds its file again.
+        public var missing: [String: LampSyncFilePlan.Missing] = [:]
         /// The bundle revision this pass left behind.
         public var bundleRevision: String?
         /// The bundle this pass wrote, as written: what a caller applies
@@ -239,9 +245,10 @@ public struct LampSyncBundlePass {
         // to it, so this is what it actually holds.
         let gathered = try await gathering()
 
-        var listing = try await LampSyncFilePlan.listing(
+        let listed = try await LampSyncFilePlan.listingAndFolders(
             in: store, manifest: opened.bundle.manifest
         )
+        var listing = listed.listing
         listing.merge(gathered.extraListing) { _, extra in extra }
 
         let filesByPath = Dictionary(
@@ -269,6 +276,13 @@ public struct LampSyncBundlePass {
             deletedLocally: gathered.deletedLocally,
             listing: listing
         ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
+        outcome.missing = LampSyncFilePlan.missing(
+            manifest: opened.bundle.manifest,
+            local: locals,
+            deletedLocally: gathered.deletedLocally,
+            listing: listing,
+            listedFolders: listed.folders
+        ).filter { LampSyncFolderLayout.kind(of: $0.key).map(plannedKinds) ?? false }
 
         // Read before anything is fetched, since fetching is what records the
         // revision that would hide it — and before anything is reaped, which

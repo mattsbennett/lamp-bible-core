@@ -226,9 +226,21 @@ public enum LampSyncFilePlan {
         in store: any LampSyncRemoteStore,
         manifest: LampSyncLibraryManifest
     ) async throws -> [String: String] {
+        try await listingAndFolders(in: store, manifest: manifest).listing
+    }
+
+    /// The listing, with the folders the store listed. A folder it has no
+    /// listing for (nil, not empty) is left out.
+    static func listingAndFolders(
+        in store: any LampSyncRemoteStore,
+        manifest: LampSyncLibraryManifest
+    ) async throws -> (listing: [String: String], folders: Set<String>) {
         var listing: [String: String] = [:]
+        var folders = Set<String>()
         for directory in LampSyncFolderLayout.listedDirectories {
-            for item in try await store.list(directory: directory + "/") ?? [] where !item.isDirectory {
+            guard let items = try await store.list(directory: directory + "/") else { continue }
+            folders.insert(directory)
+            for item in items where !item.isDirectory {
                 let path = "\(directory)/\(item.name)"
                 guard LampSyncFolderLayout.kind(of: path)?.isListed == true else { continue }
                 let entry = manifest.entry(at: path)
@@ -240,11 +252,57 @@ public enum LampSyncFilePlan {
                 }
             }
         }
-        return listing
+        return (listing, folders)
     }
 }
 
 extension LampSyncFilePlan {
+    /// Why a module this client holds was not found on the server.
+    public enum Missing: Equatable, Sendable {
+        /// Its folder was listed and the file was not in it: deleted from the
+        /// server by hand, or, on iCloud, not arrived yet.
+        case notOnServer
+        /// Its folder could not be listed at all, so whether the file is
+        /// there is unknown.
+        case folderNotListed
+    }
+
+    /// The modules and decks the manifest names, that this client holds as
+    /// the server last had them, and that a listing did not find.
+    ///
+    /// A report, never an action: absence is no evidence of a deletion. A
+    /// server can answer a listing from a stale view, and iCloud refills a
+    /// folder file by file while the manifest already names everything. The
+    /// plan does nothing about these, and a caller marks them; the person
+    /// deletes one, if they mean to, by the recorded deletion every device
+    /// follows.
+    ///
+    /// Left out: a copy changed here, or one with no record of agreeing,
+    /// which this pass sends back (`.ifAbsent`); a path deleted here; media
+    /// and workspace files, which are never listed.
+    public static func missing(
+        manifest: LampSyncLibraryManifest,
+        local: [Local],
+        deletedLocally: [String: Int64],
+        listing: [String: String],
+        listedFolders: Set<String>
+    ) -> [String: Missing] {
+        var missing: [String: Missing] = [:]
+        for held in local where listing[held.path] == nil && deletedLocally[held.path] == nil {
+            guard LampSyncFolderLayout.kind(of: held.path)?.isListed == true,
+                  manifest.entry(at: held.path)?.isMember == true,
+                  !held.changedSinceUpload, held.lastRevision != nil else { continue }
+            missing[held.path] = listedFolders.contains(folder(of: held.path)) ? .notOnServer : .folderNotListed
+        }
+        return missing
+    }
+
+    /// The folder a path is listed in.
+    static func folder(of path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<slash])
+    }
+
     /// The listed files' revisions as a listing reports them, reading no
     /// file: for a probe made every couple of minutes while the app is open.
     ///

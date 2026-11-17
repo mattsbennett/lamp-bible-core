@@ -81,6 +81,72 @@ struct LampSyncBundlePassTests {
 
     // MARK: - Tests
 
+    // MARK: A module gone from the server
+
+    /// The owner's server, after ESVs.lamp was deleted by hand and ESV.lamp
+    /// uploaded in its place, while this client holds ESVs as the server last
+    /// had it: ESVs is reported missing, and nothing deletes it.
+    @Test func aModuleGoneFromTheServerIsReportedNotDeleted() async throws {
+        let store = try seeded(path: "Translations/ESVs.lamp", revision: "\"esvs-1\"")
+        store.bodies["Translations/ESVs.lamp"] = nil
+        store.revisions["Translations/ESVs.lamp"] = nil
+        store.bodies["Translations/ESV.lamp"] = Data("the new ESV".utf8)
+        store.revisions["Translations/ESV.lamp"] = "\"esv-1\""
+        var records = LampSyncFileRecords()
+        records.recordInstall("Translations/ESVs.lamp", in: source, revision: "\"esvs-1\"")
+        let library = StubLibrary()
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(gathering: {
+            var held = LampSyncBundlePass.Gathered()
+            held.heldWithoutAFile = ["Translations/ESVs.lamp"]
+            return held
+        }, records: &records)
+
+        #expect(outcome.missing == ["Translations/ESVs.lamp": .notOnServer])
+        #expect(library.installed == ["Translations/ESV.lamp"])
+        #expect(library.deleted.isEmpty)
+        #expect(outcome.tombstoned.isEmpty)
+        let manifest = try LampSyncSettingsBundle.decode(store.bodies[bundlePath]!).manifest
+        #expect(manifest.entry(at: "Translations/ESVs.lamp")?.isMember == true)
+    }
+
+    /// Who is missing, and why, path by path.
+    @Test func whatTheListingDidNotFind() {
+        var manifest = LampSyncLibraryManifest()
+        for path in ["Translations/a.lamp", "Translations/changed.lamp", "Translations/unrecorded.lamp",
+                     "Translations/listed.lamp", "Translations/deleted.lamp", "Dictionaries/d.lamp",
+                     "Workspaces/Presentations/talk.lampdeck"] {
+            manifest = (try? manifest.recordingWrite(path, revision: "\"r\"", replacing: nil, at: 1_000)) ?? manifest
+        }
+        func held(_ path: String, changed: Bool = false, revision: String? = "\"r\"") -> LampSyncFilePlan.Local {
+            .init(path: path, changedSinceUpload: changed, lastRevision: revision, savedAt: nil)
+        }
+        let missing = LampSyncFilePlan.missing(
+            manifest: manifest,
+            local: [
+                held("Translations/a.lamp"),
+                // Going back up in this pass, so not missing for long.
+                held("Translations/changed.lamp", changed: true),
+                held("Translations/unrecorded.lamp", revision: nil),
+                held("Translations/listed.lamp"),
+                held("Translations/deleted.lamp"),
+                held("Translations/unknown.lamp"),
+                held("Dictionaries/d.lamp"),
+                held("Workspaces/Presentations/talk.lampdeck"),
+            ],
+            deletedLocally: ["Translations/deleted.lamp": 1_500],
+            listing: ["Translations/listed.lamp": "\"r\""],
+            listedFolders: ["Translations", LampSyncFolderLayout.decksDirectory]
+        )
+        #expect(missing == [
+            "Translations/a.lamp": .notOnServer,
+            "Dictionaries/d.lamp": .folderNotListed,
+            "Workspaces/Presentations/talk.lampdeck": .notOnServer,
+        ])
+    }
+
     /// A pass on an untouched library must write the bundle before any file.
     /// Its own files are what make the next read call the library an earlier
     /// one, so a pass that uploaded first would be told `notMigrated` by its
