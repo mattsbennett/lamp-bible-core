@@ -126,6 +126,54 @@ struct LampTranslationImportTests {
         #expect(headings(imported, book: 35, chapter: 3) == [])
     }
 
+    /// The WEB's Psalm 119 writes each letter as `\d` between two sections,
+    /// after the last verse of one: a heading over the next verse, not the
+    /// end of the verse before, which only a `\d` with no verse after it in
+    /// its chapter is.
+    @Test func usfmDescriptiveTitleBetweenVersesHeadsTheNextOne() throws {
+        let imported = try read(#"""
+            \id PSA
+            \c 119
+            \d ALEPH
+            \q1 \v 1 Blessed are those whose ways are blameless.
+            \q1 \v 2 Blessed are those who keep his statutes.
+            \d BETH
+            \q1 \v 3 How can a young man keep his way pure?
+            \c 120
+            \d A Song of Ascents.
+            \q1 \v 1 In my distress, I cried to Yahweh.
+            """#)
+
+        #expect(verse(imported, 19_119_002)?.text == "Blessed are those who keep his statutes.")
+        #expect(headings(imported, book: 19, chapter: 119).map { "\($0.beforeVerse) \($0.text)" } == ["1 ALEPH", "3 BETH"])
+        #expect(headings(imported, book: 19, chapter: 120).map(\.text) == ["A Song of Ascents."])
+        #expect(verse(imported, 19_119_003)?.text == "How can a young man keep his way pure?")
+    }
+
+    /// A closing line keeps its words' tags (the BSB tags Hab 3:19's), and
+    /// one with the verse's own words after it stays in the verse.
+    @Test func usfmClosingLineKeepsItsTagsAndItsPlace() throws {
+        let imported = try read(#"""
+            \id HAB
+            \c 3
+            \q1 \v 18 I will rejoice.
+            \q1 \v 19 He makes me walk upon the heights!
+            \d \w For the choirmaster|strong="H5329"\w*.
+            \id PSA
+            \c 3
+            \q1 \v 1 Many say of me,
+            \d A line marked as a title
+            \q2 and the verse goes on.
+            \q1 \v 2 But you are a shield.
+            """#)
+
+        let subscription = try #require(verse(imported, 35_003_019))
+        #expect(subscription.text == "He makes me walk upon the heights! For the choirmaster.")
+        #expect(spans(subscription, "strongs") == ["For the choirmaster"])
+        #expect(verse(imported, 19_003_001)?.text == "Many say of me, A line marked as a title and the verse goes on.")
+        #expect(headings(imported, book: 19, chapter: 3) == [])
+    }
+
     @Test func usfmNoteWordsKeepTheirSpaceAfterAVerseNumberOrPart() throws {
         let imported = try read(#"""
             \id MAT

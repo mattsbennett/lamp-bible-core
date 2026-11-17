@@ -155,6 +155,9 @@ struct USFMTranslationReader {
             endBlock()
             note = nil
             closeContentSpans()
+            // A `\d` after the last verse's words, with this verse after it:
+            // a heading over this one (Ps 119's `\d BETH`), not the end of that.
+            collector.takeTrailingLineAsHeading(level: Self.headingLevels["d"] ?? 2)
             guard inChapter, let first = Int(number.prefix(while: \.isNumber)) else { return }
             let afterDash = number.drop(while: { $0 != "-" && $0 != "\u{2013}" }).dropFirst()
             // "1a", "1b": a verse in parts.
@@ -238,14 +241,18 @@ struct USFMTranslationReader {
         if note != nil { return }
         if Self.headingLevels[name] != nil || Self.paragraphMarkers.contains(name) || Self.poetryMarkers[name] != nil
             || Self.lineBreakMarkers.contains(name) || name == "b" || name == "nb" {
-            // A new block ends a psalm's title written in its first verse.
+            // A new block ends a psalm's title written in its first verse,
+            // and the line a `\d` began after a verse's words.
             collector.endTitle()
+            collector.closeTrailingLine()
         }
         if name == "d", collector.lastCharacter != nil {
             // A `\d` after a verse's words is not a title but the verse's own
-            // last line, a subscription: Hab 3:19 "For the choirmaster."
+            // last line, a subscription (Hab 3:19 "For the choirmaster."),
+            // unless a verse follows in the chapter, when it heads that one.
+            // Read into the verse, with its words' tags, until that is known.
             endBlock()
-            collector.breakLine()
+            collector.beginTrailingLine()
             return
         }
 
@@ -254,6 +261,9 @@ struct USFMTranslationReader {
                 block = .heading(level: level, text: text + " ")
                 return
             }
+            // A heading after it: a verse follows, so a `\d` line before it
+            // was a heading too, and comes first.
+            collector.takeTrailingLineAsHeading(level: Self.headingLevels["d"] ?? 2)
             endBlock()
             block = inChapter ? .heading(level: level, text: "") : .skipped
             headingMarker = name
