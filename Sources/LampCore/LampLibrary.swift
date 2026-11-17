@@ -451,7 +451,9 @@ public actor LampLibrary {
     /// the hash is never one revision's and the rest another's.
     public nonisolated func moduleRecord(kind: LampModuleKind, id: String) async throws -> LampModuleRecord? {
         func stamp(_ url: URL) -> (Int?, Date?) {
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            // A URL keeps the values it was first asked for, so a fresh one.
+            let values = try? URL(fileURLWithPath: url.path)
+                .resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             return (values?.fileSize, values?.contentModificationDate)
         }
         var record: LampModuleRecord?
