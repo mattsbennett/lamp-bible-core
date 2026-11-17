@@ -174,6 +174,11 @@ struct LampTranslationImportTests {
             \p
             \d GIMEL
             \v 11 Eleventh.
+            \d First label
+            \s1 Section
+            \d DALETH
+            \q1 \v 12a First half.
+            \v 12b Second half.
             """#)
 
         // A part of the same verse continues it, so the line stays.
@@ -182,7 +187,9 @@ struct LampTranslationImportTests {
         #expect(verse(imported, 19_001_002)?.text == "Second. Closing. still verse two.")
         // Every line, in order, after the headings already waiting.
         #expect(headings(imported, book: 19, chapter: 119).map { "\($0.beforeVerse) \($0.text)" }
-            == ["9 Section", "9 Subsection", "9 Hebrew label", "9 BETH", "11 GIMEL"])
+            == ["9 Section", "9 Subsection", "9 Hebrew label", "9 BETH", "11 GIMEL",
+                "12 First label", "12 Section", "12 DALETH"])
+        #expect(verse(imported, 19_119_011)?.text == "Eleventh.")
         #expect(verse(imported, 19_119_008)?.text == "Eighth.")
         // A paragraph marked before a line still opens the verse after it.
         #expect(verse(imported, 19_119_011)?.paragraph == true)

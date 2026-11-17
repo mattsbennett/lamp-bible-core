@@ -244,16 +244,14 @@ struct TranslationCollector {
         /// then where in the verse's text it ends.
         var titleIsOpen = false
         var titleEnd: Int?
-        /// Where each `\d` written after the verse's words begins: the
-        /// verse's closing lines unless a new verse follows in the chapter,
-        /// when they are cut off as headings over that verse.
-        var trailingStarts: [Int] = []
+        /// Where each `\d` written after the verse's words begins, and how
+        /// many headings were waiting then: the verse's closing lines unless
+        /// a new verse follows in the chapter, when they are cut off as
+        /// headings over that verse, each where it came among the others.
+        var trailingStarts: [(offset: Int, headingsBefore: Int)] = []
         /// The last `\d` line has ended; words after it are the verse's
         /// own, and make the lines part of the verse.
         var trailingClosed = false
-        /// How many headings were waiting when the first `\d` line began:
-        /// the lines, made headings, go before any that came after them.
-        var headingsBeforeTrailing = 0
 
         /// Whether nothing but the title has been written: a paragraph or
         /// line marked now opens the verse.
@@ -457,8 +455,7 @@ struct TranslationCollector {
     /// A `\d` begins after the open verse's words, on a line of its own.
     mutating func beginTrailingLine() {
         guard var open = verse else { return }
-        if open.trailingStarts.isEmpty { open.headingsBeforeTrailing = pendingHeadings.count }
-        open.trailingStarts.append(open.text.length)
+        open.trailingStarts.append((open.text.length, pendingHeadings.count))
         open.trailingClosed = false
         verse = open
         breakLine()
@@ -470,11 +467,11 @@ struct TranslationCollector {
 
     /// The open verse's `\d` lines, cut off and set as headings before the
     /// verse `number` about to start, with the open verse's tags and notes
-    /// kept to what is left. Not for a part of the open verse or another
-    /// copy of its number, which continue it: the lines stay its own.
-    mutating func takeTrailingLinesAsHeadings(level: Int, before number: Int, continuing: Bool) {
-        guard var open = verse, let start = open.trailingStarts.first else { return }
-        guard !continuing, number != open.number else {
+    /// kept to what is left. Not for another part (`1b`) or copy of the open
+    /// verse's own number, which continues it: the lines stay its own.
+    mutating func takeTrailingLinesAsHeadings(level: Int, before number: Int) {
+        guard var open = verse, let start = open.trailingStarts.first?.offset else { return }
+        guard number != open.number else {
             closeTrailingLine()
             return
         }
@@ -486,10 +483,11 @@ struct TranslationCollector {
             verse = open
             return
         }
-        let lines = zip(starts, starts.dropFirst() + [characters.count]).compactMap { from, to -> String? in
-            guard from < to, to <= characters.count else { return nil }
-            let line = Self.collapsingWhitespace(String(characters[from..<to]))
-            return line.isEmpty ? nil : line
+        let ends = starts.dropFirst().map(\.offset) + [characters.count]
+        let lines = zip(starts, ends).compactMap { start, to -> (text: String, at: Int)? in
+            guard start.offset < to, to <= characters.count else { return nil }
+            let line = Self.collapsingWhitespace(String(characters[start.offset..<to]))
+            return line.isEmpty ? nil : (line, start.headingsBefore)
         }
         var kept = VerseTextBuilder()
         kept.append(String(characters[..<start]))
@@ -505,8 +503,11 @@ struct TranslationCollector {
             ImportedFootnote(id: note.id, kind: note.kind, content: note.content, offset: min(note.offset, start))
         }
         verse = open
-        let at = min(open.headingsBeforeTrailing, pendingHeadings.count)
-        pendingHeadings.insert(contentsOf: lines.map { (level: level, text: $0, midVerse: true) }, at: at)
+        // The last first, so each lands where it came among the headings
+        // already waiting, before any that came after it.
+        for line in lines.reversed() {
+            pendingHeadings.insert((level: level, text: line.text, midVerse: true), at: min(line.at, pendingHeadings.count))
+        }
     }
 
     /// The open verse starts with a psalm's title, read as its text until

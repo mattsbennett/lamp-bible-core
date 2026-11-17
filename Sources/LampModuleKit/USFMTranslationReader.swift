@@ -161,7 +161,7 @@ struct USFMTranslationReader {
             let isPart = number.drop(while: \.isNumber).first?.isLetter == true
             // A `\d` after the last verse's words, with a new verse after it:
             // a heading over this one (Ps 119's `\d BETH`), not the end of that.
-            collector.takeTrailingLinesAsHeadings(level: Self.headingLevels["d"] ?? 2, before: first, continuing: isPart)
+            collector.takeTrailingLinesAsHeadings(level: Self.headingLevels["d"] ?? 2, before: first)
             collector.startVerse(first, through: Int(afterDash.prefix(while: \.isNumber)), continuing: isPart)
             block = .text
             if opensTitle {
