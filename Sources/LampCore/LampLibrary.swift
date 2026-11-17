@@ -438,6 +438,99 @@ public actor LampLibrary {
         }
     }
 
+    /// Everything the library holds about one module (`LampModuleRecord`):
+    /// for an info window that tells apart two modules listed under one
+    /// name. An installed module is read from its own database, and one
+    /// shipped inside the app from the bundle's; installed wins, as in
+    /// `installedModules`. Nil for a module the library doesn't hold.
+    ///
+    /// Read on request, not with the list: it hashes the module's file.
+    public func moduleRecord(kind: LampModuleKind, id: String) throws -> LampModuleRecord? {
+        func file(_ url: URL, hashed: Bool) -> LampModuleRecord.File? {
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            else { return nil }
+            return .init(
+                url: url, byteCount: values.fileSize, modifiedAt: values.contentModificationDate,
+                sha256: hashed ? try? LampSyncContentRevision.digest(forFileAt: url) : nil
+            )
+        }
+        if let installed = try installedDatabases().first(where: { $0.module.kind == kind && $0.module.id == id }) {
+            let databaseURL = databasesURL.appendingPathComponent(storageKey(for: id)).appendingPathExtension("sqlite")
+            guard let database = file(databaseURL, hashed: false) else { return nil }
+            let tables = try openReadOnlyDatabase(at: databaseURL).read { db in
+                try Self.recordTables(in: db, Self.installedRecordTables.map { ($0, "1 = 1", []) })
+            }
+            return LampModuleRecord(
+                module: installed.module,
+                storage: .installed(
+                    moduleFile: installed.hasModuleFile ? file(installed.moduleFileURL, hashed: true) : nil,
+                    database: database
+                ),
+                tables: tables
+            )
+        }
+        guard let module = try bundledModules().first(where: { $0.kind == kind && $0.id == id }),
+              let databaseURL = try preparedBundledDatabaseURL(),
+              let database = file(databaseURL, hashed: false) else { return nil }
+        let tables = try openReadOnlyDatabase(at: databaseURL).read { db in
+            try Self.recordTables(in: db, Self.bundledRecordTables(for: kind).map { ($0.table, $0.condition, [id]) })
+        }
+        return LampModuleRecord(module: module, storage: .bundled(database: database), tables: tables)
+    }
+
+    /// The metadata tables an installed module's database may have, one
+    /// module to a database, in the order a record shows them. Content
+    /// tables (verses, entries, highlights) are not metadata.
+    private static let installedRecordTables = [
+        "module_format", "translation_meta", "translations", "module_metadata", "series_meta",
+        "module_meta", "note_book_meta", "highlight_meta", "commentary_books", "book_modules",
+        "plans", "quiz_modules",
+    ]
+
+    /// Where the bundle keeps a module of each kind: its row by ID, and a
+    /// commentary's series by the ID its row names.
+    private static func bundledRecordTables(for kind: LampModuleKind) -> [(table: String, condition: String)] {
+        switch kind {
+        case .translation: [("translations", "id = ?")]
+        case .dictionary: [("lexicons", "id = ?"), ("modules", "id = ?")]
+        case .commentary:
+            [("modules", "id = ?"), ("commentary_series", "id = (SELECT series_id FROM modules WHERE id = ?)")]
+        case .book: [("book_modules", "id = ?")]
+        case .plan: [("plans", "id = ?")]
+        case .quiz: [("quiz_modules", "id = ?")]
+        case .devotional, .notes, .highlights: [("modules", "id = ?")]
+        }
+    }
+
+    /// Each of `tables` the database has, with its matching rows and every
+    /// column. A table with no matching row is left out; one module's
+    /// database holds few metadata rows, and a record shows at most 100.
+    private static func recordTables(
+        in db: Database, _ tables: [(name: String, condition: String, arguments: [String])]
+    ) throws -> [LampModuleRecord.Table] {
+        let present = try LampModuleText.tableNames(in: db)
+        return try tables.compactMap { table in
+            guard present.contains(table.name) else { return nil }
+            let rows = try Row.fetchAll(
+                db, sql: "SELECT * FROM \(table.name) WHERE \(table.condition) LIMIT 100",
+                arguments: StatementArguments(table.arguments)
+            )
+            guard !rows.isEmpty else { return nil }
+            return LampModuleRecord.Table(name: table.name, rows: rows.map { row in
+                zip(row.columnNames, row.databaseValues).map { name, value in
+                    let recorded: LampModuleRecord.Value = switch value.storage {
+                    case .null: .null
+                    case .int64(let integer): .integer(integer)
+                    case .double(let real): .real(real)
+                    case .string(let text): .text(text)
+                    case .blob(let data): .blob(byteCount: data.count)
+                    }
+                    return LampModuleRecord.Field(name: name, value: recorded)
+                }
+            })
+        }
+    }
+
     /// The genres books are grouped by, from the bundle, in catalog order;
     /// empty for a bundle built before books had genres.
     public func bookGenres() throws -> [LampBookGenre] {
