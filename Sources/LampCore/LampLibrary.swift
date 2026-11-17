@@ -4994,6 +4994,7 @@ public actor LampLibrary {
         versifications.removeAll()
         strongsFingerprints.removeAll()
         installedMetadata.removeAll()
+        installedTranslationIDs = nil
     }
 
     private func preparedBundledDatabaseURL() throws -> URL? {

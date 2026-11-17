@@ -64,6 +64,17 @@ struct LampTranslationRenameTests {
         #expect(try await agent.listModules().isEmpty)
     }
 
+    /// A dictionary asked for by its own ID is searched as itself, though a
+    /// translation's old ID is spelled the same.
+    @Test func aModuleAskedForByItsOwnIDIsNotRenamed() async throws {
+        let (library, root) = try await library(installing: [("ESV", "love in the new import")])
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await installDictionary(id: "ESVs", into: library, at: root)
+        let agent = LampAgentLibrary(library: library)
+        let found = try await agent.searchLibrary(query: "love", kinds: [.dictionary], moduleIDs: ["ESVs"])
+        #expect(!found.isEmpty)
+    }
+
     /// A translation installed after the first renamed lookup is found by
     /// the next.
     @Test func aTranslationInstalledLaterIsFound() async throws {
