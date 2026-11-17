@@ -285,8 +285,10 @@ extension LampSyncFilePlan {
     /// and workspace files, which are never listed.
     ///
     /// `found` is every path the listing held, with a revision or without.
-    /// A name found in another case counts as found: on a store that
-    /// ignores case it is the same file, renamed only in case.
+    /// A name found only in another case counts as found when that spelling
+    /// is no module of its own here or in the manifest: on a store that
+    /// ignores case it is the same file, renamed only in case, while on one
+    /// that doesn't, `Study.lamp` and `study.lamp` can be two modules.
     public static func missing(
         manifest: LampSyncLibraryManifest,
         local: [Local],
@@ -294,10 +296,12 @@ extension LampSyncFilePlan {
         found: Set<String>,
         listedFolders: Set<String>
     ) -> [String: Missing] {
-        let foundIgnoringCase = Set(found.map { $0.lowercased() })
+        let known = Set(local.map(\.path)).union(manifest.paths)
+        let renamedInCase = Set(found.subtracting(known).map { $0.lowercased() })
         var missing: [String: Missing] = [:]
         for held in local
-        where !foundIgnoringCase.contains(held.path.lowercased()) && deletedLocally[held.path] == nil {
+        where !found.contains(held.path) && !renamedInCase.contains(held.path.lowercased())
+            && deletedLocally[held.path] == nil {
             guard LampSyncFolderLayout.kind(of: held.path)?.isListed == true,
                   manifest.entry(at: held.path)?.isMember == true,
                   !held.changedSinceUpload, held.lastRevision != nil else { continue }

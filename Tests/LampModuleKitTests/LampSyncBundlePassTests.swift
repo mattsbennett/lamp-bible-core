@@ -148,7 +148,8 @@ struct LampSyncBundlePassTests {
     /// Who is missing, and why, path by path.
     @Test func whatTheListingDidNotFind() {
         var manifest = LampSyncLibraryManifest()
-        for path in ["Translations/a.lamp", "Translations/gone.lamp", "Translations/changed.lamp", "Translations/unrecorded.lamp",
+        for path in ["Translations/a.lamp", "Translations/gone.lamp", "Translations/Study.lamp",
+                     "Translations/study.lamp", "Translations/changed.lamp", "Translations/unrecorded.lamp",
                      "Translations/listed.lamp", "Translations/deleted.lamp", "Dictionaries/d.lamp",
                      "Workspaces/Presentations/talk.lampdeck"] {
             manifest = (try? manifest.recordingWrite(path, revision: "\"r\"", replacing: nil, at: 1_000)) ?? manifest
@@ -161,6 +162,9 @@ struct LampSyncBundlePassTests {
             local: [
                 held("Translations/a.lamp"),
                 held("Translations/gone.lamp"),
+                // Two modules, on a server that tells case apart: one went.
+                held("Translations/Study.lamp"),
+                held("Translations/study.lamp"),
                 // Going back up in this pass, so not missing for long.
                 held("Translations/changed.lamp", changed: true),
                 held("Translations/unrecorded.lamp", revision: nil),
@@ -172,11 +176,13 @@ struct LampSyncBundlePassTests {
             ],
             deletedLocally: ["Translations/deleted.lamp": 1_500],
             // One found with no revision, and one renamed only in case.
-            found: ["Translations/listed.lamp", "Translations/changed.lamp", "Translations/A.LAMP"],
+            found: ["Translations/listed.lamp", "Translations/changed.lamp", "Translations/A.LAMP",
+                    "Translations/study.lamp"],
             listedFolders: ["Translations", LampSyncFolderLayout.decksDirectory]
         )
         #expect(missing == [
             "Translations/gone.lamp": .notOnServer,
+            "Translations/Study.lamp": .notOnServer,
             "Dictionaries/d.lamp": .folderNotListed,
             "Workspaces/Presentations/talk.lampdeck": .notOnServer,
         ])
