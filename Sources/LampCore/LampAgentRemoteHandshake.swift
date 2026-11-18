@@ -118,6 +118,14 @@ public struct LampAgentRemoteCredential: Sendable {
 ///
 /// Messages: host `hello` → device `auth` → host sealed `accepted`, then
 /// sealed messages both ways.
+///
+/// Two rules the code here can't enforce, so each side must:
+/// - **A pairing code pairs once.** The host stops offering it as a
+///   candidate after the `accepted` that hands out a device key, and after a
+///   few failed proofs while its QR is showing, and shows a new one.
+/// - **The device trusts nothing before `accepted`.** Its first sealed
+///   message from the host must be `accepted`; anything else, or a frame
+///   that fails to open, is a failed connection.
 public enum LampAgentRemoteHandshake {
     static let context = Data("lamp-agent-remote-v1".utf8)
     static let nonceLength = 32

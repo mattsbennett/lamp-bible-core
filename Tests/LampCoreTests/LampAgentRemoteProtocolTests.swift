@@ -163,7 +163,7 @@ final class LampAgentRemoteProtocolTests: XCTestCase {
         let credential = try XCTUnwrap(LampAgentRemoteCredential.device(.generate()))
         let (device, host, _) = try connect(device: credential, hostAccepts: [credential])
         let summary = LampAgentRemoteChatSummary(
-            id: "w1/claude", title: "Romans 5", subtitle: "Reader", kind: LampAgentRemoteChatSummary.reader,
+            id: UUID().uuidString, title: "Romans 5", subtitle: "Reader", kind: LampAgentRemoteChatSummary.reader,
             provider: "claude", providerName: "Claude", updatedAt: Date(timeIntervalSince1970: 1_800_000_000),
             preview: "Grace abounds", isRunning: true, acceptsMessages: true
         )
@@ -175,5 +175,21 @@ final class LampAgentRemoteProtocolTests: XCTestCase {
         )
         var frame = try host.seal(.snapshot(snapshot))
         XCTAssertEqual(try device.open(from: &frame).first?.snapshot, snapshot)
+    }
+
+    /// A message carries where the device is reading as ids, and a refusal
+    /// carries a code the device can act on.
+    func testASendCarriesItsReadingAndARefusalItsCode() throws {
+        let credential = try XCTUnwrap(LampAgentRemoteCredential.device(.generate()))
+        let (device, host, _) = try connect(device: credential, hostAccepts: [credential])
+        let reading = LampAgentRemoteReading(verse: 45_005_020, chapter: 45_005_000, translationID: "BSB")
+        var request = try device.seal(.send("Why abound?", to: "chat", reading: reading))
+        let sent = try XCTUnwrap(host.open(from: &request).first)
+        XCTAssertEqual(sent.reading, reading)
+
+        var refusal = try host.seal(.failed(LampAgentRemoteFailure.busy, "A reply is still being written.", requestID: sent.requestID))
+        let failed = try XCTUnwrap(device.open(from: &refusal).first)
+        XCTAssertEqual(failed.errorCode, LampAgentRemoteFailure.busy)
+        XCTAssertEqual(failed.requestID, sent.requestID)
     }
 }
