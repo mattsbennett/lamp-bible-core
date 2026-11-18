@@ -99,6 +99,16 @@ public enum LampPresentationImagePlacement: String, Codable, CaseIterable, Senda
     case background
 }
 
+extension LampPresentationDeck {
+    /// The writing this deck was built from, if any. The format names the
+    /// same thing two ways, `devotional` and `writing`: a check for one alone
+    /// counts the other's decks as standalone.
+    public var writingID: String? {
+        guard let source, source.kind == .devotional || source.kind == .writing else { return nil }
+        return source.id
+    }
+}
+
 public struct LampPresentationSource: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, CaseIterable, Sendable {
         case devotional

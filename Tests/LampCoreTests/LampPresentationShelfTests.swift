@@ -48,6 +48,14 @@ struct LampPresentationShelfTests {
             LampPresentationDeck.starter(title: "Easter"), modified: day(0)
         ) { _ in "unused" }
         #expect(standalone.writingID == nil && standalone.writingTitle == nil)
+        // The format's other name for a writing counts the same.
+        let named = LampPresentationShelf.Deck(
+            LampPresentationDeck.starter(title: "Gideon", source: LampPresentationSource(kind: .writing, id: "w-gideon")),
+            modified: day(0)
+        ) { $0 == "w-gideon" ? "Gideon" : nil }
+        #expect(named.writingID == "w-gideon" && named.writingTitle == "Gideon")
+        let fromScripture = LampPresentationDeck.starter(title: "John 1", source: LampPresentationSource(kind: .scripture, id: "43001"))
+        #expect(fromScripture.writingID == nil)
     }
 
     @Test func aDecksDateIsItsFilesByTheStoresOwnName() throws {

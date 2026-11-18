@@ -26,7 +26,7 @@ public struct LampPresentationShelf: Equatable, Sendable {
 
         /// A deck as the list shows it, its writing's title looked up by id.
         public init(_ deck: LampPresentationDeck, modified: Date, writingTitle: (String) -> String?) {
-            let writingID = deck.source?.kind == .devotional ? deck.source?.id : nil
+            let writingID = deck.writingID
             self.init(
                 id: deck.id,
                 title: deck.title,
