@@ -72,6 +72,13 @@ struct LampModuleSearchGatheringTests {
             query: "", devotionalCriteria: LampDevotionalSearchCriteria(tags: ["Prayer"])
         )) == ["databases devotional"])
         #expect(try asked(LampModuleSearchRequest(query: "hope", kinds: [.book, .plan])) == ["databases book", "plans 5"])
+        // Highlights by style or theme, or a list of them all, need no words.
+        #expect(try asked(LampModuleSearchRequest(query: "", highlightStyles: [.underlineDotted])) == ["highlights 5"])
+        #expect(try asked(LampModuleSearchRequest(
+            query: "", highlightThemes: [LampHighlightMark(color: "FFCC00", style: .highlight)]
+        )) == ["highlights 5"])
+        #expect(try asked(LampModuleSearchRequest(query: "", kinds: [.highlights], listsHighlights: true)) == ["highlights 5"])
+        #expect(try asked(LampModuleSearchRequest(query: "", kinds: [.book], listsHighlights: true)) == nil)
         // Nothing to look for: no search at all.
         #expect(try asked(LampModuleSearchRequest(query: "  ", strongsKey: " ")) == nil)
         #expect(try asked(LampModuleSearchRequest(

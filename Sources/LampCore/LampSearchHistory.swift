@@ -23,6 +23,8 @@ public struct LampSearchHistory: Equatable, Sendable {
         public var bookRange: ClosedRange<Int>?
         public var strongsKey: String?
         public var highlightColors: Set<String>?
+        public var highlightStyles: Set<LampHighlightStyle>?
+        public var highlightThemes: Set<LampHighlightMark>?
         public var devotionalCriteria: LampDevotionalSearchCriteria?
         public var searchedAt: Date
 
@@ -34,6 +36,8 @@ public struct LampSearchHistory: Equatable, Sendable {
             bookRange: ClosedRange<Int>? = nil,
             strongsKey: String? = nil,
             highlightColors: Set<String>? = nil,
+            highlightStyles: Set<LampHighlightStyle>? = nil,
+            highlightThemes: Set<LampHighlightMark>? = nil,
             devotionalCriteria: LampDevotionalSearchCriteria? = nil,
             searchedAt: Date = Date()
         ) {
@@ -44,6 +48,8 @@ public struct LampSearchHistory: Equatable, Sendable {
             self.bookRange = bookRange
             self.strongsKey = strongsKey
             self.highlightColors = highlightColors
+            self.highlightStyles = highlightStyles?.isEmpty == false ? highlightStyles : nil
+            self.highlightThemes = highlightThemes?.isEmpty == false ? highlightThemes : nil
             self.devotionalCriteria = devotionalCriteria?.isEmpty == false ? devotionalCriteria : nil
             self.searchedAt = searchedAt
         }
@@ -65,7 +71,13 @@ public struct LampSearchHistory: Equatable, Sendable {
                      (criteria.categories ?? []).sorted().joined(separator: ",")].joined(separator: ";")
                 } ?? "",
             ]
-            return ([words] + filters).joined(separator: "|")
+            // Marks by style and theme come after, and only when chosen, so
+            // a search kept before them keeps its id.
+            let marks: [String] = [
+                highlightStyles.map { "styles:" + $0.map { String($0.rawValue) }.sorted().joined(separator: ",") },
+                highlightThemes.map { "themes:" + $0.map { "\($0.color)/\($0.style.rawValue)" }.sorted().joined(separator: ",") },
+            ].compactMap { $0 }
+            return ([words] + filters + marks).joined(separator: "|")
         }
 
         /// Whether this search says enough to be worth keeping.

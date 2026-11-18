@@ -2735,12 +2735,16 @@ public actor LampLibrary {
         bookRange: ClosedRange<Int>? = nil,
         strongsKey: String? = nil,
         highlightColors: Set<String>? = nil,
+        highlightStyles: Set<LampHighlightStyle>? = nil,
+        highlightThemes: Set<LampHighlightMark>? = nil,
+        listsHighlights: Bool = false,
         devotionalCriteria: LampDevotionalSearchCriteria = .init(),
         limit: Int = 200
     ) throws -> [LampModuleSearchResult] {
         let request = LampModuleSearchRequest(
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
-            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria
+            highlightColors: highlightColors, highlightStyles: highlightStyles, highlightThemes: highlightThemes,
+            listsHighlights: listsHighlights, devotionalCriteria: devotionalCriteria
         )
         // Nothing to look for: the library isn't read.
         guard request.asksForAnything else { return [] }
@@ -2776,6 +2780,9 @@ public actor LampLibrary {
         bookRange: ClosedRange<Int>? = nil,
         strongsKey: String? = nil,
         highlightColors: Set<String>? = nil,
+        highlightStyles: Set<LampHighlightStyle>? = nil,
+        highlightThemes: Set<LampHighlightMark>? = nil,
+        listsHighlights: Bool = false,
         devotionalCriteria: LampDevotionalSearchCriteria = .init(),
         preferredTranslationID: String? = nil,
         limit: Int = 200
@@ -2785,7 +2792,8 @@ public actor LampLibrary {
         let page = min(max(limit, 1), 499)
         let request = LampModuleSearchRequest(
             query: query, kinds: kinds, moduleIDs: moduleIDs, bookRange: bookRange, strongsKey: strongsKey,
-            highlightColors: highlightColors, devotionalCriteria: devotionalCriteria,
+            highlightColors: highlightColors, highlightStyles: highlightStyles, highlightThemes: highlightThemes,
+            listsHighlights: listsHighlights, devotionalCriteria: devotionalCriteria,
             preferredTranslationID: preferredTranslationID
         )
         guard request.asksForAnything else { return [] }
@@ -2944,6 +2952,8 @@ public actor LampLibrary {
             highlights: { limit in
                 try self.searchHighlights(
                     colors: request.highlightColors,
+                    styles: request.highlightStyles,
+                    themes: request.highlightThemes,
                     query: hasTextQuery ? parsedQuery : nil,
                     moduleIDs: request.moduleIDs,
                     bookRange: request.bookRange,
@@ -2974,9 +2984,9 @@ public actor LampLibrary {
         return databases
     }
 
-    /// Highlights of `colors`, or of any colour when none are given, whose
-    /// verses hold `query` when one is given: each set's most recent first,
-    /// then each highlight module's.
+    /// Highlights of the marks asked for, or of any when none are
+    /// (`LampHighlightSearch.matches`), whose verses hold `query` when one is
+    /// given: each set's most recent first, then each highlight module's.
     ///
     /// The highlights are read first and their verses after, so a highlight
     /// is found wherever its verse falls. Found the other way, from the
@@ -2984,6 +2994,8 @@ public actor LampLibrary {
     /// hundred was never seen.
     private func searchHighlights(
         colors: Set<String>?,
+        styles: Set<LampHighlightStyle>?,
+        themes: Set<LampHighlightMark>?,
         query: LampSearchQuery?,
         moduleIDs: Set<String>?,
         bookRange: ClosedRange<Int>?,
@@ -3021,7 +3033,8 @@ public actor LampLibrary {
         )
         let names = Dictionary(sets.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let hits = try LampModuleSearch.highlights(
-            in: sets.map { ($0.id, $0.highlights) }, query: query, colors: colors, bookRange: bookRange, limit: limit
+            in: sets.map { ($0.id, $0.highlights) }, query: query, colors: colors, styles: styles, themes: themes,
+            bookRange: bookRange, limit: limit
         ) { translationID, references in
             try Task.checkCancellation()
             return (try? verseTexts(moduleID: translationID, references: references)) ?? [:]
@@ -3044,6 +3057,7 @@ public actor LampLibrary {
                 ),
                 startReference: highlight.reference,
                 highlightColor: LampHighlightSearch.normalizedColor(highlight.color),
+                highlightStyle: highlight.style,
                 holdsPhrase: hit.holdsPhrase
             )
         }

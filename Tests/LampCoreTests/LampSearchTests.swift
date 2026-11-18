@@ -156,6 +156,21 @@ struct LampSearchTests {
         ), resultCount: 1)
         #expect(LampSearchHistory.decoded(from: filtered.encoded()) == filtered)
 
+        // Marks by style and theme are kept, make another search, and leave
+        // the id of a search without them as it was.
+        let plain = LampSearchHistory.Entry(query: "love", highlightColors: ["FFCC00"])
+        #expect(plain.id == "love|*|*||||FFCC00|")
+        let styled = LampSearchHistory.Entry(
+            query: "love", highlightColors: ["FFCC00"], highlightStyles: [.underlineDotted, .highlight],
+            highlightThemes: [LampHighlightMark(color: "#34c759", style: .underlineSolid)],
+            searchedAt: Date(timeIntervalSince1970: 100)
+        )
+        #expect(styled.id == "love|*|*||||FFCC00||styles:0,3|themes:34C759/1")
+        var marked = LampSearchHistory()
+        marked.record(styled, resultCount: 1)
+        #expect(LampSearchHistory.decoded(from: marked.encoded()) == marked)
+        #expect(LampSearchHistory.Entry(query: "love", highlightStyles: []).highlightStyles == nil)
+
         // An entry a newer app wrote, with a kind this one does not know, is
         // passed by without losing the rest.
         let mixed = #"[{"query":"one","kinds":["future"],"searchedAt":1},{"query":"two","searchedAt":2}]"#

@@ -353,6 +353,8 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
     public let startReference: Int?
     public let endReference: Int?
     public let highlightColor: String?
+    /// How a highlight found is drawn, to show it as the reader does.
+    public let highlightStyle: LampHighlightStyle?
     /// Whether the result's text holds the query's words together, in order:
     /// what the merge ranks it by after its title (`LampModuleSearch.ranked`).
     public let holdsPhrase: Bool
@@ -376,6 +378,7 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         startReference: Int? = nil,
         endReference: Int? = nil,
         highlightColor: String? = nil,
+        highlightStyle: LampHighlightStyle? = nil,
         holdsPhrase: Bool = false,
         entryKey: String? = nil,
         glosses: [String] = []
@@ -390,6 +393,7 @@ public struct LampModuleSearchResult: Identifiable, Equatable, Sendable {
         self.startReference = startReference
         self.endReference = endReference
         self.highlightColor = highlightColor
+        self.highlightStyle = highlightStyle
         self.holdsPhrase = holdsPhrase
         self.entryKey = entryKey
         self.glosses = glosses

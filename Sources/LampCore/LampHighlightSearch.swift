@@ -1,5 +1,17 @@
 import Foundation
 
+/// A colour drawn in a style: the mark a theme names, and what a search for
+/// that theme asks for.
+public struct LampHighlightMark: Codable, Hashable, Sendable {
+    public let color: String
+    public let style: LampHighlightStyle
+
+    public init(color: String, style: LampHighlightStyle) {
+        self.color = LampHighlightSearch.normalizedColor(color)
+        self.style = style
+    }
+}
+
 public enum LampHighlightSearch {
     public static func normalizedColor(_ color: String?) -> String {
         let value = color?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -12,6 +24,26 @@ public enum LampHighlightSearch {
         guard let selectedColors, !selectedColors.isEmpty else { return true }
         let normalized = Set(selectedColors.map { normalizedColor($0) })
         return normalized.contains(normalizedColor(color))
+    }
+
+    /// Whether a highlight is one a search's marks ask for. Colours and
+    /// styles narrow together, as a colour and a style make one mark; a
+    /// theme's mark is found besides them. Nothing chosen asks for every
+    /// highlight.
+    public static func matches(
+        color: String?,
+        style: LampHighlightStyle,
+        colors: Set<String>?,
+        styles: Set<LampHighlightStyle>?,
+        themes: Set<LampHighlightMark>?
+    ) -> Bool {
+        let colors = colors?.isEmpty == false ? colors : nil
+        let styles = styles?.isEmpty == false ? styles : nil
+        let themes = themes?.isEmpty == false ? themes : nil
+        guard colors != nil || styles != nil || themes != nil else { return true }
+        if themes?.contains(LampHighlightMark(color: normalizedColor(color), style: style)) == true { return true }
+        guard colors != nil || styles != nil else { return false }
+        return matchesColor(color, in: colors) && styles?.contains(style) != false
     }
 
     public static func markedSnippet(
@@ -35,17 +67,20 @@ extension LampModuleSearch {
         public let holdsPhrase: Bool
     }
 
-    /// The highlights of `sets` of the colours and books asked for whose
+    /// The highlights of `sets` of the marks and books asked for whose
     /// verses hold `query`, at most `limit` of them: each set's newest first,
     /// the room shared between the sets as `sharedEvenly` shares it, and the
     /// sets taking turns in the order given, as the merge gives tied results
-    /// theirs. Without a query, the colours and books choose them alone.
+    /// theirs. Without a query, the marks and books choose them alone
+    /// (`LampHighlightSearch.matches`).
     /// `verseTexts` reads a translation's verses, for those the colours and
     /// books leave.
     public static func highlights(
         in sets: [(id: String, highlights: [LampVerseHighlight])],
         query: LampSearchQuery?,
         colors: Set<String>?,
+        styles: Set<LampHighlightStyle>? = nil,
+        themes: Set<LampHighlightMark>? = nil,
         bookRange: ClosedRange<Int>?,
         limit: Int,
         verseTexts: (_ translationID: String, _ references: Set<Int>) throws -> [Int: String]
@@ -54,7 +89,9 @@ extension LampModuleSearch {
         let query = query.flatMap { $0.isEmpty || $0.plainText.isEmpty ? nil : $0 }
         let wanted = sets.map { set in
             set.highlights.filter { highlight in
-                LampHighlightSearch.matchesColor(highlight.color, in: colors)
+                LampHighlightSearch.matches(
+                    color: highlight.color, style: highlight.style, colors: colors, styles: styles, themes: themes
+                )
                     && bookRange.map { $0.contains(highlight.reference / 1_000_000) } != false
             }.sorted { $0.id > $1.id }
         }

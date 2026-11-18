@@ -892,6 +892,30 @@ struct LampLibraryTests {
         #expect(try await library.searchModules(
             query: "light", kinds: [.highlights], highlightColors: ["00FF00"]
         ).isEmpty)
+        // By style and by theme, and the list of every highlight, each
+        // result drawn in its own style.
+        _ = try await library.saveVerseHighlight(
+            translationID: "FULL", reference: 43_001_005,
+            startOffset: 24, endOffset: 32, style: .underlineDotted, color: "34C759"
+        )
+        let dotted = try await library.searchModules(
+            query: "", kinds: [.highlights], highlightStyles: [.underlineDotted]
+        )
+        #expect(dotted.map(\.snippet) == ["<mark>darkness</mark>"])
+        #expect(dotted.first?.highlightStyle == .underlineDotted)
+        #expect(colorResults.first?.highlightStyle == .highlight)
+        #expect(try await library.searchModules(
+            query: "", kinds: [.highlights],
+            highlightThemes: [LampHighlightMark(color: "34C759", style: .underlineDotted)]
+        ).map(\.snippet) == ["<mark>darkness</mark>"])
+        #expect(try await library.searchModules(
+            query: "", kinds: [.highlights],
+            highlightThemes: [LampHighlightMark(color: "34C759", style: .highlight)]
+        ).isEmpty)
+        #expect(try await library.searchModules(query: "", kinds: [.highlights]).isEmpty, "no words, no marks, no list")
+        #expect(Set(try await library.searchModules(
+            query: "", kinds: [.highlights], listsHighlights: true
+        ).map(\.snippet)) == ["<mark>light</mark>", "<mark>darkness</mark>"])
 
         let chapter = try await library.chapter(
             moduleID: "FULL",

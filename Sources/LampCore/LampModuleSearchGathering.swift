@@ -2,8 +2,8 @@ import Foundation
 import GRDB
 import LampModuleKit
 
-/// A search of every kind of module: its words, a Strong's key, highlight
-/// colours or a writing's date, tags and kind, and what narrows it. Asked
+/// A search of every kind of module: its words, a Strong's key, highlights
+/// by their marks or a writing's date, tags and kind, and what narrows it. Asked
 /// the same way on both apps, and answered from each app's own modules
 /// (`LampModuleSearch.gather`).
 public struct LampModuleSearchRequest: Sendable {
@@ -17,6 +17,13 @@ public struct LampModuleSearchRequest: Sendable {
     /// A Strong's key, trimmed; nil when none was given.
     public let strongsKey: String?
     public let highlightColors: Set<String>?
+    public let highlightStyles: Set<LampHighlightStyle>?
+    /// Themes' marks: a highlight made with one is found besides the
+    /// colours and styles (`LampHighlightSearch.matches`).
+    public let highlightThemes: Set<LampHighlightMark>?
+    /// Highlights are listed by their marks alone, every one when no mark is
+    /// chosen, with or without words: a list of one's highlights.
+    public let listsHighlights: Bool
     public let devotionalCriteria: LampDevotionalSearchCriteria
     /// Scripture from this translation, or from the one with the most
     /// matches where it has none (`LampScriptureChoice`), for a page of every
@@ -32,6 +39,9 @@ public struct LampModuleSearchRequest: Sendable {
         bookRange: ClosedRange<Int>? = nil,
         strongsKey: String? = nil,
         highlightColors: Set<String>? = nil,
+        highlightStyles: Set<LampHighlightStyle>? = nil,
+        highlightThemes: Set<LampHighlightMark>? = nil,
+        listsHighlights: Bool = false,
         devotionalCriteria: LampDevotionalSearchCriteria = .init(),
         preferredTranslationID: String? = nil
     ) {
@@ -43,6 +53,9 @@ public struct LampModuleSearchRequest: Sendable {
         let key = strongsKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.strongsKey = key?.isEmpty == false ? key : nil
         self.highlightColors = highlightColors
+        self.highlightStyles = highlightStyles
+        self.highlightThemes = highlightThemes
+        self.listsHighlights = listsHighlights
         self.devotionalCriteria = devotionalCriteria
         self.preferredTranslationID = preferredTranslationID
         self.parsedQuery = LampSearchQuery(trimmed)
@@ -54,14 +67,25 @@ public struct LampModuleSearchRequest: Sendable {
 
     public var hasColors: Bool { highlightColors?.isEmpty == false }
 
+    /// Whether highlights are asked for by their marks: a colour, a style
+    /// or a theme.
+    public var hasMarks: Bool {
+        hasColors || highlightStyles?.isEmpty == false || highlightThemes?.isEmpty == false
+    }
+
+    /// Whether highlights are found without words.
+    var findsHighlightsAlone: Bool { hasMarks || listsHighlights }
+
     public func wants(_ kind: LampModuleKind) -> Bool { kinds?.contains(kind) ?? true }
 
     public func includes(moduleID: String) -> Bool { moduleIDs?.contains(moduleID) ?? true }
 
-    /// Whether the request asks for anything at all: words, a key, colours,
-    /// or a writing's date, tags or kind where writing is searched.
+    /// Whether the request asks for anything at all: words, a key,
+    /// highlights by their marks or as a list, or a writing's date, tags or
+    /// kind where writing is searched.
     public var asksForAnything: Bool {
-        hasWords || strongsKey != nil || hasColors || (!devotionalCriteria.isEmpty && wants(.devotional))
+        hasWords || strongsKey != nil || hasMarks || (listsHighlights && wants(.highlights))
+            || (!devotionalCriteria.isEmpty && wants(.devotional))
     }
 }
 
@@ -445,7 +469,7 @@ extension LampModuleSearch {
             add(try plans(limit))
         }
 
-        if (request.hasWords || request.hasColors) && request.wants(.highlights),
+        if (request.hasWords || request.findsHighlightsAlone) && request.wants(.highlights),
            let highlights = sources.highlights {
             try Task.checkCancellation()
             add(try highlights(limit))
