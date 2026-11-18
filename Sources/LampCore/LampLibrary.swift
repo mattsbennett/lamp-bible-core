@@ -3050,7 +3050,7 @@ public actor LampLibrary {
                 subtitle: abbreviations[
                     LampTranslationID.held(highlight.translationID, among: abbreviations.keys) ?? highlight.translationID
                 ],
-                snippet: query.map { $0.markedSnippet(hit.text) } ?? LampHighlightSearch.markedSnippet(
+                snippet: LampHighlightSearch.markedVerse(
                     text: hit.text,
                     startOffset: highlight.startOffset,
                     endOffset: highlight.endOffset

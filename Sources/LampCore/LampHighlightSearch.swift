@@ -46,6 +46,18 @@ public enum LampHighlightSearch {
         return matchesColor(color, in: colors) && styles?.contains(style) != false
     }
 
+    /// The verse with the highlight's own words marked: what a search shows
+    /// of a highlight found, by words or by its marks alike. A search's words
+    /// marked instead would be drawn as though the reader had highlighted
+    /// them.
+    public static func markedVerse(text: String, startOffset: Int, endOffset: Int) -> String {
+        guard startOffset >= 0, endOffset > startOffset,
+              endOffset <= text.count else { return "<mark>\(text)</mark>" }
+        let start = text.index(text.startIndex, offsetBy: startOffset)
+        let end = text.index(text.startIndex, offsetBy: endOffset)
+        return "\(text[..<start])<mark>\(text[start..<end])</mark>\(text[end...])"
+    }
+
     public static func markedSnippet(
         text: String, startOffset: Int, endOffset: Int
     ) -> String {

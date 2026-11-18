@@ -885,7 +885,7 @@ struct LampLibraryTests {
             query: "", kinds: [.highlights], highlightColors: ["FFCC00"]
         )
         #expect(colorResults.first?.highlightColor == "FFCC00")
-        #expect(colorResults.first?.snippet == "<mark>light</mark>")
+        #expect(colorResults.first?.snippet == "The <mark>light</mark> shines in the darkness")
         #expect(try await library.searchModules(
             query: "", kinds: [.highlights], highlightColors: ["00FF00"]
         ).isEmpty)
@@ -901,13 +901,13 @@ struct LampLibraryTests {
         let dotted = try await library.searchModules(
             query: "", kinds: [.highlights], highlightStyles: [.underlineDotted]
         )
-        #expect(dotted.map(\.snippet) == ["<mark>darkness</mark>"])
+        #expect(dotted.map(\.snippet) == ["The light shines in the <mark>darkness</mark>"])
         #expect(dotted.first?.highlightStyle == .underlineDotted)
         #expect(colorResults.first?.highlightStyle == .highlight)
         #expect(try await library.searchModules(
             query: "", kinds: [.highlights],
             highlightThemes: [LampHighlightMark(color: "34C759", style: .underlineDotted)]
-        ).map(\.snippet) == ["<mark>darkness</mark>"])
+        ).map(\.snippet) == ["The light shines in the <mark>darkness</mark>"])
         #expect(try await library.searchModules(
             query: "", kinds: [.highlights],
             highlightThemes: [LampHighlightMark(color: "34C759", style: .highlight)]
@@ -915,7 +915,7 @@ struct LampLibraryTests {
         #expect(try await library.searchModules(query: "", kinds: [.highlights]).isEmpty, "no words, no marks, no list")
         #expect(Set(try await library.searchModules(
             query: "", kinds: [.highlights], listsHighlights: true
-        ).map(\.snippet)) == ["<mark>light</mark>", "<mark>darkness</mark>"])
+        ).map(\.snippet)) == ["The <mark>light</mark> shines in the darkness", "The light shines in the <mark>darkness</mark>"])
 
         let chapter = try await library.chapter(
             moduleID: "FULL",

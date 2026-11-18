@@ -8,6 +8,25 @@ struct LampHighlightSearchTests {
         #expect(LampHighlightSearch.markedSnippet(
             text: "the light shines", startOffset: 4, endOffset: 9
         ) == "<mark>light</mark>")
+        #expect(LampHighlightSearch.markedVerse(
+            text: "the light shines", startOffset: 4, endOffset: 9
+        ) == "the <mark>light</mark> shines")
+    }
+
+    /// A search's words find the highlight; the highlight's own words are
+    /// what is marked, so they are not drawn as the reader's highlight.
+    @Test func aHighlightFoundByWordsMarksItsOwnWords() async throws {
+        let hits = LampModuleSearch.highlights(
+            in: [("set", [LampVerseHighlight(
+                id: 1, setID: "set", translationID: "T", reference: 43_003_016, startOffset: 4, endOffset: 7
+            )])],
+            query: LampSearchQuery("world"), colors: nil, bookRange: nil, limit: 5
+        ) { _, _ in [43_003_016: "For God so loved the world"] }
+        #expect(hits.count == 1)
+        let hit = try #require(hits.first)
+        #expect(LampHighlightSearch.markedVerse(
+            text: hit.text, startOffset: hit.highlight.startOffset, endOffset: hit.highlight.endOffset
+        ) == "For <mark>God</mark> so loved the world")
     }
 
     @Test func coloursAndStylesNarrowTogetherAndAThemeIsFoundBesides() {
