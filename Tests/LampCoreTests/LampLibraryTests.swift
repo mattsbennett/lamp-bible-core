@@ -913,6 +913,7 @@ struct LampLibraryTests {
             highlightThemes: [LampHighlightMark(color: "34C759", style: .highlight)]
         ).isEmpty)
         #expect(try await library.searchModules(query: "", kinds: [.highlights]).isEmpty, "no words, no marks, no list")
+        #expect(try await library.highlightColorsInUse() == ["FFCC00", "34C759"])
         #expect(Set(try await library.searchModules(
             query: "", kinds: [.highlights], listsHighlights: true
         ).map(\.snippet)) == ["The <mark>light</mark> shines in the darkness", "The light shines in the <mark>darkness</mark>"])

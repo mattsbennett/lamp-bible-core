@@ -49,13 +49,26 @@ public enum LampHighlightSearch {
     /// The verse with the highlight's own words marked: what a search shows
     /// of a highlight found, by words or by its marks alike. A search's words
     /// marked instead would be drawn as though the reader had highlighted
-    /// them.
-    public static func markedVerse(text: String, startOffset: Int, endOffset: Int) -> String {
+    /// them. At most `context` characters lead up to the words and twice that
+    /// follow, cut at a word, so a highlight late in a long verse is still
+    /// in the lines a list shows.
+    public static func markedVerse(text: String, startOffset: Int, endOffset: Int, context: Int = .max) -> String {
         guard startOffset >= 0, endOffset > startOffset,
               endOffset <= text.count else { return "<mark>\(text)</mark>" }
         let start = text.index(text.startIndex, offsetBy: startOffset)
         let end = text.index(text.startIndex, offsetBy: endOffset)
-        return "\(text[..<start])<mark>\(text[start..<end])</mark>\(text[end...])"
+        var before = String(text[..<start])
+        var after = String(text[end...])
+        if before.count > context {
+            let kept = before.suffix(context)
+            before = "…" + (kept.firstIndex(of: " ").map { String(kept[kept.index(after: $0)...]) } ?? String(kept))
+        }
+        let trailing = context > Int.max / 2 ? Int.max : context * 2
+        if after.count > trailing {
+            let kept = after.prefix(trailing)
+            after = (kept.lastIndex(of: " ").map { String(kept[..<$0]) } ?? String(kept)) + "…"
+        }
+        return "\(before)<mark>\(text[start..<end])</mark>\(after)"
     }
 
     public static func markedSnippet(

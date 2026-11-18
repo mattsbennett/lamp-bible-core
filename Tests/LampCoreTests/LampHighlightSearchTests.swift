@@ -11,6 +11,11 @@ struct LampHighlightSearchTests {
         #expect(LampHighlightSearch.markedVerse(
             text: "the light shines", startOffset: 4, endOffset: 9
         ) == "the <mark>light</mark> shines")
+        // Late in a long verse: cut to the words around it, at a word.
+        let long = String(repeating: "and the word ", count: 20) + "light" + String(repeating: " shines on", count: 20)
+        let start = long.count - 5 - 200
+        let cut = LampHighlightSearch.markedVerse(text: long, startOffset: start, endOffset: start + 5, context: 20)
+        #expect(cut == "…word and the word <mark>light</mark> shines on shines on shines on shines…")
     }
 
     /// A search's words find the highlight; the highlight's own words are

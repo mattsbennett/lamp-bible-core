@@ -3053,7 +3053,8 @@ public actor LampLibrary {
                 snippet: LampHighlightSearch.markedVerse(
                     text: hit.text,
                     startOffset: highlight.startOffset,
-                    endOffset: highlight.endOffset
+                    endOffset: highlight.endOffset,
+                    context: 80
                 ),
                 startReference: highlight.reference,
                 highlightColor: LampHighlightSearch.normalizedColor(highlight.color),
@@ -3783,6 +3784,16 @@ public actor LampLibrary {
             try db.execute(sql: "DELETE FROM highlight_themes WHERE set_id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM highlight_sets WHERE id = ?", arguments: [id])
         }
+    }
+
+    /// Every colour a highlight of mine is made in, as core spells colours:
+    /// what a search can be narrowed to besides the palette and the themes.
+    public func highlightColorsInUse() throws -> Set<String> {
+        let queue = try openUserDatabase()
+        let colors = try queue.read { db in
+            try String?.fetchAll(db, sql: "SELECT DISTINCT color FROM highlights")
+        }
+        return Set(colors.map(LampHighlightSearch.normalizedColor))
     }
 
     public func highlightThemes(setID: String) throws -> [LampHighlightTheme] {
