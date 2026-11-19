@@ -1223,6 +1223,43 @@ struct LampSyncBundlePassTests {
         #expect(outcome.written?.bundle.manifest.entry(at: path)?.revision == "\"v1\"")
     }
 
+    /// R11. A new file no listing reaches, a writing's document, uploaded to
+    /// a server that has not shown it back: not in the manifest, so nothing
+    /// asked for its revision, and every pass after sent it "if absent" and
+    /// was refused, for good. The pass asks for the revision of a held,
+    /// unlisted path the manifest does not name, and the next pass settles.
+    @Test func anUnlistedUploadTheServerHasNotShownBackIsSettledNextPass() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let store = FakeStore()
+        store.namesRevisionOnWrite = false
+        store.revisionLag = 100
+        let url = try makeFile("outline")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        let first = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([local(path, url, "outline")]) }, records: &records, patience: immediate)
+        #expect(first.uploaded.isEmpty)
+        #expect(first.written?.bundle.manifest.entry(at: path) == nil)
+
+        // The server catches up, and stops lagging.
+        for _ in 0..<100 {
+            _ = try await store.revision(path: path)
+            _ = try await store.revision(path: bundlePath)
+        }
+        store.revisionLag = 0
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+        ).run(gathering: { gathered([local(path, url, "outline")]) }, records: &records, patience: immediate)
+        #expect(second.failures.isEmpty, "\(second.failures)")
+        #expect(second.written?.bundle.manifest.entry(at: path)?.revision == store.revisions[path])
+
+        let third = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 4_000 }
+        ).run(gathering: { gathered([local(path, url, "outline")]) }, records: &records, patience: immediate)
+        #expect(third.failures.isEmpty && third.uploaded.isEmpty && third.installed.isEmpty)
+    }
+
     /// R11. Kinds the caller asks to confirm by reading are read back.
     @Test func kindsConfirmedByReadingAreReadBack() async throws {
         let path = "Notes/notes.lamp"

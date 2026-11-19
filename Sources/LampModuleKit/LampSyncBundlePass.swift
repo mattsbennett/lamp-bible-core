@@ -273,6 +273,21 @@ public struct LampSyncBundlePass {
         )
         var listing = listed.listing
         listing.merge(gathered.extraListing) { _, extra in extra }
+        // A file held here that no listing reaches and the manifest does not
+        // name. Usually new; but it may be an upload the server had not shown
+        // back, which the pass records nothing of and no bundle names, and
+        // which the plan, unasked, sends "if absent" on every pass, refused
+        // for good. Its revision is asked for, as the caller asks for the
+        // manifest's own unlisted members, and the comparison settles it.
+        // One request for each such file, until a bundle names it.
+        for file in gathered.local where listing[file.path] == nil {
+            guard let kind = LampSyncFolderLayout.kind(of: file.path), !kind.isListed, !kind.isMedia,
+                  opened.bundle.manifest.entry(at: file.path) == nil
+            else { continue }
+            if let revision = try? await store.revision(path: file.path) {
+                listing[file.path] = revision
+            }
+        }
 
         let filesByPath = Dictionary(
             gathered.local.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }
