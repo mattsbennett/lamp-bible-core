@@ -321,9 +321,16 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     private static func isInFencedCode(before location: Int, in text: NSString) -> Bool {
         var open: (character: Character, length: Int)?
         for line in text.substring(to: location).components(separatedBy: "\n") {
-            // A fence is indented three spaces at most, quote markers aside;
-            // four is code, and neither opens nor closes one.
-            let unquoted = line.drop { $0 == ">" || $0 == " " && line.contains(">") }
+            // A fence is indented three spaces at most, after any quote
+            // markers, each of which takes one space after it with it; four
+            // is code, and neither opens nor closes one.
+            var unquoted = Substring(line)
+            while true {
+                let lead = unquoted.prefix { $0 == " " }
+                guard lead.count <= 3, unquoted.dropFirst(lead.count).first == ">" else { break }
+                unquoted = unquoted.dropFirst(lead.count + 1)
+                if unquoted.first == " " { unquoted = unquoted.dropFirst() }
+            }
             let indent = unquoted.prefix { $0 == " " }.count
             guard indent <= 3 else { continue }
             let trimmed = unquoted.dropFirst(indent)
@@ -688,15 +695,18 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     ) -> NSRange? {
         guard range.length > 0 else { return nil }
         let words = source.substring(with: range)
+        // A copy keeps the marked passage's edges: words that began and ended
+        // at word boundaries are not found inside a longer word.
+        let edges = Edges(of: piece(range, in: source))
         var found: [NSRange] = []
         var search = NSRange(location: 0, length: source.length)
         while true {
             let copy = source.range(of: words, options: .literal, range: search)
             if copy.location == NSNotFound { break }
-            if copy != range {
+            if copy != range, edges.hold(at: copy, in: source) {
                 let carried = alignment.carried(copy)
                 if carried.count == 1, carried[0].length == copy.length,
-                   target.substring(with: carried[0]) == words {
+                   target.substring(with: carried[0]) == words, edges.hold(at: carried[0], in: target) {
                     found.append(carried[0])
                 }
             }

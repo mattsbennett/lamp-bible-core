@@ -502,6 +502,19 @@ struct LampWritingReviewTests {
         #expect(LampWritingReview.markedRange(in: sent, of: held) == nil)
     }
 
+    @Test func aMarkIsNotMovedIntoALongerWord() {
+        let review = empty.markingAssistantChange(from: "cat\nx", to: "cat\nat")
+        #expect(marked(review, in: "cat\nat") == ["at"])
+        let carried = review.carryingWriterEdit(from: "cat\nat", to: "cat")
+        #expect(marked(carried, in: "cat").isEmpty)
+    }
+
+    @Test func aQuoteMarkerTakesOneSpaceWithIt() {
+        let held = "> ````\n>     ```\n> 1. x\n> ````"
+        let sent = "> ````\n>     ```\n> 2. \u{E002}x\n> ````"
+        #expect(LampWritingReview.markedRange(in: sent, of: held) == nil)
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(
