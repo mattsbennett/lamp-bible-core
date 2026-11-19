@@ -476,6 +476,37 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return result.tidied()
     }
 
+    /// `clearing(_:in:)` made in `text`, the marks carried there from
+    /// `known` first, changing only the marks the clear touches: every
+    /// other mark, and its clearances, stays exactly as it was.
+    ///
+    /// For a clear made in the text an editor's page held as it was
+    /// pressed, which can be a moment older or newer than the latest marks.
+    /// Carried whole into that text, a mark with no words in it (made by a
+    /// turn the page had not shown yet) would be retired by a clear of some
+    /// other passage, and a mark the page had not caught up with would be
+    /// moved to text that is already gone.
+    public func clearing(
+        _ range: NSRange, in text: String, carryingFrom known: [String], at date: Date = Date()
+    ) -> LampWritingReview {
+        let live = carryingToText(text, from: known, at: date)
+        let cleared = live.clearing(range, in: text, at: date)
+        let liveMarks = Dictionary(live.marks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let liveRetired = Set(live.retired.map(\.id))
+        let liveClearances = Set(live.clearances.map(\.id))
+        var touched = Set(cleared.retired.map(\.id)).subtracting(liveRetired)
+        touched.formUnion(cleared.marks.filter { liveMarks[$0.id] != $0 }.map(\.id))
+        touched.formUnion(cleared.clearances.filter { !liveClearances.contains($0.id) }.map(\.markID))
+        guard !touched.isEmpty else { return self }
+        let clearedMarks = Dictionary(cleared.marks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var result = self
+        result.marks = marks.compactMap { touched.contains($0.id) ? clearedMarks[$0.id] : $0 }
+        result.retired += cleared.retired.filter { touched.contains($0.id) }
+        result.clearances = clearances.filter { !touched.contains($0.markID) }
+            + cleared.clearances.filter { touched.contains($0.markID) }
+        return result.tidied()
+    }
+
     /// The record with every mark cleared.
     public func clearingAll(at date: Date = Date()) -> LampWritingReview {
         var result = self

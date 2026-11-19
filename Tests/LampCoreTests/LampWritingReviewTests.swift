@@ -58,6 +58,36 @@ struct LampWritingReviewTests {
         #expect(cleared.clearances.count == 1)
     }
 
+    /// Codex's case: the page sends a clear from the text it held a moment
+    /// before the latest turn's draft reached it. The clear takes the
+    /// passage pressed on and leaves the turn's new paragraph marked, where
+    /// carrying everything to the page's text first retired it.
+    @Test func aClearFromAnOlderPageChangesOnlyTheMarkItTouches() {
+        let first = "One two three.\n\nFour five six."
+        let page = "One alpha three.\n\nFour five six."
+        let latest = "One alpha three.\n\nFour five six.\n\nSeven gamma nine."
+        let review = empty.markingAssistantChange(from: first, to: page).markingAssistantChange(from: page, to: latest)
+        #expect(review.marks.count == 2)
+        let alpha = (page as NSString).range(of: "alpha")
+
+        let wholesale = review.carryingToText(page, from: [latest]).clearing(alpha, in: page)
+        #expect(wholesale.marks.isEmpty)
+
+        let cleared = review.clearing(alpha, in: page, carryingFrom: [latest])
+        #expect(cleared.marks.count == 1)
+        #expect(review.marks.contains(cleared.marks[0]))
+        #expect(marked(cleared, in: latest) == marked(review, in: latest).filter { $0 != "alpha" })
+        #expect(cleared.retired.count == 1)
+    }
+
+    @Test func aClearThatTouchesNoMarkChangesNothing() {
+        let old = "One two three.\n\nFour five six."
+        let new = "One alpha three.\n\nFour five six."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let five = (new as NSString).range(of: "five")
+        #expect(review.clearing(five, in: new, carryingFrom: [new]) == review)
+    }
+
     @Test func aClearedPassageChangedAgainIsMarkedAgain() {
         let start = "A cleared sentence stands here."
         let first = "A reviewed sentence stands here."
