@@ -436,6 +436,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         var result = self
         result.marks = []
         for mark in marks {
+            // Already in the new text, whole, where it was anchored: made
+            // for this very change. An assistant's draft is marked as it is
+            // taken in and then saved like any edit, and carrying the new
+            // mark across that same change again could take it from a copy
+            // of its words in the old text and move it there.
+            if mark.pieces.allSatisfy({ Self.find($0, in: target, strictly: true)?.location == $0.hint }) {
+                result.marks.append(mark)
+                continue
+            }
             guard let ranges = found[mark.id] else {
                 // Not in the old text either: nothing to carry, and nothing
                 // to say it was read. Kept as it was, for the copy that can

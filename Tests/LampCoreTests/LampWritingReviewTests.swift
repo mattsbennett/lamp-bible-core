@@ -262,6 +262,23 @@ struct LampWritingReviewTests {
         #expect(marked(here.merged(with: there), in: edited) == ["gamma"])
     }
 
+    @Test func savingTheChangeThatMadeAMarkLeavesItOnTheCopyTheAssistantWrote() {
+        // Review's case: two blocks whose words differ only in the middle,
+        // with a full line of context either side. The assistant turns the
+        // second into the first; its mark is made as the draft is taken in,
+        // then the save carries the same change again.
+        func block(_ word: String) -> String {
+            String(repeating: "p", count: 24) + " " + word + " " + String(repeating: "q", count: 24) + "\n"
+        }
+        let old = block("Echo") + block("Other")
+        let new = block("Echo") + block("Echo")
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let assistants = NSRange(location: (block("Echo") as NSString).length + 25, length: 4)
+        #expect(review.highlightedRanges(in: new) == [assistants])
+        let saved = review.carryingWriterEdit(from: old, to: new)
+        #expect(saved.highlightedRanges(in: new) == [assistants])
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(
