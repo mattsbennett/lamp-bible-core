@@ -258,4 +258,19 @@ final class LampAgentRemoteProtocolTests: XCTestCase {
         XCTAssertFalse(LampAgentRemoteWritingRevision.hostShouldFetch(host: second, hostDigest: a, device: 1_799_999_999, deviceDigest: b))
         XCTAssertTrue(LampAgentRemoteWritingRevision.hostShouldFetch(host: second, hostDigest: a, device: 1_800_000_001, deviceDigest: a))
     }
+
+    /// A body that is only Markdown digests alike kept bare or wrapped in a
+    /// paragraph, as a writing the Mac holds as plain text is.
+    func testAPlainBodyDigestsAlikeBareOrWrapped() throws {
+        let writing = LampDevotional(
+            id: "w", moduleID: "m", moduleName: "Writing", title: "t", subtitle: nil, author: nil, date: nil,
+            tags: [], category: nil, seriesName: nil, seriesOrder: nil, keyScriptures: [], summary: nil,
+            content: "Grace *upon* grace.", contentJSON: nil, footnotes: nil, mediaJSON: nil,
+            created: nil, lastModified: nil, isEditable: true
+        )
+        let bare = LampPersonalWritingFile.Row(id: "w", moduleID: "m", title: "t", contentJSON: "Grace *upon* grace.", created: 0)
+        XCTAssertEqual(LampAgentRemoteWritingRevision.digest(of: writing), LampAgentRemoteWritingRevision.digest(of: bare))
+        let other = LampPersonalWritingFile.Row(id: "w", moduleID: "m", title: "t", contentJSON: "Grace upon grace.", created: 0)
+        XCTAssertNotEqual(LampAgentRemoteWritingRevision.digest(of: bare), LampAgentRemoteWritingRevision.digest(of: other))
+    }
 }

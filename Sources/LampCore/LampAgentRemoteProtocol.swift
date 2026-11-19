@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LampModuleKit
 
 /// The contract between a Mac that runs agent chats and a phone or iPad that
 /// follows and continues them.
@@ -532,9 +533,13 @@ public enum LampAgentRemoteWritingRevision {
     }
 
     /// What a writing's body holds, as both apps sync it: the row's
-    /// `contentJSON`, byte for byte.
+    /// `contentJSON`, byte for byte, except that a body which is only
+    /// Markdown is the same whether it is kept as the Markdown or wrapped in
+    /// a single paragraph, as this app's row wraps a writing it holds as
+    /// plain text.
     public static func digest(of row: LampPersonalWritingFile.Row) -> String {
-        SHA256.hash(data: Data(row.contentJSON.utf8)).map { String(format: "%02x", $0) }.joined()
+        let body = LampPortableDevotionalMedia.plainMarkdown(from: row.contentJSON) ?? row.contentJSON
+        return SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// The same for this app's own writing, through the row it syncs as.
