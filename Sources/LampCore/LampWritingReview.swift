@@ -186,6 +186,67 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         Self.coalesced(located(in: text).flatMap(\.ranges), joiningAcross: nil)
     }
 
+    // MARK: Crossing into a web editor
+
+    /// The markers a web editor finds marks by: private-use characters, which
+    /// no writing holds and no Markdown rule reads as anything but a letter.
+    /// The editor's `review-marks.js` uses the same three.
+    public static let markStart: Character = "\u{E000}"
+    public static let markEnd: Character = "\u{E001}"
+    public static let markPoint: Character = "\u{E002}"
+
+    /// `text` with a marker at each edge of what is still marked, for a web
+    /// editor to place the marks in the document it shows from the Markdown
+    /// it was given. Nil where nothing is marked.
+    public func markedMarkdown(in text: String) -> String? {
+        let ranges = highlightedRanges(in: text)
+        guard !ranges.isEmpty else { return nil }
+        let source = text as NSString
+        var result = ""
+        var at = 0
+        for range in ranges {
+            result += source.substring(with: NSRange(location: at, length: range.location - at))
+            if range.length == 0 {
+                result.append(Self.markPoint)
+            } else {
+                result.append(Self.markStart)
+                result += source.substring(with: range)
+                result.append(Self.markEnd)
+            }
+            at = NSMaxRange(range)
+        }
+        result += source.substring(from: at)
+        return result
+    }
+
+    /// The range a web editor marked in Markdown it sent back — a start and
+    /// an end marker, or a point — and the Markdown without them. Nil unless
+    /// there is exactly one such range, or where the Markdown without its
+    /// markers is not `text`: the editor was showing something else, and
+    /// clearing by its range would clear the wrong words.
+    public static func markedRange(in marked: String, of text: String) -> NSRange? {
+        var plain = ""
+        var start: Int?
+        var end: Int?
+        for character in marked {
+            switch character {
+            case markStart where start == nil:
+                start = (plain as NSString).length
+            case markEnd where end == nil:
+                end = (plain as NSString).length
+            case markPoint where start == nil:
+                start = (plain as NSString).length
+                end = start
+            case markStart, markEnd, markPoint:
+                return nil
+            default:
+                plain.append(character)
+            }
+        }
+        guard plain == text, let start, let end, end >= start else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
     // MARK: Changing the record
 
     /// The record after the assistant changed the writing from `old` to
@@ -623,8 +684,17 @@ struct LampTextAlignment {
               oldTokens[oldTokens.count - 1 - suffix].units == newTokens[newTokens.count - 1 - suffix].units {
             suffix += 1
         }
-        let oldMiddle = oldTokens[prefix..<(oldTokens.count - suffix)].map(\.units)
-        let newMiddle = newTokens[prefix..<(newTokens.count - suffix)].map(\.units)
+        // Compared as numbers, one for each distinct token: the difference
+        // compares tokens far more often than there are tokens, and a whole
+        // rewrite of a long draft spent seconds comparing code units.
+        var numbers: [[UInt16]: Int] = [:]
+        func number(_ token: Token) -> Int {
+            if let known = numbers[token.units] { return known }
+            numbers[token.units] = numbers.count
+            return numbers.count - 1
+        }
+        let oldMiddle = oldTokens[prefix..<(oldTokens.count - suffix)].map(number)
+        let newMiddle = newTokens[prefix..<(newTokens.count - suffix)].map(number)
         var removed = Set<Int>()
         var inserted = Set<Int>()
         for change in newMiddle.difference(from: oldMiddle) {

@@ -229,6 +229,22 @@ struct LampWritingReviewTests {
         #expect(marked(merged.pruning(before: Date().addingTimeInterval(3_600)), in: new) == ["beta"])
     }
 
+    @Test func marksCrossIntoAWebEditorAndAClearComesBack() {
+        let old = "One two three.\n\nFour five six."
+        let new = "One deux three.\n\nFour six."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        #expect(review.markedMarkdown(in: new) == "One \u{E000}deux\u{E001} three.\n\nFour\u{E002} six.")
+        #expect(empty.markedMarkdown(in: new) == nil)
+
+        let sent = "One \u{E000}deux three.\u{E001}\n\nFour six."
+        let range = LampWritingReview.markedRange(in: sent, of: new)
+        #expect(range == NSRange(location: 4, length: 11))
+        #expect(LampWritingReview.markedRange(in: "One \u{E002}deux three.\n\nFour six.", of: new) == NSRange(location: 4, length: 0))
+        // From an editor showing something else, nothing is cleared.
+        #expect(LampWritingReview.markedRange(in: "Other \u{E000}text\u{E001}", of: new) == nil)
+        #expect(LampWritingReview.markedRange(in: "One deux three.\n\nFour six.", of: new) == nil)
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(
