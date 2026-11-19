@@ -460,6 +460,33 @@ struct LampWritingReviewTests {
         #expect(range.map { (quoted as NSString).substring(with: $0) } == "two")
     }
 
+    /// H3, at the hint: a foreign piece is not drawn on a copy that now
+    /// sits where its hint points, after an identical block above was cut.
+    @Test func aForeignPieceIsNotDrawnAtItsHintWhereItsWordsRepeat() {
+        let text = padded("Echo") + padded("Echo")
+        let foreign = LampWritingReview.Piece(
+            text: "Echo", before: String(repeating: "p", count: 24) + " ",
+            after: " " + String(repeating: "q", count: 24), hint: 25, anchoredIn: "elsewhere"
+        )
+        let review = LampWritingReview(writingID: "w", marks: [.init(pieces: [foreign], markedAt: Date(), turnID: nil)])
+        #expect(review.highlightedRanges(in: text).isEmpty)
+    }
+
+    @Test func aRepeatedPieceIsAnchoredByEveryCarry() {
+        let b = padded("Echo") + padded("Echo")
+        let review = empty.markingAssistantChange(from: padded("Echo") + padded("Other"), to: b)
+        let c = b + "Tail."
+        let carried = review.carryingWriterEdit(from: b, to: c)
+        #expect(carried.marks.flatMap(\.pieces).allSatisfy { $0.anchoredIn == LampWritingReview.digest(of: c) })
+        #expect(carried.highlightedRanges(in: c) == review.highlightedRanges(in: b))
+    }
+
+    @Test func aLongerFenceIsClosedOnlyByOneAsLong() {
+        let held = "````\n```\n1. x\n````"
+        let sent = "````\n```\n2. \u{E002}x\n````"
+        #expect(LampWritingReview.markedRange(in: sent, of: held) == nil)
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(

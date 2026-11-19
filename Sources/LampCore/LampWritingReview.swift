@@ -311,15 +311,31 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         guard width < (lead.contains(">") ? 5 : 4) else { return false }
         let after = NSRange(location: NSMaxRange(digits), length: min(2, text.length - NSMaxRange(digits)))
         guard text.substring(with: after).range(of: #"^[.)][ \t]"#, options: .regularExpression) != nil else { return false }
-        // Inside a fenced block when an odd number of fences open before it.
-        let before = text.substring(to: line.location)
-        let fences = before.components(separatedBy: "\n").filter {
-            let trimmed = $0.drop { $0 == " " || $0 == ">" }
-            return trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~")
-        }
-        return fences.count % 2 == 0
+        return !isInFencedCode(before: line.location, in: text)
     }
 
+    /// Whether a line starting at `location` is inside a fenced code block,
+    /// as CommonMark reads fences: one opens with three or more backticks or
+    /// tildes, and closes only with a line of the same character, at least
+    /// as long, and nothing after it but spaces.
+    private static func isInFencedCode(before location: Int, in text: NSString) -> Bool {
+        var open: (character: Character, length: Int)?
+        for line in text.substring(to: location).components(separatedBy: "\n") {
+            let trimmed = line.drop { $0 == " " || $0 == ">" }
+            guard let first = trimmed.first, first == "`" || first == "~" else { continue }
+            let run = trimmed.prefix { $0 == first }.count
+            guard run >= 3 else { continue }
+            if let fence = open {
+                if first == fence.character, run >= fence.length,
+                   trimmed.dropFirst(run).allSatisfy({ $0 == " " || $0 == "\t" }) {
+                    open = nil
+                }
+            } else {
+                open = (first, run)
+            }
+        }
+        return open != nil
+    }
 
     /// `range` of an editor's Markdown, placed in the Markdown held, where the
     /// two differ only in how the editor writes the same document back — a
@@ -414,7 +430,6 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         guard !marks.isEmpty else { return self }
         return carried(to: text, from: known.filter { $0 != text }, at: date)
     }
-
 
     /// The record with everything in `range` of `text` cleared. A mark only
     /// partly inside keeps its part outside; a point inside or at either end
@@ -565,12 +580,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// is taken from there, exactly. One anchored in a text not among them —
     /// another device's, one long gone, or none recorded — is taken from the
     /// newest source in which it stands whole, where it says or exactly
-    /// once. Uniqueness in some other text is a weaker proof than a piece's
-    /// own, so that is only for a piece with none.
+    /// once — exactly once, never at its hint, which another text's hint does
+    /// not prove. Uniqueness in some other text is a weaker proof than a
+    /// piece's own, so that is only for a piece with none.
     ///
-    /// A piece whose words, context and place all come through unchanged is
-    /// kept as it was, so a save that touched no mark changes nothing. One
-    /// whose place moved is anchored again, in `target`, so it stays exact.
+    /// A piece whose words, context and place all come through unchanged,
+    /// and stand once, is kept as it was, so a save that touched no mark
+    /// changes nothing. One whose place moved, or whose words repeat, is
+    /// anchored again, in `target`, so it stays exact.
     /// A piece no source holds is kept as it is, to be carried later.
     private func carried(to target: String, from sources: [String], at date: Date) -> LampWritingReview {
         let targetText = target as NSString
@@ -588,8 +605,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 return Self.exact(piece, in: sources[index] as NSString).map { (index, $0) }
             }
             for index in sources.indices.reversed() {
-                let text = sources[index] as NSString
-                if let range = Self.atHint(piece, in: text) ?? Self.unique(piece, in: text) { return (index, range) }
+                if let range = Self.unique(piece, in: sources[index] as NSString) { return (index, range) }
             }
             return nil
         }
@@ -606,7 +622,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                     alignment(index).carried(range).map { Self.trimmed($0, in: targetText) }, joiningAcross: nil
                 )
                 let moved = survived.map { Self.piece($0, in: targetText, anchoredIn: here) }
-                if moved.count == 1, moved[0].sameWords(as: piece), moved[0].hint == piece.hint {
+                // Kept as it was only where it can be found again without its
+                // anchor: the same words, context and place, standing once.
+                // A piece of a repeated passage is anchored here every time,
+                // so it is placed exactly, never guessed among its copies.
+                if moved.count == 1, moved[0].sameWords(as: piece), moved[0].hint == piece.hint,
+                   Self.unique(moved[0], in: targetText) != nil {
                     result.append(piece)
                 } else {
                     result += moved
@@ -644,15 +665,6 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
         result = result.tidied()
         return result.marks == marks && result.retired == retired && result.clearances == clearances ? self : result
-    }
-
-    /// A piece whole with its context exactly where its hint says.
-    static func atHint(_ piece: Piece, in text: NSString) -> NSRange? {
-        let offset = (piece.before as NSString).length
-        let needle = piece.before + piece.text + piece.after
-        let whole = NSRange(location: piece.hint - offset, length: (needle as NSString).length)
-        guard whole.location >= 0, NSMaxRange(whole) <= text.length, text.substring(with: whole) == needle else { return nil }
-        return NSRange(location: piece.hint, length: (piece.text as NSString).length)
     }
 
     /// A piece whole with its context, where that stands exactly once.
@@ -726,11 +738,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     static func find(_ piece: Piece, in text: NSString, strictly: Bool = false) -> NSRange? {
         let length = (piece.text as NSString).length
         let offset = (piece.before as NSString).length
-        // Whole, with its context, where it says or where it stands once.
-        // Never the nearest of several copies to a place recorded in some
-        // other text: there that place names nothing, and would choose a
-        // copy that was never marked.
-        if let found = atHint(piece, in: text) ?? unique(piece, in: text) { return found }
+        // Whole, with its context, where it stands once. Not at its hint, nor
+        // nearest it: a hint recorded in another text names nothing here,
+        // and where the words repeat it would choose a copy never marked. A
+        // piece in its own text is placed exactly before this is asked, and
+        // a carry anchors every piece of a repeated passage in the text it
+        // carries to, so a repeated piece is only ever placed that way.
+        if let found = unique(piece, in: text) { return found }
         if strictly { return nil }
         let edges = Edges(of: piece)
         if !piece.before.isEmpty, let found = only(piece.before + piece.text, in: text, where: {
@@ -776,21 +790,6 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         private static func isWord(_ scalar: Unicode.Scalar?) -> Bool {
             scalar.map(CharacterSet.alphanumerics.contains) ?? false
         }
-    }
-
-    private static func nearest(_ needle: String, to hint: Int, in text: NSString) -> NSRange? {
-        guard !needle.isEmpty else { return nil }
-        var best: NSRange?
-        var search = NSRange(location: 0, length: text.length)
-        while search.length >= 0 {
-            let found = text.range(of: needle, options: .literal, range: search)
-            if found.location == NSNotFound { break }
-            if best.map({ abs($0.location - hint) > abs(found.location - hint) }) ?? true { best = found }
-            let next = found.location + 1
-            guard next <= text.length else { break }
-            search = NSRange(location: next, length: text.length - next)
-        }
-        return best
     }
 
     /// The one copy of `needle` in `text` that `accepts`, or nil where there
