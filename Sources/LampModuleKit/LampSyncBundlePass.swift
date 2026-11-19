@@ -381,7 +381,7 @@ public struct LampSyncBundlePass {
         if !plan.merge.isEmpty {
             do {
                 (republish, fetchedRevisions) = try await reconcile(
-                    plan.merge, local: filesByPath, records: &records, outcome: &outcome
+                    plan.merge, local: filesByPath, records: &records, staged: &staged, outcome: &outcome
                 )
             } catch {
                 outcome.failures.append("merging: \(error.localizedDescription)")
@@ -674,6 +674,7 @@ public struct LampSyncBundlePass {
         _ merge: [String: String],
         local: [String: LampSyncLocalFile],
         records: inout LampSyncFileRecords,
+        staged: inout [(path: String, revision: String?, digest: String?)],
         outcome: inout Outcome
     ) async throws -> (republish: [String: URL], fetchedRevisions: [String: String]) {
         var downloaded: [String: URL] = [:]
@@ -721,8 +722,14 @@ public struct LampSyncBundlePass {
         // that failed left the records naming the server's copy as taken
         // over a copy here that never took it, and the next pass sent this
         // client's copy over the other device's edit as a change of its own.
+        // A file of a tree taken in together is only staged by the merge, and
+        // is recorded with the rest of the tree once that is in (step 3).
         for path in downloaded.keys {
-            records.recordInstall(path, in: source, revision: fetchedRevisions[path], digest: digests[path] ?? nil)
+            if LampSyncFolderLayout.kind(of: path)?.isTakenInTogether == true {
+                staged.append((path, fetchedRevisions[path], digests[path] ?? nil))
+            } else {
+                records.recordInstall(path, in: source, revision: fetchedRevisions[path], digest: digests[path] ?? nil)
+            }
         }
         outcome.reconciled = downloaded.keys.sorted()
         return (republish.merging(ahead) { merged, _ in merged }, fetchedRevisions)

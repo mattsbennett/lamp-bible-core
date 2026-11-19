@@ -343,6 +343,36 @@ struct LampSyncBundlePassTests {
         #expect(store.bodies["Notes/notes.lamp"] != Data("mine".utf8))
     }
 
+    /// A merged file of a tree taken in together is recorded with the tree:
+    /// a tree whose import then fails leaves its record as it was.
+    @Test func aMergedTreeFileIsRecordedOnlyOnceTheTreeIsIn() async throws {
+        let path = "Workspaces/Writing/w/Context/a.md"
+        let store = try seeded(path: path, revision: "\"a-2\"")
+        let mine = try makeFile("mine")
+        defer { try? FileManager.default.removeItem(at: mine) }
+        let library = StubLibrary()
+        library.finishFails = true
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "an older digest", revision: "\"a-1\"")
+        records.confirmRecorded([path: "\"a-1\""], in: source)
+        let before = records
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(
+            gathering: {
+                var held = gathered([local(path, mine, "mine")])
+                held.extraListing = [path: "\"a-2\""]
+                return held
+            },
+            records: &records
+        )
+
+        #expect(library.reconcileCalls == 1)
+        #expect(outcome.failures.contains { $0.hasPrefix("installing") })
+        #expect(records.record(path, in: source) == before.record(path, in: source))
+    }
+
     /// The Mac merges personal content in one staged transaction, not file by
     /// file, and the transaction rewrites local content — so what gets
     /// published is what it produced, never what was digested before it ran.
