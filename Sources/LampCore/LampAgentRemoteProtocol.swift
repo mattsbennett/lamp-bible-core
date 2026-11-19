@@ -81,6 +81,9 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
     public var newChat: LampAgentRemoteNewChat?
     /// On `send`: where the device is reading as the message is sent.
     public var reading: LampAgentRemoteReading?
+    /// On `send` to a writing chat: the words selected in the writing on the
+    /// device, as plain text, which the message is about.
+    public var selection: String?
     public var clientName: String?
     /// On pairing only: the id the host knows this device by, and the key
     /// it will use on every later connection. Kept in the device's Keychain,
@@ -105,6 +108,7 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         event: LampAgentRemoteChatEvent? = nil,
         newChat: LampAgentRemoteNewChat? = nil,
         reading: LampAgentRemoteReading? = nil,
+        selection: String? = nil,
         clientName: String? = nil,
         deviceID: String? = nil,
         deviceKey: String? = nil,
@@ -121,6 +125,7 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         self.event = event
         self.newChat = newChat
         self.reading = reading
+        self.selection = selection
         self.clientName = clientName
         self.deviceID = deviceID
         self.deviceKey = deviceKey
@@ -161,9 +166,10 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         _ text: String,
         to chatID: String,
         reading: LampAgentRemoteReading? = nil,
+        selection: String? = nil,
         requestID: UUID = UUID()
     ) -> Self {
-        .init(kind: .send, requestID: requestID, chatID: chatID, text: text, reading: reading)
+        .init(kind: .send, requestID: requestID, chatID: chatID, text: text, reading: reading, selection: selection)
     }
 
     public static func cancel(_ chatID: String, requestID: UUID = UUID()) -> Self {
@@ -223,20 +229,24 @@ public struct LampAgentRemoteReading: Codable, Equatable, Sendable {
     }
 }
 
-/// A chat as the host's list shows it.
-///
-/// Version 1 lists reader chats only: a writing chat's transcript quotes its
-/// draft, so the host leaves those out rather than showing them read-only.
+/// A chat as the host's list shows it: its reader chats, and the chat on
+/// each writing an assistant has worked on. A host older than writing chats
+/// lists reader chats only, and refuses a writing `start-chat` as
+/// `not-allowed`.
 public struct LampAgentRemoteChatSummary: Codable, Equatable, Identifiable, Sendable {
-    /// The host's own name for the chat, opaque to the device. On the Mac, the
-    /// reader chat's UUID: one conversation, whichever providers spoke in it.
+    /// The host's own name for the chat, opaque to the device: one
+    /// conversation, whichever providers spoke in it.
     public var id: String
     public var title: String
     /// What the chat is about, under its title: a passage, or a writing's name.
     public var subtitle: String?
-    /// `reader`, `writing`, or a kind a later Lamp knows. Only reader chats
-    /// can be continued from a device in this version.
+    /// `reader`, `writing`, or a kind a later Lamp knows.
     public var kind: String
+    /// On a writing chat: the writing it works on, by the id both apps sync
+    /// it under. A writing has one chat, so this is also how a device finds
+    /// the chat for a writing it shows. What a turn changes reaches the
+    /// device by sync, as the writing and its review marks.
+    public var writingID: String?
     /// The provider's id ("claude", "codex") and the name to show for it: the
     /// one the host's own chat pane would open the chat on, which is the one
     /// `send` continues with.
@@ -259,6 +269,7 @@ public struct LampAgentRemoteChatSummary: Codable, Equatable, Identifiable, Send
         title: String,
         subtitle: String? = nil,
         kind: String,
+        writingID: String? = nil,
         provider: String,
         providerName: String,
         updatedAt: Date? = nil,
@@ -270,6 +281,7 @@ public struct LampAgentRemoteChatSummary: Codable, Equatable, Identifiable, Send
         self.title = title
         self.subtitle = subtitle
         self.kind = kind
+        self.writingID = writingID
         self.provider = provider
         self.providerName = providerName
         self.updatedAt = updatedAt
@@ -410,24 +422,47 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
 }
 
 /// A chat a device asks the host to begin, with its first message.
+///
+/// A writing has one chat, so asking to begin one on a writing that already
+/// has one goes on in that chat, under the provider it already has: the
+/// host's snapshot in answer shows what was said before.
 public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
-    /// `reader` in this version.
+    /// `reader` or `writing`.
     public var kind: String
-    /// The provider to run it with, or nil for the host's reader default.
+    /// The provider to run a new chat with, or nil for the host's default
+    /// for that kind.
     public var provider: String?
-    /// Where the device is reading, as with `send`.
+    /// For a reader chat: where the device is reading, as with `send`.
     public var reading: LampAgentRemoteReading?
+    /// For a writing chat: the writing, by the id both apps sync it under.
+    public var writingID: String?
+    /// For a writing chat: the words selected in it, as with `send`.
+    public var selection: String?
     public var firstMessage: String
 
     public init(
         kind: String = LampAgentRemoteChatSummary.reader,
         provider: String? = nil,
         reading: LampAgentRemoteReading? = nil,
+        writingID: String? = nil,
+        selection: String? = nil,
         firstMessage: String
     ) {
         self.kind = kind
         self.provider = provider
         self.reading = reading
+        self.writingID = writingID
+        self.selection = selection
         self.firstMessage = firstMessage
+    }
+
+    /// The first message on a writing: in its chat, begun if it has none.
+    public static func writing(
+        _ writingID: String, firstMessage: String, selection: String? = nil, provider: String? = nil
+    ) -> Self {
+        .init(
+            kind: LampAgentRemoteChatSummary.writing, provider: provider,
+            writingID: writingID, selection: selection, firstMessage: firstMessage
+        )
     }
 }

@@ -192,4 +192,36 @@ final class LampAgentRemoteProtocolTests: XCTestCase {
         XCTAssertEqual(failed.errorCode, LampAgentRemoteFailure.busy)
         XCTAssertEqual(failed.requestID, sent.requestID)
     }
+
+    /// A writing chat is listed with its writing, a message to it carries the
+    /// words selected on the device, and one begun on a writing names it.
+    func testAWritingChatCarriesItsWritingAndSelection() throws {
+        let credential = try XCTUnwrap(LampAgentRemoteCredential.device(.generate()))
+        let (device, host, _) = try connect(device: credential, hostAccepts: [credential])
+        let summary = LampAgentRemoteChatSummary(
+            id: "writing:abc", title: "On grace", kind: LampAgentRemoteChatSummary.writing, writingID: "abc",
+            provider: "claude", providerName: "Claude", acceptsMessages: true
+        )
+        var listed = try host.seal(.chats([summary]))
+        XCTAssertEqual(try device.open(from: &listed).first?.chats?.first?.writingID, "abc")
+
+        var request = try device.seal(.send("Tighten this", to: summary.id, selection: "grace upon grace"))
+        XCTAssertEqual(try host.open(from: &request).first?.selection, "grace upon grace")
+
+        var begin = try device.seal(.startChat(.writing("abc", firstMessage: "Read it through", selection: "upon")))
+        let begun = try XCTUnwrap(host.open(from: &begin).first?.newChat)
+        XCTAssertEqual(begun, LampAgentRemoteNewChat(
+            kind: LampAgentRemoteChatSummary.writing, writingID: "abc", selection: "upon", firstMessage: "Read it through"
+        ))
+    }
+
+    /// What an older device sends has none of the writing fields, and still
+    /// reads as a reader chat.
+    func testAStartChatWithoutWritingFieldsIsAReaderChat() throws {
+        let old = #"{"kind":"reader","firstMessage":"Hello"}"#
+        let chat = try JSONDecoder().decode(LampAgentRemoteNewChat.self, from: Data(old.utf8))
+        XCTAssertEqual(chat.kind, LampAgentRemoteChatSummary.reader)
+        XCTAssertNil(chat.writingID)
+        XCTAssertNil(chat.selection)
+    }
 }
