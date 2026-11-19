@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The contract between a Mac that runs agent chats and a phone or iPad that
@@ -90,6 +91,10 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
     /// if it is still older, rather than have the assistant change a text
     /// the writer has since changed.
     public var writingRevision: Int?
+    /// With `writingRevision`: what the writing held on the device
+    /// (`LampAgentRemoteWritingRevision.digest`), which tells two saves in
+    /// the same second apart.
+    public var writingDigest: String?
     public var clientName: String?
     /// On pairing only: the id the host knows this device by, and the key
     /// it will use on every later connection. Kept in the device's Keychain,
@@ -116,6 +121,7 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         reading: LampAgentRemoteReading? = nil,
         selection: String? = nil,
         writingRevision: Int? = nil,
+        writingDigest: String? = nil,
         clientName: String? = nil,
         deviceID: String? = nil,
         deviceKey: String? = nil,
@@ -134,6 +140,7 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         self.reading = reading
         self.selection = selection
         self.writingRevision = writingRevision
+        self.writingDigest = writingDigest
         self.clientName = clientName
         self.deviceID = deviceID
         self.deviceKey = deviceKey
@@ -176,11 +183,12 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         reading: LampAgentRemoteReading? = nil,
         selection: String? = nil,
         writingRevision: Int? = nil,
+        writingDigest: String? = nil,
         requestID: UUID = UUID()
     ) -> Self {
         .init(
             kind: .send, requestID: requestID, chatID: chatID, text: text, reading: reading,
-            selection: selection, writingRevision: writingRevision
+            selection: selection, writingRevision: writingRevision, writingDigest: writingDigest
         )
     }
 
@@ -456,6 +464,7 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
     public var selection: String?
     /// For a writing chat: its revision on the device, as with `send`.
     public var writingRevision: Int?
+    public var writingDigest: String?
     public var firstMessage: String
 
     public init(
@@ -465,6 +474,7 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
         writingID: String? = nil,
         selection: String? = nil,
         writingRevision: Int? = nil,
+        writingDigest: String? = nil,
         firstMessage: String
     ) {
         self.kind = kind
@@ -473,18 +483,19 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
         self.writingID = writingID
         self.selection = selection
         self.writingRevision = writingRevision
+        self.writingDigest = writingDigest
         self.firstMessage = firstMessage
     }
 
     /// The first message on a writing: in its chat, begun if it has none.
     public static func writing(
         _ writingID: String, firstMessage: String, selection: String? = nil,
-        writingRevision: Int? = nil, provider: String? = nil
+        writingRevision: Int? = nil, writingDigest: String? = nil, provider: String? = nil
     ) -> Self {
         .init(
             kind: LampAgentRemoteChatSummary.writing, provider: provider,
             writingID: writingID, selection: selection, writingRevision: writingRevision,
-            firstMessage: firstMessage
+            writingDigest: writingDigest, firstMessage: firstMessage
         )
     }
 }
@@ -505,5 +516,32 @@ public enum LampAgentRemoteWritingRevision {
         guard let device else { return false }
         guard let host else { return true }
         return of(lastModified: host) < device
+    }
+
+    /// The same, telling two saves in one second apart by what each holds:
+    /// a host copy dated the device's second but holding something else is
+    /// behind too. A device that sent no digest is judged by its second.
+    public static func hostIsBehind(
+        host: Date?, hostDigest: String?, device: Int?, deviceDigest: String?
+    ) -> Bool {
+        if hostIsBehind(host: host, device: device) { return true }
+        guard let host, let device, let deviceDigest, of(lastModified: host) == device else { return false }
+        return hostDigest != deviceDigest
+    }
+
+    /// What a writing holds, as both apps store and sync it: its plain text
+    /// and its rich body, if it has one, each exactly as stored.
+    public static func digest(content: String, contentJSON: String?) -> String {
+        // The plain text, a separator, then whether there is a rich body and
+        // the body: none and an empty one are not the same writing.
+        var bytes = Data(content.utf8)
+        bytes.append(0)
+        if let contentJSON {
+            bytes.append(1)
+            bytes.append(contentsOf: Data(contentJSON.utf8))
+        } else {
+            bytes.append(0)
+        }
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 }
