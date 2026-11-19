@@ -652,3 +652,40 @@ The listed Lean rules prove properties of models that correspond to shared
 Swift decisions. Swift tests exercise each shared implementation with the
 same edge cases. This is not a machine-checked proof of the Swift runtime,
 database engines, filesystem, or network provider.
+
+## Agent chats on the phone
+
+`AgentRemote.lean` is a second, smaller model: the decisions behind following
+a Mac's reader chats from a paired phone (`LampAgentRemote*` in LampCore). It
+models the decisions, not CryptoKit, the network or the apps. It is checked
+with the core suite by `AgentRemoteModelConformanceTests`, in the same way as
+the sync model: the proofs must check with nothing else printed, and the
+shipped Swift is asked every question in its tables (12,241 cases across
+four decisions).
+
+What it proves:
+
+- **A code pairs at most once** (`aCodePairsAtMostOnce`), however the right
+  and wrong attempts fall, and a window is closed by as many wrong codes as
+  it allows (`wrongCodesClose`); once closed it stays closed and pairs
+  nothing (`foldClosed`).
+- **A channel opens only the frames in the order they were sealed**
+  (`openedIsTheSealedOrder`), so no frame opens twice (`aReplayDoesNotOpen`):
+  a frame replayed, dropped or reordered ends the connection there.
+- **A host lets in only a paired device not since forgotten, or the open
+  pairing code** (`aForgottenDeviceIsNotLetIn`, `aSpentCodeIsNotLetIn`).
+- **The update contract**: events a host sends, applied to the snapshot a
+  device holds, give the next snapshot (`eventsArriveAtTheNextSnapshot`). The
+  host checks this before sending, so where events cannot say a change — a
+  message taken away, a failure cleared with no turn begun — it sends a
+  snapshot instead (`aMessageTakenAwayNeedsASnapshot`,
+  `aClearedFailureNeedsASnapshot`). An ordinary turn is told by events, in
+  order (`anOrdinaryTurnIsToldByEvents`, `anOrdinaryTurnIsToldInOrder`), and
+  the `chatPlanOrdinaryNeedsNoSnapshot` system check counts, over every case
+  in the table, the ordinary changes (messages only added, no failure
+  cleared) that would need a snapshot: there must be none.
+
+Not modelled: the handshake's cryptography (CryptoKit's X25519, HKDF and
+ChaCha20-Poly1305 are taken as given), the network, the host's keychain, and
+how each app draws a chat.
+
