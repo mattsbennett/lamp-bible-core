@@ -10,19 +10,25 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
     public var activity: LampAgentRemoteActivity?
     public var isRunning: Bool
     public var failure: String?
+    /// The request each question was sent by, by the question's id, for the
+    /// questions a device sent through this host: what lets that device know
+    /// its own question from the same words sent elsewhere.
+    public var askedBy: [UUID: UUID]
 
     public init(
         messages: [LampAgentRemoteChatMessage] = [],
         arriving: String = "",
         activity: LampAgentRemoteActivity? = nil,
         isRunning: Bool = false,
-        failure: String? = nil
+        failure: String? = nil,
+        askedBy: [UUID: UUID] = [:]
     ) {
         self.messages = messages
         self.arriving = arriving
         self.activity = activity
         self.isRunning = isRunning
         self.failure = failure
+        self.askedBy = askedBy
     }
 }
 
@@ -85,15 +91,16 @@ public enum LampAgentRemoteChatUpdates {
         )
         var copy = LampAgentRemoteChatView(snapshot(summary: summary, state: old))
         var events: [LampAgentRemoteChatEvent] = []
+        let user = LampAgentRemoteChatMessage.user
         func send(_ kind: String, _ turn: UUID?, message: LampAgentRemoteChatMessage? = nil,
                   text: String? = nil, activity: LampAgentRemoteActivity? = nil) {
             let event = LampAgentRemoteChatEvent(
-                chatID: chatID, kind: kind, turnID: turn, message: message, text: text, activity: activity
+                chatID: chatID, kind: kind, turnID: turn, message: message, text: text, activity: activity,
+                requestID: message.flatMap { $0.role == user ? new.askedBy[$0.id] : nil }
             )
             events.append(event)
             copy.apply(event)
         }
-        let user = LampAgentRemoteChatMessage.user
         let added = Array(new.messages.dropFirst(old.messages.count))
         let lastAddedQuestion = added.last { $0.role == user }?.id
         var open: UUID? = old.isRunning ? old.messages.last { $0.role == user }?.id : nil

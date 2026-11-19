@@ -121,6 +121,47 @@ struct LampAgentRemoteChatTests {
         #expect(events.map(\.kind) == ["failed", "turn-ended"])
     }
 
+    /// The same words from the Mac and from the device are told apart by the
+    /// request each came with, wherever the question is carried: begun as a
+    /// turn, stopped before its first update, or whole in one step.
+    @Test func aquestionCarriesTheRequestItWasSentBy() {
+        let user = LampAgentRemoteChatMessage.user
+        let request = UUID()
+        let fromMac = said("Why?", user, 0)
+        let fromDevice = said("Why?", user, 1)
+        let answer = said("Because.", LampAgentRemoteChatMessage.assistant, 2)
+        let asked = [fromDevice.id: request]
+
+        let elsewhere = LampAgentRemoteChatUpdates.events(chatID: "c", from: .init(), to: .init(messages: [fromMac]))
+        #expect(elsewhere.map(\.requestID) == [nil])
+
+        let begun = LampAgentRemoteChatUpdates.events(
+            chatID: "c", from: .init(messages: [fromMac]),
+            to: .init(messages: [fromMac, fromDevice], isRunning: true, askedBy: asked)
+        )
+        #expect(begun.map(\.kind) == ["turn-started"])
+        #expect(begun[0].requestID == request)
+
+        let stopped = LampAgentRemoteChatUpdates.events(
+            chatID: "c", from: .init(messages: [fromMac]), to: .init(messages: [fromMac, fromDevice], askedBy: asked)
+        )
+        #expect(stopped.map(\.kind) == ["reply"])
+        #expect(stopped[0].requestID == request)
+
+        let whole = LampAgentRemoteChatUpdates.events(
+            chatID: "c", from: .init(messages: [fromMac]), to: .init(messages: [fromMac, fromDevice, answer], askedBy: asked)
+        )
+        #expect(whole.map(\.kind) == ["turn-started", "reply", "turn-ended"])
+        #expect(whole.map(\.requestID) == [request, nil, nil])
+    }
+
+    /// An event from a host older than the field still reads, with no request.
+    @Test func anEventWithNoRequestStillDecodes() throws {
+        let old = #"{"chatID":"c","kind":"turn-started"}"#
+        let event = try JSONDecoder().decode(LampAgentRemoteChatEvent.self, from: Data(old.utf8))
+        #expect(event.kind == LampAgentRemoteChatEvent.turnStarted && event.requestID == nil)
+    }
+
     @Test func aquestionFromElsewhereIsAMessageAndAClearedChatIsSnapshotted() {
         let question = said("Asked on the Mac", LampAgentRemoteChatMessage.user, 0)
         let arrived = LampAgentRemoteChatUpdates.events(chatID: "c", from: .init(), to: .init(messages: [question]))

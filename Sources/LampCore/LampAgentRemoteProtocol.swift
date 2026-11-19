@@ -376,6 +376,12 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
     public var text: String?
     /// `activity`: what the turn is doing now.
     public var activity: LampAgentRemoteActivity?
+    /// On an event that carries a question: the `requestID` of the `send` or
+    /// `start-chat` it came from, so the device that sent it knows it for its
+    /// own by more than its words. Nil for a question asked anywhere else,
+    /// and from a host older than this field, where a device falls back on
+    /// the words.
+    public var requestID: UUID?
 
     public static let turnStarted = "turn-started"
     public static let fragment = "fragment"
@@ -390,7 +396,8 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
         turnID: UUID? = nil,
         message: LampAgentRemoteChatMessage? = nil,
         text: String? = nil,
-        activity: LampAgentRemoteActivity? = nil
+        activity: LampAgentRemoteActivity? = nil,
+        requestID: UUID? = nil
     ) {
         self.chatID = chatID
         self.kind = kind
@@ -398,6 +405,7 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
         self.message = message
         self.text = text
         self.activity = activity
+        self.requestID = requestID
     }
 }
 
