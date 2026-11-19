@@ -111,7 +111,7 @@ struct SyncModelConformanceTests {
         "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourCopy", "fetchedForMerge",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
-        "reviewMerge", "documentMerge",
+        "reviewMerge", "documentMerge", "documentDeletion",
     ]
 
     // MARK: - The model itself
@@ -1037,24 +1037,36 @@ struct SyncModelConformanceTests {
         }
     }
 
-    /// A downloaded document against the copy held, as body 1 or 2 against a
-    /// download of body 1: a kept copy or not, both changed or not.
+    /// A downloaded document, body 1, against the copy held, as body 1 or 2,
+    /// and what was last agreed, none for never. A kept copy's name changes
+    /// nothing.
     @Test func documentMerge() throws {
-        let body = { (n: String) in Data("body \(n)".utf8) }
+        let body = { (n: String) in n == "none" ? nil : Data("body \(n)".utf8) }
         try conform("documentMerge") { f in
-            let name = f[0] == "true"
-                ? LampWritingWorkspaceLayout.keptCopyName(of: "outline.md", device: "iPhone", at: Date())
-                : "outline.md"
-            let decision = LampWritingDocumentMerge.decide(
-                name: name, held: f[1] == "none" ? nil : body(f[1]), incoming: body("1"),
-                bothChanged: f[2] == "true", localDevice: "Mac", at: Date()
-            )
-            let code = switch decision {
-            case .keep: "keep"
-            case .take: "take"
-            case .takeKeepingHeldAs: "takeKeepingHeld"
+            let agreed = body(f[1]).map(LampSyncContentRevision.digest(for:))
+            let copy = LampWritingWorkspaceLayout.keptCopyName(of: "outline.md", device: "iPhone", at: Date())
+            return try ["outline.md", copy].allSatisfy { name in
+                let decision = LampWritingDocumentMerge.decide(
+                    name: name, held: body(f[0]), incoming: try #require(body("1")),
+                    agreedDigest: agreed, localDevice: "Mac", at: Date()
+                )
+                let code = switch decision {
+                case .keep: "keep"
+                case .take: "take"
+                case .takeKeepingHeldAs: "takeKeepingHeld"
+                }
+                return code == f[2]
             }
-            return code == f[3]
+        }
+    }
+
+    /// A deletion from elsewhere against the copy held, as body 1 or 2, and
+    /// what was last agreed: whether the copy is kept.
+    @Test func documentDeletion() throws {
+        let body = { (n: String) in n == "none" ? nil : Data("body \(n)".utf8) }
+        try conform("documentDeletion") { f in
+            let agreed = body(f[1]).map(LampSyncContentRevision.digest(for:))
+            return String(LampWritingDocumentMerge.keepsOnDeletion(held: body(f[0]), agreedDigest: agreed)) == f[2]
         }
     }
 

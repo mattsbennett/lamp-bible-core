@@ -21,6 +21,7 @@ struct LampWritingWorkspaceLayoutTests {
             #expect(LampWritingWorkspaceLayout.isDocumentName(name), "\(name)")
         }
         for name in ["draft.md", "DRAFT.md", "AGENTS.md", "claude.md", "DEVOTIONAL_CONTEXT.md", "opencode.json",
+                     ".\u{301}notes.md",
                      ".hidden.md", ".md", "a/b.md", "a:b.md", "a\\b.md", "line\nbreak.md", "outline", ""] {
             #expect(!LampWritingWorkspaceLayout.isDocumentName(name), "\(name)")
         }
@@ -59,6 +60,7 @@ struct LampWritingWorkspaceLayoutTests {
         let when = Date(timeIntervalSince1970: 1_795_000_000)
         let utc = TimeZone(identifier: "UTC")!
         let devices = ["iPhone", "Matt's iPad", "a/b:c\\d", "(Work), Mac", "  ", "", "\n\t", ".hidden",
+                       String(repeating: "\u{1F1E8}\u{1F1E6}", count: 28), ".\u{301}x",
                        String(repeating: "Ü", count: 300), "Ro\u{308}mer's \u{1F4F1}"]
         let names = ["outline.md", "Notes.TXT", "a.markdown", String(repeating: "long ", count: 60) + ".md",
                      String(repeating: "\u{1F4D6}", count: 70) + ".text", "x (edits from Mac, 2026-01-01 01.01).md"]
@@ -100,23 +102,34 @@ struct LampWritingDocumentStoreTests {
 
     private let path = try! LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
 
+    private func digest(_ text: String) -> String { LampSyncContentRevision.digest(for: Data(text.utf8)) }
+
+    /// A new name that differs from one already there only in case is
+    /// refused: one file here, two on the server.
+    @Test func aNameDifferingOnlyInCaseIsRefused() throws {
+        let store = try temporaryStore()
+        #expect(try store.write(Data("a".utf8), writingID: "w", name: "Notes.md", replacing: nil))
+        #expect(try !store.write(Data("b".utf8), writingID: "w", name: "notes.md", replacing: nil))
+        #expect(try store.documents(writingID: "w").map(\.text) == ["a"])
+    }
+
     @Test func aDownloadOfANewDocumentIsTaken() throws {
         let store = try temporaryStore()
-        let decision = try store.takeIn(downloaded: Data("one".utf8), path: path, bothChanged: false, localDevice: "Mac")
+        let decision = try store.takeIn(downloaded: Data("one".utf8), path: path, agreedDigest: nil, localDevice: "Mac")
         #expect(decision == .take)
         #expect(try store.documents(writingID: "w").map(\.text) == ["one"])
         #expect(try store.held().mapValues { $0.resolvingSymlinksInPath().path }
             == [path: store.url(writingID: "w", name: "outline.md").resolvingSymlinksInPath().path])
     }
 
-    /// Both changed: the server's copy under the name, this device's edits
-    /// beside it, and nothing lost.
-    @Test func bothChangedKeepsThisDevicesEditsAsACopy() throws {
+    /// Edited here since last agreed, however the pass found it: the
+    /// server's copy under the name, this device's edits beside it.
+    @Test func anEditHeldHereIsKeptAsACopy() throws {
         let store = try temporaryStore()
         #expect(try store.write(Data("mine".utf8), writingID: "w", name: "outline.md", replacing: nil))
         let when = Date(timeIntervalSince1970: 1_795_000_000)
         let decision = try store.takeIn(
-            downloaded: Data("theirs".utf8), path: path, bothChanged: true, localDevice: "iPhone", at: when
+            downloaded: Data("theirs".utf8), path: path, agreedDigest: digest("agreed"), localDevice: "iPhone", at: when
         )
         guard case .takeKeepingHeldAs(let copy) = decision else { Issue.record("\(decision)"); return }
         let documents = try store.documents(writingID: "w")
@@ -126,14 +139,14 @@ struct LampWritingDocumentStoreTests {
         #expect(try store.held().count == 2)
 
         // The same again keeps the copy already made and makes no other.
-        #expect(try store.takeIn(downloaded: Data("theirs".utf8), path: path, bothChanged: true, localDevice: "iPhone") == .keep)
+        #expect(try store.takeIn(downloaded: Data("theirs".utf8), path: path, agreedDigest: nil, localDevice: "iPhone") == .keep)
         #expect(try store.documents(writingID: "w").count == 2)
     }
 
     @Test func onlyTheServerMovedReplacesTheCopyHere() throws {
         let store = try temporaryStore()
         try store.write(Data("old".utf8), writingID: "w", name: "outline.md", replacing: nil)
-        #expect(try store.takeIn(downloaded: Data("new".utf8), path: path, bothChanged: false, localDevice: "Mac") == .take)
+        #expect(try store.takeIn(downloaded: Data("new".utf8), path: path, agreedDigest: digest("old"), localDevice: "Mac") == .take)
         #expect(try store.documents(writingID: "w").map(\.text) == ["new"])
     }
 
@@ -142,7 +155,7 @@ struct LampWritingDocumentStoreTests {
     @Test func aSaveOverAChangedCopyIsRefused() throws {
         let store = try temporaryStore()
         try store.write(Data("opened".utf8), writingID: "w", name: "outline.md", replacing: nil)
-        try store.takeIn(downloaded: Data("arrived".utf8), path: path, bothChanged: false, localDevice: "Mac")
+        try store.takeIn(downloaded: Data("arrived".utf8), path: path, agreedDigest: digest("opened"), localDevice: "Mac")
         #expect(try !store.write(Data("typed".utf8), writingID: "w", name: "outline.md", replacing: Data("opened".utf8)))
         #expect(try !store.write(Data("typed".utf8), writingID: "w", name: "outline.md", replacing: nil))
         #expect(try store.documents(writingID: "w").map(\.text) == ["arrived"])
@@ -153,12 +166,29 @@ struct LampWritingDocumentStoreTests {
     @Test func aDeletionRemovesTheFileAndIsDatedAfterTheSaveItRemoves() throws {
         let store = try temporaryStore()
         try store.write(Data("x".utf8), writingID: "w", name: "outline.md", replacing: nil)
-        try store.remove(path: path)
+        let agreed = LampSyncContentRevision.digest(for: Data("x".utf8))
+        #expect(try store.remove(path: path, agreedDigest: agreed, localDevice: "Mac") == nil)
         #expect(try store.documents(writingID: "w").isEmpty)
         try store.remove(writingID: "w", name: "outline.md")
         #expect(LampWritingDocumentStore.deletionTime(of: path, members: [path: 5_000], now: 4_000) == 5_001)
         #expect(LampWritingDocumentStore.deletionTime(of: path, members: [path: 5_000], now: 9_000) == 9_000)
         #expect(LampWritingDocumentStore.deletionTime(of: path, members: [:], now: 9_000) == 9_000)
+    }
+
+    /// A deletion made elsewhere never takes an edit made here since this
+    /// device last agreed with the server: the edit is kept as a copy.
+    @Test func aDeletionKeepsAnEditMadeHere() throws {
+        let store = try temporaryStore()
+        try store.write(Data("edited".utf8), writingID: "w", name: "outline.md", replacing: nil)
+        let agreed = LampSyncContentRevision.digest(for: Data("as sent".utf8))
+        let copy = try #require(try store.remove(path: path, agreedDigest: agreed, localDevice: "iPhone"))
+        #expect(LampWritingWorkspaceLayout.isKeptCopy(copy))
+        #expect(try store.documents(writingID: "w").map(\.name) == [copy])
+        #expect(try store.documents(writingID: "w").map(\.text) == ["edited"])
+        // Never agreed at all, as a document made here and not yet sent.
+        try store.write(Data("new".utf8), writingID: "w", name: "outline.md", replacing: nil)
+        #expect(try store.remove(path: path, agreedDigest: nil, localDevice: "iPhone") != nil)
+        #expect(try store.documents(writingID: "w").count == 2)
     }
 
     /// The workspace's other files, Lamp's own and the draft, are never

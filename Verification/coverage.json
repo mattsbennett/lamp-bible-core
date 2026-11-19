@@ -745,19 +745,23 @@
         "documentMerge",
         "documentAfter",
         "anIdenticalBodyMakesNoCopy",
-        "everyBodySurvivesABothChangedMerge",
-        "aKeptCopyIsNeverCopied",
         "onlyTheServerMovedTakesItsCopy",
-        "theServersCopyKeepsTheName"
+        "anEditHeldHereIsNeverLost",
+        "theServersCopyKeepsTheName",
+        "documentDeletionKeeps",
+        "aDeletionNeverLosesAnEditMadeHere",
+        "anUneditedDocumentIsDeleted"
       ],
       "conformance": [
-        "documentMerge"
+        "documentMerge",
+        "documentDeletion"
       ],
       "boundary": "What a device does with a downloaded document, given its own copy and whether both changed: the decision is modelled, with bodies as numbers. Which names are documents, the workspace folder's name and the kept copy's name are not: they are spelled once here for both apps and held by LampWritingWorkspaceLayoutTests, including that every kept copy's name is a document's."
     },
     "Sources/LampCore/LampWritingDocumentStore.swift": {
       "rules": [
-        "documentMerge"
+        "documentMerge",
+        "documentDeletionKeeps"
       ],
       "boundary": "Applies `LampWritingDocumentMerge` to the files a device keeps, under a lock per file, writing a kept copy before the document it was taken from is replaced. File-system behaviour is assumed; LampWritingDocumentStoreTests hold the store to the decision."
     },

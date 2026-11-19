@@ -18,6 +18,14 @@ public protocol LampSyncPassLibrary {
     /// trade encodings of the same content for ever.
     func install(_ path: String, from url: URL) async throws -> String?
 
+    /// `install`, told the digest of the bytes this client last agreed with
+    /// the server on at the path, sent or taken (nil where it has none). A
+    /// library whose files the writer edits keeps what was edited since, as
+    /// a writing's documents do (`LampWritingDocumentMerge`), whatever the
+    /// plan saw: a save can land between the plan and the install. The rest
+    /// ignore it.
+    func install(_ path: String, from url: URL, agreedDigest: String?) async throws -> String?
+
     /// Reconciles the files both sides changed, having downloaded each.
     ///
     /// One call for the whole group, because the Mac merges personal content
@@ -29,6 +37,13 @@ public protocol LampSyncPassLibrary {
 
     /// Removes the local copy of a file deleted elsewhere.
     func deleteLocally(_ path: String) async throws
+
+    /// Removes the local copy of a file deleted elsewhere, told the digest
+    /// of the bytes this client last agreed with the server on, sent or
+    /// taken (nil where it has none). A library whose files the writer edits
+    /// keeps what was edited since, as a writing's documents do
+    /// (`LampWritingDocumentMerge.keepsOnDeletion`); the rest ignore it.
+    func deleteLocally(_ path: String, agreedDigest: String?) async throws
 
     /// Called once after every download and merge, before anything is
     /// published.
@@ -42,6 +57,14 @@ public protocol LampSyncPassLibrary {
 
 public extension LampSyncPassLibrary {
     func finishInstalling() async throws {}
+
+    func deleteLocally(_ path: String, agreedDigest: String?) async throws {
+        try await deleteLocally(path)
+    }
+
+    func install(_ path: String, from url: URL, agreedDigest: String?) async throws -> String? {
+        try await install(path, from: url)
+    }
 }
 
 /// One Design B pass: read the bundle, work out what moved, move it, and
@@ -335,7 +358,9 @@ public struct LampSyncBundlePass {
                         outcome.changedDuringPass.append(path)
                         return
                     }
-                    let held = try await library.install(path, from: downloaded.url)
+                    let held = try await library.install(
+                        path, from: downloaded.url, agreedDigest: records.record(path, in: source)?.uploadedDigest
+                    )
                     let digest = held ?? (try? LampSyncContentRevision.digest(forFileAt: downloaded.url))
                     if LampSyncFolderLayout.kind(of: path)?.isTakenInTogether == true {
                         staged.append((path, downloaded.revision, digest))
@@ -468,7 +493,9 @@ public struct LampSyncBundlePass {
                 continue
             }
             do {
-                try await library.deleteLocally(path)
+                try await library.deleteLocally(
+                    path, agreedDigest: records.record(path, in: source)?.uploadedDigest
+                )
                 records.forget(path, in: source)
                 outcome.deletedLocally.append(path)
             } catch {

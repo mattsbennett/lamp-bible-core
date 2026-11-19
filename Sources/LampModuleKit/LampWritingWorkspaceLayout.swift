@@ -50,7 +50,9 @@ public enum LampWritingWorkspaceLayout {
     /// name every file system keeps. Judged in NFC.
     public static func isDocumentName(_ name: String) -> Bool {
         let name = name.precomposedStringWithCanonicalMapping
-        guard !name.isEmpty, !name.hasPrefix("."), name.utf8.count <= 255,
+        // By scalar: a period with a combining mark after it is one
+        // Character that does not begin with ".", but the file is hidden.
+        guard !name.isEmpty, name.unicodeScalars.first != ".", name.utf8.count <= 255,
               !name.unicodeScalars.contains(where: { $0 == "/" || $0 == "\\" || $0 == ":"
                   || CharacterSet.controlCharacters.contains($0) })
         else { return false }
@@ -83,7 +85,7 @@ public enum LampWritingWorkspaceLayout {
         else { return nil }
         let folder = components[writing.count]
         let name = components[writing.count + 2].precomposedStringWithCanonicalMapping
-        guard !folder.isEmpty, !folder.hasPrefix("."), !folder.contains("\\"), !folder.contains("\0"),
+        guard !folder.isEmpty, folder.unicodeScalars.first != ".", !folder.contains("\\"), !folder.contains("\0"),
               isDocumentName(name) else { return nil }
         return (folder, name)
     }
@@ -121,7 +123,7 @@ public enum LampWritingWorkspaceLayout {
             let suffix = " (edits from \(device), \(stamp)\(attempt == 1 ? "" : " \(attempt)")).\(ext)"
             var cut = stem
             while !cut.isEmpty, (cut + suffix).utf8.count > maximumKeptCopyBytes { cut.removeLast() }
-            cut = String(cut.drop(while: { $0 == "." || $0 == " " }))
+            while let first = cut.unicodeScalars.first, first == "." || first == " " { cut.removeFirst() }
             if cut.isEmpty { cut = "Document" }
             let candidate = cut + suffix
             if !taken(candidate) { return candidate }
@@ -129,8 +131,10 @@ public enum LampWritingWorkspaceLayout {
         fatalError("unreachable")
     }
 
-    /// Whether a name is one `keptCopyName` makes. A kept copy is never
-    /// itself copied: when two devices both change one, the server's stands.
+    /// Whether a name is one `keptCopyName` makes, as both apps show a kept
+    /// copy. A copy both sides changed is kept again like any document, its
+    /// name taking a second suffix: no clocks are compared, so nothing makes
+    /// copies of its own accord.
     public static func isKeptCopy(_ name: String) -> Bool {
         let stem = (name.precomposedStringWithCanonicalMapping as NSString).deletingPathExtension
         return stem.range(
@@ -140,7 +144,8 @@ public enum LampWritingWorkspaceLayout {
     }
 
     /// A device's name as a kept copy holds it: in NFC, without what a file
-    /// name or the copy's own pattern cannot hold, and at most 40 characters.
+    /// name or the copy's own pattern cannot hold, and at most 60 bytes,
+    /// cut between characters.
     static func cleanedDeviceName(_ device: String) -> String {
         let scalars = device.precomposedStringWithCanonicalMapping.unicodeScalars.map { scalar -> Character in
             "/\\:(),".unicodeScalars.contains(scalar) || CharacterSet.controlCharacters.contains(scalar)
@@ -148,21 +153,27 @@ public enum LampWritingWorkspaceLayout {
                 ? " " : Character(String(scalar))
         }
         let words = String(scalars).split(whereSeparator: { $0.isWhitespace })
-        let joined = String(words.joined(separator: " ").prefix(40)).trimmingCharacters(in: .whitespaces)
+        var joined = words.joined(separator: " ")
+        while joined.utf8.count > 60 { joined.removeLast() }
+        joined = joined.trimmingCharacters(in: .whitespaces)
         return joined.isEmpty ? "another device" : joined
     }
 }
 
 /// What a device does with a document a pass downloaded, given the copy it
-/// holds. No clocks are compared: a downloaded file's date is when it
-/// arrived, and devices' clocks disagree.
+/// holds and what it last agreed with the server on (`agreedDigest`, the
+/// digest of the bytes it last sent or took, nil for never). No clocks are
+/// compared: a downloaded file's date is when it arrived, and devices'
+/// clocks disagree. Nor is the plan's word that both sides changed taken:
+/// a save can land between the plan and the install, so what this device
+/// holds is judged as it stands, under the file's lock.
 ///
-/// - nothing held, or only the server moved: take the server's;
+/// - nothing held: take the server's;
 /// - the same bytes either side: keep, nothing to do;
-/// - both changed and they differ: take the server's under the document's
-///   name, and keep this device's edits beside it under `keptCopyName`, so
-///   every body survives. A kept copy both changed is the exception: the
-///   server's stands, so copies are never made of copies.
+/// - held as last agreed, so only the server moved: take the server's;
+/// - otherwise both changed: take the server's under the document's name,
+///   and keep this device's edits beside it under `keptCopyName`, so every
+///   body survives.
 ///
 /// (`Verification/SyncMerge.lean`: `documentMerge`.)
 public enum LampWritingDocumentMerge {
@@ -173,15 +184,25 @@ public enum LampWritingDocumentMerge {
     }
 
     public static func decide(
-        name: String, held: Data?, incoming: Data, bothChanged: Bool,
+        name: String, held: Data?, incoming: Data, agreedDigest: String?,
         localDevice: String, at date: Date, timeZone: TimeZone = .current,
         taken: (String) -> Bool = { _ in false }
     ) -> Decision {
         guard let held else { return .take }
         if held == incoming { return .keep }
-        guard bothChanged, !LampWritingWorkspaceLayout.isKeptCopy(name) else { return .take }
+        if LampSyncContentRevision.digest(for: held) == agreedDigest { return .take }
         return .takeKeepingHeldAs(LampWritingWorkspaceLayout.keptCopyName(
             of: name, device: localDevice, at: date, timeZone: timeZone, taken: taken
         ))
+    }
+
+    /// Whether a document deleted on another device is kept here as a copy
+    /// rather than removed: where this device edited it since it last
+    /// agreed with the server. A deletion takes the document away, never an
+    /// edit the deleting device did not see.
+    /// (`Verification/SyncMerge.lean`: `documentDeletionKeeps`.)
+    public static func keepsOnDeletion(held: Data?, agreedDigest: String?) -> Bool {
+        guard let held else { return false }
+        return LampSyncContentRevision.digest(for: held) != agreedDigest
     }
 }

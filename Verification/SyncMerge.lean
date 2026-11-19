@@ -3497,69 +3497,80 @@ theorem mergeReview_idem (a : Review) : mergeReview a a = a := by
 /-! ### A writing's documents
 
 `LampWritingDocumentMerge.decide`: what a device does with a document a pass
-downloaded, given the copy it holds. A document is whole text, merged as a
-file, and no clocks are compared: a downloaded file's date is when it
-arrived. When both sides changed, the server's copy keeps the document's
-name, since other devices may already hold it, and this device's edits are
-kept beside it under a name of their own. A kept copy that both changed is
-not copied again: the server's stands. Bodies are numbers here; a copy's
-name is outside the model and held by a test (`keptCopyName`). -/
+downloaded, given the copy it holds and the bytes it last agreed with the
+server on, sent or taken (none for never). A document is whole text, merged
+as a file. No clocks are compared, a downloaded file's date being when it
+arrived; nor is the plan's word that both sides changed taken, since a save
+can land between the plan and the install. The server's copy keeps the
+document's name, since other devices may already hold it, and edits held
+here that the server has not seen are kept beside it under a name of their
+own. Bodies are numbers here; a copy's name is outside the model and held
+by a test (`keptCopyName`). -/
 
 inductive DocumentDecision where
   | keep | take | takeKeepingHeld
   deriving DecidableEq, Repr
 
-def documentMerge (isCopy : Bool) (held : Option Nat) (incoming : Nat) (bothChanged : Bool) :
-    DocumentDecision :=
+def documentMerge (held : Option Nat) (incoming : Nat) (agreed : Option Nat) : DocumentDecision :=
   match held with
   | none => .take
-  | some h => if h == incoming then .keep else if bothChanged && !isCopy then .takeKeepingHeld else .take
+  | some h => if h == incoming then .keep else if agreed == some h then .take else .takeKeepingHeld
 
 -- What the device holds after: the document under its name, and a kept copy.
-def documentAfter (isCopy : Bool) (held : Option Nat) (incoming : Nat) (bothChanged : Bool) :
-    Option Nat × Option Nat :=
-  match documentMerge isCopy held incoming bothChanged with
+def documentAfter (held : Option Nat) (incoming : Nat) (agreed : Option Nat) : Option Nat × Option Nat :=
+  match documentMerge held incoming agreed with
   | .keep => (held, none)
   | .take => (some incoming, none)
   | .takeKeepingHeld => (some incoming, held)
 
 -- The same body either side changes nothing and makes no copy.
-theorem anIdenticalBodyMakesNoCopy (isCopy bothChanged : Bool) (b : Nat) :
-    documentAfter isCopy (some b) b bothChanged = (some b, none) := by
+theorem anIdenticalBodyMakesNoCopy (b : Nat) (agreed : Option Nat) :
+    documentAfter (some b) b agreed = (some b, none) := by
   simp [documentAfter, documentMerge]
 
--- Both changed: both bodies survive, the server's under the name.
-theorem everyBodySurvivesABothChangedMerge (held incoming : Nat) :
-    documentAfter false (some held) incoming true = (some incoming, some held) ∨ held = incoming := by
-  by_cases h : held = incoming
-  · exact Or.inr h
-  · left; simp [documentAfter, documentMerge, h]
+-- Held as last agreed, only the server moved: its copy is taken, nothing kept.
+theorem onlyTheServerMovedTakesItsCopy (h incoming : Nat) :
+    documentAfter (some h) incoming (some h) = (some incoming, none) := by
+  by_cases e : h = incoming
+  · subst e; simp [documentAfter, documentMerge]
+  · simp [documentAfter, documentMerge, e]
 
--- A copy is never made of a kept copy, so two devices cannot copy each
--- other's copies back and forth.
-theorem aKeptCopyIsNeverCopied (held : Option Nat) (incoming : Nat) (bothChanged : Bool) :
-    documentMerge true held incoming bothChanged ≠ .takeKeepingHeld := by
-  cases held <;> simp [documentMerge] <;> split <;> simp
-
--- Only the server moved: its copy is taken, and nothing is kept.
-theorem onlyTheServerMovedTakesItsCopy (isCopy : Bool) (held : Option Nat) (incoming : Nat) :
-    (documentAfter isCopy held incoming false).2 = none := by
-  cases held with
-  | none => simp [documentAfter, documentMerge]
-  | some h =>
-    by_cases e : h = incoming
-    · subst e; simp [documentAfter, documentMerge]
-    · simp [documentAfter, documentMerge, e]
+-- An edit held here that the server has not seen is never lost, however the
+-- pass found it: both bodies survive, the server's under the name.
+theorem anEditHeldHereIsNeverLost (h incoming : Nat) (agreed : Option Nat)
+    (edited : agreed ≠ some h) (differs : h ≠ incoming) :
+    documentAfter (some h) incoming agreed = (some incoming, some h) := by
+  simp [documentAfter, documentMerge, differs, edited]
 
 -- Whatever is decided, the document ends holding the server's body.
-theorem theServersCopyKeepsTheName (isCopy bothChanged : Bool) (held : Option Nat) (incoming : Nat) :
-    (documentAfter isCopy held incoming bothChanged).1 = some incoming := by
+theorem theServersCopyKeepsTheName (held : Option Nat) (incoming : Nat) (agreed : Option Nat) :
+    (documentAfter held incoming agreed).1 = some incoming := by
   cases held with
   | none => simp [documentAfter, documentMerge]
   | some h =>
     by_cases e : h = incoming
     · subst e; simp [documentAfter, documentMerge]
-    · cases isCopy <;> cases bothChanged <;> simp [documentAfter, documentMerge, e]
+    · by_cases a : agreed = some h <;> simp [documentAfter, documentMerge, e, a]
+
+-- A deletion made on another device, carried out here: the copy held is
+-- kept, under a copy's name, where this device edited it since it last
+-- agreed with the server. The plan asks for the removal whenever the copy
+-- was not saved after the deletion (`filePlanAction`), and a slow clock can
+-- date a later edit before it; this is what keeps such an edit. Returns the
+-- body kept.
+def documentDeletionKeeps (held agreed : Option Nat) : Option Nat :=
+  match held with
+  | none => none
+  | some h => if agreed == some h then none else some h
+
+-- A deletion never takes an edit the deleting device did not see.
+theorem aDeletionNeverLosesAnEditMadeHere (h : Nat) (agreed : Option Nat) (edited : agreed ≠ some h) :
+    documentDeletionKeeps (some h) agreed = some h := by
+  simp [documentDeletionKeeps, edited]
+
+-- And a copy unedited since it last agreed is simply deleted.
+theorem anUneditedDocumentIsDeleted (h : Nat) : documentDeletionKeeps (some h) (some h) = none := by
+  simp [documentDeletionKeeps]
 
 -- A removal here is recorded as a deletion only where the library would carry
 -- one out: the same rule on both sides, so no client records a tombstone
@@ -5317,14 +5328,21 @@ def documentDecisionName : DocumentDecision → String
   | .keep => "keep" | .take => "take" | .takeKeepingHeld => "takeKeepingHeld"
 
 #eval show IO Unit from do
-  -- A document held or not, as body 1 or 2, against a download of body 1:
-  -- a kept copy or not, both changed or not.
-  for isCopy in [false, true] do
-    for held in [none, some 1, some 2] do
-      for bothChanged in [false, true] do
-        IO.println <| conformanceLine "documentMerge"
-          [toString isCopy, held.map toString |>.getD "none", toString bothChanged,
-           documentDecisionName (documentMerge isCopy held 1 bothChanged)]
+  -- A document held or not, as body 1 or 2, against a download of body 1,
+  -- and what was last agreed, none for never.
+  for held in [none, some 1, some 2] do
+    for agreed in [none, some 1, some 2] do
+      IO.println <| conformanceLine "documentMerge"
+        [held.map toString |>.getD "none", agreed.map toString |>.getD "none",
+         documentDecisionName (documentMerge held 1 agreed)]
+
+#eval show IO Unit from do
+  -- A copy held or not, against what was last agreed, none for never.
+  for held in [none, some 1, some 2] do
+    for agreed in [none, some 1, some 2] do
+      IO.println <| conformanceLine "documentDeletion"
+        [held.map toString |>.getD "none", agreed.map toString |>.getD "none",
+         toString (documentDeletionKeeps held agreed).isSome]
 
 #eval show IO Unit from do
   -- A fetch of what this client's records already name: the revision it last

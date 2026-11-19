@@ -98,10 +98,20 @@ public struct LampWritingDocumentStore: Sendable {
     /// yet. Returns false, writing nothing, where it changed meanwhile, as a
     /// pass taking a download in would change it; the caller keeps the
     /// writer's text and asks again rather than writing over the other.
+    ///
+    /// A new document whose name differs from one already there only in
+    /// case is refused too: the file systems Lamp runs on hold the two as
+    /// one file, and the server as two.
     @discardableResult
     public func write(_ data: Data, writingID: String, name: String, replacing expected: Data?) throws -> Bool {
         let url = try url(writingID: writingID, name: name)
+        let folded = name.precomposedStringWithCanonicalMapping.lowercased()
+        let exact = name.precomposedStringWithCanonicalMapping
         return try Self.locks.holding(url) {
+            if expected == nil, try documents(writingID: writingID)
+                .contains(where: { $0.name.lowercased() == folded && $0.name != exact }) {
+                return false
+            }
             guard try Self.contents(of: url) == expected else { return false }
             if expected == data { return true }
             try FileManager.default.createDirectory(
@@ -118,13 +128,40 @@ public struct LampWritingDocumentStore: Sendable {
         try remove(at: url(writingID: writingID, name: name))
     }
 
-    /// Removes the document at a server path, as a pass carries out a
-    /// deletion made on another device.
-    public func remove(path: String) throws {
+    /// Carries out a deletion made on another device: the document at a
+    /// server path is removed, unless this device edited it since it last
+    /// agreed with the server (`agreedDigest`, the pass's record of what it
+    /// last sent or took). Then it is kept under a copy's name instead, as
+    /// both sides' edits are when both change it, and returns that name; the
+    /// next pass sends it as a document of its own.
+    @discardableResult
+    public func remove(
+        path: String, agreedDigest: String?, localDevice: String, at date: Date = Date()
+    ) throws -> String? {
         guard let document = LampWritingWorkspaceLayout.document(ofPath: path) else {
             throw LampSyncFolderLayout.PathError.unsafe(path)
         }
-        try remove(at: url(folder: document.folder, name: document.name))
+        let url = try url(folder: document.folder, name: document.name)
+        let folder = url.deletingLastPathComponent()
+        return try Self.locks.holding(url) {
+            let held = try Self.contents(of: url)
+            guard LampWritingDocumentMerge.keepsOnDeletion(held: held, agreedDigest: agreedDigest) else {
+                try remove(at: url)
+                return nil
+            }
+            // Under a new name even where it is a kept copy already: the
+            // deleted path is gone everywhere, and a file left at it would
+            // be deleted again or argue with the deletion.
+            let copyName = LampWritingWorkspaceLayout.keptCopyName(
+                of: document.name, device: localDevice, at: date,
+                taken: { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
+            )
+            let copy = try self.url(folder: document.folder, name: copyName)
+            try Self.locks.holding(copy) {
+                try FileManager.default.moveItem(at: url, to: copy)
+            }
+            return copyName
+        }
     }
 
     private func remove(at url: URL) throws {
@@ -135,13 +172,15 @@ public struct LampWritingDocumentStore: Sendable {
     }
 
     /// Takes in a copy a pass downloaded, as `LampWritingDocumentMerge`
-    /// decides, and says what it did. `bothChanged` is the plan's: this
-    /// device's copy changed since it last agreed with the server, and so
-    /// did the server's. A kept copy is written before the document is
-    /// replaced, so a stop between the two leaves both bodies.
+    /// decides, and says what it did. `agreedDigest` is the pass's record
+    /// of what this device last sent or took at the path, nil for none: a
+    /// copy held otherwise than that was edited here, and is kept. Judged
+    /// under the file's lock, so a save that lands after the pass planned
+    /// is kept too. A kept copy is written before the document is replaced,
+    /// so a stop between the two leaves both bodies.
     @discardableResult
     public func takeIn(
-        downloaded data: Data, path: String, bothChanged: Bool, localDevice: String, at date: Date = Date()
+        downloaded data: Data, path: String, agreedDigest: String?, localDevice: String, at date: Date = Date()
     ) throws -> LampWritingDocumentMerge.Decision {
         guard let document = LampWritingWorkspaceLayout.document(ofPath: path) else {
             throw LampSyncFolderLayout.PathError.unsafe(path)
@@ -152,7 +191,7 @@ public struct LampWritingDocumentStore: Sendable {
             let held = try Self.contents(of: url)
             let decision = LampWritingDocumentMerge.decide(
                 name: document.name, held: held, incoming: data,
-                bothChanged: bothChanged, localDevice: localDevice, at: date,
+                agreedDigest: agreedDigest, localDevice: localDevice, at: date,
                 taken: { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
             )
             switch decision {
