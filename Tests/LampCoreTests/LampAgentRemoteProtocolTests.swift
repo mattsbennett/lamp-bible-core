@@ -224,4 +224,23 @@ final class LampAgentRemoteProtocolTests: XCTestCase {
         XCTAssertNil(chat.writingID)
         XCTAssertNil(chat.selection)
     }
+
+    /// A writing turn names the writing's revision on the device, and the
+    /// host is behind only where its copy is older or missing.
+    func testAWritingTurnCarriesItsRevision() throws {
+        let credential = try XCTUnwrap(LampAgentRemoteCredential.device(.generate()))
+        let (device, host, _) = try connect(device: credential, hostAccepts: [credential])
+        var request = try device.seal(.send("Tighten this", to: "writing:abc", writingRevision: 1_800_000_000))
+        XCTAssertEqual(try host.open(from: &request).first?.writingRevision, 1_800_000_000)
+        var begin = try device.seal(.startChat(.writing("abc", firstMessage: "Read it", writingRevision: 7)))
+        XCTAssertEqual(try host.open(from: &begin).first?.newChat?.writingRevision, 7)
+
+        let saved = Date(timeIntervalSince1970: 1_800_000_000.75)
+        XCTAssertEqual(LampAgentRemoteWritingRevision.of(lastModified: saved), 1_800_000_000)
+        XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: saved, device: 1_800_000_000))
+        XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: saved, device: 1_799_999_999))
+        XCTAssertTrue(LampAgentRemoteWritingRevision.hostIsBehind(host: saved, device: 1_800_000_001))
+        XCTAssertTrue(LampAgentRemoteWritingRevision.hostIsBehind(host: nil, device: 1))
+        XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: nil, device: nil))
+    }
 }

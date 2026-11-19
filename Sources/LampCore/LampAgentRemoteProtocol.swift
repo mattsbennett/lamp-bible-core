@@ -84,6 +84,12 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
     /// On `send` to a writing chat: the words selected in the writing on the
     /// device, as plain text, which the message is about.
     public var selection: String?
+    /// On `send` to a writing chat: the writing's revision as the device
+    /// holds it (`LampAgentRemoteWritingRevision`). A host whose copy is
+    /// older takes in what sync has first, and refuses as `writing-behind`
+    /// if it is still older, rather than have the assistant change a text
+    /// the writer has since changed.
+    public var writingRevision: Int?
     public var clientName: String?
     /// On pairing only: the id the host knows this device by, and the key
     /// it will use on every later connection. Kept in the device's Keychain,
@@ -109,6 +115,7 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         newChat: LampAgentRemoteNewChat? = nil,
         reading: LampAgentRemoteReading? = nil,
         selection: String? = nil,
+        writingRevision: Int? = nil,
         clientName: String? = nil,
         deviceID: String? = nil,
         deviceKey: String? = nil,
@@ -126,6 +133,7 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         self.newChat = newChat
         self.reading = reading
         self.selection = selection
+        self.writingRevision = writingRevision
         self.clientName = clientName
         self.deviceID = deviceID
         self.deviceKey = deviceKey
@@ -167,9 +175,13 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         to chatID: String,
         reading: LampAgentRemoteReading? = nil,
         selection: String? = nil,
+        writingRevision: Int? = nil,
         requestID: UUID = UUID()
     ) -> Self {
-        .init(kind: .send, requestID: requestID, chatID: chatID, text: text, reading: reading, selection: selection)
+        .init(
+            kind: .send, requestID: requestID, chatID: chatID, text: text, reading: reading,
+            selection: selection, writingRevision: writingRevision
+        )
     }
 
     public static func cancel(_ chatID: String, requestID: UUID = UUID()) -> Self {
@@ -201,6 +213,10 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
 public enum LampAgentRemoteFailure {
     /// A reply is already running in that chat; the host takes one at a time.
     public static let busy = "busy"
+    /// The host's copy of the writing is older than the device's, even after
+    /// taking in what sync had: the device should wait for its edits to
+    /// arrive and try again.
+    public static let writingBehind = "writing-behind"
     public static let notFound = "not-found"
     /// The provider needs signing in or setting up, which only the Mac can do.
     public static let needsSetup = "needs-setup"
@@ -438,6 +454,8 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
     public var writingID: String?
     /// For a writing chat: the words selected in it, as with `send`.
     public var selection: String?
+    /// For a writing chat: its revision on the device, as with `send`.
+    public var writingRevision: Int?
     public var firstMessage: String
 
     public init(
@@ -446,6 +464,7 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
         reading: LampAgentRemoteReading? = nil,
         writingID: String? = nil,
         selection: String? = nil,
+        writingRevision: Int? = nil,
         firstMessage: String
     ) {
         self.kind = kind
@@ -453,16 +472,38 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
         self.reading = reading
         self.writingID = writingID
         self.selection = selection
+        self.writingRevision = writingRevision
         self.firstMessage = firstMessage
     }
 
     /// The first message on a writing: in its chat, begun if it has none.
     public static func writing(
-        _ writingID: String, firstMessage: String, selection: String? = nil, provider: String? = nil
+        _ writingID: String, firstMessage: String, selection: String? = nil,
+        writingRevision: Int? = nil, provider: String? = nil
     ) -> Self {
         .init(
             kind: LampAgentRemoteChatSummary.writing, provider: provider,
-            writingID: writingID, selection: selection, firstMessage: firstMessage
+            writingID: writingID, selection: selection, writingRevision: writingRevision,
+            firstMessage: firstMessage
         )
+    }
+}
+
+/// Which copy of a writing is newer, the device's or the host's, by when each
+/// was last saved: the writing's `lastModified`, in whole seconds since 1970,
+/// which is how it is stored and synced.
+public enum LampAgentRemoteWritingRevision {
+    /// The revision a device sends for its copy.
+    public static func of(lastModified: Date) -> Int {
+        Int(lastModified.timeIntervalSince1970.rounded(.down))
+    }
+
+    /// Whether the host's copy is older than the one the device sent, or
+    /// missing. A device that sent no revision is an older one, and nothing
+    /// is behind it.
+    public static func hostIsBehind(host: Date?, device: Int?) -> Bool {
+        guard let device else { return false }
+        guard let host else { return true }
+        return of(lastModified: host) < device
     }
 }
