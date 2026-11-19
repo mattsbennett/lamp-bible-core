@@ -394,7 +394,8 @@ public struct LampSyncBundlePass {
             try await library.finishInstalling()
             for file in staged {
                 records.recordInstall(file.path, in: source, revision: file.revision, digest: file.digest)
-                outcome.installed.append(file.path)
+                // A merged one is reported as merged, not twice.
+                if !outcome.reconciled.contains(file.path) { outcome.installed.append(file.path) }
             }
         } catch {
             outcome.failures.append("installing: \(error.localizedDescription)")

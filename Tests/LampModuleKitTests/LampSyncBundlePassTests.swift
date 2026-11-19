@@ -371,6 +371,21 @@ struct LampSyncBundlePassTests {
         #expect(library.reconcileCalls == 1)
         #expect(outcome.failures.contains { $0.hasPrefix("installing") })
         #expect(records.record(path, in: source) == before.record(path, in: source))
+
+        // Once the tree goes in, it is recorded, and reported once, as merged.
+        library.finishFails = false
+        let again = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(
+            gathering: {
+                var held = gathered([local(path, mine, "mine")])
+                held.extraListing = [path: "\"a-2\""]
+                return held
+            },
+            records: &records
+        )
+        #expect(again.reconciled == [path] && !again.installed.contains(path))
+        #expect(records.record(path, in: source)?.installedRevision == "\"a-2\"")
     }
 
     /// The Mac merges personal content in one staged transaction, not file by
