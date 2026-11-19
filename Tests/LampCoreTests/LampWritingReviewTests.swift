@@ -358,7 +358,7 @@ struct LampWritingReviewStoreTests {
         let deletions = try store.deletions(
             deleted: ["gone", "kept", "never-reviewed", "elsewhere"],
             held: ["KEPT"],
-            members: ["WritingReview/elsewhere.json", "Writing/writing.lamp"],
+            members: ["WritingReview/elsewhere.json": 3, "Writing/writing.lamp": 3],
             now: 9
         )
         #expect(deletions == ["WritingReview/Gone.json": 9, "WritingReview/elsewhere.json": 9])

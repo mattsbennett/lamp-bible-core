@@ -98,7 +98,7 @@ public enum LampSyncFolderLayout {
     public static let deckAssetsDirectory = "\(decksDirectory)/Assets"
     public static let deckExtension = "lampdeck"
     /// One file per writing whose assistant's changes are being reviewed,
-    /// named by the writing's id, as its workspace is.
+    /// named by the writing's id (`reviewFilename(writingID:)`).
     public static let writingReviewDirectory = "WritingReview"
     public static let writingReviewExtension = "json"
 
@@ -151,15 +151,72 @@ public enum LampSyncFolderLayout {
     }
 
     public static func writingReviewPath(writingID: String) throws -> String {
-        try checked([writingReviewDirectory], "\(writingID).\(writingReviewExtension)")
+        let filename = reviewFilename(writingID: writingID)
+        guard filename.utf8.count <= maximumReviewFilenameBytes else {
+            throw PathError.unsafe("\(writingReviewDirectory)/\(filename)")
+        }
+        return try checked([writingReviewDirectory], filename)
     }
 
     /// The writing a review file is for, or nil for any other path.
     public static func writingID(ofReviewPath path: String) -> String? {
-        guard kind(of: path) == .writingReview,
-              let filename = path.split(separator: "/").last else { return nil }
-        return String(filename.dropLast(writingReviewExtension.count + 1))
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2, components[0] == writingReviewDirectory else { return nil }
+        return writingID(reviewFilename: String(components[1]))
     }
+
+    /// A writing's id as its review file's name. An id stays as it is where
+    /// it is ASCII letters, digits and hyphens, as every id Lamp makes is;
+    /// any other byte of its UTF-8 is written `_` and two uppercase hex
+    /// digits. A writing's id can come from the front matter of a file the
+    /// writer imported, which may begin with a period, hold a space or a
+    /// letter that is spelled two ways in Unicode: none of those may reach
+    /// a file name as it is, since a hidden or renormalised name is a file
+    /// no pass would find again.
+    static func reviewFilename(writingID: String) -> String {
+        var name = ""
+        for byte in writingID.utf8 {
+            switch byte {
+            case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+                 UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "-"):
+                name.unicodeScalars.append(Unicode.Scalar(byte))
+            default:
+                name += String(format: "_%02X", byte)
+            }
+        }
+        return "\(name).\(writingReviewExtension)"
+    }
+
+    /// The id a review file's name was made from, or nil for a name
+    /// `reviewFilename` does not make: one name for each id, read back
+    /// exactly.
+    static func writingID(reviewFilename filename: String) -> String? {
+        let suffix = ".\(writingReviewExtension)"
+        guard filename.hasSuffix(suffix), filename.utf8.count > suffix.utf8.count,
+              filename.utf8.count <= maximumReviewFilenameBytes else { return nil }
+        var bytes: [UInt8] = []
+        var rest = Substring(filename.dropLast(suffix.count)).utf8[...]
+        while let byte = rest.first {
+            rest = rest.dropFirst()
+            guard byte == UInt8(ascii: "_") else {
+                bytes.append(byte)
+                continue
+            }
+            guard rest.count >= 2, let value = UInt8(String(decoding: rest.prefix(2), as: UTF8.self), radix: 16) else {
+                return nil
+            }
+            bytes.append(value)
+            rest = rest.dropFirst(2)
+        }
+        guard let id = String(bytes: bytes, encoding: .utf8), reviewFilename(writingID: id) == filename else {
+            return nil
+        }
+        return id
+    }
+
+    /// Within what every file system and server Lamp syncs through takes
+    /// for a name.
+    static let maximumReviewFilenameBytes = 240
 
     public static func workspaceFilePath(relativePath: String) throws -> String {
         let path = "\(workspacesDirectory)/\(relativePath)"
@@ -191,9 +248,7 @@ public enum LampSyncFolderLayout {
             return components.count >= 3 ? .bookMedia : nil
         }
         if head == writingReviewDirectory {
-            let filename = components.count == 2 ? components[1] : ""
-            return filename.lowercased().hasSuffix(".\(writingReviewExtension)")
-                && filename.count > writingReviewExtension.count + 1 ? .writingReview : nil
+            return writingID(ofReviewPath: path) == nil ? nil : .writingReview
         }
         guard head == workspacesDirectory else { return nil }
         if components[1] == "Presentations" {

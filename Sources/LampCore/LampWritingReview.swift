@@ -243,7 +243,10 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 plain.append(character)
             }
         }
-        guard plain == text, let start, let end, end >= start else { return nil }
+        // Unit for unit: the offsets are UTF-16 ones, and a string equal to
+        // `text` only by Unicode's rules, `é` spelled as `e` and an accent,
+        // puts them on other characters.
+        guard plain.utf16.elementsEqual(text.utf16), let start, let end, end >= start else { return nil }
         return NSRange(location: start, length: end - start)
     }
 

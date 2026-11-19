@@ -29,10 +29,12 @@ public struct LampWritingReviewStore: Sendable {
     /// none would let the next write replace marks the writer still has.
     public func review(writingID: String) throws -> LampWritingReview {
         let url = try url(writingID: writingID)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return LampWritingReview(writingID: writingID)
+        return try Self.locks.holding(url) {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return LampWritingReview(writingID: writingID)
+            }
+            return try LampWritingReview.decoded(from: Data(contentsOf: url))
         }
-        return try LampWritingReview.decoded(from: Data(contentsOf: url))
     }
 
     /// Writes the record, unless the file already holds these bytes.
@@ -41,21 +43,30 @@ public struct LampWritingReviewStore: Sendable {
     public func save(_ review: LampWritingReview) throws -> Bool {
         let url = try url(writingID: review.writingID)
         let data = try review.encoded()
-        if (try? Data(contentsOf: url)) == data { return false }
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
-        return true
+        return try Self.locks.holding(url) {
+            if (try? Data(contentsOf: url)) == data { return false }
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            return true
+        }
     }
 
     /// Changes the writing's marks by `change`, and saves what comes of it.
     /// Returns the record as saved.
+    ///
+    /// Read, changed and written under the file's lock, as `takeIn` is: the
+    /// reconciler, a clear and a save's carrying change marks on the main
+    /// actor while a pass takes a download in off it, and either writing
+    /// over a copy read before the other wrote would lose a mark or a clear.
     @discardableResult
     public func update(
         writingID: String, _ change: (LampWritingReview) throws -> LampWritingReview
     ) throws -> LampWritingReview {
-        let next = try change(review(writingID: writingID))
-        try save(next)
-        return next
+        try Self.locks.holding(try url(writingID: writingID)) {
+            let next = try change(review(writingID: writingID))
+            try save(next)
+            return next
+        }
     }
 
     /// Takes in a copy a pass downloaded: merged with the copy here, if any.
@@ -71,23 +82,26 @@ public struct LampWritingReviewStore: Sendable {
     @discardableResult
     public func takeIn(downloaded data: Data, writingID: String) throws -> Bool {
         let incoming = try LampWritingReview.decoded(from: data)
-        let merged = try review(writingID: writingID).merged(with: incoming)
-        let wrote = try save(merged)
-        let differs = try merged.encoded() != incoming.encoded()
-        if differs, !wrote {
-            try FileManager.default.setAttributes(
-                [.modificationDate: Date()], ofItemAtPath: try url(writingID: writingID).path
-            )
+        let url = try url(writingID: writingID)
+        return try Self.locks.holding(url) {
+            let merged = try review(writingID: writingID).merged(with: incoming)
+            let wrote = try save(merged)
+            let differs = try merged.encoded() != incoming.encoded()
+            if differs, !wrote {
+                try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+            }
+            return differs
         }
-        return differs
     }
 
     /// Removes the writing's marks, as its writing is deleted. The caller
     /// records the removal as a deletion, so other devices remove theirs.
     public func remove(writingID: String) throws {
         let url = try url(writingID: writingID)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        try FileManager.default.removeItem(at: url)
+        try Self.locks.holding(url) {
+            guard FileManager.default.fileExists(atPath: url.path) else { return }
+            try FileManager.default.removeItem(at: url)
+        }
     }
 
     /// The deletions a pass records for the marks of writings deleted, by
@@ -102,30 +116,37 @@ public struct LampWritingReviewStore: Sendable {
     ///
     /// `deleted` is the writings deleted, from the personal ledger; `held`
     /// the writings this device still has, which win over a deletion of the
-    /// same id; `members` the paths the library's manifest names; `now` the
-    /// time to record, in milliseconds. Ids are compared folded, since a
-    /// writing's is not spelled alike on every platform.
+    /// same id; `members` the paths the library's manifest names, each with
+    /// the latest time a device wrote it; `now` the time to record, in
+    /// milliseconds. Ids are compared folded, since a writing's is not
+    /// spelled alike on every platform.
     ///
     /// Recorded now, not at the writing's own time. Marks cleared on another
     /// device after the writing went are still the marks of a writing that
     /// is gone, and a deletion dated before that upload would lose to it:
     /// the file would come back down, be swept again, and do so on every
-    /// pass. Once recorded the path is no member and there is no file, so
-    /// nothing is recorded again.
+    /// pass. For the same reason never before the write the manifest holds,
+    /// which a device whose clock runs ahead can date after this one's now.
+    /// Once recorded the path is no member and there is no file, so nothing
+    /// is recorded again.
     public func deletions(
-        deleted: Set<String>, held: Set<String>, members: Set<String>, now: Int64
+        deleted: Set<String>, held: Set<String>, members: [String: Int64], now: Int64
     ) throws -> [String: Int64] {
         let gone = Set(deleted.map { $0.lowercased() }).subtracting(held.map { $0.lowercased() })
         guard !gone.isEmpty else { return [:] }
+        func stamp(_ path: String) -> Int64 {
+            members[path].map { max(now, $0 + 1) } ?? now
+        }
         var result: [String: Int64] = [:]
         for id in try writingIDs() where gone.contains(id.lowercased()) {
             try remove(writingID: id)
-            result[try LampSyncFolderLayout.writingReviewPath(writingID: id)] = now
+            let path = try LampSyncFolderLayout.writingReviewPath(writingID: id)
+            result[path] = stamp(path)
         }
-        for path in members {
+        for path in members.keys {
             guard let id = LampSyncFolderLayout.writingID(ofReviewPath: path),
                   gone.contains(id.lowercased()) else { continue }
-            result[path] = now
+            result[path] = stamp(path)
         }
         return result
     }
@@ -138,8 +159,30 @@ public struct LampWritingReviewStore: Sendable {
             .sorted()
     }
 
+    private static let locks = FileLocks()
+
     /// How long a retirement is kept before it is pruned. A device away
     /// from sync for longer than this could show a passage it last saw
     /// marked as marked again; nothing else depends on it.
     public static let retirementLifetime: TimeInterval = 60 * 60 * 24 * 90
+}
+
+/// One lock for each review file, shared by every store in the process, so
+/// two stores over the same library change a file one at a time. Recursive,
+/// since a change reads and saves under the lock it already holds. Keyed
+/// folded, as the file systems Lamp runs on name files.
+private final class FileLocks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var locks: [String: NSRecursiveLock] = [:]
+
+    func holding<T>(_ url: URL, _ body: () throws -> T) rethrows -> T {
+        let key = url.standardizedFileURL.path.lowercased()
+        lock.lock()
+        let fileLock = locks[key] ?? NSRecursiveLock()
+        locks[key] = fileLock
+        lock.unlock()
+        fileLock.lock()
+        defer { fileLock.unlock() }
+        return try body()
+    }
 }
