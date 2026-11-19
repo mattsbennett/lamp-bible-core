@@ -1289,10 +1289,10 @@ struct LampSyncBundlePassTests {
         #expect(records.record(path, in: source) == nil)
     }
 
-    /// A deletion's file the server no longer has, reaped elsewhere or by a
-    /// delete whose answer was lost: the record is forgotten on asking, and
-    /// the path not asked about again.
-    @Test func aDeletionAlreadyReapedIsForgottenAndNotAskedAgain() async throws {
+    /// A deletion's file the server no longer has is asked about only while
+    /// the deletion is young, and its record is kept: a stale answer is only a
+    /// retry, and nothing the record serves is lost.
+    @Test func anOldDeletionIsNotAskedAboutAndNothingIsForgotten() async throws {
         let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
         let store = try seeded(path: path, revision: "\"o1\"", deletedAt: 1_500)
         store.bodies[path] = nil
@@ -1303,10 +1303,12 @@ struct LampSyncBundlePassTests {
         _ = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 2_000 }
         ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
-        #expect(records.record(path, in: source) == nil)
+        #expect(store.operations.contains("revision \(path)"))
+        #expect(records.record(path, in: source) != nil)
         store.operations.removeAll()
         _ = try await LampSyncBundlePass(
-            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+            store: store, library: StubLibrary(), source: source,
+            now: { 1_500 + LampSyncBundlePass.reapRetryWindow }
         ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
         #expect(!store.operations.contains("revision \(path)"))
     }

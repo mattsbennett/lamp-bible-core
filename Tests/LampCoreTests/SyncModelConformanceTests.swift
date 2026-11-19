@@ -112,7 +112,7 @@ struct SyncModelConformanceTests {
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
         "reviewMerge", "documentMerge", "documentDeletion", "mergedRecord", "asksRevision",
-        "documentSwept", "documentDeletionStamp", "forgetsAfterAsking",
+        "documentSwept", "documentDeletionStamp",
     ]
 
     // MARK: - The model itself
@@ -1038,20 +1038,6 @@ struct SyncModelConformanceTests {
         }
     }
 
-    /// Whether a path asked about and found gone is forgotten.
-    @Test func forgetsAfterAsking() throws {
-        try conform("forgetsAfterAsking") { f in
-            let entry: LampSyncBundlePass.ProbeEntry = switch f[0] {
-            case "member": .member
-            case "deletion": .deletion
-            default: .none
-            }
-            return String(LampSyncBundlePass.forgetsAfterAsking(
-                entry: entry, held: f[1] == "true", answered: f[2] == "true"
-            )) == f[3]
-        }
-    }
-
     /// Whether a deleted writing's documents are swept, and when the
     /// deletion is dated.
     @Test func documentSweep() throws {
@@ -1084,8 +1070,9 @@ struct SyncModelConformanceTests {
             }
             return String(LampSyncBundlePass.asksForRevision(
                 listedKind: f[0] == "true", media: f[1] == "true", inListing: f[2] == "true", entry: entry,
-                held: f[4] == "true", otherSpelling: f[5] == "true", recordStands: f[6] == "true"
-            )) == f[7]
+                held: f[4] == "true", otherSpelling: f[5] == "true", recordStands: f[6] == "true",
+                young: f[7] == "true"
+            )) == f[8]
         }
     }
 

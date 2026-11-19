@@ -280,24 +280,28 @@ public struct LampSyncBundlePass {
         // deletion's file this client was to reap and could not. One request
         // for each, until a bundle names the one or a reap forgets the other.
         let manifest = opened.bundle.manifest
-        let held = Set(gathered.local.map(\.path))
+        let held = Set(gathered.local.map(\.path)).union(gathered.heldWithoutAFile)
         let known = held.union(manifest.paths)
-        let spellings = Dictionary(grouping: known) { $0.precomposedStringWithCanonicalMapping.lowercased() }
+        func folded(_ path: String) -> String { path.precomposedStringWithCanonicalMapping.lowercased() }
+        let spellings = Dictionary(grouping: known, by: folded)
+        let started = now()
         for path in known.sorted() {
             guard let kind = LampSyncFolderLayout.kind(of: path) else { continue }
             let entry: ProbeEntry = manifest.entry(at: path).map { $0.isMember ? .member : .deletion } ?? .none
+            let others = (spellings[folded(path)] ?? []).filter { $0 != path }
+            let otherSpelling = entry == .deletion
+                ? others.contains { held.contains($0) || manifest.entry(at: $0)?.isMember == true }
+                : !others.isEmpty
+            // Only a deletion's age is asked; no deletion, no age.
+            let young = manifest.entry(at: path)?.deletedAt.map { started - $0 < Self.reapRetryWindow } ?? false
             guard Self.asksForRevision(
                 listedKind: kind.isListed, media: kind.isMedia, inListing: listing[path] != nil, entry: entry,
-                held: held.contains(path),
-                otherSpelling: (spellings[path.precomposedStringWithCanonicalMapping.lowercased()]?.count ?? 0) > 1,
-                recordStands: records.record(path, in: source) != nil
+                held: held.contains(path), otherSpelling: otherSpelling,
+                recordStands: records.record(path, in: source) != nil,
+                young: young
             ) else { continue }
-            let answer: String?
-            do { answer = try await store.revision(path: path) } catch { continue }
-            if let answer {
-                listing[path] = answer
-            } else if Self.forgetsAfterAsking(entry: entry, held: held.contains(path), answered: false) {
-                records.forget(path, in: source)
+            if let revision = try? await store.revision(path: path) {
+                listing[path] = revision
             }
         }
 
@@ -777,31 +781,26 @@ public struct LampSyncBundlePass {
     /// Whether the pass asks the server for a path's revision itself.
     /// Listings reach the listed kinds, the caller asks for the manifest's
     /// unlisted members, and media never changes at a path. Besides those, an
-    /// unlisted file held here that the manifest does not name, unless it
-    /// names it under another spelling, whose answer a server folding case
-    /// would give; and a deletion's file this client still has a record
-    /// of, which a reap that failed leaves.
+    /// unlisted file held here that the manifest does not name; and a
+    /// deletion's file this client still has a record of, which a reap that
+    /// failed leaves, while the deletion is `young`. Neither where another
+    /// spelling could answer for it on a server that folds case.
     /// (`Verification/SyncMerge.lean`: `asksRevision`.)
     static func asksForRevision(
         listedKind: Bool, media: Bool, inListing: Bool, entry: ProbeEntry,
-        held: Bool, otherSpelling: Bool, recordStands: Bool
+        held: Bool, otherSpelling: Bool, recordStands: Bool, young: Bool
     ) -> Bool {
         if listedKind || media || inListing { return false }
         switch entry {
         case .none: return held && !otherSpelling
         case .member: return false
-        case .deletion: return recordStands && !otherSpelling
+        case .deletion: return recordStands && young && !otherSpelling
         }
     }
 
-    /// Whether a path asked about is forgotten: a deletion's, held nowhere
-    /// here, whose file the server no longer has. Another client reaped it,
-    /// or a delete's answer was lost; nothing is left to reap, and asking
-    /// again on every pass would go on until the tombstone was pruned.
-    /// (`Verification/SyncMerge.lean`: `forgetsAfterAsking`.)
-    static func forgetsAfterAsking(entry: ProbeEntry, held: Bool, answered: Bool) -> Bool {
-        entry == .deletion && !held && !answered
-    }
+    /// How long a deletion's file is asked about again for, so a reap that
+    /// failed is retried: a fortnight, in milliseconds.
+    static let reapRetryWindow: Int64 = 14 * 24 * 60 * 60 * 1_000
 
     enum FetchedForMerge: Equatable {
         /// The server's copy is the one held here.

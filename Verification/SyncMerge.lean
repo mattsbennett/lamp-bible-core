@@ -3446,44 +3446,38 @@ caller asks for the manifest's own unlisted members. The pass asks, besides,
 for an unlisted, non-media path held here that the manifest does not name,
 which may be an upload the server had not shown back, which nothing records;
 and for a deletion's file this client still has a record of, which a reap
-that failed leaves. Not for a path the manifest or this client names under
-another spelling as well: a server that folds case would answer with that
-file's revision, and the plan would adopt a deleted file, or reap a live one.
-A deletion's file the server no longer has, reaped by another client or by a
-delete whose answer was lost, leaves nothing to reap: the record is
-forgotten, and the path is not asked about again. -/
+that failed leaves, while the deletion is young (`young`), so a file another
+client reaped, or a delete whose answer was lost, is not asked about for
+ever, and a stale answer is only a retry. Nothing is forgotten on an answer.
+Not where another spelling could answer for the path on a server that folds
+case (`otherSpelling`): for a path the manifest does not name, any other
+spelling named or held, a deleted one included, whose revision the plan
+would adopt; for a deletion, a live one, held here or a member, which the
+plan would reap. -/
 
 inductive ProbeEntry where
   | none | member | deletion
   deriving DecidableEq, Repr
 
 def asksRevision (listedKind media inListing : Bool) (entry : ProbeEntry)
-    (held otherSpelling recordStands : Bool) : Bool :=
+    (held otherSpelling recordStands young : Bool) : Bool :=
   if listedKind || media || inListing then false else
   match entry with
   | .none => held && !otherSpelling
   | .member => false
-  | .deletion => recordStands && !otherSpelling
+  | .deletion => recordStands && young && !otherSpelling
 
-def forgetsAfterAsking (entry : ProbeEntry) (held answered : Bool) : Bool :=
-  entry == .deletion && !held && !answered
+theorem anUnconfirmedUploadIsAskedAbout (recordStands young : Bool) :
+    asksRevision false false false .none true false recordStands young = true := rfl
 
-theorem anUnconfirmedUploadIsAskedAbout (recordStands : Bool) :
-    asksRevision false false false .none true false recordStands = true := rfl
-
-theorem anotherSpellingIsNeverAskedAbout (entry : ProbeEntry) (held recordStands : Bool) :
-    asksRevision false false false entry held true recordStands = false := by
+theorem anotherSpellingIsNeverAskedAbout (entry : ProbeEntry) (held recordStands young : Bool) :
+    asksRevision false false false entry held true recordStands young = false := by
   cases entry <;> simp [asksRevision]
 
--- Only a deletion's record is forgotten, never a member's or a held copy's,
--- and once forgotten the path is not asked about again.
-theorem onlyAGoneDeletionIsForgotten (entry : ProbeEntry) (held answered : Bool)
-    (h : forgetsAfterAsking entry held answered = true) :
-    entry = .deletion ∧ held = false ∧ answered = false := by
-  cases entry <;> cases held <;> cases answered <;> simp_all [forgetsAfterAsking]
-
-theorem aForgottenDeletionIsNotAskedAgain (otherSpelling : Bool) :
-    asksRevision false false false .deletion false otherSpelling false = false := by
+-- A deletion is asked about only while young: one request a pass, for a
+-- bounded time, whatever the server answers.
+theorem anOldDeletionIsNotAskedAbout (held otherSpelling recordStands : Bool) :
+    asksRevision false false false .deletion held otherSpelling recordStands false = false := by
   simp [asksRevision]
 
 -- Unasked, an upload not shown back is sent "if absent" on every pass, and
@@ -3499,7 +3493,7 @@ theorem anAskedUploadIsAdoptedAndCompared (r : Nat) (s : Option Nat) :
   have differs : ((none : Option Nat) != some r) = true := by simp
   simp [filePlanAction, changeAction, differs]
 
-theorem aFailedReapIsAskedAgain : asksRevision false false false .deletion false false true = true := rfl
+theorem aFailedReapIsAskedAgain : asksRevision false false false .deletion false false true true = true := rfl
 
 -- And reaped, once its revision is in hand.
 theorem aFailedReapIsReapedOnceAsked (r : Nat) :
@@ -5499,15 +5493,11 @@ def probeEntryName : ProbeEntry → String
           for held in [false, true] do
             for otherSpelling in [false, true] do
               for recordStands in [false, true] do
-                IO.println <| conformanceLine "asksRevision"
-                  [toString listedKind, toString media, toString inListing, probeEntryName entry,
-                   toString held, toString otherSpelling, toString recordStands,
-                   toString (asksRevision listedKind media inListing entry held otherSpelling recordStands)]
-  for entry in [ProbeEntry.none, .member, .deletion] do
-    for held in [false, true] do
-      for answered in [false, true] do
-        IO.println <| conformanceLine "forgetsAfterAsking"
-          [probeEntryName entry, toString held, toString answered, toString (forgetsAfterAsking entry held answered)]
+                for young in [false, true] do
+                  IO.println <| conformanceLine "asksRevision"
+                    [toString listedKind, toString media, toString inListing, probeEntryName entry,
+                     toString held, toString otherSpelling, toString recordStands, toString young,
+                     toString (asksRevision listedKind media inListing entry held otherSpelling recordStands young)]
 
 #eval show IO Unit from do
   -- A copy held or not, against what was last agreed, none for never.
