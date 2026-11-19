@@ -13,6 +13,7 @@ public struct LampAgentRemotePairingWindow: Equatable, Sendable {
     public init(code: String = LampPresentationRemotePairing.generateCode(), allowedFailures: Int = Self.allowedFailures) {
         self.code = code
         self.failuresLeft = allowedFailures
+        self.isClosed = allowedFailures <= 0
     }
 
     /// The pairing key a device may prove itself with, while the window is
@@ -76,13 +77,15 @@ public struct LampAgentRemoteRememberedHost: Codable, Equatable, Identifiable, S
 /// The host speaks first. A host the device remembers is answered with the
 /// key it gave the device; any other waits for a pairing code from its QR. A
 /// remembered key the host turns away (by closing, or by not answering) is
-/// forgotten and the device pairs again: that is what forgetting the device
-/// on the host comes to. A connection lost to the network is not a refusal,
-/// and keeps the key.
+/// set aside for the next connection, which pairs by code — but not deleted:
+/// a hello can be replayed by something that is not the host, and a key lost
+/// to that, or to a slow network, would be a pairing lost for nothing. The
+/// key is replaced when the device pairs with that host again, or forgotten
+/// when the person asks. A connection lost to the network is not a refusal.
 ///
-/// Effects come in the order to act on them. Every `send` must go out before
-/// anything after it is acted on: what is sealed on hearing `connected` takes
-/// the next number, and must leave after the opening requests.
+/// Effects come in the order to act on them, every `send` first, in the
+/// order sealed: what is sealed on hearing `connected` or a message takes
+/// the next number, and must leave after everything sealed before it.
 public struct LampAgentRemoteDeviceConnection {
     /// Why something did not work, for the device to say in its own words.
     public enum Problem: Equatable, Sendable {
@@ -112,10 +115,11 @@ public struct LampAgentRemoteDeviceConnection {
         /// Keep this host, in place of anything kept before with the same
         /// secret.
         case remember(LampAgentRemoteRememberedHost)
-        /// Forget the remembered host with this id.
-        case forget(String)
-        /// The remembered key was turned away and is forgotten: connect again
-        /// to pair by code.
+        /// The remembered host with this id turned its key away, or never
+        /// proved itself with it: don't offer it on the next connection, but
+        /// keep it until a pairing replaces it.
+        case keyRefused(String)
+        /// Connect again to pair by code.
         case pairAgain
         case failed(Problem)
         /// An established connection ended.
@@ -181,6 +185,16 @@ public struct LampAgentRemoteDeviceConnection {
     }
 
     public mutating func receive(_ data: Data) -> [Effect] {
+        Self.sendsFirst(receiving(data))
+    }
+
+    /// The sends, in the order sealed, then everything else in its order.
+    static func sendsFirst(_ effects: [Effect]) -> [Effect] {
+        effects.filter { if case .send = $0 { true } else { false } }
+            + effects.filter { if case .send = $0 { false } else { true } }
+    }
+
+    private mutating func receiving(_ data: Data) -> [Effect] {
         buffer.append(data)
         var effects: [Effect] = []
         do {
@@ -214,6 +228,12 @@ public struct LampAgentRemoteDeviceConnection {
                         return effects + [.failed(.unreadable)]
                     }
                     effects += accepted(first, offered: offered, channel: channel)
+                    // An `accepted` that could not be taken ends it: nothing
+                    // after it is read.
+                    guard case .connected = stage else {
+                        buffer = Data()
+                        return effects
+                    }
                     effects += messages.flatMap { handle($0, channel: channel) }
                 case let .connected(channel):
                     let messages = try channel.open(from: &buffer)
@@ -360,7 +380,7 @@ public struct LampAgentRemoteDeviceConnection {
 
     private mutating func refuse(_ offered: LampAgentRemoteRememberedHost) -> [Effect] {
         stage = .closed
-        return [.forget(offered.id), .pairAgain]
+        return [.keyRefused(offered.id), .pairAgain]
     }
 }
 

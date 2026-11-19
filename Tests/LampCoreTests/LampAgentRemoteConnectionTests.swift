@@ -98,7 +98,7 @@ struct LampAgentRemoteConnectionTests {
         #expect(again.deviceEffects.contains { if case .received(let m) = $0 { return m.kind == .chats } else { return false } })
     }
 
-    @Test func aforgottenDeviceIsTurnedAwayAndForgetsTheHost() throws {
+    @Test func aforgottenDeviceIsTurnedAwayAndSetsTheKeyAside() throws {
         var keys = Host()
         keys.pairing = LampAgentRemotePairingWindow()
         var first = Wire(&keys, remembered: [])
@@ -112,7 +112,7 @@ struct LampAgentRemoteConnectionTests {
         #expect(again.hostEffects.last == .close)
         #expect(!again.device.isConnected)
         let afterOffer = again.deviceEffects.filter { $0 != .watchSavedKey }
-        #expect(afterOffer.suffix(2) == [.forget(remembered.id), .pairAgain])
+        #expect(afterOffer.suffix(2) == [.keyRefused(remembered.id), .pairAgain])
 
         // A host with no devices left gives no hint to be recognised by, so
         // the device asks for a code rather than offering the old key.
@@ -186,5 +186,50 @@ struct LampAgentRemoteConnectionTests {
         var waiting = LampAgentRemoteDeviceConnection(remembered: [], hostName: "Mac", clientName: "iPhone")
         _ = waiting.receive(try LampAgentRemoteFraming.encode(LampAgentRemoteHandshake.hostStart(hostSecret: nil).hello))
         #expect(waiting.receive(Data([1, 2, 3])) == [.failed(.unreadable)])
+    }
+
+    @Test func whatIsSealedInAnswerLeavesAfterWhatWasSealedBefore() throws {
+        // `accepted` and a ping in one read: the opening requests and the
+        // pong are all sent before `connected` is heard.
+        var keys = Host()
+        keys.pairing = LampAgentRemotePairingWindow()
+        let host = LampAgentRemoteHandshake.hostStart(hostSecret: nil)
+        var device = LampAgentRemoteDeviceConnection(remembered: [], hostName: "Mac", clientName: "iPhone")
+        _ = device.receive(try LampAgentRemoteFraming.encode(host.hello))
+        guard case .send(let authFrame) = device.pair(code: try #require(keys.pairing?.code)).first else {
+            Issue.record("no answer"); return
+        }
+        var buffer = authFrame
+        let auth = try #require(try LampAgentRemoteFraming.decode(LampAgentRemoteAuth.self, from: &buffer))
+        let accepted = try LampAgentRemoteHandshake.accept(auth, start: host, candidates: [try #require(keys.pairing?.credential)])
+        let minted = LampAgentRemoteDeviceCredential.generate()
+        let both = try accepted.channel.seal(.accepted(pairing: minted, hostSecret: "secret"))
+            + accepted.channel.seal(.ping)
+        let effects = device.receive(both)
+        let firstOther = effects.firstIndex { if case .send = $0 { false } else { true } } ?? effects.count
+        #expect(effects[..<firstOther].count == 3)
+        #expect(effects[firstOther...].allSatisfy { if case .send = $0 { false } else { true } })
+        #expect(effects.contains(.connected))
+    }
+
+    @Test func nothingIsReadAfterAnAcceptedThatCannotBeTaken() throws {
+        var keys = Host()
+        keys.pairing = LampAgentRemotePairingWindow()
+        let host = LampAgentRemoteHandshake.hostStart(hostSecret: nil)
+        var device = LampAgentRemoteDeviceConnection(remembered: [], hostName: "Mac", clientName: "iPhone")
+        _ = device.receive(try LampAgentRemoteFraming.encode(host.hello))
+        guard case .send(let authFrame) = device.pair(code: try #require(keys.pairing?.code)).first else {
+            Issue.record("no answer"); return
+        }
+        var buffer = authFrame
+        let auth = try #require(try LampAgentRemoteFraming.decode(LampAgentRemoteAuth.self, from: &buffer))
+        let accepted = try LampAgentRemoteHandshake.accept(auth, start: host, candidates: [try #require(keys.pairing?.credential)])
+        // Paired by code, but no key in `accepted`, then a message after it.
+        let frames = try accepted.channel.seal(.accepted()) + accepted.channel.seal(.chats([]))
+        #expect(device.receive(frames) == [.failed(.unreadable)])
+    }
+
+    @Test func awindowAllowingNoWrongCodesIsClosedFromTheStart() {
+        #expect(LampAgentRemotePairingWindow(allowedFailures: 0).credential == nil)
     }
 }

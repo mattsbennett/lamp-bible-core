@@ -356,7 +356,7 @@ def allAttempts : Nat → List (List Attempt)
   | n + 1 => [[]] ++ (allAttempts n).flatMap (fun as => [.right :: as, .wrong :: as])
 
 #eval show IO Unit from do
-  for a in [1, 2, 3] do
+  for a in [0, 1, 2, 3] do
     for as in (allAttempts 4).eraseDups do
       let (w, pairings) := run a as
       IO.println <| conformanceLine "pairingWindow" [toString a, attemptsName as, toString w.closed, toString pairings]
