@@ -305,7 +305,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             }
             for cleared in ranges where Self.touches(cleared, range) {
                 let part = cleared.length == 0 ? cleared : NSIntersectionRange(cleared, range)
-                result.clearances.append(Clearance(markID: mark.id, pieces: [Self.piece(part, in: source)], clearedAt: date))
+                result.clearances.append(Clearance(
+                    markID: mark.id, pieces: Self.wordPieces(of: part, in: source), clearedAt: date
+                ))
             }
             result.marks.append(Mark(
                 id: mark.id, pieces: kept.map { Self.piece($0, in: source) },
@@ -504,6 +506,31 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         let left = (try? encoder.encode(lhs)) ?? Data()
         let right = (try? encoder.encode(rhs)) ?? Data()
         return left.lexicographicallyPrecedes(right) ? rhs : lhs
+    }
+
+    /// What was cleared, a word to a piece, so each is found again on its
+    /// own. One piece for the whole phrase was lost as soon as any word of it
+    /// changed — on another device, by a writer who never saw the clear —
+    /// and the rest of what was cleared showed as marked again. A word with
+    /// one side of its context intact is still found. A point is one piece.
+    static func wordPieces(of range: NSRange, in text: NSString) -> [Piece] {
+        guard range.length > 0 else { return [piece(range, in: text)] }
+        var pieces: [Piece] = []
+        var location = range.location
+        let end = NSMaxRange(range)
+        let blank = CharacterSet.whitespacesAndNewlines
+        func isBlank(_ index: Int) -> Bool {
+            Unicode.Scalar(text.character(at: index)).map(blank.contains) ?? false
+        }
+        while location < end {
+            while location < end, isBlank(location) { location += 1 }
+            let start = location
+            while location < end, !isBlank(location) { location += 1 }
+            if location > start {
+                pieces.append(piece(NSRange(location: start, length: location - start), in: text))
+            }
+        }
+        return pieces.isEmpty ? [piece(range, in: text)] : pieces
     }
 
     static func piece(_ range: NSRange, in text: NSString) -> Piece {
@@ -756,7 +783,42 @@ struct LampTextAlignment {
                 break
             }
         }
-        self.segments = segments
+        self.segments = Self.absorbingSmallEqualities(segments, oldText: old as NSString)
+    }
+
+    /// Segments with every short run that stayed the same between two
+    /// changes taken into one change with them: a word or two of the old
+    /// text the difference happened to pair with the new — the "a" of "not
+    /// a promise of comfort but" kept in "a call" — split one change into
+    /// two, which marked as two places words were taken out with the "a"
+    /// standing unmarked between them. A reader sees one change there.
+    static func absorbingSmallEqualities(_ segments: [Segment], oldText: NSString) -> [Segment] {
+        guard segments.count >= 3 else { return segments }
+        var result: [Segment] = []
+        var index = 0
+        while index < segments.count {
+            let segment = segments[index]
+            if segment.isEqual, let previous = result.last, !previous.isEqual, index + 1 < segments.count,
+               !segments[index + 1].isEqual, isSmall(segment.old, in: oldText) {
+                let next = segments[index + 1]
+                result[result.count - 1] = Segment(
+                    old: NSRange(location: previous.old.location, length: NSMaxRange(next.old) - previous.old.location),
+                    new: NSRange(location: previous.new.location, length: NSMaxRange(next.new) - previous.new.location),
+                    isEqual: false
+                )
+                index += 2
+                continue
+            }
+            result.append(segment)
+            index += 1
+        }
+        return result
+    }
+
+    /// At most a short word and the spaces beside it, on one line.
+    private static func isSmall(_ range: NSRange, in text: NSString) -> Bool {
+        guard range.length <= 4 else { return false }
+        return !text.substring(with: range).contains { $0.isNewline }
     }
 
     /// What of `range` of the old text survives in the new, as pieces: the

@@ -245,6 +245,23 @@ struct LampWritingReviewTests {
         #expect(LampWritingReview.markedRange(in: "One deux three.\n\nFour six.", of: new) == nil)
     }
 
+    @Test func aSmallWordKeptInsideARemovalIsOneChange() {
+        let old = "The word he chooses is not a promise of comfort but a call to wake."
+        let new = "The word he chooses is a call to wake."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        #expect(review.highlightedRanges(in: new).count == 1)
+    }
+
+    @Test func aPartialClearHoldsWhenAnotherDeviceEditsOneOfItsWords() {
+        let start = "One alpha beta gamma three."
+        let review = empty.markingAssistantChange(from: "One two three.", to: start)
+        // A clears "alpha beta"; B, never seeing it, types over "beta".
+        let here = review.clearing((start as NSString).range(of: "alpha beta"), in: start)
+        let edited = "One alpha BETA gamma three."
+        let there = review.carryingWriterEdit(from: start, to: edited)
+        #expect(marked(here.merged(with: there), in: edited) == ["gamma"])
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(
