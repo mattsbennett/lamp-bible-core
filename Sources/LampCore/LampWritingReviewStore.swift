@@ -78,6 +78,43 @@ public struct LampWritingReviewStore: Sendable {
         try FileManager.default.removeItem(at: url)
     }
 
+    /// The deletions a pass records for the marks of writings deleted, by
+    /// path, at the time each writing went; the files here are removed as
+    /// they are found.
+    ///
+    /// A writing's marks go with it everywhere. A file only removed here
+    /// would be fetched again from the server's copy, so each is recorded
+    /// as a deletion, as a deck of a deleted writing is — but only where
+    /// there is a file to delete, here or on the server, so a writing that
+    /// was never reviewed leaves no tombstone behind.
+    ///
+    /// `deletedAt` is each deleted writing's time in milliseconds, as the
+    /// personal ledger keeps it; `held` the writings this device still has,
+    /// which win over a deletion of the same id; `members` the paths the
+    /// library's manifest names. Ids are compared folded, since a writing's
+    /// is not spelled alike on every platform.
+    public func deletions(
+        deletedAt: [String: Int64], held: Set<String>, members: Set<String>
+    ) throws -> [String: Int64] {
+        var when: [String: Int64] = [:]
+        for (id, time) in deletedAt { when[id.lowercased()] = max(when[id.lowercased()] ?? .min, time) }
+        let kept = Set(held.map { $0.lowercased() })
+        var result: [String: Int64] = [:]
+        for id in try writingIDs() {
+            let folded = id.lowercased()
+            guard !kept.contains(folded), let time = when[folded] else { continue }
+            try remove(writingID: id)
+            result[try LampSyncFolderLayout.writingReviewPath(writingID: id)] = time
+        }
+        for path in members {
+            guard let id = LampSyncFolderLayout.writingID(ofReviewPath: path) else { continue }
+            let folded = id.lowercased()
+            guard !kept.contains(folded), let time = when[folded] else { continue }
+            result[path] = time
+        }
+        return result
+    }
+
     /// The writing ids that have a file here.
     public func writingIDs() throws -> [String] {
         guard FileManager.default.fileExists(atPath: directoryURL.path) else { return [] }

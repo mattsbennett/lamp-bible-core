@@ -206,4 +206,17 @@ struct LampWritingReviewStoreTests {
         try Data("not json".utf8).write(to: url)
         #expect(throws: (any Error).self) { try store.review(writingID: "w") }
     }
+
+    @Test func aDeletedWritingsMarksAreDeletedWhereverThereIsAFile() throws {
+        let store = try temporaryStore()
+        try store.save(LampWritingReview(writingID: "Gone").markingAssistantChange(from: "a", to: "b"))
+        try store.save(LampWritingReview(writingID: "kept").markingAssistantChange(from: "a", to: "b"))
+        let deletions = try store.deletions(
+            deletedAt: ["gone": 5, "kept": 6, "never-reviewed": 7, "elsewhere": 8],
+            held: ["KEPT"],
+            members: ["WritingReview/elsewhere.json", "Writing/writing.lamp"]
+        )
+        #expect(deletions == ["WritingReview/Gone.json": 5, "WritingReview/elsewhere.json": 8])
+        #expect(try store.writingIDs() == ["kept"])
+    }
 }
