@@ -103,4 +103,31 @@ struct LampWritingReviewFileTests {
         let piece = LampWritingReview.Piece(text: "our", before: "col", after: "", hint: 3)
         #expect(LampWritingReview.find(piece, in: "A colour." as NSString) == NSRange(location: 5, length: 3))
     }
+
+    /// A record and the date of the file it came from are taken together,
+    /// whatever writes around them.
+    @Test func asnapshotsDateIsTheDateOfItsRecord() throws {
+        let store = try temporaryStore()
+        #expect(try store.snapshot(writingID: "w") == .init(review: LampWritingReview(writingID: "w"), modified: nil))
+        let made = try store.updating(writingID: "w") { $0.markingAssistantChange(from: "a", to: "b") }
+        let url = try store.url(writingID: "w")
+        #expect(made.modified == (try FileManager.default.attributesOfItem(atPath: url.path))[.modificationDate] as? Date)
+        #expect(try store.snapshot(writingID: "w") == made)
+
+        // Written over and over from elsewhere, every snapshot's record is
+        // the one on disk at its date: none is paired with a later write.
+        let other = LampWritingReviewStore(rootURL: store.rootURL)
+        var mismatches = 0
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: 80) { round in
+            if round.isMultiple(of: 2) {
+                _ = try? other.update(writingID: "w") { $0.markingAssistantChange(from: "", to: "w\(round)") }
+            } else if let seen = try? store.snapshot(writingID: "w"),
+                      let again = try? store.snapshot(writingID: "w"),
+                      seen.modified == again.modified, seen.review != again.review {
+                lock.lock(); mismatches += 1; lock.unlock()
+            }
+        }
+        #expect(mismatches == 0)
+    }
 }

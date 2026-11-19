@@ -37,6 +37,44 @@ public struct LampWritingReviewStore: Sendable {
         }
     }
 
+    /// A writing's marks with the date of the file they were read from.
+    ///
+    /// Both are taken under the file's lock. A watcher that read the record
+    /// and then the date apart could pair an older record with the date of a
+    /// write that landed between the two, and then never read that write,
+    /// since the date would say it had.
+    public struct Snapshot: Equatable, Sendable {
+        public let review: LampWritingReview
+        /// Nil where the writing has no file.
+        public let modified: Date?
+    }
+
+    public func snapshot(writingID: String) throws -> Snapshot {
+        let url = try url(writingID: writingID)
+        return try Self.locks.holding(url) {
+            Snapshot(review: try review(writingID: writingID), modified: Self.modified(url))
+        }
+    }
+
+    /// `update`, returning the record as saved with the date of the file
+    /// that holds it, both taken before the lock is let go.
+    @discardableResult
+    public func updating(
+        writingID: String, _ change: (LampWritingReview) throws -> LampWritingReview
+    ) throws -> Snapshot {
+        let url = try url(writingID: writingID)
+        return try Self.locks.holding(url) {
+            Snapshot(review: try update(writingID: writingID, change), modified: Self.modified(url))
+        }
+    }
+
+    /// Read from the file system each time. A URL's resource values can be
+    /// answered from a cache, and under load were: three writes in a row
+    /// came back with the first one's date.
+    private static func modified(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
     /// Writes the record, unless the file already holds these bytes.
     /// Returns whether it wrote, which is whether a pass has anything to send.
     @discardableResult
