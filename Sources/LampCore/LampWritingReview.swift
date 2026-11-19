@@ -291,6 +291,25 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return mapped(NSRange(location: start, length: end - start), from: plain, to: text)
     }
 
+    /// What an editor rewrites when it writes Markdown back: no letter, and
+    /// a digit only as a list's number — at the start of its line after any
+    /// indent, followed by `.` or `)` and a space — so a renumbered list is
+    /// spelling and "chapter 1" against "chapter 2" is not.
+    private static func isMarkup(_ range: NSRange, in text: NSString) -> Bool {
+        let string = text.substring(with: range)
+        guard !string.contains(where: { $0.isLetter }) else { return false }
+        guard string.contains(where: { $0.isNumber }) else { return true }
+        // Every run of digits in the difference must be a list's number.
+        let digits = try! NSRegularExpression(pattern: #"\d+"#)
+        return digits.matches(in: text as String, range: range).allSatisfy { match in
+            let lineStart = text.lineRange(for: NSRange(location: match.range.location, length: 0)).location
+            let indent = text.substring(with: NSRange(location: lineStart, length: match.range.location - lineStart))
+            let rest = NSRange(location: NSMaxRange(match.range), length: min(2, text.length - NSMaxRange(match.range)))
+            return indent.allSatisfy { $0 == " " || $0 == "\t" }
+                && text.substring(with: rest).range(of: #"^[.)][ \t]"#, options: .regularExpression) != nil
+        }
+    }
+
     /// `range` of an editor's Markdown, placed in the Markdown held, where the
     /// two differ only in how the editor writes the same document back — a
     /// list's `*` returned as `-`, an emphasis's `_` as `*`, however many of
@@ -310,7 +329,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             // One character written two ways, é as e and an accent, is the
             // same text however it is stored.
             if old.precomposedStringWithCanonicalMapping == new.precomposedStringWithCanonicalMapping { return true }
-            return !old.contains { $0.isLetter || $0.isNumber } && !new.contains { $0.isLetter || $0.isNumber }
+            return isMarkup(segment.old, in: editorText) && isMarkup(segment.new, in: heldText)
         }
         guard alignment.segments.allSatisfy({ $0.isEqual || spelling($0) }) else { return nil }
         func place(_ offset: Int, atEnd: Bool) -> Int? {
@@ -344,8 +363,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         from old: String, to new: String, turnID: UUID? = nil, at date: Date = Date()
     ) -> LampWritingReview {
         guard old != new else { return self }
+        // Standing marks are carried by every run that stayed, short words
+        // included; the assistant's change is marked as a reader sees it,
+        // a word kept inside a removal taken into the change.
+        var result = carried(
+            through: LampTextAlignment(from: old, to: new, absorbingSmallEqualities: false),
+            from: old, to: new, at: date
+        )
         let alignment = LampTextAlignment(from: old, to: new)
-        var result = carried(through: alignment, from: old, to: new, at: date)
         let target = new as NSString
         let changed = alignment.segments.filter { !$0.isEqual }.map { Self.trimmed($0.new, in: target) }
         let anchor = Self.digest(of: new)
@@ -369,18 +394,25 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// anchored in `old`.
     public func carryingWriterEdit(from old: String, to new: String, at date: Date = Date()) -> LampWritingReview {
         guard old != new, !marks.isEmpty else { return self }
-        return carried(through: LampTextAlignment(from: old, to: new), from: old, to: new, at: date)
+        return carried(
+            through: LampTextAlignment(from: old, to: new, absorbingSmallEqualities: false),
+            from: old, to: new, at: date
+        )
     }
 
-    /// The record with whatever is anchored in a text in `known` — keyed by
-    /// `digest(of:)` — carried from there to `text`, each from its own. For
-    /// a caller that has seen several versions of the writing go by: the
-    /// editor, whose clears anchor what is left in text not yet saved.
-    public func carryingToText(_ text: String, from known: [String: String], at date: Date = Date()) -> LampWritingReview {
+    /// The record with whatever is anchored in one of the `known` texts
+    /// carried from there to `text`, each from its own. For a caller that
+    /// has seen several versions of the writing go by: the editor, whose
+    /// clears anchor what is left in text not yet saved. The texts are
+    /// hashed here, so a caller off the main actor pays for it there.
+    public func carryingToText(_ text: String, from known: [String], at date: Date = Date()) -> LampWritingReview {
         let target = Self.digest(of: text)
+        let wanted = anchors.subtracting([target])
+        guard !wanted.isEmpty else { return self }
         var result = self
-        for anchor in anchors.sorted() where anchor != target {
-            guard let source = known[anchor] else { continue }
+        for source in known where source != text {
+            let digest = Self.digest(of: source)
+            guard wanted.contains(digest), result.anchors.contains(digest) else { continue }
             result = result.carryingWriterEdit(from: source, to: text, at: date)
         }
         return result
@@ -538,23 +570,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         let target = new as NSString
         let from = Self.digest(of: old)
         let to = Self.digest(of: new)
-        // Carried from here: a piece anchored in `old`, found where it says;
-        // or, in a record from before anchors were kept, one found whole
-        // with its context. Anything anchored elsewhere is not this edit's.
+        // Where pieces stand in `old`, if they are this edit's to carry.
+        // Anchored in `old`: exactly where they say. Anchored in a text this
+        // device does not have — another device's, one it has forgotten, or
+        // none recorded — whole with their context, and only where that
+        // stands once: a repeated passage could be any of its copies, and a
+        // mark taken from the wrong one would be moved onto it.
         func ranges(_ pieces: [Piece], anchoredIn: String?) -> [NSRange]? {
-            switch anchoredIn {
-            case from:
-                let found = pieces.compactMap { Self.exact($0, in: source) }
-                return found.count == pieces.count ? found : nil
-            case nil:
-                let found = pieces.compactMap { Self.find($0, in: source, strictly: true) }
-                return found.isEmpty ? nil : found
-            default:
-                return nil
+            let found = pieces.compactMap { piece in
+                anchoredIn == from ? Self.exact(piece, in: source) : Self.unique(piece, in: source)
             }
+            return found.count == pieces.count ? found : nil
         }
         var cleared: [UUID: [NSRange]] = [:]
-        for clearance in clearances {
+        for clearance in clearances where clearance.anchoredIn != to {
             for range in ranges(clearance.pieces, anchoredIn: clearance.anchoredIn) ?? [] {
                 cleared[clearance.markID, default: []].append(range)
             }
@@ -577,8 +606,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 result.retired.append(Retirement(id: mark.id, retiredAt: date))
                 continue
             }
-            result.marks.append(Mark(
-                id: mark.id, pieces: survived.map { Self.piece($0, in: target) }, version: mark.version + 1,
+            let pieces = survived.map { Self.piece($0, in: target) }
+            result.marks.append(Self.untouched(mark.pieces, pieces, in: target) ? mark : Mark(
+                id: mark.id, pieces: pieces, version: mark.version + 1,
                 markedAt: mark.markedAt, turnID: mark.turnID, anchoredIn: to
             ))
         }
@@ -592,13 +622,32 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 found.flatMap { alignment.carried($0) }.compactMap { Self.remainder($0, in: target) },
                 joiningAcross: nil
             )
-            return Clearance(
-                id: clearance.id, markID: clearance.markID, pieces: survived.map { Self.piece($0, in: target) },
+            let pieces = survived.map { Self.piece($0, in: target) }
+            return Self.untouched(clearance.pieces, pieces, in: target) ? clearance : Clearance(
+                id: clearance.id, markID: clearance.markID, pieces: pieces,
                 version: clearance.version + 1, clearedAt: clearance.clearedAt, anchoredIn: to
             )
         }
         result = result.tidied()
         return result.marks == marks && result.retired == retired && result.clearances == clearances ? self : result
+    }
+
+    /// Whether pieces carried to a new text are the ones held, so the record
+    /// need not change: the same words beside the same words, and, where
+    /// those stand more than once, at the same place. A save that touched no
+    /// mark then writes nothing, and syncs nothing. A repeated piece whose
+    /// place moved is anchored again, so it stays exact.
+    private static func untouched(_ held: [Piece], _ carried: [Piece], in text: NSString) -> Bool {
+        guard held.count == carried.count else { return false }
+        return zip(held, carried).allSatisfy { old, new in
+            old.sameWords(as: new) && (old.hint == new.hint || unique(new, in: text) != nil)
+        }
+    }
+
+    /// A piece whole with its context, where that stands exactly once.
+    static func unique(_ piece: Piece, in text: NSString) -> NSRange? {
+        guard let found = only(piece.before + piece.text + piece.after, in: text) else { return nil }
+        return NSRange(location: found.location + (piece.before as NSString).length, length: (piece.text as NSString).length)
     }
 
     private static func later(_ lhs: Clearance, _ rhs: Clearance) -> Clearance {

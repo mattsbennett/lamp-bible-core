@@ -32,8 +32,8 @@ struct LampWritingReviewTests {
         let review = empty.markingAssistantChange(from: old, to: agent)
         let typed = "Alpha BETA gamma.\n\nDelta epsilon zeta eta theta."
         let carried = review.carryingWriterEdit(from: agent, to: typed)
-        // Re-anchored in the new text, which names it; drawn where it was.
-        #expect(carried.marks.allSatisfy { $0.anchoredIn == LampWritingReview.digest(of: typed) })
+        // Untouched by the edit: the record does not change, and syncs nothing.
+        #expect(carried == review)
         #expect(marked(carried, in: typed) == ["BETA"])
     }
 
@@ -328,14 +328,13 @@ struct LampWritingReviewTests {
         // Cleared while "mine" was typed and not yet saved.
         let unsaved = "One alpha mine beta gamma three."
         let cleared = review
-            .carryingToText(unsaved, from: [LampWritingReview.digest(of: saved): saved])
+            .carryingToText(unsaved, from: [saved])
             .clearing((unsaved as NSString).range(of: "gamma"), in: unsaved)
         #expect(marked(cleared, in: unsaved) == ["alpha", "beta"])
         // The save carries from the last saved text; the editor knows the
         // unsaved one too, so what the clear left is carried from there.
         let later = "One alpha mine beta gamma three, and more."
-        let known = [LampWritingReview.digest(of: saved): saved, LampWritingReview.digest(of: unsaved): unsaved]
-        let carried = cleared.carryingToText(later, from: known)
+        let carried = cleared.carryingToText(later, from: [saved, unsaved])
         #expect(marked(carried, in: later) == ["alpha", "beta"])
     }
 
@@ -358,6 +357,37 @@ struct LampWritingReviewTests {
         let text = "_one_ _two_ three"
         let range = LampWritingReview.markedRange(in: "*\u{E000}one\u{E001}* *two* three", of: text)
         #expect(range.map { (text as NSString).substring(with: $0) } == "one")
+    }
+
+    @Test func aMarkAnchoredInATextThisDeviceNeverHadIsStillCarried() {
+        // Made on another device, or in a text since forgotten: found whole
+        // and once in the old text, and carried from there.
+        let old = "One alpha beta gamma three.\n\nSecond line."
+        var review = empty.markingAssistantChange(from: "One two three.\n\nSecond line.", to: old)
+        review.marks = review.marks.map {
+            .init(id: $0.id, pieces: $0.pieces, version: $0.version, markedAt: $0.markedAt, turnID: nil, anchoredIn: "elsewhere")
+        }
+        let typed = "One alpha mine beta gamma three.\n\nSecond line."
+        let carried = review.carryingWriterEdit(from: old, to: typed)
+        #expect(marked(carried, in: typed) == ["alpha", "beta gamma"])
+        #expect(carried.marks.allSatisfy { $0.anchoredIn == LampWritingReview.digest(of: typed) })
+    }
+
+    @Test func carryingThroughTidiedMarkdownKeepsAShortWordMarked() {
+        // Review's case: "one" marked in _one_ _two_ three; the visual editor
+        // writes it back as *one* *two* three! and the mark must survive.
+        let before = "_uno_ _two_ three"
+        let marked0 = empty.markingAssistantChange(from: before, to: "_one_ _two_ three")
+        let written = "*one* *two* three!"
+        let carried = marked0.carryingWriterEdit(from: "_one_ _two_ three", to: written)
+        #expect(marked(carried, in: written) == ["one"])
+    }
+
+    @Test func aRenumberedListIsSpellingButAChapterNumberIsNot() {
+        let text = "1. one\n1. two"
+        let range = LampWritingReview.markedRange(in: "1. one\n2. \u{E000}two\u{E001}", of: text)
+        #expect(range.map { (text as NSString).substring(with: $0) } == "two")
+        #expect(LampWritingReview.markedRange(in: "see chapter 2. \u{E002}Then", of: "see chapter 1. Then") == nil)
     }
 
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
