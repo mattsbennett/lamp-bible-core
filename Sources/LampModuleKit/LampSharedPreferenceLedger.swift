@@ -64,6 +64,7 @@ public struct LampSharedPreferenceLedger: Codable, Equatable, Sendable {
         "plans.reminder.hour": .integer,
         "plans.reminder.minute": .integer,
         LampPreferenceDefaults.aiFeaturesKey: .boolean,
+        LampPreferenceDefaults.writingReviewMarksKey: .boolean,
     ]
 
     public static let currentFormatVersion = 1

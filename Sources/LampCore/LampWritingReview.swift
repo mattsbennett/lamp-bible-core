@@ -190,6 +190,21 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return result
     }
 
+    /// The record after turns were undone and the writing put back from
+    /// `current` to `restored`: the marks those turns made are retired, and
+    /// the rest are carried across the text the undo put back, which is
+    /// nobody's new work.
+    public func undoingTurns(
+        _ turns: Set<UUID>, from current: String, to restored: String, at date: Date = Date()
+    ) -> LampWritingReview {
+        var result = self
+        for mark in marks where mark.turnID.map(turns.contains) == true {
+            result.retired.append(Retirement(id: mark.id, retiredAt: date))
+        }
+        result.marks.removeAll { $0.turnID.map(turns.contains) == true }
+        return result.carryingWriterEdit(from: current, to: restored, at: date)
+    }
+
     /// The record with every mark cleared.
     public func clearingAll(at date: Date = Date()) -> LampWritingReview {
         var result = self

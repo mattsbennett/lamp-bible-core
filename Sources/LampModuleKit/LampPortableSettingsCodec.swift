@@ -32,6 +32,7 @@ public enum LampPortableSettingsCodec {
         "writing.sortOrder", "writing.groupBy",
         "books.fontSize", "books.lineSpacing", "books.typeface",
         LampPreferenceDefaults.aiFeaturesKey,
+        LampPreferenceDefaults.writingReviewMarksKey,
     ]
 
     public static func encode(from defaults: UserDefaults) throws -> Data {

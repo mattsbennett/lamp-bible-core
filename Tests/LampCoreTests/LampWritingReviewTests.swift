@@ -113,6 +113,18 @@ struct LampWritingReviewTests {
         #expect(marked(merged, in: later) == ["EPSILON"])
     }
 
+    @Test func undoingATurnTakesItsMarksAndLeavesTheRest() {
+        let start = "Alpha beta.\n\nGamma delta."
+        let first = "Alpha BETA.\n\nGamma delta."
+        let firstTurn = UUID()
+        let secondTurn = UUID()
+        var review = empty.markingAssistantChange(from: start, to: first, turnID: firstTurn)
+        let second = "Alpha BETA.\n\nGamma DELTA."
+        review = review.markingAssistantChange(from: first, to: second, turnID: secondTurn)
+        let undone = review.undoingTurns([secondTurn], from: second, to: first)
+        #expect(marked(undone, in: first) == ["BETA"])
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(writingID: "w", marks: review.marks.reversed(), retired: review.retired.reversed())

@@ -42,4 +42,15 @@ public enum LampPreferenceDefaults {
     /// no one loses what they rely on (each app decides what counts).
     public static let aiFeaturesKey = "ai.enabled"
     public static let aiFeaturesEnabled = false
+
+    /// Whether the passages the writing assistant changes are marked until
+    /// the writer has read them through and cleared them
+    /// (`LampWritingReview`). A shared preference, so the phone shows the
+    /// marks a turn on the Mac made, and clears them, under the same choice.
+    ///
+    /// Off until someone turns it on: not everyone reviews that way, and
+    /// marks nobody asked for would read as the app second-guessing them.
+    /// Only shown, or acted on, with AI features on.
+    public static let writingReviewMarksKey = "writing.reviewMarks"
+    public static let writingReviewMarksEnabled = false
 }

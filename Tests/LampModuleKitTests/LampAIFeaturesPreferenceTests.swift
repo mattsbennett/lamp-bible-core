@@ -31,6 +31,12 @@ struct LampAIFeaturesPreferenceTests {
         #expect(values[LampPreferenceDefaults.aiFeaturesKey] == nil)
     }
 
+    @Test func reviewMarksAreOffAndTravelLikeTheSwitch() {
+        #expect(LampPreferenceDefaults.writingReviewMarksEnabled == false)
+        #expect(LampSharedPreferenceLedger.sharedKeys.contains(LampPreferenceDefaults.writingReviewMarksKey))
+        #expect(LampPortableSettingsCodec.syncedKeys.contains(LampPreferenceDefaults.writingReviewMarksKey))
+    }
+
     @Test func aStringIsRejected() {
         let ledger = LampSharedPreferenceLedger(fields: [
             LampPreferenceDefaults.aiFeaturesKey: .init(value: .string("yes")),
