@@ -288,10 +288,12 @@ public struct LampSyncBundlePass {
         for path in known.sorted() {
             guard let kind = LampSyncFolderLayout.kind(of: path) else { continue }
             let entry: ProbeEntry = manifest.entry(at: path).map { $0.isMember ? .member : .deletion } ?? .none
-            let others = (spellings[folded(path)] ?? []).filter { $0 != path }
-            let otherSpelling = entry == .deletion
-                ? others.contains { held.contains($0) || manifest.entry(at: $0)?.isMember == true }
-                : !others.isEmpty
+            // Any other spelling, live or deleted, held or named: on a server
+            // that folds case its file answers for this one, and the plan
+            // would adopt a deleted file or reap a live one. Two deleted
+            // spellings then leave their file for the tombstones' pruning, a
+            // file left over and nothing brought back.
+            let otherSpelling = (spellings[folded(path)] ?? []).contains { $0 != path }
             // Only a deletion's age is asked; no deletion, no age.
             let young = manifest.entry(at: path)?.deletedAt.map { started - $0 < Self.reapRetryWindow } ?? false
             guard Self.asksForRevision(

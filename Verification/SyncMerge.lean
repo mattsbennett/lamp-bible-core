@@ -3449,11 +3449,10 @@ and for a deletion's file this client still has a record of, which a reap
 that failed leaves, while the deletion is young (`young`), so a file another
 client reaped, or a delete whose answer was lost, is not asked about for
 ever, and a stale answer is only a retry. Nothing is forgotten on an answer.
-Not where another spelling could answer for the path on a server that folds
-case (`otherSpelling`): for a path the manifest does not name, any other
-spelling named or held, a deleted one included, whose revision the plan
-would adopt; for a deletion, a live one, held here or a member, which the
-plan would reap. -/
+Not where any other spelling of the path is named or held (`otherSpelling`):
+on a server that folds case its file would answer, and the plan would adopt
+a deleted file or reap a live one. Two deleted spellings leave their file to
+the tombstones' pruning: a file left over, nothing brought back. -/
 
 inductive ProbeEntry where
   | none | member | deletion
