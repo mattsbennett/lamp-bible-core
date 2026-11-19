@@ -231,9 +231,9 @@ public struct LampWritingDocumentStore: Sendable {
     public func deletions(
         deleted: Set<String>, held: Set<String>, members: [String: Int64], now: Int64
     ) throws -> [String: Int64] {
-        let gone = Set(deleted.map { $0.lowercased() }).subtracting(held.map { $0.lowercased() })
+        let heldFolded = Set(held.map { $0.lowercased() })
         var result: [String: Int64] = [:]
-        for id in deleted where gone.contains(id.lowercased()) {
+        for id in deleted where Self.swept(deleted: true, held: heldFolded.contains(id.lowercased())) {
             let folder = LampWritingWorkspaceLayout.directoryName(for: id)
             for document in try documents(writingID: id) {
                 let path = try LampWritingWorkspaceLayout.documentPath(folder: folder, name: document.name)
@@ -247,11 +247,18 @@ public struct LampWritingDocumentStore: Sendable {
         return result
     }
 
+    /// Whether a writing's documents are swept: deleted, and held by no
+    /// writing here. (`Verification/SyncMerge.lean`: `documentSwept`.)
+    static func swept(deleted: Bool, held: Bool) -> Bool {
+        deleted && !held
+    }
+
     /// When to record a document's deletion, in milliseconds: now, but never
     /// before the write the manifest holds for it (`members`, the latest
     /// time a device wrote each path). A device whose clock runs behind
     /// would otherwise date its deletion before the save it removes, and
     /// the save would win and bring the document back.
+    /// (`Verification/SyncMerge.lean`: `documentDeletionStamp`.)
     public static func deletionTime(of path: String, members: [String: Int64], now: Int64) -> Int64 {
         members[path].map { max(now, $0 + 1) } ?? now
     }

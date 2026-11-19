@@ -1260,6 +1260,50 @@ struct LampSyncBundlePassTests {
         #expect(third.failures.isEmpty && third.uploaded.isEmpty && third.installed.isEmpty)
     }
 
+    /// A writing's document deleted here, its file's removal failing once:
+    /// the bundle names the deletion and the copy here is gone, so only this
+    /// client's record of the path is left, and the next pass asks for its
+    /// revision on that account and reaps it.
+    @Test func aFailedReapOfAnUnlistedFileIsTriedAgain() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let store = try seeded(path: path, revision: "\"o1\"")
+        store.failingDeletes[path] = 1
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"o1\"")
+        records.confirmRecorded([path: "\"o1\""], in: source)
+        let first = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: {
+            var held = gathered([], deletedLocally: [path: 1_500])
+            held.extraListing = [path: "\"o1\""]
+            return held
+        }, records: &records, patience: immediate)
+        #expect(first.reaped.isEmpty && first.failures.contains { $0.hasPrefix(path) })
+        #expect(store.bodies[path] != nil)
+
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+        ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
+        #expect(second.reaped == [path])
+        #expect(store.bodies[path] == nil)
+        #expect(records.record(path, in: source) == nil)
+    }
+
+    /// A held file the manifest names under another spelling is never asked
+    /// about: a server folding case would answer with that file's revision.
+    @Test func aPathTheManifestNamesUnderAnotherSpellingIsNotAskedAbout() async throws {
+        let named = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "Outline.md")
+        let held = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let store = try seeded(path: named, revision: "\"o1\"")
+        let url = try makeFile("outline")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([local(held, url, "outline")]) }, records: &records, patience: immediate)
+        #expect(!store.operations.contains("revision \(held)"))
+    }
+
     /// R11. Kinds the caller asks to confirm by reading are read back.
     @Test func kindsConfirmedByReadingAreReadBack() async throws {
         let path = "Notes/notes.lamp"
@@ -1899,8 +1943,17 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
         return namesRevisionOnWrite ? revision : nil
     }
 
+    /// Deletes of these paths fail this many more times, as on a dropped
+    /// connection.
+    var failingDeletes: [String: Int] = [:]
+    struct DeleteFailed: Error {}
+
     func delete(path: String, condition: LampSyncWriteCondition) async throws {
         operations.append("delete \(path)")
+        if let left = failingDeletes[path], left > 0 {
+            failingDeletes[path] = left - 1
+            throw DeleteFailed()
+        }
         if case .ifRevision(let expected) = condition, revisions[path] != expected {
             throw LampSyncConditionalWrite.WriteError.conflict
         }

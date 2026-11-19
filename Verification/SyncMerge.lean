@@ -3372,6 +3372,124 @@ theorem aSaveAfterTheDeletionSurvives (changed : Bool) (last : Option Nat) (r d 
         { uploadAction (.ifRevision r) with supersede := some d } := by
   simp [filePlanAction, entryIsMember, deletesRevision, savedAfter, after]
 
+/-! ### A deleted writing's documents
+
+`LampWritingDocumentStore.deletions`: when a writing is deleted, the
+documents beside it go with it everywhere, as its review marks do. Swept only
+where no writing held here has the id, compared folded, which is outside the
+model; and each tombstone is dated never before the write the manifest holds
+for the path (`deletionTime`), so a device whose clock runs behind does not
+date its deletion before the save it removes and lose to it. -/
+
+def documentSwept (deleted held : Bool) : Bool := deleted && !held
+
+def documentDeletionStamp (memberWrite : Option Nat) (now : Nat) : Nat :=
+  match memberWrite with
+  | none => now
+  | some m => max now (m + 1)
+
+theorem aHeldWritingKeepsItsDocuments (deleted : Bool) : documentSwept deleted true = false := by
+  simp [documentSwept]
+
+-- The sweep's tombstone removes the write it was dated after, whatever the
+-- clock here said.
+theorem aSweepRemovesTheWriteItIsDatedAfter (m now : Nat) (r : Option Nat) :
+    entryIsMember (removeFile ⟨some m, r, none, none⟩ (documentDeletionStamp (some m) now) r) = false := by
+  have later : laterStamp (none, none) (some (documentDeletionStamp (some m) now), r)
+      = (some (documentDeletionStamp (some m) now), r) := by
+    cases r <;> simp [laterStamp, stampLE, optKey]
+  simp only [removeFile, ManifestEntry.written, ManifestEntry.deleted, later]
+  simp [entryIsMember, ManifestEntry.withStamps, documentDeletionStamp]
+  omega
+
+/-! ### When a merge is recorded
+
+`LampSyncBundlePass.recordsMergedInstall`: a path both sides changed is
+downloaded and handed to the library to merge, and its install recorded only
+once the merge is in, and, for a file of a tree taken in together, once the
+tree is. Recorded before, a merge that failed left the record naming the
+server's copy over a copy here that never took it, and the next pass sent
+this copy over the other device's edit as a change of its own. -/
+
+def mergedRecord (takenTogether reconciled treeIn : Bool) : Bool :=
+  reconciled && (!takenTogether || treeIn)
+
+theorem aFailedMergeRecordsNothing (takenTogether treeIn : Bool) :
+    mergedRecord takenTogether false treeIn = false := by
+  simp [mergedRecord]
+
+theorem aMergedTreeFileWaitsForItsTree : mergedRecord true true false = false := rfl
+
+-- Unrecorded, the next pass finds both sides changed again and merges again:
+theorem anUnrecordedMergeIsMergedAgain (cls : FileClass) (old r : Nat) (s : Option Nat)
+    (notMedia : cls ≠ .media) (moved : old ≠ r) :
+    filePlanAction cls (some ⟨some 1, some r, none, none⟩) (some ⟨true, some old, s⟩) none (some r)
+      = { merge := some r } := by
+  have differs : (some old != some r) = true := by simp [moved]
+  cases cls
+  · exact absurd rfl notMedia
+  all_goals simp [filePlanAction, entryIsMember, changeAction, differs]
+
+-- whereas a record naming the server's revision would send this copy over it.
+theorem aRecordOfTheirsWouldSendThisCopyOverIt (cls : FileClass) (r : Nat) (s : Option Nat)
+    (notMedia : cls ≠ .media) :
+    filePlanAction cls (some ⟨some 1, some r, none, none⟩) (some ⟨true, some r, s⟩) none (some r)
+      = uploadAction (.ifRevision r) := by
+  cases cls
+  · exact absurd rfl notMedia
+  all_goals simp [filePlanAction, entryIsMember, changeAction]
+
+/-! ### Revisions a pass asks for itself
+
+`LampSyncBundlePass.asksForRevision`: listings reach the listed kinds, and the
+caller asks for the manifest's own unlisted members. The pass asks, besides,
+for an unlisted, non-media path held here that the manifest does not name,
+which may be an upload the server had not shown back, which nothing records;
+and for a deletion's file this client still has a record of, which a reap
+that failed leaves. Not for a path the manifest names under another
+spelling: a server that folds case would answer with that file's revision. -/
+
+inductive ProbeEntry where
+  | none | member | deletion
+  deriving DecidableEq, Repr
+
+def asksRevision (listedKind media inListing : Bool) (entry : ProbeEntry)
+    (held otherSpelling recordStands : Bool) : Bool :=
+  if listedKind || media || inListing then false else
+  match entry with
+  | .none => held && !otherSpelling
+  | .member => false
+  | .deletion => recordStands
+
+theorem anUnconfirmedUploadIsAskedAbout (recordStands : Bool) :
+    asksRevision false false false .none true false recordStands = true := rfl
+
+theorem anotherSpellingIsNeverAskedAbout (entry : ProbeEntry) (held recordStands : Bool)
+    (h : entry = .none) :
+    asksRevision false false false entry held true recordStands = false := by
+  subst h; simp [asksRevision]
+
+-- Unasked, an upload not shown back is sent "if absent" on every pass, and
+-- refused, since it is there;
+theorem anUnaskedUploadIsSentIfAbsent (s : Option Nat) :
+    filePlanAction .unlisted none (some ⟨true, none, s⟩) none none = uploadAction .ifAbsent := by
+  simp [filePlanAction]
+
+-- asked, it is adopted and compared, which `fetchedForMerge` settles.
+theorem anAskedUploadIsAdoptedAndCompared (r : Nat) (s : Option Nat) :
+    filePlanAction .unlisted none (some ⟨true, none, s⟩) none (some r)
+      = { merge := some r, adopt := some r } := by
+  have differs : ((none : Option Nat) != some r) = true := by simp
+  simp [filePlanAction, changeAction, differs]
+
+theorem aFailedReapIsAskedAgain : asksRevision false false false .deletion false false true = true := rfl
+
+-- And reaped, once its revision is in hand.
+theorem aFailedReapIsReapedOnceAsked (r : Nat) :
+    filePlanAction .unlisted (some ⟨some 1, some r, some 2, some r⟩) none none (some r)
+      = { reap := some r } := by
+  simp [filePlanAction, entryIsMember, deletesRevision]
+
 /-! ### Deleting a copy here
 
 `LampSyncLocalDeletion.target`: what deleting a path from a device's library
@@ -5335,6 +5453,39 @@ def documentDecisionName : DocumentDecision → String
       IO.println <| conformanceLine "documentMerge"
         [held.map toString |>.getD "none", agreed.map toString |>.getD "none",
          documentDecisionName (documentMerge held 1 agreed)]
+
+#eval show IO Unit from do
+  for deleted in [false, true] do
+    for held in [false, true] do
+      IO.println <| conformanceLine "documentSwept" [toString deleted, toString held, toString (documentSwept deleted held)]
+  for memberWrite in [none, some 4000, some 5000] do
+    for now in [4000, 9000] do
+      IO.println <| conformanceLine "documentDeletionStamp"
+        [memberWrite.map toString |>.getD "none", toString now, toString (documentDeletionStamp memberWrite now)]
+
+def probeEntryName : ProbeEntry → String
+  | .none => "none" | .member => "member" | .deletion => "deletion"
+
+#eval show IO Unit from do
+  for takenTogether in [false, true] do
+    for reconciled in [false, true] do
+      for treeIn in [false, true] do
+        IO.println <| conformanceLine "mergedRecord"
+          [toString takenTogether, toString reconciled, toString treeIn,
+           toString (mergedRecord takenTogether reconciled treeIn)]
+
+#eval show IO Unit from do
+  for listedKind in [false, true] do
+    for media in [false, true] do
+      for inListing in [false, true] do
+        for entry in [ProbeEntry.none, .member, .deletion] do
+          for held in [false, true] do
+            for otherSpelling in [false, true] do
+              for recordStands in [false, true] do
+                IO.println <| conformanceLine "asksRevision"
+                  [toString listedKind, toString media, toString inListing, probeEntryName entry,
+                   toString held, toString otherSpelling, toString recordStands,
+                   toString (asksRevision listedKind media inListing entry held otherSpelling recordStands)]
 
 #eval show IO Unit from do
   -- A copy held or not, against what was last agreed, none for never.

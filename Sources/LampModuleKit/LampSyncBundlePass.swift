@@ -273,19 +273,26 @@ public struct LampSyncBundlePass {
         )
         var listing = listed.listing
         listing.merge(gathered.extraListing) { _, extra in extra }
-        // A file held here that no listing reaches and the manifest does not
-        // name. Usually new; but it may be an upload the server had not shown
-        // back, which the pass records nothing of and no bundle names, and
-        // which the plan, unasked, sends "if absent" on every pass, refused
-        // for good. Its revision is asked for, as the caller asks for the
-        // manifest's own unlisted members, and the comparison settles it.
-        // One request for each such file, until a bundle names it.
-        for file in gathered.local where listing[file.path] == nil {
-            guard let kind = LampSyncFolderLayout.kind(of: file.path), !kind.isListed, !kind.isMedia,
-                  opened.bundle.manifest.entry(at: file.path) == nil
-            else { continue }
-            if let revision = try? await store.revision(path: file.path) {
-                listing[file.path] = revision
+        // Revisions no listing reaches and the caller did not ask for
+        // (`asksForRevision`): an upload the server had not shown back, which
+        // the pass records nothing of and no bundle names, and which the plan,
+        // unasked, sends "if absent" on every pass, refused for good; and a
+        // deletion's file this client was to reap and could not. One request
+        // for each, until a bundle names the one or a reap forgets the other.
+        let manifest = opened.bundle.manifest
+        let named = Set(manifest.paths.map { $0.precomposedStringWithCanonicalMapping.lowercased() })
+        let held = Set(gathered.local.map(\.path))
+        for path in held.union(manifest.paths).sorted() {
+            guard let kind = LampSyncFolderLayout.kind(of: path) else { continue }
+            let entry: ProbeEntry = manifest.entry(at: path).map { $0.isMember ? .member : .deletion } ?? .none
+            guard Self.asksForRevision(
+                listedKind: kind.isListed, media: kind.isMedia, inListing: listing[path] != nil, entry: entry,
+                held: held.contains(path),
+                otherSpelling: entry == .none && named.contains(path.precomposedStringWithCanonicalMapping.lowercased()),
+                recordStands: records.record(path, in: source) != nil
+            ) else { continue }
+            if let revision = try? await store.revision(path: path) {
+                listing[path] = revision
             }
         }
 
@@ -741,14 +748,45 @@ public struct LampSyncBundlePass {
         // A file of a tree taken in together is only staged by the merge, and
         // is recorded with the rest of the tree once that is in (step 3).
         for path in downloaded.keys {
-            if LampSyncFolderLayout.kind(of: path)?.isTakenInTogether == true {
-                staged.append((path, fetchedRevisions[path], digests[path] ?? nil))
-            } else {
+            let takenTogether = LampSyncFolderLayout.kind(of: path)?.isTakenInTogether == true
+            if Self.recordsMergedInstall(takenTogether: takenTogether, reconciled: true, treeIn: false) {
                 records.recordInstall(path, in: source, revision: fetchedRevisions[path], digest: digests[path] ?? nil)
+            } else {
+                staged.append((path, fetchedRevisions[path], digests[path] ?? nil))
             }
         }
         outcome.reconciled = downloaded.keys.sorted()
         return (republish.merging(ahead) { merged, _ in merged }, fetchedRevisions)
+    }
+
+    /// Whether a merged path's install is recorded: only once the library
+    /// has merged it, and for a file of a tree taken in together, once the
+    /// tree is in. (`Verification/SyncMerge.lean`: `mergedRecord`.)
+    static func recordsMergedInstall(takenTogether: Bool, reconciled: Bool, treeIn: Bool) -> Bool {
+        reconciled && (!takenTogether || treeIn)
+    }
+
+    /// What the manifest says of a path, as `asksForRevision` reads it.
+    enum ProbeEntry: Equatable { case none, member, deletion }
+
+    /// Whether the pass asks the server for a path's revision itself.
+    /// Listings reach the listed kinds, the caller asks for the manifest's
+    /// unlisted members, and media never changes at a path. Besides those, an
+    /// unlisted file held here that the manifest does not name, unless it
+    /// names it under another spelling, whose answer a server folding case
+    /// would give; and a deletion's file this client still has a record
+    /// of, which a reap that failed leaves.
+    /// (`Verification/SyncMerge.lean`: `asksRevision`.)
+    static func asksForRevision(
+        listedKind: Bool, media: Bool, inListing: Bool, entry: ProbeEntry,
+        held: Bool, otherSpelling: Bool, recordStands: Bool
+    ) -> Bool {
+        if listedKind || media || inListing { return false }
+        switch entry {
+        case .none: return held && !otherSpelling
+        case .member: return false
+        case .deletion: return recordStands
+        }
     }
 
     enum FetchedForMerge: Equatable {

@@ -111,7 +111,8 @@ struct SyncModelConformanceTests {
         "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourCopy", "fetchedForMerge",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
-        "reviewMerge", "documentMerge", "documentDeletion",
+        "reviewMerge", "documentMerge", "documentDeletion", "mergedRecord", "asksRevision",
+        "documentSwept", "documentDeletionStamp",
     ]
 
     // MARK: - The model itself
@@ -1034,6 +1035,43 @@ struct SyncModelConformanceTests {
                 let target = LampSyncLocalDeletion.target(of: path)
                 return name(target, at: path) == f[1] && String(target.isAllowed) == f[2]
             }
+        }
+    }
+
+    /// Whether a deleted writing's documents are swept, and when the
+    /// deletion is dated.
+    @Test func documentSweep() throws {
+        try conform("documentSwept") { f in
+            String(LampWritingDocumentStore.swept(deleted: f[0] == "true", held: f[1] == "true")) == f[2]
+        }
+        try conform("documentDeletionStamp") { f in
+            let path = "Workspaces/Writing/w/Documents/a.md"
+            let members = f[0] == "none" ? [:] : [path: Int64(f[0])!]
+            return String(LampWritingDocumentStore.deletionTime(of: path, members: members, now: Int64(f[1])!)) == f[2]
+        }
+    }
+
+    /// When a merged path's install is recorded.
+    @Test func mergedRecord() throws {
+        try conform("mergedRecord") { f in
+            String(LampSyncBundlePass.recordsMergedInstall(
+                takenTogether: f[0] == "true", reconciled: f[1] == "true", treeIn: f[2] == "true"
+            )) == f[3]
+        }
+    }
+
+    /// Which revisions a pass asks for itself.
+    @Test func asksRevision() throws {
+        try conform("asksRevision") { f in
+            let entry: LampSyncBundlePass.ProbeEntry = switch f[3] {
+            case "member": .member
+            case "deletion": .deletion
+            default: .none
+            }
+            return String(LampSyncBundlePass.asksForRevision(
+                listedKind: f[0] == "true", media: f[1] == "true", inListing: f[2] == "true", entry: entry,
+                held: f[4] == "true", otherSpelling: f[5] == "true", recordStands: f[6] == "true"
+            )) == f[7]
         }
     }
 
