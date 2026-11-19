@@ -189,6 +189,16 @@ public struct LampWritingReviewStore: Sendable {
         return result
     }
 
+    /// The writings whose deletion stands in `ledger`, to pass to
+    /// `deletions` as `deleted`: those deleted after their last recorded
+    /// save. A writing deleted and later saved again under its id keeps its
+    /// deletion in the ledger beside the newer save, and taking any recorded
+    /// deletion as standing swept a live writing's marks everywhere, on a
+    /// device that had not yet fetched the writing back.
+    public static func deletedWritings(in ledger: LampPersonalDeletionLedger) -> Set<String> {
+        Set(ledger.entries(of: .devotional).filter { $0.value.isDeleted(itemModified: nil) }.keys)
+    }
+
     /// The writing ids that have a file here.
     public func writingIDs() throws -> [String] {
         guard FileManager.default.fileExists(atPath: directoryURL.path) else { return [] }

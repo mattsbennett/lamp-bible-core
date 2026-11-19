@@ -130,4 +130,14 @@ struct LampWritingReviewFileTests {
         }
         #expect(mismatches == 0)
     }
+
+    /// A writing deleted and saved again under its id is not deleted, so its
+    /// marks are not swept.
+    @Test func awritingSavedAgainAfterItsDeletionIsNotDeleted() {
+        var ledger = LampPersonalDeletionLedger()
+        ledger.set(.init(presentSince: 100, deletedAt: 200), kind: .devotional, key: "gone")
+        ledger.set(.init(presentSince: 300, deletedAt: 200), kind: .devotional, key: "back")
+        ledger.set(.init(presentSince: 100), kind: .devotional, key: "never")
+        #expect(LampWritingReviewStore.deletedWritings(in: ledger) == ["gone"])
+    }
 }
