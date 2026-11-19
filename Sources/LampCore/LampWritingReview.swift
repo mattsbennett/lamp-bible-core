@@ -599,6 +599,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// the copy nearest its hint where there are several; then with one
     /// side, then its words alone, if those stand only once. A point is
     /// found by its context.
+    ///
+    /// The looser readings keep the piece's edges: one that began at the
+    /// start of a word is found only at the start of one, and one that ended
+    /// at a word's end only at an end. Without that, a cleared "a" whose
+    /// context had been rewritten was found inside "lamp", and cut the word.
     static func find(_ piece: Piece, in text: NSString, strictly: Bool = false, anchoredOnly: Bool = false) -> NSRange? {
         let length = (piece.text as NSString).length
         let offset = (piece.before as NSString).length
@@ -608,16 +613,50 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             return NSRange(location: location, length: length)
         }
         if strictly { return nil }
-        if !piece.before.isEmpty, let found = only(piece.before + piece.text, in: text) {
+        let edges = Edges(of: piece)
+        if !piece.before.isEmpty, let found = only(piece.before + piece.text, in: text, where: {
+            edges.hold(at: NSRange(location: $0.location + offset, length: length), in: text)
+        }) {
             return NSRange(location: found.location + offset, length: length)
         }
-        if !piece.after.isEmpty, let found = only(piece.text + piece.after, in: text) {
+        if !piece.after.isEmpty, let found = only(piece.text + piece.after, in: text, where: {
+            edges.hold(at: NSRange(location: $0.location, length: length), in: text)
+        }) {
             return NSRange(location: found.location, length: length)
         }
-        if length > 0, let found = only(piece.text, in: text) {
+        if length > 0, let found = only(piece.text, in: text, where: { edges.hold(at: $0, in: text) }) {
             return found
         }
         return nil
+    }
+
+    /// Whether a piece began and ended at the edges of words, as it was
+    /// last anchored.
+    private struct Edges {
+        let start: Bool
+        let end: Bool
+
+        init(of piece: Piece) {
+            start = Self.isWord(piece.text.unicodeScalars.first) && !Self.isWord(piece.before.unicodeScalars.last)
+            end = Self.isWord(piece.text.unicodeScalars.last) && !Self.isWord(piece.after.unicodeScalars.first)
+        }
+
+        /// Whether `range` of `text` keeps those edges.
+        func hold(at range: NSRange, in text: NSString) -> Bool {
+            if start, range.location > 0,
+               Self.isWord(Unicode.Scalar(text.character(at: text.rangeOfComposedCharacterSequence(at: range.location - 1).location))) {
+                return false
+            }
+            if end, NSMaxRange(range) < text.length,
+               Self.isWord(Unicode.Scalar(text.character(at: NSMaxRange(range)))) {
+                return false
+            }
+            return true
+        }
+
+        private static func isWord(_ scalar: Unicode.Scalar?) -> Bool {
+            scalar.map(CharacterSet.alphanumerics.contains) ?? false
+        }
     }
 
     private static func nearest(_ needle: String, to hint: Int, in text: NSString) -> NSRange? {
@@ -635,13 +674,24 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return best
     }
 
-    private static func only(_ needle: String, in text: NSString) -> NSRange? {
+    /// The one copy of `needle` in `text` that `accepts`, or nil where there
+    /// is none or more than one.
+    private static func only(_ needle: String, in text: NSString, where accepts: (NSRange) -> Bool = { _ in true }) -> NSRange? {
         guard !needle.isEmpty else { return nil }
-        let found = text.range(of: needle, options: .literal)
-        guard found.location != NSNotFound else { return nil }
-        let rest = found.location + 1
-        let again = text.range(of: needle, options: .literal, range: NSRange(location: rest, length: text.length - rest))
-        return again.location == NSNotFound ? found : nil
+        var match: NSRange?
+        var search = NSRange(location: 0, length: text.length)
+        while true {
+            let found = text.range(of: needle, options: .literal, range: search)
+            if found.location == NSNotFound { break }
+            if accepts(found) {
+                if match != nil { return nil }
+                match = found
+            }
+            let next = found.location + 1
+            guard next <= text.length else { break }
+            search = NSRange(location: next, length: text.length - next)
+        }
+        return match
     }
 
     private static func start(ofCharacters count: Int, endingAt end: Int, in text: NSString) -> Int {

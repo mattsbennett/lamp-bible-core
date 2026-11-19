@@ -83,4 +83,24 @@ struct LampWritingReviewFileTests {
         #expect(LampWritingReview.markedRange(in: marked, of: "\u{E9} AB") == NSRange(location: 2, length: 1))
         #expect(LampWritingReview.markedRange(in: marked, of: "e\u{301} AB") == NSRange(location: 3, length: 1))
     }
+
+    /// A cleared word found again without its context is found as a word,
+    /// never inside another: two devices, one clearing "a beta" and the
+    /// other taking those words out, leave "lamp" marked whole.
+    @Test func acleardWordIsNeverFoundInsideAnother() {
+        let shown = "One a beta lamp end."
+        let marked = LampWritingReview(writingID: "w").markingAssistantChange(from: "One two end.", to: shown)
+        #expect(marked.highlightedRanges(in: shown).map { (shown as NSString).substring(with: $0) } == ["a beta lamp"])
+        let cleared = marked.clearing((shown as NSString).range(of: "a beta"), in: shown)
+        let edited = "One lamp end."
+        let elsewhere = marked.carryingWriterEdit(from: shown, to: edited)
+        let merged = cleared.merged(with: elsewhere)
+        #expect(merged.highlightedRanges(in: edited).map { (edited as NSString).substring(with: $0) } == ["lamp"])
+    }
+
+    /// A piece that began or ended inside a word is still found there.
+    @Test func apieceInsideAWordIsFoundInsideOne() {
+        let piece = LampWritingReview.Piece(text: "our", before: "col", after: "", hint: 3)
+        #expect(LampWritingReview.find(piece, in: "A colour." as NSString) == NSRange(location: 5, length: 3))
+    }
 }
