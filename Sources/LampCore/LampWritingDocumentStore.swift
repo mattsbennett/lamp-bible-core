@@ -215,6 +215,38 @@ public struct LampWritingDocumentStore: Sendable {
         }
     }
 
+    /// The deletions a pass records for the documents of writings deleted,
+    /// by path; the files here are removed as they are found. A writing's
+    /// documents go with it everywhere, as its review marks do
+    /// (`LampWritingReviewStore.deletions`), and only where there is a file
+    /// to delete, here or on the server.
+    ///
+    /// `deleted` is the writings whose deletion stands
+    /// (`LampWritingReviewStore.deletedWritings(in:)`), `held` the writings
+    /// this device still has, which win over a deletion of the same id,
+    /// compared folded; `members` the paths the manifest names, each with
+    /// the latest time a device wrote it; `now` the time to record, in
+    /// milliseconds. Each folder is named from the deleted id as it is
+    /// spelled, as every app names it.
+    public func deletions(
+        deleted: Set<String>, held: Set<String>, members: [String: Int64], now: Int64
+    ) throws -> [String: Int64] {
+        let gone = Set(deleted.map { $0.lowercased() }).subtracting(held.map { $0.lowercased() })
+        var result: [String: Int64] = [:]
+        for id in deleted where gone.contains(id.lowercased()) {
+            let folder = LampWritingWorkspaceLayout.directoryName(for: id)
+            for document in try documents(writingID: id) {
+                let path = try LampWritingWorkspaceLayout.documentPath(folder: folder, name: document.name)
+                try remove(at: url(folder: folder, name: document.name))
+                result[path] = Self.deletionTime(of: path, members: members, now: now)
+            }
+            for path in members.keys where LampWritingWorkspaceLayout.document(ofPath: path)?.folder == folder {
+                result[path] = Self.deletionTime(of: path, members: members, now: now)
+            }
+        }
+        return result
+    }
+
     /// When to record a document's deletion, in milliseconds: now, but never
     /// before the write the manifest holds for it (`members`, the latest
     /// time a device wrote each path). A device whose clock runs behind

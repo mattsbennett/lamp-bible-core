@@ -191,6 +191,24 @@ struct LampWritingDocumentStoreTests {
         #expect(try store.documents(writingID: "w").count == 2)
     }
 
+    /// A deleted writing's documents go with it: removed here, and every
+    /// one held here or on the server recorded as deleted. A writing still
+    /// held, however its id is spelled, keeps its own.
+    @Test func aDeletedWritingsDocumentsGoWithIt() throws {
+        let store = try temporaryStore()
+        try store.write(Data("a".utf8), writingID: "gone", name: "outline.md", replacing: nil)
+        try store.write(Data("b".utf8), writingID: "kept", name: "outline.md", replacing: nil)
+        let onServer = try LampWritingWorkspaceLayout.documentPath(writingID: "gone", name: "sources.md")
+        let held = try LampWritingWorkspaceLayout.documentPath(writingID: "gone", name: "outline.md")
+        let other = try LampWritingWorkspaceLayout.documentPath(writingID: "kept", name: "outline.md")
+        let deletions = try store.deletions(
+            deleted: ["gone", "KEPT"], held: ["kept"], members: [onServer: 5_000, other: 1], now: 4_000
+        )
+        #expect(deletions == [held: 4_000, onServer: 5_001])
+        #expect(try store.documents(writingID: "gone").isEmpty)
+        #expect(try store.documents(writingID: "kept").map(\.text) == ["b"])
+    }
+
     /// The workspace's other files, Lamp's own and the draft, are never
     /// listed or gathered.
     @Test func onlyDocumentsAreListed() throws {
