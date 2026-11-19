@@ -1972,6 +1972,20 @@ public actor LampLibrary {
         )!.saved
     }
 
+    /// Saves a writing as `savePersonalDevotional` does, unless the stored
+    /// copy was saved in a later second than `revision`, the copy the caller
+    /// began from: another device's, brought in by sync while an editor held
+    /// this one, which the save would otherwise write over. Checked and
+    /// written in one transaction. Returns nil, having written nothing, when
+    /// the stored copy is newer. Whole seconds, as the copy is stored.
+    public func savePersonalDevotional(
+        _ devotional: LampDevotional, ifNotNewerThan revision: Date
+    ) throws -> LampDevotional? {
+        try writePersonalDevotional(
+            devotional, preserveLastModified: false, condition: nil, notNewerThan: revision
+        )?.saved
+    }
+
     /// Saves a writing only if the stored copy is still `current` (nil: there
     /// is none), checked and written in one transaction, so no other writer
     /// to the database — another library, sync, the phone's own threads —
@@ -1990,7 +2004,8 @@ public actor LampLibrary {
     private func writePersonalDevotional(
         _ devotional: LampDevotional,
         preserveLastModified: Bool,
-        condition: LampDevotional??
+        condition: LampDevotional??,
+        notNewerThan: Date? = nil
     ) throws -> (saved: LampDevotional, stored: LampDevotional?)? {
         let title = devotional.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasAuthoredContent = [
@@ -2018,6 +2033,16 @@ public actor LampLibrary {
                     db, sql: "SELECT * FROM personal_devotionals WHERE id = ?", arguments: [identifier]
                 ).map(makePersonalDevotional)
                 guard stored == condition else { return nil }
+            }
+            if let notNewerThan {
+                let storedModified = try Row.fetchOne(
+                    db, sql: "SELECT * FROM personal_devotionals WHERE id = ?", arguments: [identifier]
+                ).flatMap { makePersonalDevotional($0).lastModified }
+                if let storedModified,
+                   Int(storedModified.timeIntervalSince1970.rounded(.down))
+                    > Int(notNewerThan.timeIntervalSince1970.rounded(.down)) {
+                    return nil
+                }
             }
             let prior = try Row.fetchOne(
                 db, sql: "SELECT content, content_json, media_json FROM personal_devotionals WHERE id = ?",
