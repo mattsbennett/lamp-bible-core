@@ -316,6 +316,33 @@ struct LampSyncBundlePassTests {
         #expect(records.record("Translations/refused.lamp", in: source) == nil)
     }
 
+    /// A merge that fails changes no record: the copy here never took the
+    /// server's, so the next pass must merge again rather than send this
+    /// copy over the other device's edit as a change of its own.
+    @Test func aFailedMergeLeavesTheRecordsAsTheyWere() async throws {
+        let store = try seeded(path: "Notes/notes.lamp", revision: "\"notes-2\"")
+        let mine = try makeFile("mine")
+        defer { try? FileManager.default.removeItem(at: mine) }
+        let library = StubLibrary()
+        library.reconcileFails = true
+        var records = LampSyncFileRecords()
+        records.recordUpload("Notes/notes.lamp", in: source, digest: "an older digest", revision: "\"notes-1\"")
+        records.confirmRecorded(["Notes/notes.lamp": "\"notes-1\""], in: source)
+        let before = records
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: library, source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([local("Notes/notes.lamp", mine, "mine")]) },
+            records: &records
+        )
+
+        #expect(library.reconcileCalls == 1)
+        #expect(outcome.failures.contains { $0.hasPrefix("merging") })
+        #expect(records.record("Notes/notes.lamp", in: source) == before.record("Notes/notes.lamp", in: source))
+        #expect(store.bodies["Notes/notes.lamp"] != Data("mine".utf8))
+    }
+
     /// The Mac merges personal content in one staged transaction, not file by
     /// file, and the transaction rewrites local content — so what gets
     /// published is what it produced, never what was digested before it ran.
@@ -1692,8 +1719,13 @@ final class StubLibrary: LampSyncPassLibrary, @unchecked Sendable {
         return heldAfterInstall
     }
 
+    /// Makes a merge fail, as writing a kept copy can.
+    var reconcileFails = false
+    struct ReconcileFailed: Error {}
+
     func reconcile(_ downloaded: [String: URL]) async throws -> [String: URL] {
         reconcileCalls += 1
+        if reconcileFails { throw ReconcileFailed() }
         return reconciled(downloaded)
     }
 

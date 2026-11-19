@@ -712,14 +712,18 @@ public struct LampSyncBundlePass {
                 break
             }
             downloaded[path] = file.url
-            records.recordInstall(
-                path, in: source, revision: file.revision,
-                digest: try? LampSyncContentRevision.digest(forFileAt: file.url)
-            )
         }
         outcome.alreadyInStep.append(contentsOf: unchanged)
         guard !downloaded.isEmpty else { return (ahead, fetchedRevisions) }
+        let digests = downloaded.mapValues { try? LampSyncContentRevision.digest(forFileAt: $0) }
         let republish = try await library.reconcile(downloaded)
+        // Recorded only once the merge is in. Recorded before it, a merge
+        // that failed left the records naming the server's copy as taken
+        // over a copy here that never took it, and the next pass sent this
+        // client's copy over the other device's edit as a change of its own.
+        for path in downloaded.keys {
+            records.recordInstall(path, in: source, revision: fetchedRevisions[path], digest: digests[path] ?? nil)
+        }
         outcome.reconciled = downloaded.keys.sorted()
         return (republish.merging(ahead) { merged, _ in merged }, fetchedRevisions)
     }
