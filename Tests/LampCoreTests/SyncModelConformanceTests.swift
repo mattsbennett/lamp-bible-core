@@ -1017,7 +1017,7 @@ struct SyncModelConformanceTests {
 
     /// Two copies of a writing's review marks merged, the model's numbers
     /// standing for marks and a clearance of mark 1: what the merge shows of
-    /// each mark, and whether the clearance still applies.
+    /// each mark, and which version of the clearance applies.
     @Test func reviewMerge() throws {
         func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
         let when = Date(timeIntervalSince1970: 0)
@@ -1033,8 +1033,10 @@ struct SyncModelConformanceTests {
                     review.marks.append(.init(id: id(n), pieces: [piece(n, version)], version: version, markedAt: when, turnID: nil))
                 }
             }
-            if clearance == "true" {
-                review.clearances.append(.init(id: id(10), markID: id(1), piece: piece(1, 0), clearedAt: when))
+            if let version = Int(clearance), version > 0 {
+                review.clearances.append(.init(
+                    id: id(10), markID: id(1), pieces: [piece(10, version)], version: version, clearedAt: when
+                ))
             }
             return review
         }
@@ -1044,9 +1046,9 @@ struct SyncModelConformanceTests {
         }
         try conform("reviewMerge") { f in
             let merged = copy(f[0], f[1], f[2]).merged(with: copy(f[3], f[4], f[5]))
-            let clearanceApplies = merged.clearances.contains { $0.id == id(10) }
-                && !merged.retired.contains { $0.id == id(1) }
-            return code(merged, 1) == f[6] && code(merged, 2) == f[7] && String(clearanceApplies) == f[8]
+            let clearance = merged.retired.contains { $0.id == id(1) }
+                ? 0 : merged.clearances.first { $0.id == id(10) }?.version ?? 0
+            return code(merged, 1) == f[6] && code(merged, 2) == f[7] && String(clearance) == f[8]
         }
     }
 

@@ -109,17 +109,21 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
     }
 
-    /// Part of a mark the writer cleared.
+    /// Part of a mark the writer cleared. Carried through edits as a mark
+    /// is, under its own id and a rising version, so it keeps covering the
+    /// words it cleared; kept for as long as its mark is.
     public struct Clearance: Codable, Equatable, Hashable, Sendable, Identifiable {
         public let id: UUID
         public let markID: UUID
-        public let piece: Piece
+        public let pieces: [Piece]
+        public let version: Int
         public let clearedAt: Date
 
-        public init(id: UUID = UUID(), markID: UUID, piece: Piece, clearedAt: Date) {
+        public init(id: UUID = UUID(), markID: UUID, pieces: [Piece], version: Int = 1, clearedAt: Date) {
             self.id = id
             self.markID = markID
-            self.piece = piece
+            self.pieces = pieces
+            self.version = version
             self.clearedAt = LampWritingReview.toTheMillisecond(clearedAt)
         }
     }
@@ -147,15 +151,26 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// none of whose words are there any more is left out: somebody rewrote
     /// them, which is reading them.
     public func located(in text: String) -> [Located] {
+        located(in: text, strictly: false)
+    }
+
+    /// With `strictly`, a piece is found only with its context on both
+    /// sides. Carrying marks across an edit asks that: the text before the
+    /// edit is the one they were last anchored in, so a piece not found
+    /// whole there is stale, and the looser readings could take the same
+    /// word from somewhere else and move the mark onto it.
+    func located(in text: String, strictly: Bool) -> [Located] {
         let source = text as NSString
         var cleared: [UUID: [NSRange]] = [:]
         for clearance in clearances {
-            if let range = Self.find(clearance.piece, in: source) {
-                cleared[clearance.markID, default: []].append(range)
+            for piece in clearance.pieces {
+                if let range = Self.find(piece, in: source, strictly: strictly) {
+                    cleared[clearance.markID, default: []].append(range)
+                }
             }
         }
         return marks.compactMap { mark -> Located? in
-            var ranges = mark.pieces.compactMap { Self.find($0, in: source) }
+            var ranges = mark.pieces.compactMap { Self.find($0, in: source, strictly: strictly) }
             for range in cleared[mark.id] ?? [] {
                 ranges = ranges.flatMap { Self.subtracting(range, from: $0) }.compactMap { Self.remainder($0, in: source) }
             }
@@ -226,14 +241,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             }
             for cleared in ranges where Self.touches(cleared, range) {
                 let part = cleared.length == 0 ? cleared : NSIntersectionRange(cleared, range)
-                result.clearances.append(Clearance(markID: mark.id, piece: Self.piece(part, in: source), clearedAt: date))
+                result.clearances.append(Clearance(markID: mark.id, pieces: [Self.piece(part, in: source)], clearedAt: date))
             }
             result.marks.append(Mark(
                 id: mark.id, pieces: kept.map { Self.piece($0, in: source) },
                 version: mark.version + 1, markedAt: mark.markedAt, turnID: mark.turnID
             ))
         }
-        return result
+        return result.tidied()
     }
 
     /// The record with every mark cleared.
@@ -241,7 +256,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         var result = self
         result.retired += marks.map { Retirement(id: $0.id, retiredAt: date) }
         result.marks = []
-        return result
+        return result.tidied()
     }
 
     /// The record after turns were undone and the writing put back from
@@ -256,7 +271,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             result.retired.append(Retirement(id: mark.id, retiredAt: date))
         }
         result.marks.removeAll { $0.turnID.map(turns.contains) == true }
-        return result.carryingWriterEdit(from: current, to: restored, at: date)
+        return result.tidied().carryingWriterEdit(from: current, to: restored, at: date)
     }
 
     /// The record with what another copy of it knows. Each mark either has,
@@ -277,7 +292,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
         var clearancesByID: [UUID: Clearance] = [:]
         for clearance in clearances + other.clearances where retiredByID[clearance.markID] == nil {
-            clearancesByID[clearance.id] = clearancesByID[clearance.id] ?? clearance
+            clearancesByID[clearance.id] = clearancesByID[clearance.id].map { Self.later($0, clearance) } ?? clearance
         }
         var result = LampWritingReview(writingID: writingID)
         result.formatVersion = max(formatVersion, other.formatVersion)
@@ -289,17 +304,28 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return result
     }
 
-    /// The record without retirements and clearances made before `date`.
+    /// The record without retirements made before `date`.
     ///
-    /// They are kept so that a copy which still has a mark, or all of one,
-    /// cannot bring it back in a merge. Once every device has merged since,
-    /// they guard nothing, so the caller drops old ones rather than letting
-    /// the record only grow. A device away for longer than that could show
-    /// a cleared passage marked again, which is the whole of the risk.
+    /// A retirement is kept so that a copy which still has the mark cannot
+    /// bring it back in a merge. Once every device has merged since, it
+    /// guards nothing, so the caller drops old ones rather than letting the
+    /// record only grow. A device away for longer than that could show a
+    /// cleared passage marked again, which is the whole of the risk.
+    ///
+    /// Clearances are not pruned by age: what they cleared may still stand
+    /// in the winning copy of their mark, which would show it again. They go
+    /// with their mark.
     public func pruning(before date: Date) -> LampWritingReview {
         var result = self
         result.retired.removeAll { $0.retiredAt < date }
-        result.clearances.removeAll { $0.clearedAt < date }
+        return result
+    }
+
+    /// Without the clearances of marks no longer held.
+    private func tidied() -> LampWritingReview {
+        let held = Set(marks.map(\.id))
+        var result = self
+        result.clearances.removeAll { !held.contains($0.markID) }
         return result
     }
 
@@ -340,7 +366,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         through alignment: LampTextAlignment, from old: String, to new: String, at date: Date
     ) -> LampWritingReview {
         let target = new as NSString
-        let found = Dictionary(located(in: old).map { ($0.id, $0.ranges) }, uniquingKeysWith: { first, _ in first })
+        let found = Dictionary(located(in: old, strictly: true).map { ($0.id, $0.ranges) }, uniquingKeysWith: { first, _ in first })
         var result = self
         result.marks = []
         for mark in marks {
@@ -360,14 +386,51 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 continue
             }
             let pieces = survived.map { Self.piece($0, in: target) }
-            let unmoved = pieces.count == mark.pieces.count
-                && zip(pieces, mark.pieces).allSatisfy { $0.sameWords(as: $1) }
-            result.marks.append(unmoved ? mark : Mark(
+            result.marks.append(Self.unmoved(mark.pieces, pieces, in: target) ? mark : Mark(
                 id: mark.id, pieces: pieces, version: mark.version + 1,
                 markedAt: mark.markedAt, turnID: mark.turnID
             ))
         }
-        return result.marks == marks && result.retired == retired ? self : result
+        // Clearances follow the words they cleared, as marks do, so a mark's
+        // later copy cannot show again what was cleared of an earlier one.
+        let source = old as NSString
+        result.clearances = clearances.map { clearance in
+            let ranges = clearance.pieces.compactMap { Self.find($0, in: source, strictly: true) }
+            guard !ranges.isEmpty else { return clearance }
+            let survived = Self.coalesced(
+                ranges.flatMap { alignment.carried($0) }.compactMap { Self.remainder($0, in: target) },
+                joiningAcross: nil
+            )
+            let pieces = survived.map { Self.piece($0, in: target) }
+            return Self.unmoved(clearance.pieces, pieces, in: target) ? clearance : Clearance(
+                id: clearance.id, markID: clearance.markID, pieces: pieces,
+                version: clearance.version + 1, clearedAt: clearance.clearedAt
+            )
+        }
+        result = result.tidied()
+        return result.marks == marks && result.retired == retired && result.clearances == clearances ? self : result
+    }
+
+    /// Whether pieces carried to a new text are the ones held: the same
+    /// words beside the same words, and, where those stand more than once,
+    /// at the same place. Otherwise the place held would be stale, and the
+    /// nearest copy to it could be another one.
+    private static func unmoved(_ held: [Piece], _ carried: [Piece], in text: NSString) -> Bool {
+        guard held.count == carried.count else { return false }
+        return zip(held, carried).allSatisfy { old, new in
+            old.sameWords(as: new) && (old.hint == new.hint || !standsTwice(new, in: text))
+        }
+    }
+
+    private static func standsTwice(_ piece: Piece, in text: NSString) -> Bool {
+        only(piece.before + piece.text + piece.after, in: text) == nil
+    }
+
+    private static func later(_ lhs: Clearance, _ rhs: Clearance) -> Clearance {
+        if lhs.version != rhs.version { return lhs.version > rhs.version ? lhs : rhs }
+        let left = (try? encoder.encode(lhs)) ?? Data()
+        let right = (try? encoder.encode(rhs)) ?? Data()
+        return left.lexicographicallyPrecedes(right) ? rhs : lhs
     }
 
     private static func later(_ lhs: Mark, _ rhs: Mark) -> Mark {
@@ -394,12 +457,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// the copy nearest its hint where there are several; then with one
     /// side, then its words alone, if those stand only once. A point is
     /// found by its context.
-    static func find(_ piece: Piece, in text: NSString) -> NSRange? {
+    static func find(_ piece: Piece, in text: NSString, strictly: Bool = false) -> NSRange? {
         let length = (piece.text as NSString).length
         let offset = (piece.before as NSString).length
         if let found = nearest(piece.before + piece.text + piece.after, to: piece.hint - offset, in: text) {
             return NSRange(location: found.location + offset, length: length)
         }
+        if strictly { return nil }
         if !piece.before.isEmpty, let found = only(piece.before + piece.text, in: text) {
             return NSRange(location: found.location + offset, length: length)
         }

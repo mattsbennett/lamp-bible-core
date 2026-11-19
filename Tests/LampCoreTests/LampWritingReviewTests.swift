@@ -181,6 +181,54 @@ struct LampWritingReviewTests {
         #expect(review.carryingWriterEdit(from: agent, to: typed).isEmpty)
     }
 
+    @Test func carryingAcrossTheChangeThatMadeAMarkLeavesItWhereItIs() {
+        // An assistant's draft is marked as it is taken, then saved like
+        // any edit: carrying across that same change must not move the new
+        // mark onto the one other copy of its word in the old text.
+        let old = "Say grace here.\n\nOther words."
+        let new = "Say grace here.\n\nOther grace words."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        #expect(marked(review, in: new) == ["grace"])
+        let saved = review.carryingWriterEdit(from: old, to: new)
+        #expect(saved == review)
+    }
+
+    @Test func aClearanceFollowsItsWordsSoALaterCopyCannotShowThemAgain() {
+        let start = "One alpha beta gamma three."
+        let review = empty.markingAssistantChange(from: "One two three.", to: start)
+        // This device clears "alpha beta", then edits "alpha".
+        var here = review.clearing((start as NSString).range(of: "alpha beta"), in: start)
+        let edited = "One ALPHA beta gamma three."
+        here = here.carryingWriterEdit(from: start, to: edited)
+        // The other edits the same word, then moves the mark on twice more.
+        var there = review.carryingWriterEdit(from: start, to: edited)
+        there = there.carryingWriterEdit(from: edited, to: "Once ALPHA beta gamma three.")
+        there = there.carryingWriterEdit(from: "Once ALPHA beta gamma three.", to: edited)
+        #expect(marked(here.merged(with: there), in: edited) == ["gamma"])
+    }
+
+    @Test func aMarkOnRepeatedWordsStaysOnItsCopyAsTextIsAddedAbove() {
+        let block = String(repeating: "p", count: 24) + " Echo " + String(repeating: "q", count: 24) + "\n"
+        let other = String(repeating: "p", count: 24) + " Other " + String(repeating: "q", count: 24) + "\n"
+        let old = block + other
+        let new = block + block
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let assistants = NSRange(location: (block as NSString).length + 25, length: 4)
+        #expect(review.highlightedRanges(in: new) == [assistants])
+        let prefix = String(repeating: "z", count: 100) + "\n"
+        let carried = review.carryingWriterEdit(from: new, to: prefix + new)
+        #expect(carried.highlightedRanges(in: prefix + new)
+            == [NSRange(location: assistants.location + (prefix as NSString).length, length: 4)])
+    }
+
+    @Test func pruningNeverShowsWhatWasClearedAgain() {
+        let new = "One alpha beta gamma three."
+        let review = empty.markingAssistantChange(from: "One two three.", to: new)
+        let merged = review.clearing((new as NSString).range(of: "alpha"), in: new)
+            .merged(with: review.clearing((new as NSString).range(of: "gamma"), in: new))
+        #expect(marked(merged.pruning(before: Date().addingTimeInterval(3_600)), in: new) == ["beta"])
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(

@@ -3419,8 +3419,9 @@ as the Swift keeps them:
   raises its version; two copies of a mark merge to the higher version,
 - clearing a whole mark retires its id, and a retired id is never shown,
 - clearing part of a mark records a clearance, which is taken out of the
-  mark wherever it is drawn, and is kept until its mark is retired.
-A version of 0 is no mark. How a mark is found in the text, and what its
+  mark wherever it is drawn; carried through edits as a mark is, it too has
+  a version, and it is kept until its mark is retired.
+A version of 0 is no mark, or no clearance. How a mark is found in the text, and what its
 pieces are, is outside the model: which copy's pieces are drawn is decided
 by the version, and a tie between two copies of one version by their bytes,
 the same on both sides. -/
@@ -3428,12 +3429,12 @@ the same on both sides. -/
 structure Review where
   version : Nat → Nat
   retired : Nat → Bool
-  cleared : Nat → Bool
+  cleared : Nat → Nat
 
 def mergeReview (a b : Review) : Review :=
   { version := fun i => max (a.version i) (b.version i),
     retired := fun i => a.retired i || b.retired i,
-    cleared := fun c => a.cleared c || b.cleared c }
+    cleared := fun c => max (a.cleared c) (b.cleared c) }
 
 def Review.shows (r : Review) (i : Nat) : Bool := Decidable.decide (0 < r.version i) && !r.retired i
 
@@ -3454,9 +3455,9 @@ theorem theLatestOfAMarkNeitherRetiredSurvives (a b : Review) (i : Nat)
 
 -- And part of a mark cleared on one device stays cleared, so two devices
 -- clearing different parts leave only what neither cleared.
-theorem aClearanceIsNeverLost (a b : Review) (c : Nat) (h : a.cleared c = true) :
-    (mergeReview a b).cleared c = true := by
-  simp [mergeReview, h]
+theorem aClearanceIsNeverLost (a b : Review) (c : Nat) :
+    a.cleared c ≤ (mergeReview a b).cleared c :=
+  Nat.le_max_left _ _
 
 -- The same whichever side merges, in whatever grouping, and merging a copy
 -- with itself changes nothing, so devices agree however their passes
@@ -3466,7 +3467,7 @@ theorem mergeReview_comm (a b : Review) : mergeReview a b = mergeReview b a := b
   refine ⟨?_, ?_, ?_⟩ <;> funext i
   · exact Nat.max_comm _ _
   · exact Bool.or_comm _ _
-  · exact Bool.or_comm _ _
+  · exact Nat.max_comm _ _
 
 theorem mergeReview_assoc (a b c : Review) :
     mergeReview (mergeReview a b) c = mergeReview a (mergeReview b c) := by
@@ -3474,7 +3475,7 @@ theorem mergeReview_assoc (a b c : Review) :
   refine ⟨?_, ?_, ?_⟩ <;> funext i
   · exact Nat.max_assoc _ _ _
   · exact Bool.or_assoc _ _ _
-  · exact Bool.or_assoc _ _ _
+  · exact Nat.max_assoc _ _ _
 
 theorem mergeReview_idem (a : Review) : mergeReview a a = a := by
   cases a
@@ -5204,33 +5205,34 @@ def localDeletionName : LocalDeletion → String
 
 -- One copy of a review over marks 1 and 2 and a clearance 10 of mark 1, as
 -- a copy really is: a retired mark is not held, and neither is a clearance
--- of one. Each mark is coded as its version, 0 for none, or `r` retired.
-def reviewCopy (one two : String) (clearance : Bool) : Review :=
+-- of one. Each mark is coded as its version, 0 for none, or `r` retired;
+-- the clearance as its version, 0 for none.
+def reviewCopy (one two : String) (clearance : Nat) : Review :=
   let version := fun (code : String) => if code == "1" then 1 else if code == "2" then 2 else 0
   { version := fun i => if i == 1 then version one else if i == 2 then version two else 0,
     retired := fun i => (i == 1 && one == "r") || (i == 2 && two == "r"),
-    cleared := fun c => c == 10 && clearance }
+    cleared := fun c => if c == 10 then clearance else 0 }
 
 def reviewMarkCode (r : Review) (i : Nat) : String :=
   if r.retired i then "r" else if r.shows i then toString (r.version i) else "0"
 
 #eval show IO Unit from do
-  -- Every pair of copies: what the merge shows of each mark, and whether
-  -- mark 1's clearance still applies (held, and its mark not retired).
+  -- Every pair of copies: what the merge shows of each mark, and which
+  -- version of mark 1's clearance applies (0 for none, or its mark retired).
   let codes := ["0", "1", "2", "r"]
   for a1 in codes do
     for a2 in codes do
-      for ac in [false, true] do
-        if ac && a1 == "r" then continue
+      for ac in [0, 1, 2] do
+        if ac > 0 && a1 == "r" then continue
         for b1 in codes do
           for b2 in codes do
-            for bc in [false, true] do
-              if bc && b1 == "r" then continue
+            for bc in [0, 1, 2] do
+              if bc > 0 && b1 == "r" then continue
               let merged := mergeReview (reviewCopy a1 a2 ac) (reviewCopy b1 b2 bc)
               IO.println <| conformanceLine "reviewMerge"
                 [a1, a2, toString ac, b1, b2, toString bc,
                  reviewMarkCode merged 1, reviewMarkCode merged 2,
-                 toString (merged.cleared 10 && !merged.retired 1)]
+                 toString (if merged.retired 1 then 0 else merged.cleared 10)]
 
 #eval show IO Unit from do
   -- A fetch of what this client's records already name: the revision it last
