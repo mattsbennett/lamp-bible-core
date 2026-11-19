@@ -3383,11 +3383,11 @@ ledger instead. Any other notes or writing module is a module, and so is a
 highlight set: one file per set, so deleting a set deletes it everywhere. -/
 
 inductive LocalKind where
-  | module | collection | deck | deckAsset | media | workspaceFile | outside
+  | module | collection | deck | deckAsset | media | workspaceFile | writingReview | outside
   deriving DecidableEq, Repr
 
 inductive LocalDeletion where
-  | module (id : Nat) | deck | deckAsset | collection | unsupported
+  | module (id : Nat) | deck | deckAsset | writingReview | collection | unsupported
   deriving DecidableEq, Repr
 
 def deleteTarget : LocalKind → Option Nat → LocalDeletion
@@ -3396,11 +3396,72 @@ def deleteTarget : LocalKind → Option Nat → LocalDeletion
   | .module, none => .unsupported
   | .deck, _ => .deck
   | .deckAsset, _ => .deckAsset
+  | .writingReview, _ => .writingReview
   | .media, _ | .workspaceFile, _ | .outside, _ => .unsupported
 
 def deleteAllowed : LocalDeletion → Bool
-  | .module _ | .deck | .deckAsset => true
+  | .module _ | .deck | .deckAsset | .writingReview => true
   | .collection | .unsupported => false
+
+-- A writing's review marks go with the writing, everywhere: a file removed
+-- here and not recorded would come back from the server's copy.
+theorem aWritingsReviewIsDeletedEverywhere (id : Option Nat) :
+    deleteAllowed (deleteTarget .writingReview id) = true := rfl
+
+/-! ### A writing's review marks
+
+`LampWritingReview.merged(with:)`: what of a writing the assistant changed
+and its writer has not yet cleared, kept in its own small file. Two devices
+can each clear passages, or one clear while the Mac marks a turn, and the
+file merges rather than one copy replacing the other: every mark either
+copy has, less every mark either has retired. Marks are modelled by their
+ids, which are made once and never reused; a passage marked again after a
+clear gets a new one, so a retirement hides only the mark it retired. What
+each id covers in the text, and how a mark is found again, is outside the
+model. -/
+
+structure Review where
+  marks : List Nat
+  retired : List Nat
+  deriving DecidableEq, Repr
+
+def mergeReview (a b : Review) : Review :=
+  { marks := (a.marks ++ b.marks).filter (fun m => !(a.retired ++ b.retired).contains m),
+    retired := a.retired ++ b.retired }
+
+-- A clear on any device holds, whatever the other copy still shows.
+theorem aRetiredMarkNeverReturns (a b : Review) (m : Nat) (h : m ∈ a.retired ∨ m ∈ b.retired) :
+    m ∉ (mergeReview a b).marks := by
+  simp only [mergeReview, List.mem_filter, List.contains_eq_any_beq]
+  grind
+
+-- And nothing either side marks is lost unless one of them cleared it.
+theorem aMarkNeitherRetiredSurvives (a b : Review) (m : Nat) (h : m ∈ a.marks ∨ m ∈ b.marks)
+    (ha : m ∉ a.retired) (hb : m ∉ b.retired) : m ∈ (mergeReview a b).marks := by
+  simp [mergeReview, List.mem_filter]
+  grind
+
+-- The same whichever side merges, in whatever grouping, and merging a copy
+-- with itself changes nothing a reader can see, so devices agree however
+-- their passes interleave.
+theorem mergeReview_comm (a b : Review) (m : Nat) :
+    (m ∈ (mergeReview a b).marks ↔ m ∈ (mergeReview b a).marks) ∧
+      (m ∈ (mergeReview a b).retired ↔ m ∈ (mergeReview b a).retired) := by
+  simp [mergeReview, List.mem_filter]
+  grind
+
+theorem mergeReview_assoc (a b c : Review) (m : Nat) :
+    (m ∈ (mergeReview (mergeReview a b) c).marks ↔ m ∈ (mergeReview a (mergeReview b c)).marks) ∧
+      (m ∈ (mergeReview (mergeReview a b) c).retired ↔ m ∈ (mergeReview a (mergeReview b c)).retired) := by
+  simp [mergeReview, List.mem_filter]
+  grind
+
+theorem mergeReview_idem (a : Review) (m : Nat) (clean : ∀ m, m ∈ a.marks → m ∉ a.retired) :
+    (m ∈ (mergeReview a a).marks ↔ m ∈ a.marks) ∧
+      (m ∈ (mergeReview a a).retired ↔ m ∈ a.retired) := by
+  have := clean m
+  simp [mergeReview, List.mem_filter]
+  grind
 
 -- A removal here is recorded as a deletion only where the library would carry
 -- one out: the same rule on both sides, so no client records a tombstone
@@ -5108,19 +5169,42 @@ def manifestEntries : List ManifestEntry :=
 def localKindName : LocalKind → String
   | .module => "module" | .collection => "collection" | .deck => "deck"
   | .deckAsset => "deckAsset" | .media => "media" | .workspaceFile => "workspaceFile"
-  | .outside => "outside"
+  | .writingReview => "writingReview" | .outside => "outside"
 
 -- A module removal is checked to name the path's own ID, 7 here.
 def localDeletionName : LocalDeletion → String
   | .module id => if id == 7 then "module:own" else "module:other"
-  | .deck => "deck" | .deckAsset => "deckAsset" | .collection => "collection"
-  | .unsupported => "unsupported"
+  | .deck => "deck" | .deckAsset => "deckAsset" | .writingReview => "writingReview"
+  | .collection => "collection" | .unsupported => "unsupported"
 
 #eval show IO Unit from do
-  for kind in [LocalKind.module, .collection, .deck, .deckAsset, .media, .workspaceFile, .outside] do
+  for kind in [LocalKind.module, .collection, .deck, .deckAsset, .media, .workspaceFile,
+               .writingReview, .outside] do
     IO.println <| conformanceLine "deleteTarget"
       [localKindName kind, localDeletionName (deleteTarget kind (some 7)),
        toString (mayRecordRemoval kind (some 7))]
+
+def idsCode (ids : List Nat) : String :=
+  if ids.isEmpty then "-" else ",".intercalate (ids.map toString)
+
+def sortedIDs (ids : List Nat) : List Nat :=
+  ((List.range 4).filter ids.contains)
+
+#eval show IO Unit from do
+  -- Every way two copies can hold marks 1–3 and retire them, each copy
+  -- clean (no mark it holds is one it retired), as a real copy is. The
+  -- merged copy's marks and retirements, as sets.
+  let subsets : List (List Nat) := [[], [1], [2], [3], [1, 2], [1, 3], [2, 3], [1, 2, 3]]
+  for am in subsets do
+    for ar in subsets do
+      if am.any ar.contains then continue
+      for bm in subsets do
+        for br in subsets do
+          if bm.any br.contains then continue
+          let merged := mergeReview ⟨am, ar⟩ ⟨bm, br⟩
+          IO.println <| conformanceLine "reviewMerge"
+            [idsCode am, idsCode ar, idsCode bm, idsCode br,
+             idsCode (sortedIDs merged.marks), idsCode (sortedIDs merged.retired)]
 
 #eval show IO Unit from do
   -- A fetch of what this client's records already name: the revision it last

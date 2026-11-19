@@ -164,3 +164,46 @@ struct LampWritingReviewTests {
         #expect(Date().timeIntervalSince(start) < 5)
     }
 }
+
+struct LampWritingReviewStoreTests {
+    private func temporaryStore() throws -> LampWritingReviewStore {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return LampWritingReviewStore(rootURL: root)
+    }
+
+    @Test func aFileIsAtItsServerPathAndSavesOnlyWhatChanged() throws {
+        let store = try temporaryStore()
+        let review = LampWritingReview(writingID: "w-1")
+            .markingAssistantChange(from: "a b", to: "a c", at: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(try store.save(review))
+        #expect(try !store.save(review))
+        #expect(try store.url(writingID: "w-1").path.hasSuffix("WritingReview/w-1.json"))
+        #expect(try store.review(writingID: "w-1") == review)
+        #expect(try store.writingIDs() == ["w-1"])
+    }
+
+    @Test func aDownloadedCopyIsMergedNotPutOver() throws {
+        let store = try temporaryStore()
+        let text = "Alpha BETA gamma.\n\nDelta EPSILON zeta."
+        let review = LampWritingReview(writingID: "w").markingAssistantChange(
+            from: "Alpha beta gamma.\n\nDelta epsilon zeta.", to: text
+        )
+        let here = review.clearing((text as NSString).range(of: "BETA"), in: text)
+        let there = review.clearing((text as NSString).range(of: "EPSILON"), in: text)
+        try store.save(here)
+        #expect(try store.takeIn(downloaded: there.encoded(), writingID: "w"))
+        #expect(try store.review(writingID: "w").isEmpty)
+        // Taking in the same copy again leaves nothing to send.
+        let merged = try store.review(writingID: "w")
+        #expect(try !store.takeIn(downloaded: merged.encoded(), writingID: "w"))
+    }
+
+    @Test func anUnreadableFileIsAnErrorNotAnEmptyRecord() throws {
+        let store = try temporaryStore()
+        let url = try store.url(writingID: "w")
+        try FileManager.default.createDirectory(at: store.directoryURL, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: url)
+        #expect(throws: (any Error).self) { try store.review(writingID: "w") }
+    }
+}

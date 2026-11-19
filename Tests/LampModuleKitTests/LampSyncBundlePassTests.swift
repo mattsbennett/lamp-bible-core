@@ -998,7 +998,7 @@ struct LampSyncBundlePassTests {
             plannedKinds: { kind in
                 switch kind {
                 case .module, .devotionalMedia, .noteMedia, .bookMedia: true
-                case .deck, .deckAsset, .workspaceFile: false
+                case .deck, .deckAsset, .workspaceFile, .writingReview: false
                 }
             },
             patience: immediate

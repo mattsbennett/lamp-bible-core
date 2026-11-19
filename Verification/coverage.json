@@ -223,6 +223,21 @@
       ],
       "boundary": "The apps' own settings are opaque and kept as the current copy has them, for each app to merge. An unreadable ledger never stops the merge: of two personal ledgers, two plan-progress ledgers or two book-reading ledgers the readable one stands, and an unreadable deck ledger leaves this copy's, as the passes do."
     },
+    "Sources/LampCore/LampWritingReview.swift": {
+      "rules": [
+        "Review",
+        "mergeReview",
+        "aRetiredMarkNeverReturns",
+        "aMarkNeitherRetiredSurvives",
+        "mergeReview_comm",
+        "mergeReview_assoc",
+        "mergeReview_idem"
+      ],
+      "conformance": [
+        "reviewMerge"
+      ],
+      "boundary": "How two copies of a writing's review marks merge: every mark either has, less every mark either has retired, the same whichever side merges and in whatever grouping, so a clear on one device is never undone by another's copy. The table holds `merged(with:)` to the model for every pair of clean copies of three marks. How a mark is found in the text (its words and their context), what an assistant's change or the writer's edit does to the marks, and the pruning of old retirements are not modelled: they decide what one device writes, not how copies combine."
+    },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [
         "choosePreference",
@@ -712,12 +727,13 @@
         "mayRecordRemoval",
         "everyRecordedRemovalIsCarriedOut",
         "aCollectionIsNeverDeletedWhole",
-        "aModuleRemovalNamesItsPathsID"
+        "aModuleRemovalNamesItsPathsID",
+        "aWritingsReviewIsDeletedEverywhere"
       ],
       "conformance": [
         "deleteTarget"
       ],
-      "boundary": "What deleting a path from a library removes, called on both sides: whether a removal may be recorded, and whether one recorded elsewhere is carried out. Only the two collection paths, Notes/notes.lamp and Devotionals/devotionals.lamp, are refused; any other notes or writing module, and every highlight set, is a module. The table holds it against several real paths of each kind."
+      "boundary": "What deleting a path from a library removes, called on both sides: whether a removal may be recorded, and whether one recorded elsewhere is carried out. Only the two collection paths, Notes/notes.lamp and Devotionals/devotionals.lamp, are refused; any other notes or writing module, and every highlight set, is a module. A writing's review marks file is deleted everywhere, as a deck is. The table holds it against several real paths of each kind."
     },
     "Sources/LampModuleKit/LampPortableModuleInspector.swift": {
       "rules": [

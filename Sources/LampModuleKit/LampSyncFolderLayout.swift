@@ -16,6 +16,12 @@ public enum LampSyncFileKind: Hashable, Sendable {
     case deckAsset
     /// Any other file in a Mac workspace.
     case workspaceFile
+    /// What of one writing the assistant changed that its writer has not
+    /// yet cleared (`LampWritingReview`). Its own small file, apart from the
+    /// writing's collection, so a clear sends a few hundred bytes rather
+    /// than every writing; and listed, unlike a workspace file, so the
+    /// phone sees it change.
+    case writingReview
 
     /// Media never changes at a path: a different body gets a different
     /// name. So it is never merged, uploaded only where absent, and a
@@ -23,7 +29,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
     public var isMedia: Bool {
         switch self {
         case .devotionalMedia, .noteMedia, .bookMedia, .deckAsset: true
-        case .module, .deck, .workspaceFile: false
+        case .module, .deck, .workspaceFile, .writingReview: false
         }
     }
 
@@ -41,7 +47,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
     /// because they are an arbitrary tree the Mac checks one path at a time.
     public var isListed: Bool {
         switch self {
-        case .module, .deck: true
+        case .module, .deck, .writingReview: true
         case .devotionalMedia, .noteMedia, .bookMedia, .deckAsset, .workspaceFile: false
         }
     }
@@ -60,6 +66,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
 /// | A deck | `Workspaces/Presentations/<id>.lampdeck` |
 /// | A deck image | `Workspaces/Presentations/Assets/<file>` |
 /// | A Mac workspace file | `Workspaces/<path>` |
+/// | A writing's review marks | `WritingReview/<writing>.json` |
 ///
 /// A module's bytes are the phone's: personal modules are the
 /// `LampWebDAVPersonalArchiveAdapter` output, with module IDs rewritten, and a
@@ -90,10 +97,15 @@ public enum LampSyncFolderLayout {
     public static let writingWorkspacesDirectory = "\(workspacesDirectory)/Writing"
     public static let deckAssetsDirectory = "\(decksDirectory)/Assets"
     public static let deckExtension = "lampdeck"
+    /// One file per writing whose assistant's changes are being reviewed,
+    /// named by the writing's id, as its workspace is.
+    public static let writingReviewDirectory = "WritingReview"
+    public static let writingReviewExtension = "json"
 
-    /// The kind folders and the deck folder, one Depth:1 listing each.
+    /// The kind folders, the deck folder and the review folder, one Depth:1
+    /// listing each.
     public static let listedDirectories: [String] =
-        LampSyncContentKind.allCases.map(\.folder) + [decksDirectory]
+        LampSyncContentKind.allCases.map(\.folder) + [decksDirectory, writingReviewDirectory]
 
     public static func modulePath(kind: LampSyncContentKind, moduleID: String) throws -> String {
         try checked([kind.folder], "\(moduleID).\(moduleExtension)")
@@ -138,6 +150,17 @@ public enum LampSyncFolderLayout {
         try checked([deckAssetsDirectory], filename)
     }
 
+    public static func writingReviewPath(writingID: String) throws -> String {
+        try checked([writingReviewDirectory], "\(writingID).\(writingReviewExtension)")
+    }
+
+    /// The writing a review file is for, or nil for any other path.
+    public static func writingID(ofReviewPath path: String) -> String? {
+        guard kind(of: path) == .writingReview,
+              let filename = path.split(separator: "/").last else { return nil }
+        return String(filename.dropLast(writingReviewExtension.count + 1))
+    }
+
     public static func workspaceFilePath(relativePath: String) throws -> String {
         let path = "\(workspacesDirectory)/\(relativePath)"
         guard kind(of: path) == .workspaceFile else { throw PathError.unsafe(path) }
@@ -166,6 +189,11 @@ public enum LampSyncFolderLayout {
         }
         if head == bookMediaDirectory {
             return components.count >= 3 ? .bookMedia : nil
+        }
+        if head == writingReviewDirectory {
+            let filename = components.count == 2 ? components[1] : ""
+            return filename.lowercased().hasSuffix(".\(writingReviewExtension)")
+                && filename.count > writingReviewExtension.count + 1 ? .writingReview : nil
         }
         guard head == workspacesDirectory else { return nil }
         if components[1] == "Presentations" {

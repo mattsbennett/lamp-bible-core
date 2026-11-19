@@ -24,6 +24,10 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     case deck(String)
     /// The deck asset with this name.
     case deckAsset(String)
+    /// The review marks of the writing with this id. Deleted with its
+    /// writing, and on a device that deletes it, everywhere: a file only
+    /// removed here would be fetched again from the server's copy.
+    case writingReview(String)
     /// The notes or writing collection, refused.
     case collection
     /// Nothing a pass deletes locally: media goes with the module that shows
@@ -51,6 +55,8 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
             return filename(of: path).map(Self.deck) ?? .unsupported
         case .deckAsset:
             return filename(of: path).map(Self.deckAsset) ?? .unsupported
+        case .writingReview:
+            return LampSyncFolderLayout.writingID(ofReviewPath: path).map(Self.writingReview) ?? .unsupported
         case .devotionalMedia, .noteMedia, .bookMedia, .workspaceFile:
             return .unsupported
         }
@@ -62,7 +68,7 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     /// copy going back up (`thePlanNeverAsksForARefusedDeletion`).
     public var isAllowed: Bool {
         switch self {
-        case .module, .deck, .deckAsset: true
+        case .module, .deck, .deckAsset, .writingReview: true
         case .collection, .unsupported: false
         }
     }

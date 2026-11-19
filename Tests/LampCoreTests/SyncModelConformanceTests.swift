@@ -111,6 +111,7 @@ struct SyncModelConformanceTests {
         "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourCopy", "fetchedForMerge",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
+        "reviewMerge",
     ]
 
     // MARK: - The model itself
@@ -990,7 +991,8 @@ struct SyncModelConformanceTests {
                 try LampSyncFolderLayout.bookMediaPath(moduleID: "b", path: "plates/a.png"),
             ],
             "workspaceFile": ["Workspaces/a.md"],
-            "outside": ["Elsewhere/a.txt"],
+            "writingReview": [try LampSyncFolderLayout.writingReviewPath(writingID: "w-1")],
+            "outside": ["Elsewhere/a.txt", "WritingReview/nested/w.json", "WritingReview/w.txt"],
         ]
         func name(_ target: LampSyncLocalDeletion, at path: String) -> String {
             switch target {
@@ -998,6 +1000,8 @@ struct SyncModelConformanceTests {
                 return id == LampSyncFolderLayout.remoteModuleID(of: path) ? "module:own" : "module:other"
             case .deck: return "deck"
             case .deckAsset: return "deckAsset"
+            case .writingReview(let id):
+                return id == LampSyncFolderLayout.writingID(ofReviewPath: path) ? "writingReview" : "writingReview:other"
             case .collection: return "collection"
             case .unsupported: return "unsupported"
             }
@@ -1008,6 +1012,30 @@ struct SyncModelConformanceTests {
                 let target = LampSyncLocalDeletion.target(of: path)
                 return name(target, at: path) == f[1] && String(target.isAllowed) == f[2]
             }
+        }
+    }
+
+    /// Two copies of a writing's review marks merged, the model's ids
+    /// standing for marks: what is shown, and what is retired, as sets.
+    @Test func reviewMerge() throws {
+        func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
+        func ids(_ code: String) -> [Int] { code == "-" ? [] : code.split(separator: ",").map { Int($0)! } }
+        func review(marks: String, retired: String) -> LampWritingReview {
+            LampWritingReview(
+                writingID: "w",
+                marks: ids(marks).map {
+                    .init(id: id($0), text: "m\($0)", before: "", after: "", markedAt: Date(timeIntervalSince1970: 0), turnID: nil)
+                },
+                retired: ids(retired).map { .init(id: id($0), retiredAt: Date(timeIntervalSince1970: Double($0))) }
+            )
+        }
+        func code(_ values: [UUID]) -> String {
+            let numbers = (1...3).filter { values.contains(id($0)) }
+            return numbers.isEmpty ? "-" : numbers.map(String.init).joined(separator: ",")
+        }
+        try conform("reviewMerge") { f in
+            let merged = review(marks: f[0], retired: f[1]).merged(with: review(marks: f[2], retired: f[3]))
+            return code(merged.marks.map(\.id)) == f[4] && code(merged.retired.map(\.id)) == f[5]
         }
     }
 

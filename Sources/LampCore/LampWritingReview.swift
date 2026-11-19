@@ -63,7 +63,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             self.text = text
             self.before = before
             self.after = after
-            self.markedAt = markedAt
+            self.markedAt = LampWritingReview.toTheMillisecond(markedAt)
             self.turnID = turnID
         }
 
@@ -76,7 +76,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
         public init(id: UUID, retiredAt: Date) {
             self.id = id
-            self.retiredAt = retiredAt
+            self.retiredAt = LampWritingReview.toTheMillisecond(retiredAt)
         }
     }
 
@@ -88,6 +88,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     }
 
     public var isEmpty: Bool { marks.isEmpty }
+
+    /// Times as the file holds them, so a record read back equals the one
+    /// written: a record that differed only below a millisecond would look
+    /// changed, and be sent again, for nothing.
+    static func toTheMillisecond(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: (date.timeIntervalSince1970 * 1_000).rounded() / 1_000)
+    }
 
     // MARK: Finding marks
 
