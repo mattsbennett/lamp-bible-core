@@ -92,8 +92,8 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
     /// the writer has since changed.
     public var writingRevision: Int?
     /// With `writingRevision`: what the writing held on the device
-    /// (`LampAgentRemoteWritingRevision.digest`), which tells two saves in
-    /// the same second apart.
+    /// (`LampAgentRemoteWritingRevision.digest(of:)`), so a save in the same
+    /// second as the host's copy is still fetched.
     public var writingDigest: String?
     public var clientName: String?
     /// On pairing only: the id the host knows this device by, and the key
@@ -518,10 +518,12 @@ public enum LampAgentRemoteWritingRevision {
         return of(lastModified: host) < device
     }
 
-    /// The same, telling two saves in one second apart by what each holds:
-    /// a host copy dated the device's second but holding something else is
-    /// behind too. A device that sent no digest is judged by its second.
-    public static func hostIsBehind(
+    /// Whether the host should take in what sync has before the turn: its
+    /// copy is older, or missing, or dated the same second as the device's
+    /// but holding something else. Only `hostIsBehind` refuses a turn. Two
+    /// apps can spell the same body differently, so a digest that still
+    /// differs after the pull costs that pull, never the turn.
+    public static func hostShouldFetch(
         host: Date?, hostDigest: String?, device: Int?, deviceDigest: String?
     ) -> Bool {
         if hostIsBehind(host: host, device: device) { return true }
@@ -529,19 +531,14 @@ public enum LampAgentRemoteWritingRevision {
         return hostDigest != deviceDigest
     }
 
-    /// What a writing holds, as both apps store and sync it: its plain text
-    /// and its rich body, if it has one, each exactly as stored.
-    public static func digest(content: String, contentJSON: String?) -> String {
-        // The plain text, a separator, then whether there is a rich body and
-        // the body: none and an empty one are not the same writing.
-        var bytes = Data(content.utf8)
-        bytes.append(0)
-        if let contentJSON {
-            bytes.append(1)
-            bytes.append(contentsOf: Data(contentJSON.utf8))
-        } else {
-            bytes.append(0)
-        }
-        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    /// What a writing's body holds, as both apps sync it: the row's
+    /// `contentJSON`, byte for byte.
+    public static func digest(of row: LampPersonalWritingFile.Row) -> String {
+        SHA256.hash(data: Data(row.contentJSON.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The same for this app's own writing, through the row it syncs as.
+    public static func digest(of writing: LampDevotional) -> String? {
+        (try? LampPersonalWritingFile.row(for: writing)).map(digest(of:))
     }
 }

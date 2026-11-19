@@ -244,17 +244,18 @@ final class LampAgentRemoteProtocolTests: XCTestCase {
         XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: nil, device: nil))
     }
 
-    /// Two saves in the same second are told apart by what each holds.
-    func testTwoSavesInOneSecondAreToldApart() {
+    /// A save in the same second as the host's copy is fetched; only a
+    /// copy dated earlier is refused.
+    func testASaveInTheSameSecondIsFetched() {
         let second = Date(timeIntervalSince1970: 1_800_000_000.2)
-        let a = LampAgentRemoteWritingRevision.digest(content: "A", contentJSON: nil)
-        let b = LampAgentRemoteWritingRevision.digest(content: "B", contentJSON: nil)
+        let a = LampAgentRemoteWritingRevision.digest(of: LampPersonalWritingFile.Row(id: "w", moduleID: "m", title: "t", contentJSON: "A", created: 0))
+        let b = LampAgentRemoteWritingRevision.digest(of: LampPersonalWritingFile.Row(id: "w", moduleID: "m", title: "t", contentJSON: "B", created: 0))
         XCTAssertNotEqual(a, b)
-        XCTAssertNotEqual(a, LampAgentRemoteWritingRevision.digest(content: "A", contentJSON: ""))
-        XCTAssertTrue(LampAgentRemoteWritingRevision.hostIsBehind(host: second, hostDigest: a, device: 1_800_000_000, deviceDigest: b))
-        XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: second, hostDigest: b, device: 1_800_000_000, deviceDigest: b))
-        XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: second, hostDigest: a, device: 1_800_000_000, deviceDigest: nil))
-        // A host copy saved later is newer, whatever it holds.
-        XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: second, hostDigest: a, device: 1_799_999_999, deviceDigest: b))
+        XCTAssertTrue(LampAgentRemoteWritingRevision.hostShouldFetch(host: second, hostDigest: a, device: 1_800_000_000, deviceDigest: b))
+        XCTAssertFalse(LampAgentRemoteWritingRevision.hostIsBehind(host: second, device: 1_800_000_000))
+        XCTAssertFalse(LampAgentRemoteWritingRevision.hostShouldFetch(host: second, hostDigest: b, device: 1_800_000_000, deviceDigest: b))
+        XCTAssertFalse(LampAgentRemoteWritingRevision.hostShouldFetch(host: second, hostDigest: a, device: 1_800_000_000, deviceDigest: nil))
+        XCTAssertFalse(LampAgentRemoteWritingRevision.hostShouldFetch(host: second, hostDigest: a, device: 1_799_999_999, deviceDigest: b))
+        XCTAssertTrue(LampAgentRemoteWritingRevision.hostShouldFetch(host: second, hostDigest: a, device: 1_800_000_001, deviceDigest: a))
     }
 }
