@@ -237,8 +237,9 @@ public struct LampAgentRemoteChatSummary: Codable, Equatable, Identifiable, Send
     /// `reader`, `writing`, or a kind a later Lamp knows. Only reader chats
     /// can be continued from a device in this version.
     public var kind: String
-    /// The provider's id (`claude`, `codex`) and the name to show for it: the
-    /// one that spoke last, which is the one `send` continues with.
+    /// The provider's id ("claude", "codex") and the name to show for it: the
+    /// one the host's own chat pane would open the chat on, which is the one
+    /// `send` continues with.
     public var provider: String
     public var providerName: String
     /// The last thing said in it, by either side.
@@ -335,8 +336,10 @@ public struct LampAgentRemoteChatSnapshot: Codable, Equatable, Sendable {
     /// The running turn's reply so far.
     public var partialReply: String?
     public var activity: LampAgentRemoteActivity?
-    /// Said by the host above the chat, such as that it continues from a
-    /// session that can't be resumed on this Mac.
+    /// What went wrong with the chat's last turn, as the host shows it;
+    /// cleared when a turn begins (`LampAgentRemoteChatUpdates`). One thing,
+    /// not two: a host's other lines about a chat are not sent in this
+    /// version.
     public var notice: String?
 
     public init(
