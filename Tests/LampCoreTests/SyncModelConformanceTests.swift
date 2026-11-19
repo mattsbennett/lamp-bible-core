@@ -112,7 +112,7 @@ struct SyncModelConformanceTests {
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
         "reviewMerge", "documentMerge", "documentDeletion", "mergedRecord", "asksRevision",
-        "documentSwept", "documentDeletionStamp",
+        "documentSwept", "documentDeletionStamp", "forgetsAfterAsking",
     ]
 
     // MARK: - The model itself
@@ -1035,6 +1035,20 @@ struct SyncModelConformanceTests {
                 let target = LampSyncLocalDeletion.target(of: path)
                 return name(target, at: path) == f[1] && String(target.isAllowed) == f[2]
             }
+        }
+    }
+
+    /// Whether a path asked about and found gone is forgotten.
+    @Test func forgetsAfterAsking() throws {
+        try conform("forgetsAfterAsking") { f in
+            let entry: LampSyncBundlePass.ProbeEntry = switch f[0] {
+            case "member": .member
+            case "deletion": .deletion
+            default: .none
+            }
+            return String(LampSyncBundlePass.forgetsAfterAsking(
+                entry: entry, held: f[1] == "true", answered: f[2] == "true"
+            )) == f[3]
         }
     }
 

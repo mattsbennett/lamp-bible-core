@@ -280,19 +280,24 @@ public struct LampSyncBundlePass {
         // deletion's file this client was to reap and could not. One request
         // for each, until a bundle names the one or a reap forgets the other.
         let manifest = opened.bundle.manifest
-        let named = Set(manifest.paths.map { $0.precomposedStringWithCanonicalMapping.lowercased() })
         let held = Set(gathered.local.map(\.path))
-        for path in held.union(manifest.paths).sorted() {
+        let known = held.union(manifest.paths)
+        let spellings = Dictionary(grouping: known) { $0.precomposedStringWithCanonicalMapping.lowercased() }
+        for path in known.sorted() {
             guard let kind = LampSyncFolderLayout.kind(of: path) else { continue }
             let entry: ProbeEntry = manifest.entry(at: path).map { $0.isMember ? .member : .deletion } ?? .none
             guard Self.asksForRevision(
                 listedKind: kind.isListed, media: kind.isMedia, inListing: listing[path] != nil, entry: entry,
                 held: held.contains(path),
-                otherSpelling: entry == .none && named.contains(path.precomposedStringWithCanonicalMapping.lowercased()),
+                otherSpelling: (spellings[path.precomposedStringWithCanonicalMapping.lowercased()]?.count ?? 0) > 1,
                 recordStands: records.record(path, in: source) != nil
             ) else { continue }
-            if let revision = try? await store.revision(path: path) {
-                listing[path] = revision
+            let answer: String?
+            do { answer = try await store.revision(path: path) } catch { continue }
+            if let answer {
+                listing[path] = answer
+            } else if Self.forgetsAfterAsking(entry: entry, held: held.contains(path), answered: false) {
+                records.forget(path, in: source)
             }
         }
 
@@ -785,8 +790,17 @@ public struct LampSyncBundlePass {
         switch entry {
         case .none: return held && !otherSpelling
         case .member: return false
-        case .deletion: return recordStands
+        case .deletion: return recordStands && !otherSpelling
         }
+    }
+
+    /// Whether a path asked about is forgotten: a deletion's, held nowhere
+    /// here, whose file the server no longer has. Another client reaped it,
+    /// or a delete's answer was lost; nothing is left to reap, and asking
+    /// again on every pass would go on until the tombstone was pruned.
+    /// (`Verification/SyncMerge.lean`: `forgetsAfterAsking`.)
+    static func forgetsAfterAsking(entry: ProbeEntry, held: Bool, answered: Bool) -> Bool {
+        entry == .deletion && !held && !answered
     }
 
     enum FetchedForMerge: Equatable {

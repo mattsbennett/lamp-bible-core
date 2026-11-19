@@ -3446,8 +3446,12 @@ caller asks for the manifest's own unlisted members. The pass asks, besides,
 for an unlisted, non-media path held here that the manifest does not name,
 which may be an upload the server had not shown back, which nothing records;
 and for a deletion's file this client still has a record of, which a reap
-that failed leaves. Not for a path the manifest names under another
-spelling: a server that folds case would answer with that file's revision. -/
+that failed leaves. Not for a path the manifest or this client names under
+another spelling as well: a server that folds case would answer with that
+file's revision, and the plan would adopt a deleted file, or reap a live one.
+A deletion's file the server no longer has, reaped by another client or by a
+delete whose answer was lost, leaves nothing to reap: the record is
+forgotten, and the path is not asked about again. -/
 
 inductive ProbeEntry where
   | none | member | deletion
@@ -3459,15 +3463,28 @@ def asksRevision (listedKind media inListing : Bool) (entry : ProbeEntry)
   match entry with
   | .none => held && !otherSpelling
   | .member => false
-  | .deletion => recordStands
+  | .deletion => recordStands && !otherSpelling
+
+def forgetsAfterAsking (entry : ProbeEntry) (held answered : Bool) : Bool :=
+  entry == .deletion && !held && !answered
 
 theorem anUnconfirmedUploadIsAskedAbout (recordStands : Bool) :
     asksRevision false false false .none true false recordStands = true := rfl
 
-theorem anotherSpellingIsNeverAskedAbout (entry : ProbeEntry) (held recordStands : Bool)
-    (h : entry = .none) :
+theorem anotherSpellingIsNeverAskedAbout (entry : ProbeEntry) (held recordStands : Bool) :
     asksRevision false false false entry held true recordStands = false := by
-  subst h; simp [asksRevision]
+  cases entry <;> simp [asksRevision]
+
+-- Only a deletion's record is forgotten, never a member's or a held copy's,
+-- and once forgotten the path is not asked about again.
+theorem onlyAGoneDeletionIsForgotten (entry : ProbeEntry) (held answered : Bool)
+    (h : forgetsAfterAsking entry held answered = true) :
+    entry = .deletion ∧ held = false ∧ answered = false := by
+  cases entry <;> cases held <;> cases answered <;> simp_all [forgetsAfterAsking]
+
+theorem aForgottenDeletionIsNotAskedAgain (otherSpelling : Bool) :
+    asksRevision false false false .deletion false otherSpelling false = false := by
+  simp [asksRevision]
 
 -- Unasked, an upload not shown back is sent "if absent" on every pass, and
 -- refused, since it is there;
@@ -5486,6 +5503,11 @@ def probeEntryName : ProbeEntry → String
                   [toString listedKind, toString media, toString inListing, probeEntryName entry,
                    toString held, toString otherSpelling, toString recordStands,
                    toString (asksRevision listedKind media inListing entry held otherSpelling recordStands)]
+  for entry in [ProbeEntry.none, .member, .deletion] do
+    for held in [false, true] do
+      for answered in [false, true] do
+        IO.println <| conformanceLine "forgetsAfterAsking"
+          [probeEntryName entry, toString held, toString answered, toString (forgetsAfterAsking entry held answered)]
 
 #eval show IO Unit from do
   -- A copy held or not, against what was last agreed, none for never.

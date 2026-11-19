@@ -1289,6 +1289,46 @@ struct LampSyncBundlePassTests {
         #expect(records.record(path, in: source) == nil)
     }
 
+    /// A deletion's file the server no longer has, reaped elsewhere or by a
+    /// delete whose answer was lost: the record is forgotten on asking, and
+    /// the path not asked about again.
+    @Test func aDeletionAlreadyReapedIsForgottenAndNotAskedAgain() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let store = try seeded(path: path, revision: "\"o1\"", deletedAt: 1_500)
+        store.bodies[path] = nil
+        store.revisions[path] = nil
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"o1\"")
+        records.confirmRecorded([path: "\"o1\""], in: source)
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
+        #expect(records.record(path, in: source) == nil)
+        store.operations.removeAll()
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+        ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
+        #expect(!store.operations.contains("revision \(path)"))
+    }
+
+    /// A deletion's file is not asked about while another spelling of it is
+    /// held or named: a server folding case would answer for that one, and
+    /// the pass would reap a live document.
+    @Test func aDeletionWithALiveCaseAliasIsNotAskedAbout() async throws {
+        let deleted = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "Outline.md")
+        let live = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "outline.md")
+        let store = try seeded(path: deleted, revision: "\"o1\"", deletedAt: 1_500)
+        let url = try makeFile("outline")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(deleted, in: source, digest: "d", revision: "\"o1\"")
+        records.confirmRecorded([deleted: "\"o1\""], in: source)
+        _ = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([local(live, url, "outline")]) }, records: &records, patience: immediate)
+        #expect(!store.operations.contains("revision \(deleted)"))
+    }
+
     /// A held file the manifest names under another spelling is never asked
     /// about: a server folding case would answer with that file's revision.
     @Test func aPathTheManifestNamesUnderAnotherSpellingIsNotAskedAbout() async throws {
