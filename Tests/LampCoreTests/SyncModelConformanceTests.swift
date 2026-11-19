@@ -111,7 +111,7 @@ struct SyncModelConformanceTests {
         "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourCopy", "fetchedForMerge",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
-        "reviewMerge",
+        "reviewMerge", "documentMerge",
     ]
 
     // MARK: - The model itself
@@ -1000,8 +1000,17 @@ struct SyncModelConformanceTests {
                 try LampSyncFolderLayout.devotionalMediaPath(moduleID: "m", devotionalID: "w", filename: "a.png"),
                 try LampSyncFolderLayout.bookMediaPath(moduleID: "b", path: "plates/a.png"),
             ],
-            "workspaceFile": ["Workspaces/a.md"],
+            "workspaceFile": [
+                "Workspaces/a.md",
+                "Workspaces/Writing/w-1/Context/a.md",
+                "Workspaces/Writing/w-1/Documents/draft.md",
+                "Workspaces/Writing/w-1/DeletedFiles.json",
+            ],
             "writingReview": [try LampSyncFolderLayout.writingReviewPath(writingID: "w-1")],
+            "writingDocument": [
+                try LampWritingWorkspaceLayout.documentPath(writingID: "w-1", name: "outline.md"),
+                "Workspaces/Writing/w-1/Documents/Notes – Ro\u{0308}mer.txt",
+            ],
             "outside": ["Elsewhere/a.txt", "WritingReview/nested/w.json", "WritingReview/w.txt"],
         ]
         func name(_ target: LampSyncLocalDeletion, at path: String) -> String {
@@ -1012,6 +1021,9 @@ struct SyncModelConformanceTests {
             case .deckAsset: return "deckAsset"
             case .writingReview(let id):
                 return id == LampSyncFolderLayout.writingID(ofReviewPath: path) ? "writingReview" : "writingReview:other"
+            case .writingDocument(let folder, let name):
+                let document = LampWritingWorkspaceLayout.document(ofPath: path)
+                return document?.folder == folder && document?.name == name ? "writingDocument" : "writingDocument:other"
             case .collection: return "collection"
             case .unsupported: return "unsupported"
             }
@@ -1022,6 +1034,27 @@ struct SyncModelConformanceTests {
                 let target = LampSyncLocalDeletion.target(of: path)
                 return name(target, at: path) == f[1] && String(target.isAllowed) == f[2]
             }
+        }
+    }
+
+    /// A downloaded document against the copy held, as body 1 or 2 against a
+    /// download of body 1: a kept copy or not, both changed or not.
+    @Test func documentMerge() throws {
+        let body = { (n: String) in Data("body \(n)".utf8) }
+        try conform("documentMerge") { f in
+            let name = f[0] == "true"
+                ? LampWritingWorkspaceLayout.keptCopyName(of: "outline.md", device: "iPhone", at: Date())
+                : "outline.md"
+            let decision = LampWritingDocumentMerge.decide(
+                name: name, held: f[1] == "none" ? nil : body(f[1]), incoming: body("1"),
+                bothChanged: f[2] == "true", localDevice: "Mac", at: Date()
+            )
+            let code = switch decision {
+            case .keep: "keep"
+            case .take: "take"
+            case .takeKeepingHeldAs: "takeKeepingHeld"
+            }
+            return code == f[3]
         }
     }
 

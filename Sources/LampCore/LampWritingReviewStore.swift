@@ -215,16 +215,17 @@ public struct LampWritingReviewStore: Sendable {
     public static let retirementLifetime: TimeInterval = 60 * 60 * 24 * 90
 }
 
-/// One lock for each review file, shared by every store in the process, so
-/// two stores over the same library change a file one at a time. Recursive,
-/// since a change reads and saves under the lock it already holds. Keyed
-/// folded, as the file systems Lamp runs on name files.
-private final class FileLocks: @unchecked Sendable {
+/// One lock for each file a store keeps, review marks or a writing's
+/// documents, shared by every store in the process, so two stores over the
+/// same library change a file one at a time. Recursive, since a change reads
+/// and saves under the lock it already holds. Keyed folded and in NFC, as
+/// the file systems Lamp runs on name files.
+final class FileLocks: @unchecked Sendable {
     private let lock = NSLock()
     private var locks: [String: NSRecursiveLock] = [:]
 
     func holding<T>(_ url: URL, _ body: () throws -> T) rethrows -> T {
-        let key = url.standardizedFileURL.path.lowercased()
+        let key = url.standardizedFileURL.path.precomposedStringWithCanonicalMapping.lowercased()
         lock.lock()
         let fileLock = locks[key] ?? NSRecursiveLock()
         locks[key] = fileLock

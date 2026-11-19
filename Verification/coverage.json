@@ -730,12 +730,36 @@
         "everyRecordedRemovalIsCarriedOut",
         "aCollectionIsNeverDeletedWhole",
         "aModuleRemovalNamesItsPathsID",
-        "aWritingsReviewIsDeletedEverywhere"
+        "aWritingsReviewIsDeletedEverywhere",
+        "aWritingsDocumentIsDeletedEverywhere",
+        "anyOtherWorkspaceFileIsNotDeletedAsAFile"
       ],
       "conformance": [
         "deleteTarget"
       ],
-      "boundary": "What deleting a path from a library removes, called on both sides: whether a removal may be recorded, and whether one recorded elsewhere is carried out. Only the two collection paths, Notes/notes.lamp and Devotionals/devotionals.lamp, are refused; any other notes or writing module, and every highlight set, is a module. A writing's review marks file is deleted everywhere, as a deck is. The table holds it against several real paths of each kind."
+      "boundary": "What deleting a path from a library removes, called on both sides: whether a removal may be recorded, and whether one recorded elsewhere is carried out. Only the two collection paths, Notes/notes.lamp and Devotionals/devotionals.lamp, are refused; any other notes or writing module, and every highlight set, is a module. A writing's review marks file is deleted everywhere, as a deck is, and so is one of a writing's documents; every other workspace file travels with its tree. The table holds it against several real paths of each kind."
+    },
+    "Sources/LampModuleKit/LampWritingWorkspaceLayout.swift": {
+      "rules": [
+        "DocumentDecision",
+        "documentMerge",
+        "documentAfter",
+        "anIdenticalBodyMakesNoCopy",
+        "everyBodySurvivesABothChangedMerge",
+        "aKeptCopyIsNeverCopied",
+        "onlyTheServerMovedTakesItsCopy",
+        "theServersCopyKeepsTheName"
+      ],
+      "conformance": [
+        "documentMerge"
+      ],
+      "boundary": "What a device does with a downloaded document, given its own copy and whether both changed: the decision is modelled, with bodies as numbers. Which names are documents, the workspace folder's name and the kept copy's name are not: they are spelled once here for both apps and held by LampWritingWorkspaceLayoutTests, including that every kept copy's name is a document's."
+    },
+    "Sources/LampCore/LampWritingDocumentStore.swift": {
+      "rules": [
+        "documentMerge"
+      ],
+      "boundary": "Applies `LampWritingDocumentMerge` to the files a device keeps, under a lock per file, writing a kept copy before the document it was taken from is replaced. File-system behaviour is assumed; LampWritingDocumentStoreTests hold the store to the decision."
     },
     "Sources/LampModuleKit/LampPortableModuleInspector.swift": {
       "rules": [

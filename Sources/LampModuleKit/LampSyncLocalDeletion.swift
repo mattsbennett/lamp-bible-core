@@ -28,11 +28,15 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     /// writing, and on a device that deletes it, everywhere: a file only
     /// removed here would be fetched again from the server's copy.
     case writingReview(String)
+    /// One of a writing's documents, by its workspace folder and its name
+    /// in NFC. Deleted on any device, deleted everywhere, so an outline the
+    /// writer removed does not come back from another device's copy.
+    case writingDocument(folder: String, name: String)
     /// The notes or writing collection, refused.
     case collection
     /// Nothing a pass deletes locally: media goes with the module that shows
-    /// it, a workspace file's removal travels inside its tree, and a path
-    /// outside the layout is never acted on.
+    /// it, any other workspace file's removal travels inside its tree, and a
+    /// path outside the layout is never acted on.
     case unsupported
 
     /// The module ID of the collection every note is published in.
@@ -57,6 +61,8 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
             return filename(of: path).map(Self.deckAsset) ?? .unsupported
         case .writingReview:
             return LampSyncFolderLayout.writingID(ofReviewPath: path).map(Self.writingReview) ?? .unsupported
+        case .writingDocument:
+            return LampWritingWorkspaceLayout.document(ofPath: path).map(Self.writingDocument) ?? .unsupported
         case .devotionalMedia, .noteMedia, .bookMedia, .workspaceFile:
             return .unsupported
         }
@@ -68,7 +74,7 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     /// copy going back up (`thePlanNeverAsksForARefusedDeletion`).
     public var isAllowed: Bool {
         switch self {
-        case .module, .deck, .deckAsset, .writingReview: true
+        case .module, .deck, .deckAsset, .writingReview, .writingDocument: true
         case .collection, .unsupported: false
         }
     }

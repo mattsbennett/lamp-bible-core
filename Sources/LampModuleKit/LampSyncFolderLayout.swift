@@ -14,6 +14,10 @@ public enum LampSyncFileKind: Hashable, Sendable {
     /// An image a deck shows. Decks share one flat folder of them, under
     /// generated names.
     case deckAsset
+    /// One of the writer's own documents beside a writing, its outline or
+    /// notes, in the writing's workspace (`LampWritingWorkspaceLayout`). Both
+    /// apps keep these, and a deletion on either is a deletion everywhere.
+    case writingDocument
     /// Any other file in a Mac workspace.
     case workspaceFile
     /// What of one writing the assistant changed that its writer has not
@@ -29,7 +33,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
     public var isMedia: Bool {
         switch self {
         case .devotionalMedia, .noteMedia, .bookMedia, .deckAsset: true
-        case .module, .deck, .workspaceFile, .writingReview: false
+        case .module, .deck, .writingDocument, .workspaceFile, .writingReview: false
         }
     }
 
@@ -48,7 +52,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
     public var isListed: Bool {
         switch self {
         case .module, .deck, .writingReview: true
-        case .devotionalMedia, .noteMedia, .bookMedia, .deckAsset, .workspaceFile: false
+        case .devotionalMedia, .noteMedia, .bookMedia, .deckAsset, .writingDocument, .workspaceFile: false
         }
     }
 }
@@ -65,6 +69,7 @@ public enum LampSyncFileKind: Hashable, Sendable {
 /// | Book images | `BookMedia/<module>/<path>` |
 /// | A deck | `Workspaces/Presentations/<id>.lampdeck` |
 /// | A deck image | `Workspaces/Presentations/Assets/<file>` |
+/// | A writing's document | `Workspaces/Writing/<folder>/Documents/<name>` |
 /// | A Mac workspace file | `Workspaces/<path>` |
 /// | A writing's review marks | `WritingReview/<writing>.json` |
 ///
@@ -259,7 +264,7 @@ public enum LampSyncFolderLayout {
             // Anything else under the deck folder belongs to the deck format.
             return components.count == 4 && components[2] == "Assets" ? .deckAsset : nil
         }
-        return .workspaceFile
+        return LampWritingWorkspaceLayout.document(ofPath: path) == nil ? .workspaceFile : .writingDocument
     }
 
     /// A copy the old sync left under an ID it has since renamed:

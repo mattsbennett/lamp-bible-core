@@ -3383,11 +3383,12 @@ ledger instead. Any other notes or writing module is a module, and so is a
 highlight set: one file per set, so deleting a set deletes it everywhere. -/
 
 inductive LocalKind where
-  | module | collection | deck | deckAsset | media | workspaceFile | writingReview | outside
+  | module | collection | deck | deckAsset | media | workspaceFile | writingReview | writingDocument
+  | outside
   deriving DecidableEq, Repr
 
 inductive LocalDeletion where
-  | module (id : Nat) | deck | deckAsset | writingReview | collection | unsupported
+  | module (id : Nat) | deck | deckAsset | writingReview | writingDocument | collection | unsupported
   deriving DecidableEq, Repr
 
 def deleteTarget : LocalKind → Option Nat → LocalDeletion
@@ -3397,16 +3398,27 @@ def deleteTarget : LocalKind → Option Nat → LocalDeletion
   | .deck, _ => .deck
   | .deckAsset, _ => .deckAsset
   | .writingReview, _ => .writingReview
+  | .writingDocument, _ => .writingDocument
   | .media, _ | .workspaceFile, _ | .outside, _ => .unsupported
 
 def deleteAllowed : LocalDeletion → Bool
-  | .module _ | .deck | .deckAsset | .writingReview => true
+  | .module _ | .deck | .deckAsset | .writingReview | .writingDocument => true
   | .collection | .unsupported => false
 
 -- A writing's review marks go with the writing, everywhere: a file removed
 -- here and not recorded would come back from the server's copy.
 theorem aWritingsReviewIsDeletedEverywhere (id : Option Nat) :
     deleteAllowed (deleteTarget .writingReview id) = true := rfl
+
+-- So does one of a writing's documents, its outline or notes: either app
+-- may delete one, and a removal not recorded would come back from the
+-- other device's copy. Every other file in a Mac workspace still travels
+-- with its tree and is never deleted as a file.
+theorem aWritingsDocumentIsDeletedEverywhere (id : Option Nat) :
+    deleteAllowed (deleteTarget .writingDocument id) = true := rfl
+
+theorem anyOtherWorkspaceFileIsNotDeletedAsAFile (id : Option Nat) :
+    deleteAllowed (deleteTarget .workspaceFile id) = false := rfl
 
 /-! ### A writing's review marks
 
@@ -3481,6 +3493,73 @@ theorem mergeReview_idem (a : Review) : mergeReview a a = a := by
   cases a
   simp only [mergeReview, Review.mk.injEq]
   refine ⟨?_, ?_, ?_⟩ <;> funext i <;> simp
+
+/-! ### A writing's documents
+
+`LampWritingDocumentMerge.decide`: what a device does with a document a pass
+downloaded, given the copy it holds. A document is whole text, merged as a
+file, and no clocks are compared: a downloaded file's date is when it
+arrived. When both sides changed, the server's copy keeps the document's
+name, since other devices may already hold it, and this device's edits are
+kept beside it under a name of their own. A kept copy that both changed is
+not copied again: the server's stands. Bodies are numbers here; a copy's
+name is outside the model and held by a test (`keptCopyName`). -/
+
+inductive DocumentDecision where
+  | keep | take | takeKeepingHeld
+  deriving DecidableEq, Repr
+
+def documentMerge (isCopy : Bool) (held : Option Nat) (incoming : Nat) (bothChanged : Bool) :
+    DocumentDecision :=
+  match held with
+  | none => .take
+  | some h => if h == incoming then .keep else if bothChanged && !isCopy then .takeKeepingHeld else .take
+
+-- What the device holds after: the document under its name, and a kept copy.
+def documentAfter (isCopy : Bool) (held : Option Nat) (incoming : Nat) (bothChanged : Bool) :
+    Option Nat × Option Nat :=
+  match documentMerge isCopy held incoming bothChanged with
+  | .keep => (held, none)
+  | .take => (some incoming, none)
+  | .takeKeepingHeld => (some incoming, held)
+
+-- The same body either side changes nothing and makes no copy.
+theorem anIdenticalBodyMakesNoCopy (isCopy bothChanged : Bool) (b : Nat) :
+    documentAfter isCopy (some b) b bothChanged = (some b, none) := by
+  simp [documentAfter, documentMerge]
+
+-- Both changed: both bodies survive, the server's under the name.
+theorem everyBodySurvivesABothChangedMerge (held incoming : Nat) :
+    documentAfter false (some held) incoming true = (some incoming, some held) ∨ held = incoming := by
+  by_cases h : held = incoming
+  · exact Or.inr h
+  · left; simp [documentAfter, documentMerge, h]
+
+-- A copy is never made of a kept copy, so two devices cannot copy each
+-- other's copies back and forth.
+theorem aKeptCopyIsNeverCopied (held : Option Nat) (incoming : Nat) (bothChanged : Bool) :
+    documentMerge true held incoming bothChanged ≠ .takeKeepingHeld := by
+  cases held <;> simp [documentMerge] <;> split <;> simp
+
+-- Only the server moved: its copy is taken, and nothing is kept.
+theorem onlyTheServerMovedTakesItsCopy (isCopy : Bool) (held : Option Nat) (incoming : Nat) :
+    (documentAfter isCopy held incoming false).2 = none := by
+  cases held with
+  | none => simp [documentAfter, documentMerge]
+  | some h =>
+    by_cases e : h = incoming
+    · subst e; simp [documentAfter, documentMerge]
+    · simp [documentAfter, documentMerge, e]
+
+-- Whatever is decided, the document ends holding the server's body.
+theorem theServersCopyKeepsTheName (isCopy bothChanged : Bool) (held : Option Nat) (incoming : Nat) :
+    (documentAfter isCopy held incoming bothChanged).1 = some incoming := by
+  cases held with
+  | none => simp [documentAfter, documentMerge]
+  | some h =>
+    by_cases e : h = incoming
+    · subst e; simp [documentAfter, documentMerge]
+    · cases isCopy <;> cases bothChanged <;> simp [documentAfter, documentMerge, e]
 
 -- A removal here is recorded as a deletion only where the library would carry
 -- one out: the same rule on both sides, so no client records a tombstone
@@ -5188,17 +5267,17 @@ def manifestEntries : List ManifestEntry :=
 def localKindName : LocalKind → String
   | .module => "module" | .collection => "collection" | .deck => "deck"
   | .deckAsset => "deckAsset" | .media => "media" | .workspaceFile => "workspaceFile"
-  | .writingReview => "writingReview" | .outside => "outside"
+  | .writingReview => "writingReview" | .writingDocument => "writingDocument" | .outside => "outside"
 
 -- A module removal is checked to name the path's own ID, 7 here.
 def localDeletionName : LocalDeletion → String
   | .module id => if id == 7 then "module:own" else "module:other"
   | .deck => "deck" | .deckAsset => "deckAsset" | .writingReview => "writingReview"
-  | .collection => "collection" | .unsupported => "unsupported"
+  | .writingDocument => "writingDocument" | .collection => "collection" | .unsupported => "unsupported"
 
 #eval show IO Unit from do
   for kind in [LocalKind.module, .collection, .deck, .deckAsset, .media, .workspaceFile,
-               .writingReview, .outside] do
+               .writingReview, .writingDocument, .outside] do
     IO.println <| conformanceLine "deleteTarget"
       [localKindName kind, localDeletionName (deleteTarget kind (some 7)),
        toString (mayRecordRemoval kind (some 7))]
@@ -5233,6 +5312,19 @@ def reviewMarkCode (r : Review) (i : Nat) : String :=
                 [a1, a2, toString ac, b1, b2, toString bc,
                  reviewMarkCode merged 1, reviewMarkCode merged 2,
                  toString (if merged.retired 1 then 0 else merged.cleared 10)]
+
+def documentDecisionName : DocumentDecision → String
+  | .keep => "keep" | .take => "take" | .takeKeepingHeld => "takeKeepingHeld"
+
+#eval show IO Unit from do
+  -- A document held or not, as body 1 or 2, against a download of body 1:
+  -- a kept copy or not, both changed or not.
+  for isCopy in [false, true] do
+    for held in [none, some 1, some 2] do
+      for bothChanged in [false, true] do
+        IO.println <| conformanceLine "documentMerge"
+          [toString isCopy, held.map toString |>.getD "none", toString bothChanged,
+           documentDecisionName (documentMerge isCopy held 1 bothChanged)]
 
 #eval show IO Unit from do
   -- A fetch of what this client's records already name: the revision it last
