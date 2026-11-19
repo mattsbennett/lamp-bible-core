@@ -76,10 +76,11 @@ struct LampWritingReviewFileTests {
     }
 
     /// A clear's offsets are UTF-16 ones, so text equal only by Unicode's
-    /// rules is not the text the editor was showing.
+    /// rules is not taken offset for offset: the range is placed word by
+    /// word in the text held, on the same words.
     @Test func amarkedRangeIsOnlyTakenFromTheSameUnits() {
         let marked = "e\u{301} \(LampWritingReview.markStart)A\(LampWritingReview.markEnd)B"
-        #expect(LampWritingReview.markedRange(in: marked, of: "\u{E9} AB") == nil)
+        #expect(LampWritingReview.markedRange(in: marked, of: "\u{E9} AB") == NSRange(location: 2, length: 1))
         #expect(LampWritingReview.markedRange(in: marked, of: "e\u{301} AB") == NSRange(location: 3, length: 1))
     }
 }

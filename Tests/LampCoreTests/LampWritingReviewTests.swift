@@ -279,6 +279,33 @@ struct LampWritingReviewTests {
         #expect(saved.highlightedRanges(in: new) == [assistants])
     }
 
+    @Test func aLateCarryLeavesAMarkMadeAgainstALaterTextAlone() {
+        // Review's case: a save's carry waits behind another; meanwhile a
+        // turn marks a passage identical to two earlier ones. The late carry
+        // runs with the older save's texts and must not move the new mark.
+        let passage = "The same words stand here.\n\n"
+        let other = "Something else stood here.\n\n"
+        let a = passage + passage + passage + other + passage + passage + "Tail."
+        let b = passage + passage + passage + other + passage + passage + "Tail, edited."
+        let c = passage + passage + passage + passage + passage + passage + "Tail, edited."
+        let marked = empty.markingAssistantChange(from: b, to: c)
+        let drawn = marked.highlightedRanges(in: c)
+        let late = marked.carryingWriterEdit(from: a, to: b)
+        #expect(late.highlightedRanges(in: c) == drawn)
+    }
+
+    @Test func aClearFromAnEditorThatTidiedTheMarkdownStillLands() {
+        let text = "* one\n* two deux\n\nAfter."
+        let review = empty.markingAssistantChange(from: "* one\n* two\n\nAfter.", to: text)
+        #expect(review.highlightedRanges(in: text).count == 1)
+        // The page writes the list with dashes, and marks the second item.
+        let sent = "- one\n- \u{E000}two deux\u{E001}\n\nAfter."
+        let range = LampWritingReview.markedRange(in: sent, of: text)
+        #expect(range.map { (text as NSString).substring(with: $0) } == "two deux")
+        // A page showing other words clears nothing.
+        #expect(LampWritingReview.markedRange(in: "- one\n- \u{E000}three\u{E001}\n\nAfter.", of: text) == nil)
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(

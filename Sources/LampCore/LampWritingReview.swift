@@ -159,18 +159,27 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// edit is the one they were last anchored in, so a piece not found
     /// whole there is stale, and the looser readings could take the same
     /// word from somewhere else and move the mark onto it.
-    func located(in text: String, strictly: Bool) -> [Located] {
+    ///
+    /// With `anchoredOnly` as well, a piece whose words and context stand
+    /// more than once is found only at the place it holds. A carry from
+    /// one text to another applies only to marks anchored in the first, and
+    /// one anchored there stands exactly where it says wherever its words
+    /// repeat, since a carry keeps the place of a repeated piece current.
+    /// A mark anchored in some other text — made by a turn while this carry
+    /// waited behind another — would otherwise be taken from a copy of its
+    /// words and moved onto the wrong one.
+    func located(in text: String, strictly: Bool, anchoredOnly: Bool = false) -> [Located] {
         let source = text as NSString
         var cleared: [UUID: [NSRange]] = [:]
         for clearance in clearances {
             for piece in clearance.pieces {
-                if let range = Self.find(piece, in: source, strictly: strictly) {
+                if let range = Self.find(piece, in: source, strictly: strictly, anchoredOnly: anchoredOnly) {
                     cleared[clearance.markID, default: []].append(range)
                 }
             }
         }
         return marks.compactMap { mark -> Located? in
-            var ranges = mark.pieces.compactMap { Self.find($0, in: source, strictly: strictly) }
+            var ranges = mark.pieces.compactMap { Self.find($0, in: source, strictly: strictly, anchoredOnly: anchoredOnly) }
             for range in cleared[mark.id] ?? [] {
                 ranges = ranges.flatMap { Self.subtracting(range, from: $0) }.compactMap { Self.remainder($0, in: source) }
             }
@@ -246,8 +255,41 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         // Unit for unit: the offsets are UTF-16 ones, and a string equal to
         // `text` only by Unicode's rules, `é` spelled as `e` and an accent,
         // puts them on other characters.
-        guard plain.utf16.elementsEqual(text.utf16), let start, let end, end >= start else { return nil }
-        return NSRange(location: start, length: end - start)
+        guard let start, let end, end >= start else { return nil }
+        if plain.utf16.elementsEqual(text.utf16) { return NSRange(location: start, length: end - start) }
+        return mapped(NSRange(location: start, length: end - start), from: plain, to: text)
+    }
+
+    /// `range` of an editor's Markdown, placed in the Markdown held, where the
+    /// two differ only in how the editor writes the same document back — a
+    /// list's `*` returned as `-`, an emphasis's `_` as `*`. Placed word by
+    /// word, and refused unless the words it covers are the same words in
+    /// both: an editor showing a different text clears nothing.
+    private static func mapped(_ range: NSRange, from editor: String, to text: String) -> NSRange? {
+        let alignment = LampTextAlignment(from: editor, to: text)
+        let changed = alignment.segments.filter { !$0.isEqual }.reduce(0) { $0 + max($1.old.length, $1.new.length) }
+        // Spelling, not substance: a few characters of the whole, or of a
+        // short document a handful.
+        guard changed <= max((editor as NSString).length / 20, 16) else { return nil }
+        func place(_ offset: Int, atEnd: Bool) -> Int? {
+            for segment in alignment.segments where offset >= segment.old.location && offset <= NSMaxRange(segment.old) {
+                if segment.isEqual { return segment.new.location + offset - segment.old.location }
+                if offset == segment.old.location { return segment.new.location }
+                if offset == NSMaxRange(segment.old) { return NSMaxRange(segment.new) }
+                return atEnd ? NSMaxRange(segment.new) : segment.new.location
+            }
+            return nil
+        }
+        guard let start = place(range.location, atEnd: false),
+              let end = place(NSMaxRange(range), atEnd: true), end >= start else { return nil }
+        let placed = NSRange(location: start, length: end - start)
+        func words(_ string: String) -> [Substring] {
+            string.split { !($0.isLetter || $0.isNumber) }
+        }
+        guard words((editor as NSString).substring(with: range)) == words((text as NSString).substring(with: placed)) else {
+            return nil
+        }
+        return placed
     }
 
     // MARK: Changing the record
@@ -432,7 +474,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         through alignment: LampTextAlignment, from old: String, to new: String, at date: Date
     ) -> LampWritingReview {
         let target = new as NSString
-        let found = Dictionary(located(in: old, strictly: true).map { ($0.id, $0.ranges) }, uniquingKeysWith: { first, _ in first })
+        let found = Dictionary(located(in: old, strictly: true, anchoredOnly: true).map { ($0.id, $0.ranges) }, uniquingKeysWith: { first, _ in first })
         var result = self
         result.marks = []
         for mark in marks {
@@ -470,7 +512,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         // later copy cannot show again what was cleared of an earlier one.
         let source = old as NSString
         result.clearances = clearances.map { clearance in
-            let ranges = clearance.pieces.compactMap { Self.find($0, in: source, strictly: true) }
+            let ranges = clearance.pieces.compactMap { Self.find($0, in: source, strictly: true, anchoredOnly: true) }
             guard !ranges.isEmpty else { return clearance }
             let survived = Self.coalesced(
                 ranges.flatMap { alignment.carried($0) }.compactMap { Self.remainder($0, in: target) },
@@ -557,11 +599,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// the copy nearest its hint where there are several; then with one
     /// side, then its words alone, if those stand only once. A point is
     /// found by its context.
-    static func find(_ piece: Piece, in text: NSString, strictly: Bool = false) -> NSRange? {
+    static func find(_ piece: Piece, in text: NSString, strictly: Bool = false, anchoredOnly: Bool = false) -> NSRange? {
         let length = (piece.text as NSString).length
         let offset = (piece.before as NSString).length
         if let found = nearest(piece.before + piece.text + piece.after, to: piece.hint - offset, in: text) {
-            return NSRange(location: found.location + offset, length: length)
+            let location = found.location + offset
+            if anchoredOnly, location != piece.hint, standsTwice(piece, in: text) { return nil }
+            return NSRange(location: location, length: length)
         }
         if strictly { return nil }
         if !piece.before.isEmpty, let found = only(piece.before + piece.text, in: text) {
