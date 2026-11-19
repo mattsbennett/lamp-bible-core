@@ -155,6 +155,20 @@ struct LampAgentRemoteChatTests {
         #expect(whole.map(\.requestID) == [request, nil, nil])
     }
 
+    /// A snapshot names the request each question it holds came with, so a
+    /// device that lost the connection before hearing back can find its own.
+    @Test func asnapshotNamesTheRequestsItsQuestionsCameWith() throws {
+        let request = UUID()
+        let mine = said("Why?", LampAgentRemoteChatMessage.user, 0)
+        let theirs = said("Why?", LampAgentRemoteChatMessage.user, 1)
+        let snapshot = LampAgentRemoteChatUpdates.snapshot(
+            summary: summary, state: .init(messages: [mine, theirs], askedBy: [mine.id: request, UUID(): UUID()])
+        )
+        #expect(snapshot.askedBy == [.init(messageID: mine.id, requestID: request)])
+        let old = #"{"summary":{"id":"c","title":"t","kind":"reader","provider":"p","providerName":"P","isRunning":false,"acceptsMessages":true},"messages":[]}"#
+        #expect(try JSONDecoder().decode(LampAgentRemoteChatSnapshot.self, from: Data(old.utf8)).askedBy == nil)
+    }
+
     /// An event from a host older than the field still reads, with no request.
     @Test func anEventWithNoRequestStillDecodes() throws {
         let old = #"{"chatID":"c","kind":"turn-started"}"#

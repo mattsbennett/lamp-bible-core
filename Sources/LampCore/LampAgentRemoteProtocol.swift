@@ -378,19 +378,36 @@ public struct LampAgentRemoteChatSnapshot: Codable, Equatable, Sendable {
     /// not two: a host's other lines about a chat are not sent in this
     /// version.
     public var notice: String?
+    /// The questions in `messages` that a device sent through this host, by
+    /// the request each came with, as far as the host still remembers: so a
+    /// device that lost its connection before it heard back can tell, from
+    /// the snapshot it is sent on coming back, whether its question was
+    /// taken. Nil from a host older than this.
+    public var askedBy: [Asked]?
+
+    public struct Asked: Codable, Equatable, Sendable {
+        public var messageID: UUID
+        public var requestID: UUID
+        public init(messageID: UUID, requestID: UUID) {
+            self.messageID = messageID
+            self.requestID = requestID
+        }
+    }
 
     public init(
         summary: LampAgentRemoteChatSummary,
         messages: [LampAgentRemoteChatMessage],
         partialReply: String? = nil,
         activity: LampAgentRemoteActivity? = nil,
-        notice: String? = nil
+        notice: String? = nil,
+        askedBy: [Asked]? = nil
     ) {
         self.summary = summary
         self.messages = messages
         self.partialReply = partialReply
         self.activity = activity
         self.notice = notice
+        self.askedBy = askedBy
     }
 }
 

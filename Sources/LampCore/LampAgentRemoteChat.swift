@@ -50,7 +50,10 @@ public enum LampAgentRemoteChatUpdates {
             messages: state.messages,
             partialReply: state.isRunning && !state.arriving.isEmpty ? state.arriving : nil,
             activity: state.isRunning ? state.activity : nil,
-            notice: state.failure
+            notice: state.failure,
+            askedBy: state.messages.compactMap { message in
+                state.askedBy[message.id].map { .init(messageID: message.id, requestID: $0) }
+            }
         )
     }
 
