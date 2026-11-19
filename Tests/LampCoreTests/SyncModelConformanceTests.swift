@@ -1015,27 +1015,38 @@ struct SyncModelConformanceTests {
         }
     }
 
-    /// Two copies of a writing's review marks merged, the model's ids
-    /// standing for marks: what is shown, and what is retired, as sets.
+    /// Two copies of a writing's review marks merged, the model's numbers
+    /// standing for marks and a clearance of mark 1: what the merge shows of
+    /// each mark, and whether the clearance still applies.
     @Test func reviewMerge() throws {
         func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
-        func ids(_ code: String) -> [Int] { code == "-" ? [] : code.split(separator: ",").map { Int($0)! } }
-        func review(marks: String, retired: String) -> LampWritingReview {
-            LampWritingReview(
-                writingID: "w",
-                marks: ids(marks).map {
-                    .init(id: id($0), text: "m\($0)", before: "", after: "", markedAt: Date(timeIntervalSince1970: 0), turnID: nil)
-                },
-                retired: ids(retired).map { .init(id: id($0), retiredAt: Date(timeIntervalSince1970: Double($0))) }
-            )
+        let when = Date(timeIntervalSince1970: 0)
+        func piece(_ n: Int, _ version: Int) -> LampWritingReview.Piece {
+            .init(text: "m\(n)v\(version)", before: "", after: "", hint: 0)
         }
-        func code(_ values: [UUID]) -> String {
-            let numbers = (1...3).filter { values.contains(id($0)) }
-            return numbers.isEmpty ? "-" : numbers.map(String.init).joined(separator: ",")
+        func copy(_ one: String, _ two: String, _ clearance: String) -> LampWritingReview {
+            var review = LampWritingReview(writingID: "w")
+            for (n, code) in [(1, one), (2, two)] {
+                if code == "r" {
+                    review.retired.append(.init(id: id(n), retiredAt: when))
+                } else if let version = Int(code), version > 0 {
+                    review.marks.append(.init(id: id(n), pieces: [piece(n, version)], version: version, markedAt: when, turnID: nil))
+                }
+            }
+            if clearance == "true" {
+                review.clearances.append(.init(id: id(10), markID: id(1), piece: piece(1, 0), clearedAt: when))
+            }
+            return review
+        }
+        func code(_ review: LampWritingReview, _ n: Int) -> String {
+            if review.retired.contains(where: { $0.id == id(n) }) { return "r" }
+            return review.marks.first { $0.id == id(n) }.map { String($0.version) } ?? "0"
         }
         try conform("reviewMerge") { f in
-            let merged = review(marks: f[0], retired: f[1]).merged(with: review(marks: f[2], retired: f[3]))
-            return code(merged.marks.map(\.id)) == f[4] && code(merged.retired.map(\.id)) == f[5]
+            let merged = copy(f[0], f[1], f[2]).merged(with: copy(f[3], f[4], f[5]))
+            let clearanceApplies = merged.clearances.contains { $0.id == id(10) }
+                && !merged.retired.contains { $0.id == id(1) }
+            return code(merged, 1) == f[6] && code(merged, 2) == f[7] && String(clearanceApplies) == f[8]
         }
     }
 

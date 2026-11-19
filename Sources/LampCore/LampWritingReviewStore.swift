@@ -62,12 +62,24 @@ public struct LampWritingReviewStore: Sendable {
     /// Returns whether the merged record differs from what was downloaded,
     /// which is whether it has to go back up — this device had marks or
     /// clears the server's copy did not.
+    ///
+    /// When it does, the file is dated now even if its bytes did not move.
+    /// A pass records what it downloaded, so the file differing from that is
+    /// work for the next pass; but a device that starts passes by watching
+    /// file dates would not see it, and the clear would wait for something
+    /// else to start one.
     @discardableResult
     public func takeIn(downloaded data: Data, writingID: String) throws -> Bool {
         let incoming = try LampWritingReview.decoded(from: data)
         let merged = try review(writingID: writingID).merged(with: incoming)
-        try save(merged)
-        return try merged.encoded() != incoming.encoded()
+        let wrote = try save(merged)
+        let differs = try merged.encoded() != incoming.encoded()
+        if differs, !wrote {
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date()], ofItemAtPath: try url(writingID: writingID).path
+            )
+        }
+        return differs
     }
 
     /// Removes the writing's marks, as its writing is deleted. The caller
@@ -88,29 +100,32 @@ public struct LampWritingReviewStore: Sendable {
     /// there is a file to delete, here or on the server, so a writing that
     /// was never reviewed leaves no tombstone behind.
     ///
-    /// `deletedAt` is each deleted writing's time in milliseconds, as the
-    /// personal ledger keeps it; `held` the writings this device still has,
-    /// which win over a deletion of the same id; `members` the paths the
-    /// library's manifest names. Ids are compared folded, since a writing's
-    /// is not spelled alike on every platform.
+    /// `deleted` is the writings deleted, from the personal ledger; `held`
+    /// the writings this device still has, which win over a deletion of the
+    /// same id; `members` the paths the library's manifest names; `now` the
+    /// time to record, in milliseconds. Ids are compared folded, since a
+    /// writing's is not spelled alike on every platform.
+    ///
+    /// Recorded now, not at the writing's own time. Marks cleared on another
+    /// device after the writing went are still the marks of a writing that
+    /// is gone, and a deletion dated before that upload would lose to it:
+    /// the file would come back down, be swept again, and do so on every
+    /// pass. Once recorded the path is no member and there is no file, so
+    /// nothing is recorded again.
     public func deletions(
-        deletedAt: [String: Int64], held: Set<String>, members: Set<String>
+        deleted: Set<String>, held: Set<String>, members: Set<String>, now: Int64
     ) throws -> [String: Int64] {
-        var when: [String: Int64] = [:]
-        for (id, time) in deletedAt { when[id.lowercased()] = max(when[id.lowercased()] ?? .min, time) }
-        let kept = Set(held.map { $0.lowercased() })
+        let gone = Set(deleted.map { $0.lowercased() }).subtracting(held.map { $0.lowercased() })
+        guard !gone.isEmpty else { return [:] }
         var result: [String: Int64] = [:]
-        for id in try writingIDs() {
-            let folded = id.lowercased()
-            guard !kept.contains(folded), let time = when[folded] else { continue }
+        for id in try writingIDs() where gone.contains(id.lowercased()) {
             try remove(writingID: id)
-            result[try LampSyncFolderLayout.writingReviewPath(writingID: id)] = time
+            result[try LampSyncFolderLayout.writingReviewPath(writingID: id)] = now
         }
         for path in members {
-            guard let id = LampSyncFolderLayout.writingID(ofReviewPath: path) else { continue }
-            let folded = id.lowercased()
-            guard !kept.contains(folded), let time = when[folded] else { continue }
-            result[path] = time
+            guard let id = LampSyncFolderLayout.writingID(ofReviewPath: path),
+                  gone.contains(id.lowercased()) else { continue }
+            result[path] = now
         }
         return result
     }

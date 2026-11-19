@@ -53,7 +53,8 @@ struct LampWritingReviewTests {
         let beta = (new as NSString).range(of: "beta")
         let cleared = review.clearing(beta, in: new)
         #expect(marked(cleared, in: new) == ["alpha", "gamma"])
-        #expect(cleared.retired.count == 1)
+        #expect(cleared.retired.isEmpty)
+        #expect(cleared.clearances.count == 1)
     }
 
     @Test func aClearedPassageChangedAgainIsMarkedAgain() {
@@ -88,6 +89,8 @@ struct LampWritingReviewTests {
         let next = review.markingAssistantChange(from: first, to: second)
         #expect(next.marks.contains { $0.id == id })
         #expect(next.retired.isEmpty)
+        // Its context moved, so it was carried to a later version.
+        #expect(next.marks.first { $0.id == id }?.version == 2)
     }
 
     @Test func twoDevicesClearingDifferentPassagesBothKeepTheirClears() {
@@ -125,9 +128,65 @@ struct LampWritingReviewTests {
         #expect(marked(undone, in: first) == ["BETA"])
     }
 
+    // MARK: What review found
+
+    @Test func twoSpellingsOfOneCharacterDoNotThrowOffsetsOut() {
+        let review = empty.markingAssistantChange(from: "Cafe\u{301} beta x.", to: "Cafe\u{301} BETA x.")
+        let typed = "Caf\u{e9} BETA"
+        let carried = review.carryingWriterEdit(from: "Cafe\u{301} BETA x.", to: typed)
+        #expect(marked(carried, in: typed) == ["BETA"])
+    }
+
+    @Test func twoDevicesClearingDifferentPartsLeaveOnlyWhatNeitherCleared() {
+        let new = "One alpha beta gamma three."
+        let review = empty.markingAssistantChange(from: "One two three.", to: new)
+        let phone = review.clearing((new as NSString).range(of: "alpha"), in: new)
+        let mac = review.clearing((new as NSString).range(of: "gamma"), in: new)
+        #expect(marked(phone.merged(with: mac), in: new) == ["beta"])
+        #expect(marked(mac.merged(with: phone), in: new) == ["beta"])
+    }
+
+    @Test func aClearHoldsAgainstATurnThatOnlyMovedItsContext() {
+        let old = "Alpha beta gamma delta."
+        let agent = "Alpha BETA gamma delta."
+        let review = empty.markingAssistantChange(from: old, to: agent)
+        let phone = review.clearing((agent as NSString).range(of: "BETA"), in: agent)
+        let later = "Alpha BETA gamma DELTA."
+        let mac = review.markingAssistantChange(from: agent, to: later)
+        #expect(marked(phone.merged(with: mac), in: later) == ["DELTA"])
+    }
+
+    @Test func repeatedWordsMarkTheCopyTheAssistantWrote() {
+        let review = empty.markingAssistantChange(from: "Echo.\nOther.", to: "Echo.\nEcho.")
+        let ranges = review.highlightedRanges(in: "Echo.\nEcho.")
+        #expect(ranges == [NSRange(location: 6, length: 4)])
+    }
+
+    @Test func aLineEmptiedOfItsWordsKeepsAPointThatCanBeCleared() {
+        let old = "Intro.\nRemove me.\nEnd."
+        let new = "Intro.\n\nEnd."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let ranges = review.highlightedRanges(in: new)
+        #expect(ranges.count == 1)
+        #expect(ranges.first?.length == 0)
+        let line = (new as NSString).paragraphRange(for: NSRange(location: 7, length: 0))
+        #expect(review.clearing(line, in: new).isEmpty)
+    }
+
+    @Test func writingWhereWordsWereTakenOutClearsThePoint() {
+        let agent = "A C."
+        let review = empty.markingAssistantChange(from: "A B C.", to: agent)
+        #expect(review.highlightedRanges(in: agent).count == 1)
+        let typed = "A mine C."
+        #expect(review.carryingWriterEdit(from: agent, to: typed).isEmpty)
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
-        let shuffled = LampWritingReview(writingID: "w", marks: review.marks.reversed(), retired: review.retired.reversed())
+        let shuffled = LampWritingReview(
+            writingID: "w", marks: review.marks.reversed(), retired: review.retired.reversed(),
+            clearances: review.clearances.reversed()
+        )
         #expect(try review.encoded() == shuffled.encoded())
         #expect(try LampWritingReview.decoded(from: review.encoded()) == review)
     }
@@ -138,7 +197,7 @@ struct LampWritingReviewTests {
         let review = LampWritingReview(writingID: "w", retired: [
             .init(id: UUID(), retiredAt: old), .init(id: UUID(), retiredAt: recent),
         ])
-        #expect(review.pruningRetirements(before: Date(timeIntervalSince1970: 500)).retired.count == 1)
+        #expect(review.pruning(before: Date(timeIntervalSince1970: 500)).retired.count == 1)
     }
 
     @Test func aMarkWhoseWordsWereRewrittenIsNotDrawn() {
@@ -209,6 +268,15 @@ struct LampWritingReviewStoreTests {
         // Taking in the same copy again leaves nothing to send.
         let merged = try store.review(writingID: "w")
         #expect(try !store.takeIn(downloaded: merged.encoded(), writingID: "w"))
+
+        // An older copy, which still has a mark cleared here: nothing to
+        // write, but news to send, so the file is dated now.
+        let file = try store.url(writingID: "w").path
+        let past = Date(timeIntervalSince1970: 1_000)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: file)
+        #expect(try store.takeIn(downloaded: review.encoded(), writingID: "w"))
+        let dated = try FileManager.default.attributesOfItem(atPath: file)[.modificationDate] as? Date
+        #expect((dated ?? past) > past)
     }
 
     @Test func anUnreadableFileIsAnErrorNotAnEmptyRecord() throws {
@@ -224,11 +292,12 @@ struct LampWritingReviewStoreTests {
         try store.save(LampWritingReview(writingID: "Gone").markingAssistantChange(from: "a", to: "b"))
         try store.save(LampWritingReview(writingID: "kept").markingAssistantChange(from: "a", to: "b"))
         let deletions = try store.deletions(
-            deletedAt: ["gone": 5, "kept": 6, "never-reviewed": 7, "elsewhere": 8],
+            deleted: ["gone", "kept", "never-reviewed", "elsewhere"],
             held: ["KEPT"],
-            members: ["WritingReview/elsewhere.json", "Writing/writing.lamp"]
+            members: ["WritingReview/elsewhere.json", "Writing/writing.lamp"],
+            now: 9
         )
-        #expect(deletions == ["WritingReview/Gone.json": 5, "WritingReview/elsewhere.json": 8])
+        #expect(deletions == ["WritingReview/Gone.json": 9, "WritingReview/elsewhere.json": 9])
         #expect(try store.writingIDs() == ["kept"])
     }
 }
