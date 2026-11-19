@@ -298,9 +298,7 @@ public struct LampSyncBundlePass {
             let young = manifest.entry(at: path)?.deletedAt.map { started - $0 < Self.reapRetryWindow } ?? false
             guard Self.asksForRevision(
                 listedKind: kind.isListed, media: kind.isMedia, inListing: listing[path] != nil, entry: entry,
-                held: held.contains(path), otherSpelling: otherSpelling,
-                recordStands: records.record(path, in: source) != nil,
-                young: young
+                held: held.contains(path), otherSpelling: otherSpelling, young: young
             ) else { continue }
             if let revision = try? await store.revision(path: path) {
                 listing[path] = revision
@@ -784,25 +782,26 @@ public struct LampSyncBundlePass {
     /// Listings reach the listed kinds, the caller asks for the manifest's
     /// unlisted members, and media never changes at a path. Besides those, an
     /// unlisted file held here that the manifest does not name; and a
-    /// deletion's file this client still has a record of, which a reap that
-    /// failed leaves, while the deletion is `young`. Neither where another
+    /// deletion's file while the deletion is `young`, which a reap that
+    /// failed leaves, whichever client asks: the one that deleted it may
+    /// keep no record once the deletion is queued. Neither where another
     /// spelling could answer for it on a server that folds case.
     /// (`Verification/SyncMerge.lean`: `asksRevision`.)
     static func asksForRevision(
         listedKind: Bool, media: Bool, inListing: Bool, entry: ProbeEntry,
-        held: Bool, otherSpelling: Bool, recordStands: Bool, young: Bool
+        held: Bool, otherSpelling: Bool, young: Bool
     ) -> Bool {
         if listedKind || media || inListing { return false }
         switch entry {
         case .none: return held && !otherSpelling
         case .member: return false
-        case .deletion: return recordStands && young && !otherSpelling
+        case .deletion: return young && !otherSpelling
         }
     }
 
     /// How long a deletion's file is asked about again for, so a reap that
     /// failed is retried: a fortnight, in milliseconds.
-    static let reapRetryWindow: Int64 = 14 * 24 * 60 * 60 * 1_000
+    public static let reapRetryWindow: Int64 = 14 * 24 * 60 * 60 * 1_000
 
     enum FetchedForMerge: Equatable {
         /// The server's copy is the one held here.

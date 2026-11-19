@@ -1070,9 +1070,8 @@ struct SyncModelConformanceTests {
             }
             return String(LampSyncBundlePass.asksForRevision(
                 listedKind: f[0] == "true", media: f[1] == "true", inListing: f[2] == "true", entry: entry,
-                held: f[4] == "true", otherSpelling: f[5] == "true", recordStands: f[6] == "true",
-                young: f[7] == "true"
-            )) == f[8]
+                held: f[4] == "true", otherSpelling: f[5] == "true", young: f[6] == "true"
+            )) == f[7]
         }
     }
 

@@ -1289,6 +1289,21 @@ struct LampSyncBundlePassTests {
         #expect(records.record(path, in: source) == nil)
     }
 
+    /// A deletion made by a client that keeps no record of the path once it
+    /// is queued, as the phone does, its reap failing: another pass, by any
+    /// client, still asks about the file while the deletion is young, and
+    /// reaps it.
+    @Test func aFailedReapIsTriedAgainWithoutARecord() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
+        #expect(outcome.reaped == [path])
+        #expect(store.bodies[path] == nil)
+    }
+
     /// A deletion's file the server no longer has is asked about only while
     /// the deletion is young, and its record is kept: a stale answer is only a
     /// retry, and nothing the record serves is lost.

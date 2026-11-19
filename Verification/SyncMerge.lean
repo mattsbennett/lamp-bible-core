@@ -3445,10 +3445,12 @@ theorem aRecordOfTheirsWouldSendThisCopyOverIt (cls : FileClass) (r : Nat) (s : 
 caller asks for the manifest's own unlisted members. The pass asks, besides,
 for an unlisted, non-media path held here that the manifest does not name,
 which may be an upload the server had not shown back, which nothing records;
-and for a deletion's file this client still has a record of, which a reap
-that failed leaves, while the deletion is young (`young`), so a file another
-client reaped, or a delete whose answer was lost, is not asked about for
-ever, and a stale answer is only a retry. Nothing is forgotten on an answer.
+and for a deletion's file while the deletion is young (`young`), which a reap
+that failed leaves, by whichever client: the one that deleted it may keep no
+record of the path once the deletion is queued, so any client asks, and
+whichever finds the file reaps it. Young, so a file already reaped is not
+asked about for ever, and a stale answer is only a retry. Nothing is
+forgotten on an answer.
 Not where any other spelling of the path is named or held (`otherSpelling`):
 on a server that folds case its file would answer, and the plan would adopt
 a deleted file or reap a live one. Two deleted spellings leave their file to
@@ -3459,24 +3461,24 @@ inductive ProbeEntry where
   deriving DecidableEq, Repr
 
 def asksRevision (listedKind media inListing : Bool) (entry : ProbeEntry)
-    (held otherSpelling recordStands young : Bool) : Bool :=
+    (held otherSpelling young : Bool) : Bool :=
   if listedKind || media || inListing then false else
   match entry with
   | .none => held && !otherSpelling
   | .member => false
-  | .deletion => recordStands && young && !otherSpelling
+  | .deletion => young && !otherSpelling
 
-theorem anUnconfirmedUploadIsAskedAbout (recordStands young : Bool) :
-    asksRevision false false false .none true false recordStands young = true := rfl
+theorem anUnconfirmedUploadIsAskedAbout (young : Bool) :
+    asksRevision false false false .none true false young = true := rfl
 
-theorem anotherSpellingIsNeverAskedAbout (entry : ProbeEntry) (held recordStands young : Bool) :
-    asksRevision false false false entry held true recordStands young = false := by
+theorem anotherSpellingIsNeverAskedAbout (entry : ProbeEntry) (held young : Bool) :
+    asksRevision false false false entry held true young = false := by
   cases entry <;> simp [asksRevision]
 
 -- A deletion is asked about only while young: one request a pass, for a
 -- bounded time, whatever the server answers.
-theorem anOldDeletionIsNotAskedAbout (held otherSpelling recordStands : Bool) :
-    asksRevision false false false .deletion held otherSpelling recordStands false = false := by
+theorem anOldDeletionIsNotAskedAbout (held otherSpelling : Bool) :
+    asksRevision false false false .deletion held otherSpelling false = false := by
   simp [asksRevision]
 
 -- Unasked, an upload not shown back is sent "if absent" on every pass, and
@@ -3492,7 +3494,8 @@ theorem anAskedUploadIsAdoptedAndCompared (r : Nat) (s : Option Nat) :
   have differs : ((none : Option Nat) != some r) = true := by simp
   simp [filePlanAction, changeAction, differs]
 
-theorem aFailedReapIsAskedAgain : asksRevision false false false .deletion false false true true = true := rfl
+-- By any client, whether or not it keeps a record of the path.
+theorem aFailedReapIsAskedAgain (held : Bool) : asksRevision false false false .deletion held false true = true := rfl
 
 -- And reaped, once its revision is in hand.
 theorem aFailedReapIsReapedOnceAsked (r : Nat) :
@@ -5491,12 +5494,11 @@ def probeEntryName : ProbeEntry → String
         for entry in [ProbeEntry.none, .member, .deletion] do
           for held in [false, true] do
             for otherSpelling in [false, true] do
-              for recordStands in [false, true] do
-                for young in [false, true] do
-                  IO.println <| conformanceLine "asksRevision"
-                    [toString listedKind, toString media, toString inListing, probeEntryName entry,
-                     toString held, toString otherSpelling, toString recordStands, toString young,
-                     toString (asksRevision listedKind media inListing entry held otherSpelling recordStands young)]
+              for young in [false, true] do
+                IO.println <| conformanceLine "asksRevision"
+                  [toString listedKind, toString media, toString inListing, probeEntryName entry,
+                   toString held, toString otherSpelling, toString young,
+                   toString (asksRevision listedKind media inListing entry held otherSpelling young)]
 
 #eval show IO Unit from do
   -- A copy held or not, against what was last agreed, none for never.
