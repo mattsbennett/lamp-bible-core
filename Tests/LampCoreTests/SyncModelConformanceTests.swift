@@ -920,16 +920,25 @@ struct SyncModelConformanceTests {
     }
 
     @Test func filePlanAction() throws {
-        // One real path of each class, deletable by a library or not.
-        let paths = [
-            "media:true": try LampSyncFolderLayout.deckAssetPath(filename: "a.png"),
-            "media:false": "WritingMedia/m/w/a.png",
-            "listed:true": try LampSyncFolderLayout.modulePath(kind: .translations, moduleID: "kjv"),
-            "listed:false": "Notes/notes.lamp",
-            "unlisted:false": "Workspaces/a.md",
+        // Real paths of each class, deletable by a library or not: every
+        // kind a class stands for, so a kind added to one is held to the
+        // class's rules by its own path, not only by an older kind's.
+        let paths: [String: [String]] = [
+            "media:true": [try LampSyncFolderLayout.deckAssetPath(filename: "a.png")],
+            "media:false": ["WritingMedia/m/w/a.png"],
+            "listed:true": [
+                try LampSyncFolderLayout.modulePath(kind: .translations, moduleID: "kjv"),
+                try LampSyncFolderLayout.deckPath(deckID: "easter"),
+                try LampSyncFolderLayout.writingReviewPath(writingID: "w-1"),
+            ],
+            "listed:false": ["Notes/notes.lamp"],
+            "unlisted:false": ["Workspaces/a.md"],
         ]
-        for (key, path) in paths {
-            #expect(LampSyncLocalDeletion.target(of: path).isAllowed == key.hasSuffix(":true"), "\(path)")
+        for (key, examples) in paths {
+            for path in examples {
+                #expect(LampSyncLocalDeletion.target(of: path).isAllowed == key.hasSuffix(":true"), "\(path)")
+                #expect(LampSyncFolderLayout.kind(of: path)?.isListed == key.hasPrefix("listed"), "\(path)")
+            }
         }
         func held(_ field: String, at path: String) -> [LampSyncFilePlan.Local] {
             guard field != "-" else { return [] }
@@ -958,14 +967,15 @@ struct SyncModelConformanceTests {
             return tokens.isEmpty ? "-" : tokens.joined(separator: ",")
         }
         try conform("filePlanAction") { f in
-            let path = paths["\(f[0]):\(f[1])"]!
-            let plan = LampSyncFilePlan.plan(
-                manifest: manifest(holding: f[2], at: path),
-                local: held(f[3], at: path),
-                deletedLocally: f[4] == "-" ? [:] : [path: Int64(f[4])!],
-                listing: f[5] == "-" ? [:] : [path: quoted(f[5])]
-            )
-            return code(plan, at: path) == f[6]
+            try #require(paths["\(f[0]):\(f[1])"]).allSatisfy { path in
+                let plan = LampSyncFilePlan.plan(
+                    manifest: manifest(holding: f[2], at: path),
+                    local: held(f[3], at: path),
+                    deletedLocally: f[4] == "-" ? [:] : [path: Int64(f[4])!],
+                    listing: f[5] == "-" ? [:] : [path: quoted(f[5])]
+                )
+                return code(plan, at: path) == f[6]
+            }
         }
     }
 
