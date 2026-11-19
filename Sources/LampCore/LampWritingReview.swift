@@ -321,7 +321,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     private static func isInFencedCode(before location: Int, in text: NSString) -> Bool {
         var open: (character: Character, length: Int)?
         for line in text.substring(to: location).components(separatedBy: "\n") {
-            let trimmed = line.drop { $0 == " " || $0 == ">" }
+            // A fence is indented three spaces at most, quote markers aside;
+            // four is code, and neither opens nor closes one.
+            let unquoted = line.drop { $0 == ">" || $0 == " " && line.contains(">") }
+            let indent = unquoted.prefix { $0 == " " }.count
+            guard indent <= 3 else { continue }
+            let trimmed = unquoted.dropFirst(indent)
             guard let first = trimmed.first, first == "`" || first == "~" else { continue }
             let run = trimmed.prefix { $0 == first }.count
             guard run >= 3 else { continue }
@@ -618,9 +623,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                     result.append(piece)
                     continue
                 }
-                let survived = Self.coalesced(
+                var survived = Self.coalesced(
                     alignment(index).carried(range).map { Self.trimmed($0, in: targetText) }, joiningAcross: nil
                 )
+                if survived.isEmpty, let kept = Self.survivingCopy(of: range, in: sources[index] as NSString,
+                                                                   through: alignment(index), to: targetText) {
+                    survived = [kept]
+                }
                 let moved = survived.map { Self.piece($0, in: targetText, anchoredIn: here) }
                 // Kept as it was only where it can be found again without its
                 // anchor: the same words, context and place, standing once.
@@ -665,6 +674,37 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
         result = result.tidied()
         return result.marks == marks && result.retired == retired && result.clearances == clearances ? self : result
+    }
+
+    /// Where a marked passage went when the difference says it was deleted
+    /// but an identical copy of its words came through: the text cannot say
+    /// which of two copies the writer took out, and the difference pairs
+    /// the one kept with whichever it meets first. A mark is kept on the copy
+    /// that survived rather than retired with the one paired away — where
+    /// exactly one such copy survived, since with more the mark cannot be
+    /// placed and is left to go.
+    static func survivingCopy(
+        of range: NSRange, in source: NSString, through alignment: LampTextAlignment, to target: NSString
+    ) -> NSRange? {
+        guard range.length > 0 else { return nil }
+        let words = source.substring(with: range)
+        var found: [NSRange] = []
+        var search = NSRange(location: 0, length: source.length)
+        while true {
+            let copy = source.range(of: words, options: .literal, range: search)
+            if copy.location == NSNotFound { break }
+            if copy != range {
+                let carried = alignment.carried(copy)
+                if carried.count == 1, carried[0].length == copy.length,
+                   target.substring(with: carried[0]) == words {
+                    found.append(carried[0])
+                }
+            }
+            let next = copy.location + 1
+            guard next <= source.length else { break }
+            search = NSRange(location: next, length: source.length - next)
+        }
+        return found.count == 1 ? found[0] : nil
     }
 
     /// A piece whole with its context, where that stands exactly once.

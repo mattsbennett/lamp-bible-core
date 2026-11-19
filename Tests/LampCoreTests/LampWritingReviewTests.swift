@@ -487,6 +487,21 @@ struct LampWritingReviewTests {
         #expect(LampWritingReview.markedRange(in: sent, of: held) == nil)
     }
 
+    /// Deleting the unmarked one of two identical lines keeps the mark on
+    /// the line that is left.
+    @Test func deletingAnUnmarkedDuplicateKeepsTheMarkedCopy() {
+        let review = empty.markingAssistantChange(from: "Echo.\nOther.", to: "Echo.\nEcho.")
+        #expect(marked(review, in: "Echo.\nEcho.") == ["Echo"])
+        let kept = review.carryingWriterEdit(from: "Echo.\nEcho.", to: "Echo.")
+        #expect(marked(kept, in: "Echo.") == ["Echo"])
+    }
+
+    @Test func aFenceIndentedAsCodeNeitherOpensNorClosesOne() {
+        let held = "```\n    ```\n1. x\n```"
+        let sent = "```\n    ```\n2. \u{E002}x\n```"
+        #expect(LampWritingReview.markedRange(in: sent, of: held) == nil)
+    }
+
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(
