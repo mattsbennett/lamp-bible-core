@@ -32,7 +32,8 @@ struct LampWritingReviewTests {
         let review = empty.markingAssistantChange(from: old, to: agent)
         let typed = "Alpha BETA gamma.\n\nDelta epsilon zeta eta theta."
         let carried = review.carryingWriterEdit(from: agent, to: typed)
-        #expect(carried == review)
+        // Re-anchored in the new text, which names it; drawn where it was.
+        #expect(carried.marks.allSatisfy { $0.anchoredIn == LampWritingReview.digest(of: typed) })
         #expect(marked(carried, in: typed) == ["BETA"])
     }
 
@@ -304,6 +305,59 @@ struct LampWritingReviewTests {
         #expect(range.map { (text as NSString).substring(with: $0) } == "two deux")
         // A page showing other words clears nothing.
         #expect(LampWritingReview.markedRange(in: "- one\n- \u{E000}three\u{E001}\n\nAfter.", of: text) == nil)
+    }
+
+    // MARK: Anchors
+
+    /// Review's case: A has Echo/Other/Third, B Echo/Echo/Third, C
+    /// Echo/Echo/Echo. A late A→B carry must leave C's new mark alone.
+    @Test func aCarryMovesOnlyWhatIsAnchoredInTheTextItCarriesFrom() {
+        let a = "Echo.\n\nOther.\n\nThird."
+        let b = "Echo.\n\nEcho.\n\nThird."
+        let c = "Echo.\n\nEcho.\n\nEcho."
+        let marked = empty.markingAssistantChange(from: b, to: c)
+        let drawn = marked.highlightedRanges(in: c)
+        #expect(drawn == [NSRange(location: 14, length: 4)])
+        #expect(marked.carryingWriterEdit(from: a, to: b) == marked)
+        #expect(marked.carryingWriterEdit(from: a, to: b).highlightedRanges(in: c) == drawn)
+    }
+
+    @Test func aClearInUnsavedTextIsCarriedFromThatTextOnSave() {
+        let saved = "One alpha beta gamma three."
+        let review = empty.markingAssistantChange(from: "One two three.", to: saved)
+        // Cleared while "mine" was typed and not yet saved.
+        let unsaved = "One alpha mine beta gamma three."
+        let cleared = review
+            .carryingToText(unsaved, from: [LampWritingReview.digest(of: saved): saved])
+            .clearing((unsaved as NSString).range(of: "gamma"), in: unsaved)
+        #expect(marked(cleared, in: unsaved) == ["alpha", "beta"])
+        // The save carries from the last saved text; the editor knows the
+        // unsaved one too, so what the clear left is carried from there.
+        let later = "One alpha mine beta gamma three, and more."
+        let known = [LampWritingReview.digest(of: saved): saved, LampWritingReview.digest(of: unsaved): unsaved]
+        let carried = cleared.carryingToText(later, from: known)
+        #expect(marked(carried, in: later) == ["alpha", "beta"])
+    }
+
+    @Test func aCaretIsNeverPlacedAcrossAChangeOfWords() {
+        let text = "One omega."
+        #expect(LampWritingReview.markedRange(in: "One \u{E002}alpha.", of: text) == nil)
+    }
+
+    @Test func aLongListWrittenBackWithDashesStillPlacesAClear() {
+        let items = (1...20).map { "item \($0)" }
+        let text = items.map { "* \($0)" }.joined(separator: "\n")
+        let sent = items.enumerated().map { index, item in
+            index == 9 ? "- \u{E000}\(item)\u{E001}" : "- \(item)"
+        }.joined(separator: "\n")
+        let range = LampWritingReview.markedRange(in: sent, of: text)
+        #expect(range.map { (text as NSString).substring(with: $0) } == "item 10")
+    }
+
+    @Test func emphasisWrittenBackAnotherWayStillPlacesAWord() {
+        let text = "_one_ _two_ three"
+        let range = LampWritingReview.markedRange(in: "*\u{E000}one\u{E001}* *two* three", of: text)
+        #expect(range.map { (text as NSString).substring(with: $0) } == "one")
     }
 
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {

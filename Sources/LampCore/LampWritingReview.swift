@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What of a writing the assistant changed that its writer has not yet read
@@ -89,13 +90,22 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         public let markedAt: Date
         /// The chat turn that made the change, where one did.
         public let turnID: UUID?
+        /// The text the pieces were last anchored in (`digest(of:)`): there
+        /// they stand exactly where they say, and only from there is a carry
+        /// to another text theirs to take. Nil in a record made before it
+        /// was kept, which is found by its words alone.
+        public let anchoredIn: String?
 
-        public init(id: UUID = UUID(), pieces: [Piece], version: Int = 1, markedAt: Date, turnID: UUID?) {
+        public init(
+            id: UUID = UUID(), pieces: [Piece], version: Int = 1, markedAt: Date, turnID: UUID?,
+            anchoredIn: String? = nil
+        ) {
             self.id = id
             self.pieces = pieces
             self.version = version
             self.markedAt = LampWritingReview.toTheMillisecond(markedAt)
             self.turnID = turnID
+            self.anchoredIn = anchoredIn
         }
     }
 
@@ -118,13 +128,19 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         public let pieces: [Piece]
         public let version: Int
         public let clearedAt: Date
+        /// As a mark's: the text the pieces were last anchored in.
+        public let anchoredIn: String?
 
-        public init(id: UUID = UUID(), markID: UUID, pieces: [Piece], version: Int = 1, clearedAt: Date) {
+        public init(
+            id: UUID = UUID(), markID: UUID, pieces: [Piece], version: Int = 1, clearedAt: Date,
+            anchoredIn: String? = nil
+        ) {
             self.id = id
             self.markID = markID
             self.pieces = pieces
             self.version = version
             self.clearedAt = LampWritingReview.toTheMillisecond(clearedAt)
+            self.anchoredIn = anchoredIn
         }
     }
 
@@ -137,6 +153,19 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     }
 
     public var isEmpty: Bool { marks.isEmpty }
+
+    /// What a piece's `anchoredIn` names a text by: a digest of its UTF-16
+    /// code units, the units every offset here counts in.
+    public static func digest(of text: String) -> String {
+        let units = Array(text.utf16)
+        let hash = units.withUnsafeBytes { SHA256.hash(data: $0) }
+        return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The digests of the texts some mark or clearance is anchored in.
+    public var anchors: Set<String> {
+        Set(marks.compactMap(\.anchoredIn) + clearances.compactMap(\.anchoredIn))
+    }
 
     /// Times as the file holds them, so a record read back equals the one
     /// written: one that differed only below a millisecond would look
@@ -155,31 +184,24 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     }
 
     /// With `strictly`, a piece is found only with its context on both
-    /// sides. Carrying marks across an edit asks that: the text before the
-    /// edit is the one they were last anchored in, so a piece not found
-    /// whole there is stale, and the looser readings could take the same
-    /// word from somewhere else and move the mark onto it.
-    ///
-    /// With `anchoredOnly` as well, a piece whose words and context stand
-    /// more than once is found only at the place it holds. A carry from
-    /// one text to another applies only to marks anchored in the first, and
-    /// one anchored there stands exactly where it says wherever its words
-    /// repeat, since a carry keeps the place of a repeated piece current.
-    /// A mark anchored in some other text — made by a turn while this carry
-    /// waited behind another — would otherwise be taken from a copy of its
-    /// words and moved onto the wrong one.
-    func located(in text: String, strictly: Bool, anchoredOnly: Bool = false) -> [Located] {
+    /// sides. A piece anchored in this very text is found where it says,
+    /// and only there.
+    func located(in text: String, strictly: Bool) -> [Located] {
         let source = text as NSString
+        let here = Self.digest(of: text)
+        func find(_ piece: Piece, anchoredIn: String?) -> NSRange? {
+            anchoredIn == here ? Self.exact(piece, in: source) : Self.find(piece, in: source, strictly: strictly)
+        }
         var cleared: [UUID: [NSRange]] = [:]
         for clearance in clearances {
             for piece in clearance.pieces {
-                if let range = Self.find(piece, in: source, strictly: strictly, anchoredOnly: anchoredOnly) {
+                if let range = find(piece, anchoredIn: clearance.anchoredIn) {
                     cleared[clearance.markID, default: []].append(range)
                 }
             }
         }
         return marks.compactMap { mark -> Located? in
-            var ranges = mark.pieces.compactMap { Self.find($0, in: source, strictly: strictly, anchoredOnly: anchoredOnly) }
+            var ranges = mark.pieces.compactMap { find($0, anchoredIn: mark.anchoredIn) }
             for range in cleared[mark.id] ?? [] {
                 ranges = ranges.flatMap { Self.subtracting(range, from: $0) }.compactMap { Self.remainder($0, in: source) }
             }
@@ -187,6 +209,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             return ranges.isEmpty ? nil : Located(id: mark.id, ranges: ranges)
         }
         .sorted { ($0.ranges[0].location, $0.ranges[0].length) < ($1.ranges[0].location, $1.ranges[0].length) }
+    }
+
+    /// A piece in the text it is anchored in: where its hint says, if its
+    /// words are there.
+    static func exact(_ piece: Piece, in text: NSString) -> NSRange? {
+        let range = NSRange(location: piece.hint, length: (piece.text as NSString).length)
+        guard range.location >= 0, NSMaxRange(range) <= text.length,
+              text.substring(with: range) == piece.text else { return nil }
+        return range
     }
 
     /// The ranges to draw: every mark's, with any that overlap or touch
@@ -262,15 +293,26 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     /// `range` of an editor's Markdown, placed in the Markdown held, where the
     /// two differ only in how the editor writes the same document back — a
-    /// list's `*` returned as `-`, an emphasis's `_` as `*`. Placed word by
-    /// word, and refused unless the words it covers are the same words in
-    /// both: an editor showing a different text clears nothing.
+    /// list's `*` returned as `-`, an emphasis's `_` as `*`, however many of
+    /// them. Refused where any difference holds a letter or a digit: that is
+    /// another text, not another spelling of this one, and a range — a
+    /// caret most of all, which covers no words to check — would land on
+    /// words the editor never showed. Placed by an alignment that keeps
+    /// every run that stayed the same, short words included, and refused
+    /// unless the words it covers are the same in both.
     private static func mapped(_ range: NSRange, from editor: String, to text: String) -> NSRange? {
-        let alignment = LampTextAlignment(from: editor, to: text)
-        let changed = alignment.segments.filter { !$0.isEqual }.reduce(0) { $0 + max($1.old.length, $1.new.length) }
-        // Spelling, not substance: a few characters of the whole, or of a
-        // short document a handful.
-        guard changed <= max((editor as NSString).length / 20, 16) else { return nil }
+        let alignment = LampTextAlignment(from: editor, to: text, absorbingSmallEqualities: false)
+        let editorText = editor as NSString
+        let heldText = text as NSString
+        func spelling(_ segment: LampTextAlignment.Segment) -> Bool {
+            let old = editorText.substring(with: segment.old)
+            let new = heldText.substring(with: segment.new)
+            // One character written two ways, é as e and an accent, is the
+            // same text however it is stored.
+            if old.precomposedStringWithCanonicalMapping == new.precomposedStringWithCanonicalMapping { return true }
+            return !old.contains { $0.isLetter || $0.isNumber } && !new.contains { $0.isLetter || $0.isNumber }
+        }
+        guard alignment.segments.allSatisfy({ $0.isEqual || spelling($0) }) else { return nil }
         func place(_ offset: Int, atEnd: Bool) -> Int? {
             for segment in alignment.segments where offset >= segment.old.location && offset <= NSMaxRange(segment.old) {
                 if segment.isEqual { return segment.new.location + offset - segment.old.location }
@@ -306,9 +348,10 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         var result = carried(through: alignment, from: old, to: new, at: date)
         let target = new as NSString
         let changed = alignment.segments.filter { !$0.isEqual }.map { Self.trimmed($0.new, in: target) }
+        let anchor = Self.digest(of: new)
         for range in Self.coalesced(changed, joiningAcross: target) {
             result.marks.append(Mark(
-                pieces: [Self.piece(range, in: target)], markedAt: date, turnID: turnID
+                pieces: [Self.piece(range, in: target)], markedAt: date, turnID: turnID, anchoredIn: anchor
             ))
         }
         return result
@@ -319,12 +362,28 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// out go with the mark; the rest of a mark they typed into stays; a
     /// place words were taken out goes once they write there.
     ///
-    /// Returns the record unchanged, equal to `self`, when no mark's words
-    /// or the text beside them were touched, which is the usual case: the
-    /// caller can then skip writing it.
+    /// Only what is anchored in `old` is carried: a mark anchored in some
+    /// other text — made by a turn while this carry waited behind another,
+    /// or left by a clear in text not yet saved — is not this edit's to
+    /// move, and is left as it is. Equal to `self` where nothing is
+    /// anchored in `old`.
     public func carryingWriterEdit(from old: String, to new: String, at date: Date = Date()) -> LampWritingReview {
         guard old != new, !marks.isEmpty else { return self }
         return carried(through: LampTextAlignment(from: old, to: new), from: old, to: new, at: date)
+    }
+
+    /// The record with whatever is anchored in a text in `known` — keyed by
+    /// `digest(of:)` — carried from there to `text`, each from its own. For
+    /// a caller that has seen several versions of the writing go by: the
+    /// editor, whose clears anchor what is left in text not yet saved.
+    public func carryingToText(_ text: String, from known: [String: String], at date: Date = Date()) -> LampWritingReview {
+        let target = Self.digest(of: text)
+        var result = self
+        for anchor in anchors.sorted() where anchor != target {
+            guard let source = known[anchor] else { continue }
+            result = result.carryingWriterEdit(from: source, to: text, at: date)
+        }
+        return result
     }
 
     /// The record with everything in `range` of `text` cleared. A mark only
@@ -332,6 +391,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// is cleared.
     public func clearing(_ range: NSRange, in text: String, at date: Date = Date()) -> LampWritingReview {
         let source = text as NSString
+        let anchor = Self.digest(of: text)
         var result = self
         let located = Dictionary(self.located(in: text).map { ($0.id, $0.ranges) }, uniquingKeysWith: { first, _ in first })
         result.marks = []
@@ -348,12 +408,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             for cleared in ranges where Self.touches(cleared, range) {
                 let part = cleared.length == 0 ? cleared : NSIntersectionRange(cleared, range)
                 result.clearances.append(Clearance(
-                    markID: mark.id, pieces: Self.wordPieces(of: part, in: source), clearedAt: date
+                    markID: mark.id, pieces: Self.wordPieces(of: part, in: source), clearedAt: date,
+                    anchoredIn: anchor
                 ))
             }
             result.marks.append(Mark(
                 id: mark.id, pieces: kept.map { Self.piece($0, in: source) },
-                version: mark.version + 1, markedAt: mark.markedAt, turnID: mark.turnID
+                version: mark.version + 1, markedAt: mark.markedAt, turnID: mark.turnID, anchoredIn: anchor
             ))
         }
         return result.tidied()
@@ -473,74 +534,71 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     private func carried(
         through alignment: LampTextAlignment, from old: String, to new: String, at date: Date
     ) -> LampWritingReview {
+        let source = old as NSString
         let target = new as NSString
-        let found = Dictionary(located(in: old, strictly: true, anchoredOnly: true).map { ($0.id, $0.ranges) }, uniquingKeysWith: { first, _ in first })
+        let from = Self.digest(of: old)
+        let to = Self.digest(of: new)
+        // Carried from here: a piece anchored in `old`, found where it says;
+        // or, in a record from before anchors were kept, one found whole
+        // with its context. Anything anchored elsewhere is not this edit's.
+        func ranges(_ pieces: [Piece], anchoredIn: String?) -> [NSRange]? {
+            switch anchoredIn {
+            case from:
+                let found = pieces.compactMap { Self.exact($0, in: source) }
+                return found.count == pieces.count ? found : nil
+            case nil:
+                let found = pieces.compactMap { Self.find($0, in: source, strictly: true) }
+                return found.isEmpty ? nil : found
+            default:
+                return nil
+            }
+        }
+        var cleared: [UUID: [NSRange]] = [:]
+        for clearance in clearances {
+            for range in ranges(clearance.pieces, anchoredIn: clearance.anchoredIn) ?? [] {
+                cleared[clearance.markID, default: []].append(range)
+            }
+        }
         var result = self
         result.marks = []
         for mark in marks {
-            // Already in the new text, whole, where it was anchored: made
-            // for this very change. An assistant's draft is marked as it is
-            // taken in and then saved like any edit, and carrying the new
-            // mark across that same change again could take it from a copy
-            // of its words in the old text and move it there.
-            if mark.pieces.allSatisfy({ Self.find($0, in: target, strictly: true)?.location == $0.hint }) {
+            guard mark.anchoredIn != to, var found = ranges(mark.pieces, anchoredIn: mark.anchoredIn) else {
                 result.marks.append(mark)
                 continue
             }
-            guard let ranges = found[mark.id] else {
-                // Not in the old text either: nothing to carry, and nothing
-                // to say it was read. Kept as it was, for the copy that can
-                // still find it.
-                result.marks.append(mark)
-                continue
+            for range in cleared[mark.id] ?? [] {
+                found = found.flatMap { Self.subtracting(range, from: $0) }.compactMap { Self.remainder($0, in: source) }
             }
             let survived = Self.coalesced(
-                ranges.flatMap { alignment.carried($0) }.map { Self.trimmed($0, in: target) },
+                found.flatMap { alignment.carried($0) }.map { Self.trimmed($0, in: target) },
                 joiningAcross: nil
             )
             guard !survived.isEmpty else {
                 result.retired.append(Retirement(id: mark.id, retiredAt: date))
                 continue
             }
-            let pieces = survived.map { Self.piece($0, in: target) }
-            result.marks.append(Self.unmoved(mark.pieces, pieces, in: target) ? mark : Mark(
-                id: mark.id, pieces: pieces, version: mark.version + 1,
-                markedAt: mark.markedAt, turnID: mark.turnID
+            result.marks.append(Mark(
+                id: mark.id, pieces: survived.map { Self.piece($0, in: target) }, version: mark.version + 1,
+                markedAt: mark.markedAt, turnID: mark.turnID, anchoredIn: to
             ))
         }
         // Clearances follow the words they cleared, as marks do, so a mark's
         // later copy cannot show again what was cleared of an earlier one.
-        let source = old as NSString
         result.clearances = clearances.map { clearance in
-            let ranges = clearance.pieces.compactMap { Self.find($0, in: source, strictly: true, anchoredOnly: true) }
-            guard !ranges.isEmpty else { return clearance }
+            guard clearance.anchoredIn != to, let found = ranges(clearance.pieces, anchoredIn: clearance.anchoredIn) else {
+                return clearance
+            }
             let survived = Self.coalesced(
-                ranges.flatMap { alignment.carried($0) }.compactMap { Self.remainder($0, in: target) },
+                found.flatMap { alignment.carried($0) }.compactMap { Self.remainder($0, in: target) },
                 joiningAcross: nil
             )
-            let pieces = survived.map { Self.piece($0, in: target) }
-            return Self.unmoved(clearance.pieces, pieces, in: target) ? clearance : Clearance(
-                id: clearance.id, markID: clearance.markID, pieces: pieces,
-                version: clearance.version + 1, clearedAt: clearance.clearedAt
+            return Clearance(
+                id: clearance.id, markID: clearance.markID, pieces: survived.map { Self.piece($0, in: target) },
+                version: clearance.version + 1, clearedAt: clearance.clearedAt, anchoredIn: to
             )
         }
         result = result.tidied()
         return result.marks == marks && result.retired == retired && result.clearances == clearances ? self : result
-    }
-
-    /// Whether pieces carried to a new text are the ones held: the same
-    /// words beside the same words, and, where those stand more than once,
-    /// at the same place. Otherwise the place held would be stale, and the
-    /// nearest copy to it could be another one.
-    private static func unmoved(_ held: [Piece], _ carried: [Piece], in text: NSString) -> Bool {
-        guard held.count == carried.count else { return false }
-        return zip(held, carried).allSatisfy { old, new in
-            old.sameWords(as: new) && (old.hint == new.hint || !standsTwice(new, in: text))
-        }
-    }
-
-    private static func standsTwice(_ piece: Piece, in text: NSString) -> Bool {
-        only(piece.before + piece.text + piece.after, in: text) == nil
     }
 
     private static func later(_ lhs: Clearance, _ rhs: Clearance) -> Clearance {
@@ -604,12 +662,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// start of a word is found only at the start of one, and one that ended
     /// at a word's end only at an end. Without that, a cleared "a" whose
     /// context had been rewritten was found inside "lamp", and cut the word.
-    static func find(_ piece: Piece, in text: NSString, strictly: Bool = false, anchoredOnly: Bool = false) -> NSRange? {
+    static func find(_ piece: Piece, in text: NSString, strictly: Bool = false) -> NSRange? {
         let length = (piece.text as NSString).length
         let offset = (piece.before as NSString).length
         if let found = nearest(piece.before + piece.text + piece.after, to: piece.hint - offset, in: text) {
             let location = found.location + offset
-            if anchoredOnly, location != piece.hint, standsTwice(piece, in: text) { return nil }
             return NSRange(location: location, length: length)
         }
         if strictly { return nil }
@@ -802,7 +859,11 @@ struct LampTextAlignment {
 
     let segments: [Segment]
 
-    init(from old: String, to new: String) {
+    /// `absorbingSmallEqualities` takes a word or two that stayed the same
+    /// between two changes into one change with them, as a reader sees it;
+    /// placing a position from one text in the other wants every run that
+    /// stayed, so it asks for none.
+    init(from old: String, to new: String, absorbingSmallEqualities: Bool = true) {
         let oldTokens = Self.tokens(of: old)
         let newTokens = Self.tokens(of: new)
         // Most turns change a passage or two of a long draft: what both
@@ -886,7 +947,9 @@ struct LampTextAlignment {
                 break
             }
         }
-        self.segments = Self.absorbingSmallEqualities(segments, oldText: old as NSString)
+        self.segments = absorbingSmallEqualities
+            ? Self.absorbingSmallEqualities(segments, oldText: old as NSString)
+            : segments
     }
 
     /// Segments with every short run that stayed the same between two
