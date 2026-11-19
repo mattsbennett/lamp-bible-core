@@ -280,10 +280,12 @@ struct LampWritingReviewTests {
         #expect(saved.highlightedRanges(in: new) == [assistants])
     }
 
+    /// A save's carry from text A to B, with the text a turn marked since
+    /// (C) among those known: the new mark is anchored in C and is taken
+    /// from C, never from a copy of its words in A. (A carry that would take
+    /// marks back to a text older than one already marked is the caller's
+    /// to skip; the Mac skips a save's carry once a newer save is in.)
     @Test func aLateCarryLeavesAMarkMadeAgainstALaterTextAlone() {
-        // Review's case: a save's carry waits behind another; meanwhile a
-        // turn marks a passage identical to two earlier ones. The late carry
-        // runs with the older save's texts and must not move the new mark.
         let passage = "The same words stand here.\n\n"
         let other = "Something else stood here.\n\n"
         let a = passage + passage + passage + other + passage + passage + "Tail."
@@ -291,8 +293,8 @@ struct LampWritingReviewTests {
         let c = passage + passage + passage + passage + passage + passage + "Tail, edited."
         let marked = empty.markingAssistantChange(from: b, to: c)
         let drawn = marked.highlightedRanges(in: c)
-        let late = marked.carryingWriterEdit(from: a, to: b)
-        #expect(late.highlightedRanges(in: c) == drawn)
+        #expect(marked.carryingToText(c, from: [a, b, c]) == marked)
+        #expect(marked.carryingToText(c, from: [a, b]).highlightedRanges(in: c) == drawn)
     }
 
     @Test func aClearFromAnEditorThatTidiedTheMarkdownStillLands() {
@@ -364,13 +366,15 @@ struct LampWritingReviewTests {
         // and once in the old text, and carried from there.
         let old = "One alpha beta gamma three.\n\nSecond line."
         var review = empty.markingAssistantChange(from: "One two three.\n\nSecond line.", to: old)
-        review.marks = review.marks.map {
-            .init(id: $0.id, pieces: $0.pieces, version: $0.version, markedAt: $0.markedAt, turnID: nil, anchoredIn: "elsewhere")
+        review.marks = review.marks.map { mark in
+            .init(id: mark.id, pieces: mark.pieces.map {
+                .init(text: $0.text, before: $0.before, after: $0.after, hint: $0.hint, anchoredIn: "elsewhere")
+            }, version: mark.version, markedAt: mark.markedAt, turnID: nil)
         }
         let typed = "One alpha mine beta gamma three.\n\nSecond line."
         let carried = review.carryingWriterEdit(from: old, to: typed)
         #expect(marked(carried, in: typed) == ["alpha", "beta gamma"])
-        #expect(carried.marks.allSatisfy { $0.anchoredIn == LampWritingReview.digest(of: typed) })
+        #expect(carried.marks.flatMap(\.pieces).allSatisfy { $0.anchoredIn == LampWritingReview.digest(of: typed) })
     }
 
     @Test func carryingThroughTidiedMarkdownKeepsAShortWordMarked() {
@@ -388,6 +392,72 @@ struct LampWritingReviewTests {
         let range = LampWritingReview.markedRange(in: "1. one\n2. \u{E000}two\u{E001}", of: text)
         #expect(range.map { (text as NSString).substring(with: $0) } == "two")
         #expect(LampWritingReview.markedRange(in: "see chapter 2. \u{E002}Then", of: "see chapter 1. Then") == nil)
+    }
+
+    // MARK: From the third review of the anchors
+
+    private func padded(_ word: String) -> String {
+        String(repeating: "p", count: 24) + " " + word + " " + String(repeating: "q", count: 24) + "\n"
+    }
+
+    /// C: what a clear left in a text since forgotten is carried from the
+    /// newest known text that holds it, and splits around new typing.
+    @Test func aClearsRemainderSplitsAroundTypingAfterItsTextIsForgotten() {
+        let unsaved = "One alpha beta mine gamma three."
+        let review = empty.markingAssistantChange(from: "One two three.", to: "One alpha beta gamma three.")
+            .carryingToText(unsaved, from: ["One alpha beta gamma three."])
+            .clearing((unsaved as NSString).range(of: "gamma"), in: unsaved)
+        // The unsaved text is forgotten; a later one that still holds the
+        // passage is known, and the writer types between alpha and beta.
+        let later = "One alpha beta mine gamma three. More."
+        let typed = "One alpha yours beta mine gamma three. More."
+        let carried = review.carryingToText(typed, from: [later])
+        #expect(marked(carried, in: typed) == ["alpha", "beta"])
+    }
+
+    /// H1: a piece with its own known text is taken from it, not from an
+    /// older text where its words happen to stand once.
+    @Test func aPieceIsTakenFromItsOwnTextBeforeAnyOther() {
+        let a = padded("Echo") + padded("Other")
+        let b = padded("Echo") + padded("Echo")
+        let review = empty.markingAssistantChange(from: a, to: b)
+        let drawn = review.highlightedRanges(in: b)
+        let carried = review.carryingToText(b + "Tail.", from: [a, b])
+        #expect(carried.highlightedRanges(in: b + "Tail.") == drawn)
+    }
+
+    /// H2: a piece whose place moved is anchored again, so a later carry
+    /// from the older text cannot match the other copy and retire it.
+    @Test func aPieceWhosePlaceMovedIsAnchoredAgain() {
+        let a = "FIRST\n" + padded("Echo") + "SECOND\n" + padded("Echo") + "TAIL"
+        let marked0 = empty.markingAssistantChange(from: a.replacingOccurrences(of: "SECOND\n" + padded("Echo"), with: "SECOND\n" + padded("Ekko")), to: a)
+        let b = String(a.dropFirst("FIRST\n".count))
+        let moved = marked0.carryingWriterEdit(from: a, to: b)
+        #expect(moved.marks.flatMap(\.pieces).allSatisfy { $0.anchoredIn == LampWritingReview.digest(of: b) })
+        let c = b + "!"
+        let later = moved.carryingToText(c, from: [a, b])
+        #expect(later.highlightedRanges(in: c) == moved.highlightedRanges(in: b))
+    }
+
+    /// H3: a piece anchored in another text is never drawn on whichever
+    /// copy of its words lies nearest a place recorded there.
+    @Test func aForeignPieceIsNotDrawnOnTheNearestCopy() {
+        let text = padded("Echo") + padded("Echo")
+        let foreign = LampWritingReview.Piece(
+            text: "Echo", before: String(repeating: "p", count: 24) + " ",
+            after: " " + String(repeating: "q", count: 24), hint: 70, anchoredIn: "elsewhere"
+        )
+        let review = LampWritingReview(writingID: "w", marks: [.init(pieces: [foreign], markedAt: Date(), turnID: nil)])
+        #expect(review.highlightedRanges(in: text).isEmpty)
+    }
+
+    @Test func numbersInCodeOrSuperscriptsAreNeverSpelling() {
+        #expect(LampWritingReview.markedRange(in: "```\n2. \u{E002}x\n```", of: "```\n1. x\n```") == nil)
+        #expect(LampWritingReview.markedRange(in: "    2. \u{E002}x", of: "    1. x") == nil)
+        #expect(LampWritingReview.markedRange(in: "x\u{B3} \u{E002}y", of: "x\u{B2} y") == nil)
+        let quoted = "> 1. one\n> 1. two"
+        let range = LampWritingReview.markedRange(in: "> 1. one\n> 2. \u{E000}two\u{E001}", of: quoted)
+        #expect(range.map { (quoted as NSString).substring(with: $0) } == "two")
     }
 
     @Test func theFileIsTheSameBytesForTheSameRecord() throws {
