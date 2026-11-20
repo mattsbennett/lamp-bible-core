@@ -182,21 +182,25 @@ public enum LampSyncFilePlan {
                 action.download = local == nil && (listed != nil || kind.isMedia)
                 action.settled = true
             } else {
-                // Unasked, or unanswered, an unlisted file's revision is the
-                // copy this client deleted, or failing a record of it the one
-                // the manifest recorded.
+                // Unasked, an unlisted file's revision is the copy this client
+                // deleted, or failing a record of it the one the manifest
+                // recorded. (An ask with no answer leaves the deletion out of
+                // the pass: `LampSyncBundlePass.defersDeletion`.)
                 let candidate = listed ?? (kind.isListed ? nil : deletedRecord ?? entry?.revision)
                 action.reap = candidate
                 // Carried already by a deletion at or after it, by an earlier
                 // pass here or another device deleting it later, which covers
                 // the copy the server holds. The manifest takes nothing new,
                 // so it is not `tombstoned`, and kept it would be asked for on
-                // every pass. A copy the manifest's deletion does not cover,
-                // this client's own, is reaped on the strength of the queue
-                // alone, so the deletion waits until the reap is done.
+                // every pass. A copy the server shows that the manifest's
+                // deletion does not cover, this client's own, is reaped on the
+                // strength of the queue alone, so the deletion waits until the
+                // reap is done. Where the server was not asked, the manifest's
+                // word is taken: waiting on a copy nobody will ask about again
+                // would keep the deletion queued for good.
                 action.settled = entry.map { entry in
                     (entry.deletedAt.map { $0 >= deletedHere } ?? false)
-                        && (candidate.map { entry.deletes(revision: $0) } ?? true)
+                        && (listed.map { entry.deletes(revision: $0) } ?? true)
                 } ?? false
             }
             return action

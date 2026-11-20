@@ -3029,17 +3029,20 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
       -- deletion is settled.
       { tombstone := some d, download := held.isNone && (listed.isSome || cls == .media), settled := true }
     else
-      -- Unasked or unanswered, an unlisted file's revision is the copy this
-      -- client deleted, or failing a record of it the manifest's.
+      -- Unasked, an unlisted file's revision is the copy this client deleted,
+      -- or failing a record of it the manifest's (an ask with no answer leaves
+      -- the deletion out of the pass: `defersDeletion`).
       let candidate := match listed with
         | some r => some r
         | none => if cls == .listed then none else (deletedRecord.orElse fun _ => entry.bind (·.revision))
       { tombstone := some d,
         reap := candidate,
         -- Carried already by a deletion at or after it, which covers the copy
-        -- the server holds: settled. One it does not cover waits for the reap.
+        -- the server shows: settled. One it does not cover waits for the reap;
+        -- unasked, the manifest's word is taken, or the deletion would wait on
+        -- a copy nobody asks about again, for good.
         settled := entry.any fun e =>
-          (e.deletedAt.any fun t => Nat.ble d t) && candidate.all (deletesRevision e) }
+          (e.deletedAt.any fun t => Nat.ble d t) && listed.all (deletesRevision e) }
   | none =>
     match entry with
     | none =>
@@ -3495,11 +3498,22 @@ theorem aReapTheTombstoneDoesNotCoverWaitsForTheReap :
     filePlanAction .unlisted (some ⟨some 1, some 1, some 7, some 1⟩) none (some 5) (some 3) true (some 3)
       = { tombstone := some 5, reap := some 3 } := by decide
 
--- Likewise when the server was not asked or did not answer: the copy this
--- client deleted is reaped, and the deletion waits for it.
-theorem anUnansweredAskReapsTheCopyThisClientDeleted :
+-- Unasked, an old deletion's copy is not known: the copy this client deleted
+-- is reaped, and the deletion settled on the manifest's word, not left queued
+-- for good waiting on a copy nobody will ask about.
+theorem anUnaskedDeletionReapsItsCopyAndSettles :
     filePlanAction .unlisted (some ⟨some 1, some 1, some 7, some 1⟩) none (some 5) none true (some 3)
-      = { tombstone := some 5, reap := some 3 } := by decide
+      = { tombstone := some 5, reap := some 3, settled := true } := by decide
+
+-- Asked and unanswered, the deletion is left out of the pass, queued, and
+-- planned on the next answer (`LampSyncBundlePass.defersDeletion`).
+def defersDeletion (asked answered : Bool) : Bool := asked && !answered
+
+theorem anUnansweredAskDefersTheDeletion : defersDeletion true false = true := rfl
+
+theorem anAnsweredOrUnaskedDeletionIsPlanned (asked answered : Bool) (h : !asked || answered) :
+    defersDeletion asked answered = false := by
+  cases asked <;> cases answered <;> simp_all [defersDeletion]
 
 -- But the copy this client had, and deleted, is its own deletion's: the
 -- deletion recorded and that copy reaped, though an older tombstone stands.
@@ -5639,6 +5653,12 @@ def documentDecisionName : DocumentDecision → String
                  (memberWrite.map fun (t, r) => toString t ++ ":" ++ toString r).getD "none",
                  recorded.map toString |>.getD "none", listed.map toString |>.getD "none",
                  toString (queuedDeletionStamp document held deletedAt memberWrite recorded listed)]
+
+#eval show IO Unit from do
+  for asked in [false, true] do
+    for answered in [false, true] do
+      IO.println <| conformanceLine "defersDeletion"
+        [toString asked, toString answered, toString (defersDeletion asked answered)]
 
 def probeEntryName : ProbeEntry → String
   | .none => "none" | .member => "member" | .deletion => "deletion"

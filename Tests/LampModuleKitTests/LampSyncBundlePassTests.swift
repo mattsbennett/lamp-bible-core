@@ -1423,9 +1423,9 @@ struct LampSyncBundlePassTests {
     }
 
     /// The same, with the server not answering the pass's ask for the
-    /// document's revision: the copy this client deleted is still the one
-    /// reaped, and the deletion is not settled on an unanswered ask.
-    @Test func anUnansweredAskReapsTheCopyThisClientDeleted() async throws {
+    /// document's revision: the deletion is left out of that pass, queued,
+    /// and the next pass, answered, reaps the copy this client deleted.
+    @Test func anUnansweredAskLeavesTheDeletionForTheNextPass() async throws {
         let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
         let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 3_000)
         store.revisions[path] = "\"n2\""
@@ -1433,12 +1433,35 @@ struct LampSyncBundlePassTests {
         var records = LampSyncFileRecords()
         records.recordUpload(path, in: source, digest: "d", revision: "\"n2\"")
         records.confirmRecorded([path: "\"n2\""], in: source)
-        let outcome = try await LampSyncBundlePass(
+        let first = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 4_000 }
         ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
         #expect(store.operations.contains("revision \(path)"))
-        #expect(outcome.reaped == [path])
+        #expect(first.reaped.isEmpty && first.settled.isEmpty && first.tombstoned.isEmpty)
+        #expect(store.bodies[path] != nil)
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 5_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
+        #expect(second.reaped == [path])
         #expect(store.bodies[path] == nil)
+    }
+
+    /// A deletion queued here long ago, of n1, under another device's later
+    /// tombstone of n2 whose reap failed, older than the probe's window: no
+    /// ask is made, the copy this client deleted is reaped (and refused), and
+    /// the deletion is settled on the manifest's word, not queued for good.
+    @Test func anUnaskedOldDeletionIsSettled() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n2\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"n1\"")
+        records.confirmRecorded([path: "\"n1\""], in: source)
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source,
+            now: { 1_500 + LampSyncBundlePass.reapRetryWindow + 1 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 1_400]) }, records: &records, patience: immediate)
+        #expect(!store.operations.contains("revision \(path)"))
+        #expect(outcome.settled == [path])
     }
 
     /// The copy the queued deletion was of is still reaped.

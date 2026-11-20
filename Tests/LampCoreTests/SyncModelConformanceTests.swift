@@ -112,7 +112,7 @@ struct SyncModelConformanceTests {
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
         "reviewMerge", "documentMerge", "documentDeletion", "mergedRecord", "asksRevision",
-        "documentSwept", "documentDeletionStamp", "queuedDeletionStamp",
+        "documentSwept", "documentDeletionStamp", "queuedDeletionStamp", "defersDeletion",
     ]
 
     // MARK: - The model itself
@@ -1070,6 +1070,13 @@ struct SyncModelConformanceTests {
                 entry: manifest.entry(at: path), recorded: f[4] == "none" ? nil : quoted(f[4]),
                 listed: f[5] == "none" ? nil : quoted(f[5])
             )) == f[6]
+        }
+    }
+
+    /// Whether a queued deletion is left out of a pass.
+    @Test func defersDeletion() throws {
+        try conform("defersDeletion") { f in
+            String(LampSyncBundlePass.defersDeletion(asked: f[0] == "true", answered: f[1] == "true")) == f[2]
         }
     }
 

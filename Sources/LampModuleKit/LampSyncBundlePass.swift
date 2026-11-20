@@ -292,6 +292,7 @@ public struct LampSyncBundlePass {
         func folded(_ path: String) -> String { path.precomposedStringWithCanonicalMapping.lowercased() }
         let spellings = Dictionary(grouping: known, by: folded)
         let started = now()
+        var unanswered = Set<String>()
         for path in known.sorted() {
             guard let kind = LampSyncFolderLayout.kind(of: path) else { continue }
             let entry: ProbeEntry = manifest.entry(at: path).map { $0.isMember ? .member : .deletion } ?? .none
@@ -307,8 +308,10 @@ public struct LampSyncBundlePass {
                 listedKind: kind.isListed, media: kind.isMedia, inListing: listing[path] != nil, entry: entry,
                 held: held.contains(path), otherSpelling: otherSpelling, young: young
             ) else { continue }
-            if let revision = try? await store.revision(path: path) {
-                listing[path] = revision
+            do {
+                if let revision = try await store.revision(path: path) { listing[path] = revision }
+            } catch {
+                unanswered.insert(path)
             }
         }
 
@@ -318,7 +321,15 @@ public struct LampSyncBundlePass {
         // the copy this client last had, the deletion saw it, and is dated
         // past it (`queuedDeletionTime`).
         var deletedLocally = gathered.deletedLocally
-        for (path, deletedAt) in gathered.deletedLocally {
+        // A deletion whose file the server was asked about and did not
+        // answer is left queued for the next pass, and nothing is planned
+        // of it in this one: planned blind, it would be settled on the
+        // manifest's word while the copy this client deleted stood, and the
+        // next answer would put that copy back (`defersDeletion`).
+        for path in unanswered where Self.defersDeletion(asked: true, answered: false) {
+            deletedLocally[path] = nil
+        }
+        for (path, deletedAt) in deletedLocally {
             deletedLocally[path] = Self.queuedDeletionTime(
                 kind: LampSyncFolderLayout.kind(of: path), deletedAt: deletedAt, held: held.contains(path),
                 entry: manifest.entry(at: path), recorded: records.record(path, in: source)?.effectiveRevision,
@@ -824,6 +835,14 @@ public struct LampSyncBundlePass {
               listed.map({ LampSyncConditionalWrite.namesSameRevision($0, revision) }) ?? true
         else { return deletedAt }
         return max(deletedAt, written + 1)
+    }
+
+    /// Whether a queued deletion is left out of this pass: where the pass
+    /// asked the server for its file's revision and had no answer. Unasked,
+    /// the deletion is planned on what the manifest says; asked, on the
+    /// answer. (`Verification/SyncMerge.lean`: `defersDeletion`.)
+    static func defersDeletion(asked: Bool, answered: Bool) -> Bool {
+        asked && !answered
     }
 
     /// What the manifest says of a path, as `asksForRevision` reads it.
