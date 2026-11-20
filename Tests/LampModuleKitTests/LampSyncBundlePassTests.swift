@@ -1398,6 +1398,30 @@ struct LampSyncBundlePassTests {
         #expect((store.bodies[path] != nil) == !hadIt)
     }
 
+    /// A copy this client had and deleted at 2500, under a tombstone of n1
+    /// at 3000 that does not cover it: reaped on the strength of the queue
+    /// alone, so a failed reap leaves the deletion queued, not settled, and
+    /// the next pass reaps it.
+    @Test func aFailedReapOfACopyTheTombstoneDoesNotCoverIsNotSettled() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 3_000)
+        store.revisions[path] = "\"n2\""
+        store.failingDeletes[path] = 1
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"n2\"")
+        records.confirmRecorded([path: "\"n2\""], in: source)
+        let first = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 4_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
+        #expect(first.reaped.isEmpty)
+        #expect(first.settled.isEmpty && first.tombstoned.isEmpty)
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 5_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
+        #expect(second.reaped == [path])
+        #expect(store.bodies[path] == nil)
+    }
+
     /// The copy the queued deletion was of is still reaped.
     @Test func aQueuedDeletionStillReapsTheCopyItDeleted() async throws {
         let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")

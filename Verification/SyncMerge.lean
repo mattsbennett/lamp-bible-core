@@ -3033,8 +3033,10 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
         reap := match listed with
           | some r => some r
           | none => if cls == .listed then none else (entry.bind (·.revision)),
-        -- Carried already by a deletion at or after it: settled.
-        settled := entry.any fun e => e.deletedAt.any fun t => Nat.ble d t }
+        -- Carried already by a deletion at or after it, which covers the copy
+        -- the server holds: settled. One it does not cover waits for the reap.
+        settled := entry.any fun e =>
+          (e.deletedAt.any fun t => Nat.ble d t) && listed.all (deletesRevision e) }
   | none =>
     match entry with
     | none =>
@@ -3482,6 +3484,13 @@ theorem anUnrecordedUploadElsewhereIsNotDatedPast (d written r r' : Nat) (record
 theorem aCopyPutBackAfterAnOlderTombstoneIsKept :
     filePlanAction .unlisted (some ⟨some 1, some 1, some 2, some 1⟩) none (some 5) (some 3) true (some 1)
       = { changeAction .unlisted none (some 3) with adopt := some 3, settled := true } := by decide
+
+-- A copy of this client's own the manifest's later tombstone does not cover:
+-- reaped on the strength of the queue alone, so not settled, and the deletion
+-- waits for the reap to be done.
+theorem aReapTheTombstoneDoesNotCoverWaitsForTheReap :
+    filePlanAction .unlisted (some ⟨some 1, some 1, some 7, some 1⟩) none (some 5) (some 3) true (some 3)
+      = { tombstone := some 5, reap := some 3 } := by decide
 
 -- But the copy this client had, and deleted, is its own deletion's: the
 -- deletion recorded and that copy reaped, though an older tombstone stands.
@@ -4747,6 +4756,8 @@ structure Device where
   -- A pass under way: what it planned, the revision listed, the copy it saw,
   -- and the manifest entry and queued deletion it read.
   plan : Option (PlanAction × Option Nat × Option Copy × ManifestEntry × Option Nat)
+  -- The revision of the copy a queued deletion took, as the record keeps it.
+  deletedRecord : Option Nat
   deriving DecidableEq, Repr
 
 structure ServerFile where
@@ -4816,16 +4827,18 @@ def delete (w : World) (who : Who) : World :=
   let d := w.device who
   match d.copy with
   | none => w
-  | some _ =>
+  | some c =>
     let w' := w.setDevice who
-      { d with copy := none, deletedHere := if w.deletable then some w.clock else none }
+      { d with copy := none, deletedHere := if w.deletable then some w.clock else none,
+               deletedRecord := c.lastRevision }
     { w' with clock := w.clock + 1 }
 
 def read (p : Policy) (w : World) (who : Who) : World :=
   let d := w.device who
   let listed := w.server.map (·.revision)
   w.setDevice who
-    { d with plan := some (filePlanAction .listed (entryOf w.entry) (held p who d) d.deletedHere listed w.deletable,
+    { d with plan := some (filePlanAction .listed (entryOf w.entry) (held p who d) d.deletedHere listed w.deletable
+          (d.deletedHere.bind fun _ => d.deletedRecord),
         listed, d.copy, w.entry, d.deletedHere) }
 
 -- Sends `content` if the server still satisfies `c`: the new revision, and
@@ -4973,12 +4986,12 @@ def neverDeleted (start final : World) : Bool :=
   final.deletable || start.server.isNone || (final.server.isSome && final.a.copy.isSome && final.b.copy.isSome)
 
 def startEmpty (deletable : Bool) : World :=
-  ⟨none, emptyEntry, ⟨none, none, none⟩, ⟨none, none, none⟩, 1, deletable⟩
+  ⟨none, emptyEntry, ⟨none, none, none, none⟩, ⟨none, none, none, none⟩, 1, deletable⟩
 
 def startHeld (deletable : Bool) : World :=
   ⟨some ⟨0, 0, .a, [0]⟩, ⟨some 0, some 0, none, none⟩,
-   ⟨some ⟨0, some 0, some (encode .a 0), [0]⟩, none, none⟩,
-   ⟨some ⟨0, some 0, some (encode .b 0), [0]⟩, none, none⟩, 1, deletable⟩
+   ⟨some ⟨0, some 0, some (encode .a 0), [0]⟩, none, none, none⟩,
+   ⟨some ⟨0, some 0, some (encode .b 0), [0]⟩, none, none, none⟩, 1, deletable⟩
 
 -- Both devices hold the file, and a device whose clock runs far ahead
 -- tombstoned it at 100; the others' clocks start at 1.

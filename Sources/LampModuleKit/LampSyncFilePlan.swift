@@ -184,11 +184,17 @@ public enum LampSyncFilePlan {
             } else {
                 // An unlisted file's only revision is the one the manifest recorded.
                 action.reap = listed ?? (kind.isListed ? nil : entry?.revision)
-                // Carried already by a deletion at or after it: by an earlier
-                // pass here, or by another device deleting it later. The
-                // manifest takes nothing new, so it is not `tombstoned`, and
-                // kept it would be asked for on every pass.
-                action.settled = entry?.deletedAt.map { $0 >= deletedHere } ?? false
+                // Carried already by a deletion at or after it, by an earlier
+                // pass here or another device deleting it later, which covers
+                // the copy the server holds. The manifest takes nothing new,
+                // so it is not `tombstoned`, and kept it would be asked for on
+                // every pass. A copy the manifest's deletion does not cover,
+                // this client's own, is reaped on the strength of the queue
+                // alone, so the deletion waits until the reap is done.
+                action.settled = entry.map { entry in
+                    (entry.deletedAt.map { $0 >= deletedHere } ?? false)
+                        && (listed.map { entry.deletes(revision: $0) } ?? true)
+                } ?? false
             }
             return action
         }
