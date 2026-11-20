@@ -1352,6 +1352,28 @@ struct LampSyncBundlePassTests {
         #expect(outcome.reaped == (recorded ? [path] : []))
     }
 
+    /// The same, with the server holding a copy uploaded elsewhere since,
+    /// not yet recorded: the deletion never saw it, so it is not dated past
+    /// the write, and the copy is not reaped.
+    @Test func aDeletionIsNotDatedPastACopyUploadedElsewhereSince() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"d1\"")
+        store.revisions[path] = "\"d2\""
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"d1\"")
+        records.confirmRecorded([path: "\"d1\""], in: source)
+        var held = gathered([], deletedLocally: [path: 900])
+        held.extraListing = [path: "\"d2\""]
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { held }, records: &records, patience: immediate)
+        let entry = try #require(outcome.written?.bundle.manifest.entry(at: path))
+        #expect(entry.isMember)
+        #expect(entry.deletedAt == 900)
+        #expect(outcome.reaped.isEmpty)
+        #expect(store.bodies[path] != nil)
+    }
+
     /// The copy the queued deletion was of is still reaped.
     @Test func aQueuedDeletionStillReapsTheCopyItDeleted() async throws {
         let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")

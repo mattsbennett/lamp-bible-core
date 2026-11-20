@@ -74,9 +74,11 @@ public enum LampSyncFilePlan {
         /// on this revision, only after the bundle that tombstones it is
         /// written, so no device reads the deletion as a missing upload.
         public var reap: [String: String] = [:]
-        /// Deletions queued here that the manifest already carries, a copy
-        /// written since standing on the server: nothing left to do for
-        /// them, and the pass reports them for the client to drop.
+        /// Deletions queued here the manifest needs nothing more of: one it
+        /// carries already, at that time or later, and a copy written since
+        /// put back; or one a write recorded after it wins. The manifest
+        /// takes nothing new for them, so the pass reports them for the
+        /// client to drop with the tombstoned.
         public var settled: [String] = []
 
         public init() {}
@@ -142,11 +144,14 @@ public enum LampSyncFilePlan {
         deletable: Bool = true
     ) -> Action {
         if deletable, let deletedHere {
-            if let entry, !entry.isMember, entry.deletedAt != nil,
+            if let entry, !entry.isMember, let carried = entry.deletedAt, carried >= deletedHere,
                let listed, !entry.deletes(revision: listed) {
                 // Already deleted, by an earlier pass here that stopped before
-                // the queue was cleared or by another device, and the server's
-                // copy is not the one deleted: written since, not yet recorded.
+                // the queue was cleared or by another device, no earlier than
+                // this deletion, and the server's copy is not the one deleted:
+                // written since, not yet recorded. An older tombstone carries
+                // nothing of a later deletion here, which may be of that very
+                // copy, and is planned below.
                 // It is put back, as below. The queued deletion is published
                 // already and has nothing left to do: `settled`, for the
                 // client to drop, since one kept would plan the path as
@@ -165,11 +170,19 @@ public enum LampSyncFilePlan {
             )
             var action = Action(tombstone: deletedHere)
             if after.isMember {
-                // Written elsewhere after it was deleted here: it comes back.
+                // Written elsewhere after it was deleted here: it comes back,
+                // and the deletion has nothing left to do (`settled`). Kept, it
+                // would plan the path as deleted here on every pass.
                 action.download = local == nil && (listed != nil || kind.isMedia)
+                action.settled = true
             } else {
                 // An unlisted file's only revision is the one the manifest recorded.
                 action.reap = listed ?? (kind.isListed ? nil : entry?.revision)
+                // Carried already by a deletion at or after it: by an earlier
+                // pass here, or by another device deleting it later. The
+                // manifest takes nothing new, so it is not `tombstoned`, and
+                // kept it would be asked for on every pass.
+                action.settled = entry?.deletedAt.map { $0 >= deletedHere } ?? false
             }
             return action
         }

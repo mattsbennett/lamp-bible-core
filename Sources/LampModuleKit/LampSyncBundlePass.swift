@@ -101,11 +101,12 @@ public struct LampSyncBundlePass {
         public var uploaded: [String] = []
         public var deletedLocally: [String] = []
         public var tombstoned: [String] = []
-        /// Deletions queued here that need nothing more: the manifest
-        /// carries each already, from a pass that stopped before the queue
-        /// was cleared, and a copy written since stands. Drop them as the
-        /// tombstoned are dropped, or the path is planned as deleted here on
-        /// every pass. (`LampSyncFilePlan.Plan.settled`.)
+        /// Deletions queued here the manifest needs nothing more of: one it
+        /// carries already, at that time or later, from a pass that stopped
+        /// before the queue was cleared or another device's later deletion;
+        /// or one a write recorded after it wins. Drop them as the
+        /// tombstoned are dropped, or each is asked for on every pass.
+        /// (`LampSyncFilePlan.Plan.settled`.)
         public var settled: [String] = []
         public var reaped: [String] = []
         /// Files the server's copy turned out to be byte-for-byte the one
@@ -320,7 +321,8 @@ public struct LampSyncBundlePass {
         for (path, deletedAt) in gathered.deletedLocally {
             deletedLocally[path] = Self.queuedDeletionTime(
                 kind: LampSyncFolderLayout.kind(of: path), deletedAt: deletedAt, held: held.contains(path),
-                entry: manifest.entry(at: path), recorded: records.record(path, in: source)?.effectiveRevision
+                entry: manifest.entry(at: path), recorded: records.record(path, in: source)?.effectiveRevision,
+                listed: listing[path]
             )
         }
 
@@ -802,17 +804,20 @@ public struct LampSyncBundlePass {
     /// document was being deleted, or the copy it took and then deleted:
     /// either way the deletion saw it. A write it has no record of is a save
     /// made elsewhere that the deletion never saw, and it outlives the
-    /// deletion. Documents only, whose deletions both apps forget once the
+    /// deletion; so does a copy the server holds (`listed`) other than the
+    /// recorded one, uploaded since and not yet recorded, which dated past
+    /// the write would be reaped. Documents only, whose deletions both apps forget once the
     /// document is held again: a module's or deck's ledger can outlive its
     /// re-creation here, and dated past this client's own new write it would
     /// delete it everywhere. (`Verification/SyncMerge.lean`: `queuedDeletionStamp`.)
     static func queuedDeletionTime(
         kind: LampSyncFileKind?, deletedAt: Int64, held: Bool,
-        entry: LampSyncLibraryManifest.Entry?, recorded: String?
+        entry: LampSyncLibraryManifest.Entry?, recorded: String?, listed: String?
     ) -> Int64 {
         guard kind == .writingDocument, !held, let entry, entry.isMember,
               let written = entry.presentSince, let revision = entry.revision, let recorded,
-              LampSyncConditionalWrite.namesSameRevision(revision, recorded)
+              LampSyncConditionalWrite.namesSameRevision(revision, recorded),
+              listed.map({ LampSyncConditionalWrite.namesSameRevision($0, revision) }) ?? true
         else { return deletedAt }
         return max(deletedAt, written + 1)
     }

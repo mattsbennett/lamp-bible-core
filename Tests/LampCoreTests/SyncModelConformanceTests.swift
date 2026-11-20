@@ -1066,8 +1066,9 @@ struct SyncModelConformanceTests {
             }
             return String(LampSyncBundlePass.queuedDeletionTime(
                 kind: LampSyncFolderLayout.kind(of: path), deletedAt: Int64(f[2])!, held: f[1] == "true",
-                entry: manifest.entry(at: path), recorded: f[4] == "none" ? nil : quoted(f[4])
-            )) == f[5]
+                entry: manifest.entry(at: path), recorded: f[4] == "none" ? nil : quoted(f[4]),
+                listed: f[5] == "none" ? nil : quoted(f[5])
+            )) == f[6]
         }
     }
 
