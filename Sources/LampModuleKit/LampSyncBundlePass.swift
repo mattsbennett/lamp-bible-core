@@ -101,6 +101,12 @@ public struct LampSyncBundlePass {
         public var uploaded: [String] = []
         public var deletedLocally: [String] = []
         public var tombstoned: [String] = []
+        /// Deletions queued here that need nothing more: the manifest
+        /// carries each already, from a pass that stopped before the queue
+        /// was cleared, and a copy written since stands. Drop them as the
+        /// tombstoned are dropped, or the path is planned as deleted here on
+        /// every pass. (`LampSyncFilePlan.Plan.settled`.)
+        public var settled: [String] = []
         public var reaped: [String] = []
         /// Files the server's copy turned out to be byte-for-byte the one
         /// this client already held: fetched, compared, and left alone.
@@ -305,6 +311,19 @@ public struct LampSyncBundlePass {
             }
         }
 
+        // A document deleted here while a pass sent it: that pass recorded
+        // its write after the deletion, which then reads as a save made
+        // elsewhere since, and the document comes back. Where the write is
+        // the copy this client last had, the deletion saw it, and is dated
+        // past it (`queuedDeletionTime`).
+        var deletedLocally = gathered.deletedLocally
+        for (path, deletedAt) in gathered.deletedLocally {
+            deletedLocally[path] = Self.queuedDeletionTime(
+                kind: LampSyncFolderLayout.kind(of: path), deletedAt: deletedAt, held: held.contains(path),
+                entry: manifest.entry(at: path), recorded: records.record(path, in: source)?.effectiveRevision
+            )
+        }
+
         let filesByPath = Dictionary(
             gathered.local.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }
         )
@@ -327,13 +346,13 @@ public struct LampSyncBundlePass {
         let plan = LampSyncFilePlan.plan(
             manifest: opened.bundle.manifest,
             local: locals,
-            deletedLocally: gathered.deletedLocally,
+            deletedLocally: deletedLocally,
             listing: listing
         ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
         outcome.missing = LampSyncFilePlan.missing(
             manifest: opened.bundle.manifest,
             local: locals,
-            deletedLocally: gathered.deletedLocally,
+            deletedLocally: deletedLocally,
             found: listed.found.union(gathered.extraListing.keys),
             listedFolders: listed.folders
         ).filter { LampSyncFolderLayout.kind(of: $0.key).map(plannedKinds) ?? false }
@@ -583,6 +602,7 @@ public struct LampSyncBundlePass {
         outcome.tombstoned = tombstone.keys.filter {
             snapshot.bundle.manifest.recordsAdeletion(of: $0, notIn: opened.bundle.manifest)
         }.sorted()
+        outcome.settled = plan.settled.sorted()
         records.confirmRecorded(
             written.compactMapValues(\.revision), in: source
         )
@@ -775,6 +795,28 @@ public struct LampSyncBundlePass {
         reconciled && (!takenTogether || treeIn)
     }
 
+    /// When a deletion queued here is recorded: when it was made, or, for a
+    /// document this client no longer holds whose manifest write is the copy
+    /// this client last had (`recorded`, its record's revision), just past
+    /// that write. Such a write is this client's own upload, sent while the
+    /// document was being deleted, or the copy it took and then deleted:
+    /// either way the deletion saw it. A write it has no record of is a save
+    /// made elsewhere that the deletion never saw, and it outlives the
+    /// deletion. Documents only, whose deletions both apps forget once the
+    /// document is held again: a module's or deck's ledger can outlive its
+    /// re-creation here, and dated past this client's own new write it would
+    /// delete it everywhere. (`Verification/SyncMerge.lean`: `queuedDeletionStamp`.)
+    static func queuedDeletionTime(
+        kind: LampSyncFileKind?, deletedAt: Int64, held: Bool,
+        entry: LampSyncLibraryManifest.Entry?, recorded: String?
+    ) -> Int64 {
+        guard kind == .writingDocument, !held, let entry, entry.isMember,
+              let written = entry.presentSince, let revision = entry.revision, let recorded,
+              LampSyncConditionalWrite.namesSameRevision(revision, recorded)
+        else { return deletedAt }
+        return max(deletedAt, written + 1)
+    }
+
     /// What the manifest says of a path, as `asksForRevision` reads it.
     enum ProbeEntry: Equatable { case none, member, deletion }
 
@@ -839,6 +881,7 @@ private extension LampSyncFilePlan.Plan {
         plan.tombstone = tombstone.filter { keep($0.key) }
         plan.reap = reap.filter { keep($0.key) }
         plan.supersede = supersede.filter { keep($0.key) }
+        plan.settled = settled.filter(keep)
         return plan
     }
 }

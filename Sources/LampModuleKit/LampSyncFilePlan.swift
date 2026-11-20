@@ -74,6 +74,10 @@ public enum LampSyncFilePlan {
         /// on this revision, only after the bundle that tombstones it is
         /// written, so no device reads the deletion as a missing upload.
         public var reap: [String: String] = [:]
+        /// Deletions queued here that the manifest already carries, a copy
+        /// written since standing on the server: nothing left to do for
+        /// them, and the pass reports them for the client to drop.
+        public var settled: [String] = []
 
         public init() {}
     }
@@ -116,6 +120,7 @@ public enum LampSyncFilePlan {
         var tombstone: Int64?
         var reap: String?
         var supersede: Int64?
+        var settled = false
 
         static let none = Action()
         static let download = Action(download: true)
@@ -142,11 +147,16 @@ public enum LampSyncFilePlan {
                 // Already deleted, by an earlier pass here that stopped before
                 // the queue was cleared or by another device, and the server's
                 // copy is not the one deleted: written since, not yet recorded.
-                // It is put back, as below, and the queued deletion waits for
-                // the next pass. Tombstoned here, it would be recorded as the
-                // deletion's revision, and reaped.
+                // It is put back, as below. The queued deletion is published
+                // already and has nothing left to do: `settled`, for the
+                // client to drop, since one kept would plan the path as
+                // deleted here on every pass and never sync it again. A copy
+                // this client held and deleted itself comes back once, which is
+                // the safe way to be wrong. Tombstoned here, it would be
+                // recorded as the deletion's revision, and reaped.
                 var action = change(kind: kind, local: local, listed: listed)
                 action.adopt = listed
+                action.settled = true
                 return action
             }
             var after = entry ?? .init(path: "")
@@ -382,5 +392,6 @@ extension LampSyncFilePlan.Plan {
         if let time = action.tombstone { tombstone[path] = time }
         if let revision = action.reap { reap[path] = revision }
         if let time = action.supersede { supersede[path] = time }
+        if action.settled { settled.append(path) }
     }
 }

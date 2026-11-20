@@ -2968,6 +2968,9 @@ structure PlanAction where
   -- after it, so it supersedes the tombstone however fast the clock that
   -- dated it.
   supersede : Option Nat := none
+  -- A deletion queued here that the manifest already carries, a copy written
+  -- since standing: nothing left to do, reported for the client to drop.
+  settled : Bool := false
   deriving DecidableEq, Repr
 
 def uploadAction (c : WriteCondition) : PlanAction := { upload := some c }
@@ -3012,11 +3015,12 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
     let after := removeFile (entry.getD emptyEntry) d listed
     -- Already deleted, and the server's copy is not the one deleted: written
     -- since, not yet recorded. Put back, as a tombstone's put-back copy is;
-    -- the queued deletion waits for the next pass.
+    -- the queued deletion is published already, and settled: kept, it would
+    -- plan the path as deleted here on every pass.
     let writtenSince := match entry, listed with
       | some e, some r => !entryIsMember e && e.deletedAt.isSome && !deletesRevision e r
       | _, _ => false
-    if writtenSince then { changeAction cls held listed with adopt := listed }
+    if writtenSince then { changeAction cls held listed with adopt := listed, settled := true }
     else if entryIsMember after then
       -- Written elsewhere after it was deleted here: it comes back.
       { tombstone := some d, download := held.isNone && (listed.isSome || cls == .media) }
@@ -3409,6 +3413,71 @@ theorem aSweepRemovesTheWriteItIsDatedAfter (m now : Nat) (r : Option Nat) :
   simp [entryIsMember, ManifestEntry.withStamps, documentDeletionStamp]
   omega
 
+/-! ### A document deleted while a pass sent it
+
+`LampSyncBundlePass.queuedDeletionTime`: a deletion queued here is recorded
+when it was made; but for a document no longer held here whose manifest
+write is the copy this client last had (its record names that revision),
+just past that write. Such a write is this client's own upload, sent while
+the document was being deleted, or the copy it took and then deleted: either
+way the deletion saw it. A write it has no record of is a save made elsewhere
+the deletion never saw, and outlives it. Documents only: both apps forget a
+document's deletion once it is held again, where a module's or deck's ledger
+can outlive its re-creation here. -/
+
+def queuedDeletionStamp (document held : Bool) (deletedAt : Nat)
+    (memberWrite : Option (Nat × Nat)) (recorded : Option Nat) : Nat :=
+  match memberWrite with
+  | some (written, rev) =>
+    if document && !held && recorded == some rev then documentDeletionStamp (some written) deletedAt
+    else deletedAt
+  | none => deletedAt
+
+-- Never earlier than the deletion was made.
+theorem aQueuedDeletionIsNeverDatedEarlier (document held : Bool) (d : Nat)
+    (m : Option (Nat × Nat)) (recorded : Option Nat) :
+    d ≤ queuedDeletionStamp document held d m recorded := by
+  unfold queuedDeletionStamp
+  split
+  · split
+    · simp only [documentDeletionStamp]; omega
+    · exact Nat.le_refl d
+  · exact Nat.le_refl d
+
+-- Deleted while its own upload was in flight, dated before that upload's
+-- write: dated past it, so the deletion is what the manifest keeps.
+theorem anUploadDeletedInFlightStaysDeleted (d written r : Nat) :
+    written < queuedDeletionStamp true false d (some (written, r)) (some r) := by
+  simp [queuedDeletionStamp, documentDeletionStamp]
+  omega
+
+-- And planned so: tombstoned past the write, and that copy reaped.
+theorem anUploadDeletedInFlightIsReaped :
+    filePlanAction .unlisted (some ⟨some 4, some 3, none, none⟩) none
+        (some (queuedDeletionStamp true false 2 (some (4, 3)) (some 3))) (some 3)
+      = { tombstone := some 5, reap := some 3 } := by decide
+
+-- Unstamped, the same deletion lost to the write and the document came back.
+theorem anUnstampedDeletionLosesToTheUpload :
+    filePlanAction .unlisted (some ⟨some 4, some 3, none, none⟩) none (some 2) (some 3)
+      = { tombstone := some 2, download := true } := by decide
+
+-- A save made elsewhere, which this client has no record of, outlives it;
+theorem aSaveElsewhereOutlivesAQueuedDeletion (d written r : Nat) (recorded : Option Nat)
+    (other : recorded ≠ some r) :
+    queuedDeletionStamp true false d (some (written, r)) recorded = d := by
+  simp [queuedDeletionStamp, other]
+
+-- a copy held here is never deleted past its write;
+theorem aHeldDocumentIsNeverDatedPast (d : Nat) (m : Option (Nat × Nat)) (recorded : Option Nat) :
+    queuedDeletionStamp true true d m recorded = d := by
+  unfold queuedDeletionStamp; split <;> simp
+
+-- and nothing but a document is.
+theorem onlyADocumentIsDatedPast (held : Bool) (d : Nat) (m : Option (Nat × Nat)) (recorded : Option Nat) :
+    queuedDeletionStamp false held d m recorded = d := by
+  unfold queuedDeletionStamp; split <;> simp
+
 /-! ### When a merge is recorded
 
 `LampSyncBundlePass.recordsMergedInstall`: a path both sides changed is
@@ -3517,7 +3586,7 @@ theorem aFailedReapIsReapedOnceAsked (r : Nat) :
 -- pass's own ask.
 theorem aQueuedDeletionPutsBackACopyWrittenSince (cls : FileClass) :
     filePlanAction cls (some ⟨some 1, some 1, some 2, some 1⟩) none (some 2) (some 3)
-      = { changeAction cls none (some 3) with adopt := some 3 } := by
+      = { changeAction cls none (some 3) with adopt := some 3, settled := true } := by
   cases cls <;> decide
 
 -- The copy it deleted is still reaped.
@@ -4789,7 +4858,8 @@ def act (p : Policy) (w : World) (who : Who) : World :=
       | some d => removeFile entry d listed
       | none => entry
     let d := w.device who
-    let kept := if action.tombstone.isSome then none else d.deletedHere
+    -- A tombstone taken, or one the manifest carried already (`settled`).
+    let kept := if action.tombstone.isSome || action.settled then none else d.deletedHere
     let w' := w.setDevice who { d with plan := none, deletedHere := kept }
     let w := { w' with entry := entry, clock := w.clock + 1 }
     -- Reap.
@@ -5344,6 +5414,7 @@ def actionCode (a : PlanAction) : String :=
     ++ (a.tombstone.map fun t => ["tombstone:" ++ toString t]).getD []
     ++ (a.reap.map fun r => ["reap:" ++ toString r]).getD []
     ++ (a.supersede.map fun t => ["supersede:" ++ toString t]).getD []
+    ++ (if a.settled then ["settled"] else [])
   if tokens.isEmpty then "-" else ",".intercalate tokens
 
 def headerName : BundleHeader → String
@@ -5498,6 +5569,17 @@ def documentDecisionName : DocumentDecision → String
     for now in [4000, 9000] do
       IO.println <| conformanceLine "documentDeletionStamp"
         [memberWrite.map toString |>.getD "none", toString now, toString (documentDeletionStamp memberWrite now)]
+  -- A member written at 5000 as revision 7, or none; the record 7, 8 or none.
+  for document in [false, true] do
+    for held in [false, true] do
+      for deletedAt in [4000, 9000] do
+        for memberWrite in [none, some (5000, 7)] do
+          for recorded in [none, some 7, some 8] do
+            IO.println <| conformanceLine "queuedDeletionStamp"
+              [toString document, toString held, toString deletedAt,
+               (memberWrite.map fun (t, r) => toString t ++ ":" ++ toString r).getD "none",
+               recorded.map toString |>.getD "none",
+               toString (queuedDeletionStamp document held deletedAt memberWrite recorded)]
 
 def probeEntryName : ProbeEntry → String
   | .none => "none" | .member => "member" | .deletion => "deletion"

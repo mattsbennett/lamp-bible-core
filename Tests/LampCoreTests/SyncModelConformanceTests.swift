@@ -112,7 +112,7 @@ struct SyncModelConformanceTests {
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
         "reviewMerge", "documentMerge", "documentDeletion", "mergedRecord", "asksRevision",
-        "documentSwept", "documentDeletionStamp",
+        "documentSwept", "documentDeletionStamp", "queuedDeletionStamp",
     ]
 
     // MARK: - The model itself
@@ -965,6 +965,7 @@ struct SyncModelConformanceTests {
             if let time = plan.tombstone[path] { tokens.append("tombstone:\(time)") }
             if let revision = plan.reap[path] { tokens.append("reap:\(token(revision))") }
             if let time = plan.supersede[path] { tokens.append("supersede:\(time)") }
+            if plan.settled.contains(path) { tokens.append("settled") }
             return tokens.isEmpty ? "-" : tokens.joined(separator: ",")
         }
         try conform("filePlanAction") { f in
@@ -1048,6 +1049,25 @@ struct SyncModelConformanceTests {
             let path = "Workspaces/Writing/w/Documents/a.md"
             let members = f[0] == "none" ? [:] : [path: Int64(f[0])!]
             return String(LampWritingDocumentStore.deletionTime(of: path, members: members, now: Int64(f[1])!)) == f[2]
+        }
+    }
+
+    /// When a deletion queued here is recorded: a document's dated past a
+    /// manifest write this client has a record of, nothing else's.
+    @Test func queuedDeletionStamp() throws {
+        try conform("queuedDeletionStamp") { f in
+            let path = f[0] == "true"
+                ? try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "a.md")
+                : try LampSyncFolderLayout.modulePath(kind: .translations, moduleID: "kjv")
+            var manifest = LampSyncLibraryManifest()
+            if f[3] != "none" {
+                let parts = f[3].split(separator: ":").map(String.init)
+                manifest = try manifest.recordingWrite(path, revision: quoted(parts[1]), replacing: nil, at: Int64(parts[0])!)
+            }
+            return String(LampSyncBundlePass.queuedDeletionTime(
+                kind: LampSyncFolderLayout.kind(of: path), deletedAt: Int64(f[2])!, held: f[1] == "true",
+                entry: manifest.entry(at: path), recorded: f[4] == "none" ? nil : quoted(f[4])
+            )) == f[5]
         }
     }
 

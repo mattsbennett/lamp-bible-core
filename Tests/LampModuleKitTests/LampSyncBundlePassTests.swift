@@ -1327,6 +1327,29 @@ struct LampSyncBundlePassTests {
         #expect(entry.isMember)
         #expect(entry.revision == "\"n2\"")
         #expect(entry.deletedRevision == "\"n1\"")
+        #expect(outcome.settled == [path])
+    }
+
+    /// A document deleted here while a pass sent it: that pass recorded its
+    /// write at 1000, after the deletion at 900. The write is the copy this
+    /// client last had, so the deletion saw it, and is dated past it; without
+    /// a record of it, it is a save made elsewhere, and the document comes back.
+    @Test(arguments: [true, false])
+    func aDocumentDeletedWhileItsUploadWasSentStaysDeleted(recorded: Bool) async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"d1\"")
+        var records = LampSyncFileRecords()
+        if recorded {
+            records.recordUpload(path, in: source, digest: "d", revision: "\"d1\"")
+            records.confirmRecorded([path: "\"d1\""], in: source)
+        }
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 900]) }, records: &records, patience: immediate)
+        let entry = try #require(outcome.written?.bundle.manifest.entry(at: path))
+        #expect(entry.isMember == !recorded)
+        #expect(entry.deletedAt == (recorded ? 1_001 : 900))
+        #expect(outcome.reaped == (recorded ? [path] : []))
     }
 
     /// The copy the queued deletion was of is still reaped.
