@@ -349,7 +349,11 @@ public struct LampSyncBundlePass {
             manifest: opened.bundle.manifest,
             local: locals,
             deletedLocally: deletedLocally,
-            listing: listing
+            listing: listing,
+            // The copy this client last had of each, which its deletion saw.
+            deletedRecords: deletedLocally.keys.reduce(into: [:]) { revisions, path in
+                revisions[path] = records.record(path, in: source)?.effectiveRevision
+            }
         ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
         outcome.missing = LampSyncFilePlan.missing(
             manifest: opened.bundle.manifest,

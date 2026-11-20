@@ -3009,17 +3009,19 @@ def savedAfter (h : HeldFile) (d : Nat) : Bool :=
 -- (`deleteTarget`). One it never does is never tombstoned, asked to be deleted
 -- here, or reaped: a held copy survives a tombstone and goes back up.
 def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Option HeldFile)
-    (deletedHere listed : Option Nat) (deletable : Bool := true) : PlanAction :=
+    (deletedHere listed : Option Nat) (deletable : Bool := true)
+    (deletedRecord : Option Nat := none) : PlanAction :=
   match if deletable then deletedHere else none with
   | some d =>
     let after := removeFile (entry.getD emptyEntry) d listed
-    -- Already deleted, and the server's copy is not the one deleted: written
-    -- since, not yet recorded. Put back, as a tombstone's put-back copy is;
-    -- the queued deletion is published already, and settled: kept, it would
-    -- plan the path as deleted here on every pass.
+    -- Already deleted, and the server's copy is neither the one deleted nor
+    -- the one this client last had (`deletedRecord`): written or put back
+    -- since, by someone else, not yet recorded. Put back, as a tombstone's
+    -- put-back copy is, and the queued deletion settled. The copy this client
+    -- had is its own deletion's, planned below.
     let writtenSince := match entry, listed with
       | some e, some r =>
-        !entryIsMember e && (e.deletedAt.any fun t => Nat.ble d t) && !deletesRevision e r
+        !entryIsMember e && e.deletedAt.isSome && !deletesRevision e r && deletedRecord != some r
       | _, _ => false
     if writtenSince then { changeAction cls held listed with adopt := listed, settled := true }
     else if entryIsMember after then
@@ -3474,10 +3476,17 @@ theorem anUnrecordedUploadElsewhereIsNotDatedPast (d written r r' : Nat) (record
     queuedDeletionStamp true false d (some (written, r)) recorded (some r') = d := by
   simp [queuedDeletionStamp, other]
 
--- A later deletion here than the tombstone the manifest carries is not
--- settled by it, but planned: the copy it deleted reaped, the deletion recorded.
-theorem anOlderTombstoneSettlesNoLaterDeletion :
-    filePlanAction .unlisted (some ⟨some 1, some 1, some 2, some 1⟩) none (some 5) (some 3)
+-- A copy put back by hand after an old tombstone, while this client, which
+-- never saw it, deleted the copy it had: put back, whenever the deletion here
+-- was made.
+theorem aCopyPutBackAfterAnOlderTombstoneIsKept :
+    filePlanAction .unlisted (some ⟨some 1, some 1, some 2, some 1⟩) none (some 5) (some 3) true (some 1)
+      = { changeAction .unlisted none (some 3) with adopt := some 3, settled := true } := by decide
+
+-- But the copy this client had, and deleted, is its own deletion's: the
+-- deletion recorded and that copy reaped, though an older tombstone stands.
+theorem theCopyThisClientDeletedIsReaped :
+    filePlanAction .unlisted (some ⟨some 1, some 1, some 2, some 1⟩) none (some 5) (some 3) true (some 3)
       = { tombstone := some 5, reap := some 3 } := by decide
 
 -- A save made elsewhere, which this client has no record of, outlives it;
@@ -4735,8 +4744,9 @@ structure Copy where
 structure Device where
   copy : Option Copy
   deletedHere : Option Nat
-  -- A pass under way: what it planned, the revision listed, and the copy it saw.
-  plan : Option (PlanAction × Option Nat × Option Copy)
+  -- A pass under way: what it planned, the revision listed, the copy it saw,
+  -- and the manifest entry and queued deletion it read.
+  plan : Option (PlanAction × Option Nat × Option Copy × ManifestEntry × Option Nat)
   deriving DecidableEq, Repr
 
 structure ServerFile where
@@ -4816,7 +4826,7 @@ def read (p : Policy) (w : World) (who : Who) : World :=
   let listed := w.server.map (·.revision)
   w.setDevice who
     { d with plan := some (filePlanAction .listed (entryOf w.entry) (held p who d) d.deletedHere listed w.deletable,
-        listed, d.copy) }
+        listed, d.copy, w.entry, d.deletedHere) }
 
 -- Sends `content` if the server still satisfies `c`: the new revision, and
 -- the revision it replaced, for the bundle update.
@@ -4832,7 +4842,7 @@ def send (w : World) (who : Who) (content : Nat) (seen : List Nat) (c : WriteCon
 def act (p : Policy) (w : World) (who : Who) : World :=
   match (w.device who).plan with
   | none => w
-  | some (action, listed, planned) =>
+  | some (action, listed, planned, readEntry, readDeletion) =>
     -- A copy is acted on only while it is the one the plan saw. One that
     -- was not there when the pass planned has nothing to compare with, and
     -- one gone now cannot be read: both are acted on as before. Refusing on
@@ -4877,11 +4887,12 @@ def act (p : Policy) (w : World) (who : Who) : World :=
       | some d => removeFile entry d listed
       | none => entry
     let d := w.device who
-    -- Dropped as the apps drop it: a deletion the manifest took
-    -- (`recordsAdeletion`, the pass's `tombstoned`), or one with nothing left
-    -- to do (`settled`). One asked for again and not taken stays queued.
-    let taken := action.tombstone.isSome && recordsAdeletion (some w.entry) (some entry)
-    let kept := if taken || action.settled then none else d.deletedHere
+    -- Dropped as the apps drop it: a deletion the manifest took against the
+    -- entry the pass read (`recordsAdeletion`, the pass's `tombstoned`), or
+    -- one with nothing left to do (`settled`); and only the one the pass
+    -- read, never one made again while it ran.
+    let taken := action.tombstone.isSome && recordsAdeletion (some readEntry) (some entry)
+    let kept := if (taken || action.settled) && d.deletedHere == readDeletion then none else d.deletedHere
     let w' := w.setDevice who { d with plan := none, deletedHere := kept }
     let w := { w' with entry := entry, clock := w.clock + 1 }
     -- Reap.
@@ -4930,7 +4941,7 @@ structure History where
 def record (h : History) (w : World) : Step → History
   | .edit who =>
     let created := match (w.device who).plan with
-      | some (_, _, none) => true
+      | some (_, _, none, _, _) => true
       | _ => false
     let during := if created then h.duringPass ++ [w.clock] else h.duringPass
     { h with edits := h.edits ++ [w.clock], duringPass := during }
@@ -5517,10 +5528,12 @@ def manifestEntries : List ManifestEntry :=
       for held in helds do
         for deletedHere in [none, some 6, some 10] do
           for listed in [none, some 1, some 2, some 3] do
-            IO.println <| conformanceLine "filePlanAction"
-              [fileClassName cls, toString deletable, optEntryCode entry, heldCode held,
-               optNat deletedHere, optNat listed,
-               actionCode (filePlanAction cls entry held deletedHere listed deletable)]
+            -- The copy this client last had of a path it deleted.
+            for deletedRecord in (if deletedHere.isSome then [none, some 1, some 3] else [none]) do
+              IO.println <| conformanceLine "filePlanAction"
+                [fileClassName cls, toString deletable, optEntryCode entry, heldCode held,
+                 optNat deletedHere, optNat listed, optNat deletedRecord,
+                 actionCode (filePlanAction cls entry held deletedHere listed deletable deletedRecord)]
 
 def localKindName : LocalKind → String
   | .module => "module" | .collection => "collection" | .deck => "deck"

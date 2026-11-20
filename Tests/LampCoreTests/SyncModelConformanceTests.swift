@@ -974,9 +974,10 @@ struct SyncModelConformanceTests {
                     manifest: manifest(holding: f[2], at: path),
                     local: held(f[3], at: path),
                     deletedLocally: f[4] == "-" ? [:] : [path: Int64(f[4])!],
-                    listing: f[5] == "-" ? [:] : [path: quoted(f[5])]
+                    listing: f[5] == "-" ? [:] : [path: quoted(f[5])],
+                    deletedRecords: f[6] == "-" ? [:] : [path: quoted(f[6])]
                 )
-                return code(plan, at: path) == f[6]
+                return code(plan, at: path) == f[7]
             }
         }
     }

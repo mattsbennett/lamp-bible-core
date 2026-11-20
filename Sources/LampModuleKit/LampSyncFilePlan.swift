@@ -92,7 +92,8 @@ public enum LampSyncFilePlan {
         manifest: LampSyncLibraryManifest,
         local: [Local],
         deletedLocally: [String: Int64],
-        listing: [String: String]
+        listing: [String: String],
+        deletedRecords: [String: String] = [:]
     ) -> Plan {
         let held = Dictionary(local.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         var plan = Plan()
@@ -105,7 +106,8 @@ public enum LampSyncFilePlan {
                 local: held[path],
                 deletedHere: deletedLocally[path],
                 listed: listing[path],
-                deletable: LampSyncLocalDeletion.target(of: path).isAllowed
+                deletable: LampSyncLocalDeletion.target(of: path).isAllowed,
+                deletedRecord: deletedRecords[path]
             )
             plan.apply(action, at: path)
         }
@@ -141,17 +143,21 @@ public enum LampSyncFilePlan {
         local: Local?,
         deletedHere: Int64?,
         listed: String?,
-        deletable: Bool = true
+        deletable: Bool = true,
+        deletedRecord: String? = nil
     ) -> Action {
         if deletable, let deletedHere {
-            if let entry, !entry.isMember, let carried = entry.deletedAt, carried >= deletedHere,
-               let listed, !entry.deletes(revision: listed) {
+            if let entry, !entry.isMember, entry.deletedAt != nil,
+               let listed, !entry.deletes(revision: listed),
+               !LampSyncConditionalWrite.namesSameRevision(listed, deletedRecord) {
                 // Already deleted, by an earlier pass here that stopped before
-                // the queue was cleared or by another device, no earlier than
-                // this deletion, and the server's copy is not the one deleted:
-                // written since, not yet recorded. An older tombstone carries
-                // nothing of a later deletion here, which may be of that very
-                // copy, and is planned below.
+                // the queue was cleared or by another device, and the server's
+                // copy is neither the one that deletion was of nor the one
+                // this client last had (`deletedRecord`): written or put back
+                // since, by someone else, not yet recorded. When the deletions
+                // came says nothing of which copy each saw; the record does.
+                // The copy this client had is its own deletion's, planned
+                // below.
                 // It is put back, as below. The queued deletion is published
                 // already and has nothing left to do: `settled`, for the
                 // client to drop, since one kept would plan the path as

@@ -1374,6 +1374,30 @@ struct LampSyncBundlePassTests {
         #expect(store.bodies[path] != nil)
     }
 
+    /// A tombstone of n1 at 1500, n2 on the server, not recorded, and a
+    /// deletion queued here at 2500. Had this client n1, n2 was put back by
+    /// someone else, unseen, and stays; had it n2, it uploaded n2 itself and
+    /// stopped before recording it, then deleted it, and n2 goes. Which copy
+    /// the deletion saw is the record's to say, not its time's.
+    @Test(arguments: [false, true])
+    func aLaterDeletionTakesOnlyTheCopyThisClientHad(hadIt: Bool) async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 1_500)
+        store.bodies[path] = Data("put back".utf8)
+        store.revisions[path] = "\"n2\""
+        var records = LampSyncFileRecords()
+        let had = hadIt ? "\"n2\"" : "\"n1\""
+        records.recordUpload(path, in: source, digest: "d", revision: had)
+        records.confirmRecorded([path: had], in: source)
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 3_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
+        let entry = try #require(outcome.written?.bundle.manifest.entry(at: path))
+        #expect(entry.isMember == !hadIt)
+        #expect(outcome.reaped == (hadIt ? [path] : []))
+        #expect((store.bodies[path] != nil) == !hadIt)
+    }
+
     /// The copy the queued deletion was of is still reaped.
     @Test func aQueuedDeletionStillReapsTheCopyItDeleted() async throws {
         let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
