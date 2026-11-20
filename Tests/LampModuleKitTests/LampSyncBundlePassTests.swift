@@ -1304,6 +1304,43 @@ struct LampSyncBundlePassTests {
         #expect(store.bodies[path] == nil)
     }
 
+    /// A deletion still queued here, already tombstoned at n1 by a pass that
+    /// stopped before the queue was cleared, while another client wrote the
+    /// path again as n2 and has not recorded it: n2 is put back, never
+    /// reaped, whether a listing found it (a review file) or the pass asked
+    /// (a document).
+    @Test(arguments: [false, true])
+    func aQueuedDeletionPutsBackACopyWrittenSince(listed: Bool) async throws {
+        let path = listed
+            ? try LampSyncFolderLayout.writingReviewPath(writingID: "w")
+            : try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 1_500)
+        store.bodies[path] = Data("written again".utf8)
+        store.revisions[path] = "\"n2\""
+        var records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 1_500]) }, records: &records, patience: immediate)
+        #expect(outcome.reaped.isEmpty)
+        #expect(store.bodies[path] == Data("written again".utf8))
+        let entry = try #require(outcome.written?.bundle.manifest.entry(at: path))
+        #expect(entry.isMember)
+        #expect(entry.revision == "\"n2\"")
+        #expect(entry.deletedRevision == "\"n1\"")
+    }
+
+    /// The copy the queued deletion was of is still reaped.
+    @Test func aQueuedDeletionStillReapsTheCopyItDeleted() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 1_500)
+        var records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 1_500]) }, records: &records, patience: immediate)
+        #expect(outcome.reaped == [path])
+        #expect(store.bodies[path] == nil)
+    }
+
     /// A deletion's file the server no longer has is asked about only while
     /// the deletion is young, and its record is kept: a stale answer is only a
     /// retry, and nothing the record serves is lost.

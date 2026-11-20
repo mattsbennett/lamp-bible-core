@@ -137,6 +137,18 @@ public enum LampSyncFilePlan {
         deletable: Bool = true
     ) -> Action {
         if deletable, let deletedHere {
+            if let entry, !entry.isMember, entry.deletedAt != nil,
+               let listed, !entry.deletes(revision: listed) {
+                // Already deleted, by an earlier pass here that stopped before
+                // the queue was cleared or by another device, and the server's
+                // copy is not the one deleted: written since, not yet recorded.
+                // It is put back, as below, and the queued deletion waits for
+                // the next pass. Tombstoned here, it would be recorded as the
+                // deletion's revision, and reaped.
+                var action = change(kind: kind, local: local, listed: listed)
+                action.adopt = listed
+                return action
+            }
             var after = entry ?? .init(path: "")
             (after.deletedAt, after.deletedRevision) = LampSyncLibraryManifest.Entry.later(
                 (after.deletedAt, after.deletedRevision), (deletedHere, listed)

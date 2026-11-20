@@ -3010,7 +3010,14 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
   match if deletable then deletedHere else none with
   | some d =>
     let after := removeFile (entry.getD emptyEntry) d listed
-    if entryIsMember after then
+    -- Already deleted, and the server's copy is not the one deleted: written
+    -- since, not yet recorded. Put back, as a tombstone's put-back copy is;
+    -- the queued deletion waits for the next pass.
+    let writtenSince := match entry, listed with
+      | some e, some r => !entryIsMember e && e.deletedAt.isSome && !deletesRevision e r
+      | _, _ => false
+    if writtenSince then { changeAction cls held listed with adopt := listed }
+    else if entryIsMember after then
       -- Written elsewhere after it was deleted here: it comes back.
       { tombstone := some d, download := held.isNone && (listed.isSome || cls == .media) }
     else
@@ -3502,6 +3509,22 @@ theorem aFailedReapIsReapedOnceAsked (r : Nat) :
     filePlanAction .unlisted (some ⟨some 1, some r, some 2, some r⟩) none none (some r)
       = { reap := some r } := by
   simp [filePlanAction, entryIsMember, deletesRevision]
+
+-- A deletion queued here, already tombstoned at r1 by a pass that stopped
+-- before the queue was cleared, while another client wrote the path again as
+-- r2 and has not recorded it: r2 is put back, never reaped, and is not recorded
+-- as the deletion's revision. Whether the revision came from a listing or the
+-- pass's own ask.
+theorem aQueuedDeletionPutsBackACopyWrittenSince (cls : FileClass) :
+    filePlanAction cls (some ⟨some 1, some 1, some 2, some 1⟩) none (some 2) (some 3)
+      = { changeAction cls none (some 3) with adopt := some 3 } := by
+  cases cls <;> decide
+
+-- The copy it deleted is still reaped.
+theorem aQueuedDeletionReapsTheCopyItDeleted (cls : FileClass) :
+    filePlanAction cls (some ⟨some 1, some 1, some 2, some 1⟩) none (some 2) (some 1)
+      = { tombstone := some 2, reap := some 1 } := by
+  cases cls <;> decide
 
 /-! ### Deleting a copy here
 
