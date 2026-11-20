@@ -3029,14 +3029,17 @@ def filePlanAction (cls : FileClass) (entry : Option ManifestEntry) (held : Opti
       -- deletion is settled.
       { tombstone := some d, download := held.isNone && (listed.isSome || cls == .media), settled := true }
     else
+      -- Unasked or unanswered, an unlisted file's revision is the copy this
+      -- client deleted, or failing a record of it the manifest's.
+      let candidate := match listed with
+        | some r => some r
+        | none => if cls == .listed then none else (deletedRecord.orElse fun _ => entry.bind (·.revision))
       { tombstone := some d,
-        reap := match listed with
-          | some r => some r
-          | none => if cls == .listed then none else (entry.bind (·.revision)),
+        reap := candidate,
         -- Carried already by a deletion at or after it, which covers the copy
         -- the server holds: settled. One it does not cover waits for the reap.
         settled := entry.any fun e =>
-          (e.deletedAt.any fun t => Nat.ble d t) && listed.all (deletesRevision e) }
+          (e.deletedAt.any fun t => Nat.ble d t) && candidate.all (deletesRevision e) }
   | none =>
     match entry with
     | none =>
@@ -3490,6 +3493,12 @@ theorem aCopyPutBackAfterAnOlderTombstoneIsKept :
 -- waits for the reap to be done.
 theorem aReapTheTombstoneDoesNotCoverWaitsForTheReap :
     filePlanAction .unlisted (some ⟨some 1, some 1, some 7, some 1⟩) none (some 5) (some 3) true (some 3)
+      = { tombstone := some 5, reap := some 3 } := by decide
+
+-- Likewise when the server was not asked or did not answer: the copy this
+-- client deleted is reaped, and the deletion waits for it.
+theorem anUnansweredAskReapsTheCopyThisClientDeleted :
+    filePlanAction .unlisted (some ⟨some 1, some 1, some 7, some 1⟩) none (some 5) none true (some 3)
       = { tombstone := some 5, reap := some 3 } := by decide
 
 -- But the copy this client had, and deleted, is its own deletion's: the

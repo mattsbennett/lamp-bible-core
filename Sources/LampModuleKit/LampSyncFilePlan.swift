@@ -182,8 +182,11 @@ public enum LampSyncFilePlan {
                 action.download = local == nil && (listed != nil || kind.isMedia)
                 action.settled = true
             } else {
-                // An unlisted file's only revision is the one the manifest recorded.
-                action.reap = listed ?? (kind.isListed ? nil : entry?.revision)
+                // Unasked, or unanswered, an unlisted file's revision is the
+                // copy this client deleted, or failing a record of it the one
+                // the manifest recorded.
+                let candidate = listed ?? (kind.isListed ? nil : deletedRecord ?? entry?.revision)
+                action.reap = candidate
                 // Carried already by a deletion at or after it, by an earlier
                 // pass here or another device deleting it later, which covers
                 // the copy the server holds. The manifest takes nothing new,
@@ -193,7 +196,7 @@ public enum LampSyncFilePlan {
                 // alone, so the deletion waits until the reap is done.
                 action.settled = entry.map { entry in
                     (entry.deletedAt.map { $0 >= deletedHere } ?? false)
-                        && (listed.map { entry.deletes(revision: $0) } ?? true)
+                        && (candidate.map { entry.deletes(revision: $0) } ?? true)
                 } ?? false
             }
             return action

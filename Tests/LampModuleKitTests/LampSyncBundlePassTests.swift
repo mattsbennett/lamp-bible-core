@@ -1422,6 +1422,25 @@ struct LampSyncBundlePassTests {
         #expect(store.bodies[path] == nil)
     }
 
+    /// The same, with the server not answering the pass's ask for the
+    /// document's revision: the copy this client deleted is still the one
+    /// reaped, and the deletion is not settled on an unanswered ask.
+    @Test func anUnansweredAskReapsTheCopyThisClientDeleted() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 3_000)
+        store.revisions[path] = "\"n2\""
+        store.failingRevisions[path] = 1
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"n2\"")
+        records.confirmRecorded([path: "\"n2\""], in: source)
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 4_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
+        #expect(store.operations.contains("revision \(path)"))
+        #expect(outcome.reaped == [path])
+        #expect(store.bodies[path] == nil)
+    }
+
     /// The copy the queued deletion was of is still reaped.
     @Test func aQueuedDeletionStillReapsTheCopyItDeleted() async throws {
         let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
@@ -2099,6 +2118,10 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
 
     func revision(path: String) async throws -> String? {
         operations.append("revision \(path)")
+        if let left = failingRevisions[path], left > 0 {
+            failingRevisions[path] = left - 1
+            throw URLError(.timedOut)
+        }
         if let lag = lagging[path], lag.left > 0 {
             lagging[path] = (lag.left - 1, lag.revision)
             return lag.revision
@@ -2133,6 +2156,8 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
     /// Deletes of these paths fail this many more times, as on a dropped
     /// connection.
     var failingDeletes: [String: Int] = [:]
+    /// Revision asks to fail, per path: a probe the server did not answer.
+    var failingRevisions: [String: Int] = [:]
     struct DeleteFailed: Error {}
 
     func delete(path: String, condition: LampSyncWriteCondition) async throws {
