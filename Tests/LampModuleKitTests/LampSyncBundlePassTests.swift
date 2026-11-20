@@ -1419,6 +1419,7 @@ struct LampSyncBundlePassTests {
             store: store, library: StubLibrary(), source: source, now: { 5_000 }
         ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
         #expect(second.reaped == [path])
+        #expect(second.settled == [path])
         #expect(store.bodies[path] == nil)
     }
 
@@ -1438,6 +1439,7 @@ struct LampSyncBundlePassTests {
         ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
         #expect(store.operations.contains("revision \(path)"))
         #expect(first.reaped.isEmpty && first.settled.isEmpty && first.tombstoned.isEmpty)
+        #expect(first.deferred == [path])
         #expect(store.bodies[path] != nil)
         let second = try await LampSyncBundlePass(
             store: store, library: StubLibrary(), source: source, now: { 5_000 }
@@ -1462,6 +1464,24 @@ struct LampSyncBundlePassTests {
         ).run(gathering: { gathered([], deletedLocally: [path: 1_400]) }, records: &records, patience: immediate)
         #expect(!store.operations.contains("revision \(path)"))
         #expect(outcome.settled == [path])
+    }
+
+    /// The server answering with no revision for a file it holds, the copy
+    /// this client deleted being one the tombstone does not cover: no answer
+    /// either, and the deletion is left for the next pass, not settled.
+    @Test func aBlankAnswerForAnUncoveredCopyLeavesTheDeletionQueued() async throws {
+        let path = try LampWritingWorkspaceLayout.documentPath(writingID: "w", name: "notes.md")
+        let store = try seeded(path: path, revision: "\"n1\"", deletedAt: 3_000)
+        store.revisions[path] = nil
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"n2\"")
+        records.confirmRecorded([path: "\"n2\""], in: source)
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 4_000 }
+        ).run(gathering: { gathered([], deletedLocally: [path: 2_500]) }, records: &records, patience: immediate)
+        #expect(store.operations.contains("revision \(path)"))
+        #expect(outcome.deferred == [path])
+        #expect(outcome.settled.isEmpty && outcome.tombstoned.isEmpty && outcome.reaped.isEmpty)
     }
 
     /// The copy the queued deletion was of is still reaped.

@@ -1076,7 +1076,9 @@ struct SyncModelConformanceTests {
     /// Whether a queued deletion is left out of a pass.
     @Test func defersDeletion() throws {
         try conform("defersDeletion") { f in
-            String(LampSyncBundlePass.defersDeletion(asked: f[0] == "true", answered: f[1] == "true")) == f[2]
+            String(LampSyncBundlePass.defersDeletion(
+                asked: f[0] == "true", threw: f[1] == "true", hasRevision: f[2] == "true", recordCovered: f[3] == "true"
+            )) == f[4]
         }
     }
 

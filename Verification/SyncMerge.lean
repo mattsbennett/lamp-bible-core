@@ -3506,14 +3506,28 @@ theorem anUnaskedDeletionReapsItsCopyAndSettles :
       = { tombstone := some 5, reap := some 3, settled := true } := by decide
 
 -- Asked and unanswered, the deletion is left out of the pass, queued, and
--- planned on the next answer (`LampSyncBundlePass.defersDeletion`).
-def defersDeletion (asked answered : Bool) : Bool := asked && !answered
+-- planned on the next answer (`LampSyncBundlePass.defersDeletion`): where the
+-- ask failed, or came back with no revision while the copy this client
+-- deleted is one the manifest's deletion does not cover, since a server can
+-- answer with no ETag for a file it holds.
+def defersDeletion (asked threw hasRevision recordCovered : Bool) : Bool :=
+  asked && (threw || (!hasRevision && !recordCovered))
 
-theorem anUnansweredAskDefersTheDeletion : defersDeletion true false = true := rfl
+theorem anUnansweredAskDefersTheDeletion (hasRevision recordCovered : Bool) :
+    defersDeletion true true hasRevision recordCovered = true := by simp [defersDeletion]
 
-theorem anAnsweredOrUnaskedDeletionIsPlanned (asked answered : Bool) (h : !asked || answered) :
-    defersDeletion asked answered = false := by
-  cases asked <;> cases answered <;> simp_all [defersDeletion]
+theorem aBlankAnswerForAnUncoveredCopyDefersTheDeletion :
+    defersDeletion true false false false = true := rfl
+
+-- A blank answer where the manifest's deletion covers the copy this client
+-- had is the file gone, and the deletion is planned.
+theorem aBlankAnswerForACoveredCopyIsPlanned : defersDeletion true false false true = false := rfl
+
+theorem anUnaskedDeletionIsPlanned (threw hasRevision recordCovered : Bool) :
+    defersDeletion false threw hasRevision recordCovered = false := by simp [defersDeletion]
+
+theorem anAnsweredAskIsPlanned (recordCovered : Bool) :
+    defersDeletion true false true recordCovered = false := by simp [defersDeletion]
 
 -- But the copy this client had, and deleted, is its own deletion's: the
 -- deletion recorded and that copy reaped, though an older tombstone stands.
@@ -4931,9 +4945,16 @@ def act (p : Policy) (w : World) (who : Who) : World :=
     let kept := if (taken || action.settled) && d.deletedHere == readDeletion then none else d.deletedHere
     let w' := w.setDevice who { d with plan := none, deletedHere := kept }
     let w := { w' with entry := entry, clock := w.clock + 1 }
-    -- Reap.
+    -- Reap. A queued deletion whose file is gone has nothing left to do, so a
+    -- reap done drops the deletion the pass read, as the pass reports it
+    -- settled.
     match action.reap with
-    | some r => if conditionHolds w.server (.ifRevision r) then { w with server := none } else w
+    | some r =>
+      if conditionHolds w.server (.ifRevision r) then
+        let d := w.device who
+        let w := if d.deletedHere == readDeletion then w.setDevice who { d with deletedHere := none } else w
+        { w with server := none }
+      else w
     | none => w
 
 def step (p : Policy) (w : World) : Step → World
@@ -5656,9 +5677,12 @@ def documentDecisionName : DocumentDecision → String
 
 #eval show IO Unit from do
   for asked in [false, true] do
-    for answered in [false, true] do
-      IO.println <| conformanceLine "defersDeletion"
-        [toString asked, toString answered, toString (defersDeletion asked answered)]
+    for threw in [false, true] do
+      for hasRevision in [false, true] do
+        for recordCovered in [false, true] do
+          IO.println <| conformanceLine "defersDeletion"
+            [toString asked, toString threw, toString hasRevision, toString recordCovered,
+             toString (defersDeletion asked threw hasRevision recordCovered)]
 
 def probeEntryName : ProbeEntry → String
   | .none => "none" | .member => "member" | .deletion => "deletion"

@@ -108,6 +108,10 @@ public struct LampSyncBundlePass {
         /// tombstoned are dropped, or each is asked for on every pass.
         /// (`LampSyncFilePlan.Plan.settled`.)
         public var settled: [String] = []
+        /// Deletions queued here this pass left out, its ask about their
+        /// file unanswered (`defersDeletion`): keep them queued for the next
+        /// pass, whatever else is cleared.
+        public var deferred: [String] = []
         public var reaped: [String] = []
         /// Files the server's copy turned out to be byte-for-byte the one
         /// this client already held: fetched, compared, and left alone.
@@ -292,6 +296,7 @@ public struct LampSyncBundlePass {
         func folded(_ path: String) -> String { path.precomposedStringWithCanonicalMapping.lowercased() }
         let spellings = Dictionary(grouping: known, by: folded)
         let started = now()
+        var asked = Set<String>()
         var unanswered = Set<String>()
         for path in known.sorted() {
             guard let kind = LampSyncFolderLayout.kind(of: path) else { continue }
@@ -308,6 +313,7 @@ public struct LampSyncBundlePass {
                 listedKind: kind.isListed, media: kind.isMedia, inListing: listing[path] != nil, entry: entry,
                 held: held.contains(path), otherSpelling: otherSpelling, young: young
             ) else { continue }
+            asked.insert(path)
             do {
                 if let revision = try await store.revision(path: path) { listing[path] = revision }
             } catch {
@@ -321,13 +327,24 @@ public struct LampSyncBundlePass {
         // the copy this client last had, the deletion saw it, and is dated
         // past it (`queuedDeletionTime`).
         var deletedLocally = gathered.deletedLocally
-        // A deletion whose file the server was asked about and did not
-        // answer is left queued for the next pass, and nothing is planned
-        // of it in this one: planned blind, it would be settled on the
-        // manifest's word while the copy this client deleted stood, and the
-        // next answer would put that copy back (`defersDeletion`).
-        for path in unanswered where Self.defersDeletion(asked: true, answered: false) {
+        // A deletion whose file the server was asked about and gave no
+        // answer for is left queued for the next pass, and nothing is
+        // planned of it in this one: planned blind, it would be settled on
+        // the manifest's word while the copy this client deleted stood, and
+        // the next answer would put that copy back. An answer with no
+        // revision is no answer either where the copy this client deleted is
+        // one the manifest's deletion does not cover: a server can answer
+        // with no ETag for a file it holds (`defersDeletion`).
+        for path in deletedLocally.keys.sorted() {
+            let recordCovered = records.record(path, in: source)?.effectiveRevision.map { record in
+                manifest.entry(at: path)?.deletes(revision: record) ?? false
+            } ?? true
+            guard Self.defersDeletion(
+                asked: asked.contains(path), threw: unanswered.contains(path),
+                hasRevision: listing[path] != nil, recordCovered: recordCovered
+            ) else { continue }
             deletedLocally[path] = nil
+            outcome.deferred.append(path)
         }
         for (path, deletedAt) in deletedLocally {
             deletedLocally[path] = Self.queuedDeletionTime(
@@ -631,6 +648,11 @@ public struct LampSyncBundlePass {
                 try await store.delete(path: path, condition: .ifRevision(revision))
                 records.forget(path, in: source)
                 outcome.reaped.append(path)
+                // A deletion queued here whose file is now gone has nothing
+                // left to do; the model's pass drops it the same way.
+                if deletedLocally[path] != nil, !outcome.settled.contains(path) {
+                    outcome.settled.append(path)
+                }
             } catch {
                 outcome.failures.append("\(path): \(error.localizedDescription)")
             }
@@ -838,11 +860,14 @@ public struct LampSyncBundlePass {
     }
 
     /// Whether a queued deletion is left out of this pass: where the pass
-    /// asked the server for its file's revision and had no answer. Unasked,
-    /// the deletion is planned on what the manifest says; asked, on the
-    /// answer. (`Verification/SyncMerge.lean`: `defersDeletion`.)
-    static func defersDeletion(asked: Bool, answered: Bool) -> Bool {
-        asked && !answered
+    /// asked the server for its file's revision and the ask failed, or came
+    /// back with no revision while the copy this client deleted is one the
+    /// manifest's deletion does not cover (`recordCovered` false), so that
+    /// whether it still stands is what was asked. Unasked, the deletion is
+    /// planned on what the manifest says; answered, on the answer.
+    /// (`Verification/SyncMerge.lean`: `defersDeletion`.)
+    static func defersDeletion(asked: Bool, threw: Bool, hasRevision: Bool, recordCovered: Bool) -> Bool {
+        asked && (threw || (!hasRevision && !recordCovered))
     }
 
     /// What the manifest says of a path, as `asksForRevision` reads it.
