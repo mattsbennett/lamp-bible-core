@@ -1661,6 +1661,18 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return total * 2 >= span ? drawable : []
     }
 
+    /// The same judgement over everything left of one mark, however many
+    /// pieces it was in: the runs must fill half of the span they are
+    /// spread over, measured from the first to the last.
+    static func enough(ofTheMark survivors: [NSRange]) -> [NSRange] {
+        let ordered = survivors.filter { $0.length > 0 }.sorted { $0.location < $1.location }
+        guard let first = ordered.first, let last = ordered.last else { return [] }
+        return enough(
+            of: NSRange(location: first.location, length: NSMaxRange(last) - first.location),
+            in: ordered
+        )
+    }
+
     /// Every mark carried from `old` to `new`, under its own id: the words
     /// of it that survive, a raised version where they moved or changed, and
     /// retired where none survive.
@@ -1705,18 +1717,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             var result: [Piece] = []
             var changed = false
             var movedToCopy = false
+            /// Every run of the mark that survived, across all of its
+            /// pieces: the whole mark is what the writer sees, so the
+            /// whole mark is what is judged.
+            var survivors: [NSRange] = []
             for piece in pieces {
                 guard piece.anchoredIn != here, let (index, range) = resolved(piece) else {
                     result.append(piece)
                     continue
                 }
-                var survived = Self.enough(
-                    of: range,
-                    in: Self.coalesced(
-                        alignment(index).carried(range).map { Self.trimmed($0, in: targetText) },
-                        joiningAcross: nil
-                    )
+                var survived = Self.coalesced(
+                    alignment(index).carried(range).map { Self.trimmed($0, in: targetText) },
+                    joiningAcross: nil
                 )
+                if range.length > 0 { survivors += survived }
                 if survived.isEmpty, let kept = Self.survivingCopy(of: range, in: sources[index] as NSString,
                                                                    through: alignment(index), to: targetText) {
                     survived = [kept]
@@ -1734,6 +1748,16 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                     result += moved
                     changed = true
                 }
+            }
+            // Scraps of a rewritten passage are not the mark, judged
+            // across every piece rather than one at a time: an earlier
+            // edit splits a mark in two, and a rewrite then leaves "The"
+            // whole in one piece and "." whole in the other, each
+            // filling its own little span. A mark an ordinary autosave
+            // had split survived a rewrite that would otherwise have
+            // retired it.
+            if !survivors.isEmpty, Self.enough(ofTheMark: survivors).isEmpty, !movedToCopy {
+                return ([], true, false)
             }
             return (result, changed, movedToCopy)
         }

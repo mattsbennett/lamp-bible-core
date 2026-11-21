@@ -296,6 +296,29 @@ struct LampWritingReviewFileTests {
         #expect(deletions == [path: 501])
     }
 
+    /// A mark an ordinary save had split into two pieces is judged as one
+    /// mark when the writer rewrites it, not as two little ones.
+    ///
+    /// Judged piece by piece, "The" survives whole in the first and "."
+    /// whole in the second, each filling its own span — so a save between
+    /// the typing and the rewrite decided whether the mark survived it.
+    @Test func amarkSplitByAnEarlierSaveIsStillJudgedWhole() {
+        let before = "Noah was ready."
+        let shown = "The flood came suddenly. Noah was ready."
+        let marked = LampWritingReview(writingID: "w").markingAssistantChange(from: before, to: shown)
+
+        // A word typed into the middle of it: two pieces now.
+        let typed = "The flood came very suddenly. Noah was ready."
+        let split = marked.carryingWriterEdit(from: shown, to: typed)
+        #expect(!split.highlightedRanges(in: typed).isEmpty)
+
+        // And then rewritten. The mark goes, as it does without the save.
+        let rewritten = "The rain fell for days. Noah was ready."
+        let after = split.carryingWriterEdit(from: typed, to: rewritten)
+        #expect(after.highlightedRanges(in: rewritten).isEmpty)
+        #expect(after.retired.count == 1)
+    }
+
     /// A piece that began or ended inside a word is still found there.
     @Test func apieceInsideAWordIsFoundInsideOne() {
         let piece = LampWritingReview.Piece(text: "our", before: "col", after: "", hint: 3)
