@@ -753,6 +753,65 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             for edit in edits { result.replaceCharacters(in: edit.range, with: edit.replacement) }
             return result as String
         }
+
+        /// Where each edit's words ended up in the text this plan makes:
+        /// its own place, moved by what every edit before it added or
+        /// took away.
+        var spans: [(edit: Edit, range: NSRange)] {
+            edits.map { edit in
+                let before = edits.filter { $0.range.location < edit.range.location }
+                let moved = edit.range.location + before.reduce(0) {
+                    $0 + ($1.replacement as NSString).length - $1.range.length
+                }
+                return (edit, NSRange(location: moved, length: (edit.replacement as NSString).length))
+            }
+        }
+
+        /// Whether `text` still holds what this restore put back, given
+        /// `held` — the writing exactly as the restore left it.
+        ///
+        /// This is what a host must ask before recording a restore
+        /// against a text it saved, and nothing it keeps can answer it:
+        /// a generation, a lineage or a position does not move when the
+        /// writer presses ⌘Z.
+        ///
+        /// Asked of the words, by aligning the writing as the restore
+        /// left it with the text in hand. The words the restore put back
+        /// must still be there — moved by whatever was typed around them,
+        /// but not rewritten — and where it took the assistant's words
+        /// out and put nothing back, they must not have come again.
+        ///
+        /// It was first asked of the marks: while none of the marks a
+        /// restore put back could be found, the text was said to hold it.
+        /// That is neither sufficient nor necessary. A later turn
+        /// rewriting the passage leaves no mark either, and would have
+        /// certified a restore that is not there; and a passage the
+        /// assistant had only taken words out of is marked by a point,
+        /// which is found again by the words either side of it even once
+        /// the sentence is back — so ordinary restores of a deletion were
+        /// read as undone. It also asked a record that a clear or a carry
+        /// from another device could change underneath it.
+        public func stands(from held: String, in text: String) -> Bool {
+            guard !edits.isEmpty else { return false }
+            if held == text { return true }
+            let alignment = LampTextAlignment(from: held, to: text, absorbingSmallEqualities: false)
+            let target = text as NSString
+            for (edit, range) in spans {
+                if range.length > 0 {
+                    // Through unchanged, wherever it now stands.
+                    let carried = LampWritingReview.coalesced(alignment.carried(range), joiningAcross: nil)
+                    guard carried.count == 1, carried[0].length == range.length else { return false }
+                } else {
+                    // Nothing was put back here, so the proof is that what
+                    // was taken out has not returned.
+                    let carried = alignment.carried(range)
+                    guard let point = carried.first else { return false }
+                    guard LampWritingReview.put(edit.discarded, at: point.location, in: target) == nil
+                    else { return false }
+                }
+            }
+            return true
+        }
     }
 
     /// The marks in `text` that can be put back, in the order they stand.
@@ -981,26 +1040,6 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         })
     }
 
-    /// Whether `text` still holds what a restore put back.
-    ///
-    /// Asked of a text that has been through other hands since — saved,
-    /// typed into, written out by a surface in its own Markdown — where
-    /// nothing has kept track of what became of the restore. The answer
-    /// is the passages themselves: a restore takes the assistant's words
-    /// out, so while none of the marks it put back can be found, they are
-    /// gone. Undo them, or roll them back, and the words return, and so
-    /// do the marks.
-    ///
-    /// This is what a host should ask before recording a restore against
-    /// a text it saved. Positions and generations cannot answer it: the
-    /// writer can undo without changing either.
-    public func restoreStands(_ plan: RestorePlan, in text: String) -> Bool {
-        guard !plan.edits.isEmpty else { return false }
-        let put = Set(plan.marks)
-        let standing = Set(located(in: text).map(\.id))
-        return put.isDisjoint(with: standing)
-    }
-
     /// The record after a plan was applied, the writing going from `text` to
     /// `restored`.
     ///
@@ -1119,7 +1158,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// there whose words are these words is taken, within a little of the
     /// length expected. Only there: the same words in another sentence are
     /// another passage, at any distance.
-    private static func put(_ words: String, at location: Int?, in text: NSString) -> NSRange? {
+    static func put(_ words: String, at location: Int?, in text: NSString) -> NSRange? {
         guard let location, location >= 0 else { return nil }
         let length = (words as NSString).length
         let exact = NSRange(location: location, length: length)
@@ -1317,6 +1356,17 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         if earliest.count != result.retired.count {
             result.retired = earliest.map { Retirement(id: $0.key, retiredAt: $0.value) }
                 .sorted { $0.id.uuidString < $1.id.uuidString }
+        }
+        // One restoration to a mark, as a merge keeps one: a passage put
+        // back, undone and put back again is still one thing the
+        // assistant needs telling about, and the newest says it.
+        var newest: [UUID: Restoration] = [:]
+        for restoration in result.restorations {
+            if let have = newest[restoration.markID], have.restoredAt >= restoration.restoredAt { continue }
+            newest[restoration.markID] = restoration
+        }
+        if newest.count != result.restorations.count {
+            result.restorations = newest.values.sorted { $0.markID.uuidString < $1.markID.uuidString }
         }
         result.clearances.removeAll { !held.contains($0.markID) }
         result.wordings.removeAll { !held.contains($0.markID) }

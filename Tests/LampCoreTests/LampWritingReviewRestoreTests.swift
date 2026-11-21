@@ -582,20 +582,56 @@ struct LampWritingReviewRestoreTests {
         #expect(Set(after.retired.map(\.id)).count == after.retired.count)
     }
 
-    /// What became of a restore, asked of the text rather than of a
-    /// generation the writer can undo without touching.
+    /// What became of a restore, asked of the words rather than of
+    /// anything a host keeps: a generation does not move when the writer
+    /// presses ⌘Z.
     @Test func whetherARestoreStandsIsAskedOfTheWordsThemselves() throws {
         let old = "The quick brown fox."
         let new = "The slow red fox."
         let review = empty.markingAssistantChange(from: old, to: new)
         let plan = try #require(review.restorePlan(for: whole(new), in: new))
-        // Put back, and still there after the writer typed around it.
-        #expect(review.restoreStands(plan, in: old))
-        #expect(review.restoreStands(plan, in: "The quick brown fox jumps."))
-        // Undone, or never made: the assistant's words are back, and so
-        // is the mark.
-        #expect(!review.restoreStands(plan, in: new))
-        #expect(!review.restoreStands(plan, in: "Before. The slow red fox."))
+        let held = plan.applied(to: new)
+        #expect(held == old)
+
+        #expect(plan.stands(from: held, in: held))
+        // Typed around, before and after: the words it put back are there.
+        #expect(plan.stands(from: held, in: "The quick brown fox jumps."))
+        #expect(plan.stands(from: held, in: "Before. The quick brown fox."))
+        // Undone: the assistant's wording is back.
+        #expect(!plan.stands(from: held, in: new))
+        // And rewritten by a later turn, which leaves no mark either and
+        // so was certified by asking the marks.
+        #expect(!plan.stands(from: held, in: "The fast white fox."))
+    }
+
+    /// A passage the assistant only took words out of is marked by a
+    /// point, and a point is found again by the words either side of it
+    /// even once the sentence is back — so asking the marks read an
+    /// ordinary restore of a deletion as undone.
+    @Test func aRestoredDeletionStandsEvenThoughItsPointCanStillBeFound() throws {
+        let old = "First sentence. Second sentence. Third sentence."
+        let new = "First sentence. Third sentence."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        let held = plan.applied(to: new)
+        #expect(held == old)
+        #expect(plan.stands(from: held, in: held))
+        #expect(plan.stands(from: held, in: old + " And more."))
+        // Taken out again is not standing.
+        #expect(!plan.stands(from: held, in: new))
+    }
+
+    /// The same words standing elsewhere are not the restore.
+    @Test func wordsPutBackAreNotProvedByACopyOfThemElsewhere() throws {
+        let old = "Alpha one here. Beta two here."
+        let new = "Alpha ONE here. Beta two here."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        let held = plan.applied(to: new)
+        #expect(plan.stands(from: held, in: held))
+        // The restore undone, with its words standing in the other
+        // sentence: not this passage.
+        #expect(!plan.stands(from: held, in: "Alpha ONE here. Beta one here."))
     }
 
     // MARK: Crossing devices and versions
