@@ -716,6 +716,35 @@ struct LampWritingReviewRestoreTests {
         #expect(put.marks.contains { $0.id != first })
     }
 
+    /// A writer who cleared everything while a restore was owed cleared a
+    /// passage that carried no mark at the time, so the record does not
+    /// put one back.
+    @Test func aclearWhileARestoreWasOwedIsNotUndoneByItsRecord() throws {
+        // Twice over with no clear between, so the words the second turn
+        // took out were themselves still to be read.
+        let first = "Alpha stands here."
+        let old = "Alpha waits here."
+        let new = "Alpha sits here."
+        let review = empty
+            .markingAssistantChange(from: first, to: old)
+            .markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        #expect(!plan.edits.contains { !$0.unread })
+
+        // Recorded as usual, the restored wording is marked: the writer
+        // took back words they never read.
+        let marked = review.restoringWording(plan, from: new, to: old)
+        #expect(!marked.marks.isEmpty)
+
+        // Cleared in between, it is not.
+        let cleared = review.clearingAll().restoringWording(
+            plan, from: new, to: old, remarkingUnread: false
+        )
+        #expect(cleared.marks.isEmpty)
+        // The record of the restore is kept either way.
+        #expect(cleared.restorations.count == 1)
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

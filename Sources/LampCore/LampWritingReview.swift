@@ -1226,9 +1226,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// for each. The whole plan is still passed, because where each
     /// passage ended up depends on every edit before it: a plan with its
     /// other edits taken out gives the wrong places.
+    /// `remarkingUnread` false leaves the writer's own clearing standing.
+    /// Putting back wording the writer had not yet read marks it, since
+    /// they have taken back words they never reviewed — but a record is
+    /// written once a save proves the text, and a writer who cleared
+    /// everything in between cleared a passage that carried no mark at
+    /// the time. A mark appearing after that is one they already answered.
     public func restoringWording(
         _ plan: RestorePlan, from text: String, to restored: String,
-        only marks: Set<UUID>? = nil,
+        only marks: Set<UUID>? = nil, remarkingUnread: Bool = true,
         carryingFrom known: [String] = [], at date: Date = Date()
     ) -> LampWritingReview {
         guard !plan.edits.isEmpty else { return self }
@@ -1276,7 +1282,8 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 $0 + ($1.replacement as NSString).length - $1.range.length
             }
         }
-        for edit in plan.edits where put.contains(edit.markID) && edit.unread && !edit.replacement.isEmpty {
+        for edit in plan.edits where remarkingUnread && put.contains(edit.markID)
+            && edit.unread && !edit.replacement.isEmpty {
             // Only where the words are: a surface that wrote its own
             // Markdown may have spelled them another way, and there is no
             // distance at which the same words elsewhere become these
