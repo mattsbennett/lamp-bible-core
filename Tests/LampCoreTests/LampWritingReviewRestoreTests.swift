@@ -500,6 +500,31 @@ struct LampWritingReviewRestoreTests {
         )
     }
 
+    /// The span taken for restored words is whole words, whole
+    /// characters, and one block: the same letters at the start of a
+    /// longer word, or running on into the next paragraph's marker, are
+    /// not the passage that was put back.
+    @Test func theSpanTakenForRestoredWordsIsNotAFragmentOrTwoBlocks() throws {
+        func found(_ replacement: String, in text: String) -> String? {
+            let plan = LampWritingReview.RestorePlan(edits: [
+                .init(markID: UUID(), range: NSRange(location: 0, length: 0),
+                      replacement: replacement, discarded: "", unread: true),
+            ])
+            var review = LampWritingReview(writingID: "w")
+            review.marks = []
+            let put = review.restoringWording(plan, from: "", to: text)
+            let source = text as NSString
+            return put.highlightedRanges(in: text).first.map { source.substring(with: $0) }
+        }
+        // The same letters beginning a longer word are not those words.
+        #expect(found("_new_", in: "newspaper") == nil)
+        // A list item comes back in the page's own markers, and stops at
+        // the end of its own block rather than taking the next one's.
+        #expect(found("*    foo", in: "- foo\n\n- bar") == "- foo")
+        // The same words in the surface's own markup are.
+        #expect(found("_unread_", in: "*unread* after") == "*unread*")
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

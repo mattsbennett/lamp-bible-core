@@ -1037,12 +1037,37 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         // `*unread` that also holds the right words.
         let widths = (max(1, length - markupSlack)...(length + markupSlack))
             .sorted { (abs($0 - length), $0) < (abs($1 - length), $1) }
+        let crossesBlocks = words.contains { $0.isNewline }
         for width in widths {
             let span = NSRange(location: location, length: width)
-            guard NSMaxRange(span) <= text.length else { continue }
-            if wordsOf(text.substring(with: span)) == wanted { return span }
+            guard NSMaxRange(span) <= text.length,
+                  // Whole characters: a span may not stop between a letter
+                  // and the accent that belongs to it.
+                  text.rangeOfComposedCharacterSequence(at: span.location).location == span.location,
+                  NSMaxRange(span) == text.length
+                      || text.rangeOfComposedCharacterSequence(at: NSMaxRange(span)).location == NSMaxRange(span)
+            else { continue }
+            let found = text.substring(with: span)
+            guard wordsOf(found) == wanted else { continue }
+            // Whole words: "new" is not the start of "newspaper".
+            guard !touchesAWord(before: span.location, in: text),
+                  !touchesAWord(at: NSMaxRange(span), in: text) else { continue }
+            // And one passage: a span that runs into the next block holds
+            // the marker that begins it, however its words read.
+            guard crossesBlocks || !found.contains(where: { $0.isNewline }) else { continue }
+            return span
         }
         return nil
+    }
+
+    private static func touchesAWord(before location: Int, in text: NSString) -> Bool {
+        guard location > 0, let scalar = Unicode.Scalar(text.character(at: location - 1)) else { return false }
+        return Character(scalar).isLetter || Character(scalar).isNumber
+    }
+
+    private static func touchesAWord(at location: Int, in text: NSString) -> Bool {
+        guard location < text.length, let scalar = Unicode.Scalar(text.character(at: location)) else { return false }
+        return Character(scalar).isLetter || Character(scalar).isNumber
     }
 
     /// How much more or less markup the same words may be wearing.
