@@ -294,6 +294,72 @@ struct LampWritingReviewRestoreTests {
         #expect(review.restoring(marks: [], in: "One alpha two.") == .nothingTouched)
     }
 
+    // MARK: Passages against each other
+
+    /// Two devices can mark one removal under their own ids. Merged, both
+    /// are points at the same place, and both hold the words that were
+    /// taken out — so putting them back put them back twice.
+    @Test func twoMarksForOneRemovalDoNotPutTheWordsBackTwice() throws {
+        let old = "One two three."
+        let new = "One three."
+        let mine = empty.markingAssistantChange(from: old, to: new)
+        let theirs = LampWritingReview(writingID: "w").markingAssistantChange(from: old, to: new)
+        let merged = mine.merged(with: theirs)
+        #expect(merged.marks.count == 2, "one removal, marked by each device under its own id")
+        #expect(merged.restorable(in: new).count == 2, "and each can be put back on its own")
+        // Together they cannot: "One two two three." is not a restore.
+        #expect(merged.restorePlan(for: whole(new), in: new) == nil)
+        #expect(merged.restoring(whole(new), in: new) == .notExact)
+    }
+
+    /// Two passages that overlap stop each other, which is neither the
+    /// writer's doing nor a wording that was never kept — and `notKept` is
+    /// the answer said silently, so it would hide this altogether.
+    @Test func passagesThatOverlapAreRefusedAsNotExactRatherThanSilently() throws {
+        let text = "The slow red fox."
+        let wide = empty.markingAssistantChange(from: "The quick brown fox.", to: text)
+        let narrow = LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: "The slow brown fox.", to: text)
+        let merged = wide.merged(with: narrow)
+        #expect(merged.marks.count == 2)
+        #expect(merged.restorable(in: text).count == 2, "each is offered on its own")
+        #expect(merged.restorePlan(for: whole(text), in: text) == nil, "together they overlap")
+        #expect(merged.restoring(whole(text), in: text) == .notExact)
+    }
+
+    /// The words put back are marked again where they landed, not where
+    /// they stood before the edits.
+    ///
+    /// Two passages put back at once: the first changes length, so
+    /// everything after it moves, and a position taken from before the
+    /// edits names the wrong place in the finished text. The position is
+    /// worked out from the plan rather than searched for — searching finds
+    /// the same words wherever they stand, and the nearest to a stale
+    /// position is not the one just put back. (A second, identical copy of
+    /// a mark's words is a different matter, settled by `survivingCopy`
+    /// when the mark is carried, before any of this.)
+    @Test func wordsPutBackAreMarkedWhereTheyLandedNotWhereTheyStood() throws {
+        let start = "Alpha one here. Beta two here."
+        let first = "Alpha ONEONEONE here. Beta TWO here."
+        var review = empty.markingAssistantChange(from: start, to: first)
+        // A second turn over both unread passages, so what a restore puts
+        // back is the assistant's own unread work, and is marked again.
+        let second = "Alpha x here. Beta y here."
+        review = review.markingAssistantChange(from: first, to: second)
+        let standing = Set(review.marks.map(\.id))
+        #expect(review.wordings.filter { standing.contains($0.markID) }.allSatisfy { $0.wasUnread })
+
+        let put = try #require(restoring(review, in: second))
+        #expect(put.text == first)
+        let source = put.text as NSString
+        let marked = put.review.highlightedRanges(in: put.text)
+        #expect(marked.map { source.substring(with: $0) } == ["ONEONEONE", "TWO"])
+        // Both at their own places in the text the restore made: the first
+        // grew by eight, and the second is marked past that, not short of it.
+        #expect(marked.first?.location == (first as NSString).range(of: "ONEONEONE").location)
+        #expect(marked.last?.location == (first as NSString).range(of: "TWO").location)
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {
@@ -356,6 +422,30 @@ struct LampWritingReviewRestoreTests {
         #expect(!put.review.restorations.contains { $0.restored == "old" })
         // The one just made is among them, which is the point of keeping any.
         #expect(put.review.restorations.contains { $0.restored == "quick brown" })
+    }
+
+    /// A device that only syncs never restores, so it never prunes; it
+    /// would otherwise hand back everything the restoring device dropped,
+    /// and the two would grow the list for ever between them.
+    @Test func aMergeKeepsOnlyTheNewestRestorations() throws {
+        var mine = LampWritingReview(writingID: "w")
+        var theirs = LampWritingReview(writingID: "w")
+        let now = Date()
+        mine.restorations = (0..<15).map {
+            .init(markID: UUID(), turnID: nil, restored: "a", discarded: "b",
+                  restoredAt: now.addingTimeInterval(-Double($0)))
+        }
+        theirs.restorations = (20..<40).map {
+            .init(markID: UUID(), turnID: nil, restored: "c", discarded: "d",
+                  restoredAt: now.addingTimeInterval(-Double($0)))
+        }
+        let merged = mine.merged(with: theirs)
+        #expect(merged.restorations.count == LampWritingReview.restorationsKept)
+        // The newest of the two sides, whichever side merges.
+        #expect(merged.restorations.allSatisfy { $0.restored == "a" || $0.restored == "c" })
+        #expect(theirs.merged(with: mine).restorations == merged.restorations)
+        // And nothing one side has alone is lost while it is among the newest.
+        #expect(merged.restorations.contains { $0.restored == "a" })
     }
 
     @Test func restorationsAreNotKeptForEver() throws {

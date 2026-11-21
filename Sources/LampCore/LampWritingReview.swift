@@ -843,6 +843,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         // be a lie they would go looking for.
         let kept = Set(wordings.map(\.markID))
         let blocking = touched.map(\.id).filter { offered[$0] == nil }
+        // Nothing blocked it one at a time, so what stopped it was the
+        // passages against each other: two that overlap, or two points at
+        // one place. Not exact, and not the writer's doing either, but it
+        // must not read as a wording that was never kept — that answer is
+        // said silently, and would hide this altogether.
+        guard !blocking.isEmpty else { return .notExact }
         return blocking.contains(where: { kept.contains($0) }) ? .notExact : .notKept
     }
 
@@ -865,7 +871,16 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
         let ordered = plan.sorted { $0.range.location < $1.range.location }
         for (earlier, later) in zip(ordered, ordered.dropFirst()) {
-            guard NSMaxRange(earlier.range) <= later.range.location else { return nil }
+            // Edges may meet, and two passages the assistant changed one
+            // after the other often do. What they may not do is stand in
+            // the same place: two marks for the same removal — made on two
+            // devices and merged — are both points at that spot, and both
+            // would put their words in, giving "One two two three."
+            let meet = NSMaxRange(earlier.range) == later.range.location
+            let bothHaveWidth = earlier.range.length > 0 && later.range.length > 0
+            guard NSMaxRange(earlier.range) < later.range.location || (meet && bothHaveWidth) else {
+                return nil
+            }
         }
         return RestorePlan(edits: ordered.reversed().map {
             Edit(markID: $0.markID, range: $0.range, replacement: $0.restored, unread: $0.wasUnread)
@@ -931,8 +946,21 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         result = result.tidied()
         let target = restored as NSString
         let anchor = Self.digest(of: restored)
+        // Where each replacement ended up: its own place, moved by what
+        // every edit before it added or took away. Taken from the plan
+        // rather than searched for, since the same words can stand
+        // elsewhere in the writing and the nearest one to a stale
+        // position is not the one that was just put back.
+        var moved: [UUID: Int] = [:]
+        for edit in plan.edits {
+            let before = plan.edits.filter { $0.range.location < edit.range.location }
+            moved[edit.markID] = edit.range.location + before.reduce(0) {
+                $0 + ($1.replacement as NSString).length - $1.range.length
+            }
+        }
         for edit in plan.edits where edit.unread && !edit.replacement.isEmpty {
-            guard let found = Self.nearest(edit.replacement, in: target, to: edit.range.location)
+            guard let found = Self.put(edit.replacement, at: moved[edit.markID], in: target)
+                ?? Self.nearest(edit.replacement, in: target, to: moved[edit.markID] ?? edit.range.location)
             else { continue }
             result.marks.append(Mark(
                 pieces: [Self.piece(Self.trimmed(found, in: target), in: target, anchoredIn: anchor)],
@@ -956,6 +984,16 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
               text.substring(with: NSRange(location: NSMaxRange(range), length: trail)) == wording.trail
         else { return nil }
         return NSRange(location: start, length: end - start)
+    }
+
+    /// `words` at `location`, where that is exactly what stands there.
+    /// The surface may have written its own Markdown and moved them, which
+    /// is what the search is for; this is the ordinary case, and exact.
+    private static func put(_ words: String, at location: Int?, in text: NSString) -> NSRange? {
+        guard let location, location >= 0 else { return nil }
+        let range = NSRange(location: location, length: (words as NSString).length)
+        guard NSMaxRange(range) <= text.length, text.substring(with: range) == words else { return nil }
+        return range
     }
 
     /// Where `words` stand in `text` nearest `location`; nil where they do
@@ -1016,6 +1054,18 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             restorationsByMark[restoration.markID] = restorationsByMark[restoration.markID]
                 .map { Self.later($0, restoration) } ?? restoration
         }
+        // The newest only. A device that merely syncs never restores, so
+        // it never prunes, and it would hand back every restoration the
+        // restoring device had dropped — the list, holding both wordings
+        // of each, would grow for ever between them. Keeping the newest
+        // of a union is the same set whichever side merges and in
+        // whatever grouping, so the merge's own laws are untouched.
+        let newest = restorationsByMark.values
+            .sorted { ($0.restoredAt, $0.markID.uuidString) > ($1.restoredAt, $1.markID.uuidString) }
+            .prefix(Self.restorationsKept)
+        restorationsByMark = Dictionary(
+            newest.map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         var result = LampWritingReview(writingID: writingID)
         result.formatVersion = max(formatVersion, other.formatVersion)
         result.marks = marksByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
