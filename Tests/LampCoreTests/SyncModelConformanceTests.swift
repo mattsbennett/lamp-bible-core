@@ -1023,8 +1023,10 @@ struct SyncModelConformanceTests {
                 return id == LampSyncFolderLayout.remoteModuleID(of: path) ? "module:own" : "module:other"
             case .deck: return "deck"
             case .deckAsset: return "deckAsset"
-            case .writingReview(let id):
-                return id == LampSyncFolderLayout.writingID(ofReviewPath: path) ? "writingReview" : "writingReview:other"
+            case .writingReview(let id, let documentKey):
+                let target = LampSyncFolderLayout.reviewTarget(ofPath: path)
+                return id == target?.writingID && documentKey == target?.documentKey
+                    ? "writingReview" : "writingReview:other"
             case .writingDocument(let folder, let name):
                 let document = LampWritingWorkspaceLayout.document(ofPath: path)
                 return document?.folder == folder && document?.name == name ? "writingDocument" : "writingDocument:other"

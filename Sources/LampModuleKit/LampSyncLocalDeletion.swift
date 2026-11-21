@@ -24,10 +24,16 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     case deck(String)
     /// The deck asset with this name.
     case deckAsset(String)
-    /// The review marks of the writing with this id. Deleted with its
-    /// writing, and on a device that deletes it, everywhere: a file only
-    /// removed here would be fetched again from the server's copy.
-    case writingReview(String)
+    /// The review marks of a writing, or of one of the documents beside
+    /// it. Deleted with what they are the marks of, and on a device that
+    /// deletes it, everywhere: a file only removed here would be fetched
+    /// again from the server's copy.
+    ///
+    /// The document is its key in the file's name, which is its name
+    /// unless that was too long to keep — then the record inside holds
+    /// the name, and the caller that needs it reads it there. Without
+    /// this, deleting a document's marks deleted the writing's own.
+    case writingReview(writingID: String, documentKey: String?)
     /// One of a writing's documents, by its workspace folder and its name
     /// in NFC. Deleted on any device, deleted everywhere, so an outline the
     /// writer removed does not come back from another device's copy.
@@ -60,7 +66,8 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
         case .deckAsset:
             return filename(of: path).map(Self.deckAsset) ?? .unsupported
         case .writingReview:
-            return LampSyncFolderLayout.writingID(ofReviewPath: path).map(Self.writingReview) ?? .unsupported
+            guard let target = LampSyncFolderLayout.reviewTarget(ofPath: path) else { return .unsupported }
+            return .writingReview(writingID: target.writingID, documentKey: target.documentKey)
         case .writingDocument:
             return LampWritingWorkspaceLayout.document(ofPath: path).map(Self.writingDocument) ?? .unsupported
         case .devotionalMedia, .noteMedia, .bookMedia, .workspaceFile:
