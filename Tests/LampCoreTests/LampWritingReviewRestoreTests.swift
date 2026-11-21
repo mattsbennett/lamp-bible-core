@@ -360,6 +360,65 @@ struct LampWritingReviewRestoreTests {
         #expect(marked.last?.location == (first as NSString).range(of: "TWO").location)
     }
 
+    /// A mark kept alive by the same words standing somewhere else is no
+    /// longer the passage the assistant changed, so it cannot be put back:
+    /// doing so would rewrite a sentence nobody touched.
+    @Test func aMarkMovedOntoACopyOfItsWordsIsNoLongerOffered() throws {
+        let start = "Alpha old here. Beta blue there."
+        let agent = "Alpha blue here. Beta blue there."
+        let review = empty.markingAssistantChange(from: start, to: agent)
+        #expect(marked(review, in: agent) == ["blue"])
+        #expect(review.restorable(in: agent).count == 1)
+        // The writer rewrites the passage the assistant changed. Its words
+        // are gone, and the carry keeps the mark by finding them in Beta's
+        // untouched sentence — right for reading, wrong for restoring.
+        let typed = "Alpha mine here. Beta blue there."
+        let carried = review.carryingWriterEdit(from: agent, to: typed)
+        #expect(marked(carried, in: typed) == ["blue"], "still marked, so it is still read")
+        #expect(
+            carried.restorable(in: typed).isEmpty,
+            "but restoring it would turn Beta's sentence into \"Beta old there.\""
+        )
+    }
+
+    /// Two copies of one restoration are settled by when, which is how the
+    /// cap orders them too: settling by bytes and capping by date let the
+    /// two disagree, and then a merge of three copies depended on the
+    /// order they were merged in.
+    @Test func aMergeOfThreeCopiesDoesNotDependOnTheOrder() throws {
+        func copy(_ entries: [(String, Double)]) -> LampWritingReview {
+            var review = LampWritingReview(writingID: "w")
+            review.restorations = entries.map { id, at in
+                .init(
+                    markID: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", abs(id.hashValue % 999999)))")!,
+                    turnID: nil, restored: "r", discarded: "d",
+                    restoredAt: Date(timeIntervalSince1970: at)
+                )
+            }
+            return review
+        }
+        let x = UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
+        func withX(_ at: Double) -> LampWritingReview {
+            var review = LampWritingReview(writingID: "w")
+            review.restorations = [
+                .init(markID: x, turnID: nil, restored: "r", discarded: "d",
+                      restoredAt: Date(timeIntervalSince1970: at)),
+            ]
+            return review
+        }
+        let a = withX(100)
+        let b = withX(9)
+        var c = LampWritingReview(writingID: "w")
+        c.restorations = (0..<20).map {
+            .init(markID: UUID(), turnID: nil, restored: "c", discarded: "d",
+                  restoredAt: Date(timeIntervalSince1970: Double(50 + $0)))
+        }
+        let left = a.merged(with: b).merged(with: c)
+        let right = a.merged(with: b.merged(with: c))
+        #expect(Set(left.restorations) == Set(right.restorations))
+        _ = copy
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

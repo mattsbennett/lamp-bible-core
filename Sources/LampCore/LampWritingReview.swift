@@ -687,6 +687,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         public let markID: UUID
         public let range: NSRange
         public let replacement: String
+        /// The words it takes out, kept here because they are known when
+        /// the plan is made and may not be afterwards: the save that puts
+        /// the restored text away carries the marks with it, which can
+        /// retire this one and take its wording before the restore is
+        /// recorded — and then the assistant is never told.
+        public let discarded: String
         /// Whether what it puts back is still to be read.
         public let unread: Bool
     }
@@ -883,7 +889,10 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             }
         }
         return RestorePlan(edits: ordered.reversed().map {
-            Edit(markID: $0.markID, range: $0.range, replacement: $0.restored, unread: $0.wasUnread)
+            Edit(
+                markID: $0.markID, range: $0.range, replacement: $0.restored,
+                discarded: $0.words, unread: $0.wasUnread
+            )
         })
     }
 
@@ -928,12 +937,18 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             live.restorable(in: text).map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
         )
         var result = self
-        for id in plan.marks {
-            result.retired.append(Retirement(id: id, retiredAt: date))
-            guard let one = held[id] else { continue }
+        for edit in plan.edits {
+            result.retired.append(Retirement(id: edit.markID, retiredAt: date))
+            // From the plan, not from the record as it stands now: by the
+            // time a surface has made the edit and its writing has been
+            // saved, the save's own carry may have retired this mark and
+            // dropped its wording, and there would be nothing to tell the
+            // assistant.
             result.restorations.append(Restoration(
-                markID: id, turnID: turns[id] ?? nil,
-                restored: one.restored, discarded: one.words, restoredAt: date
+                markID: edit.markID, turnID: turns[edit.markID] ?? nil,
+                restored: edit.replacement,
+                discarded: held[edit.markID]?.words ?? edit.discarded,
+                restoredAt: date
             ))
         }
         result.marks.removeAll { put.contains($0.id) }
@@ -998,6 +1013,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     /// Where `words` stand in `text` nearest `location`; nil where they do
     /// not stand there at all.
+    /// How far from where a restore put its words they may still be
+    /// found: a surface that writes its own Markdown can spell them a
+    /// little differently and move them a little, but the same words in
+    /// another passage are another passage. Beyond this they are left
+    /// unmarked rather than marked in the wrong place.
+    static let searchWindow = 64
+
     private static func nearest(_ words: String, in text: NSString, to location: Int) -> NSRange? {
         guard !words.isEmpty else { return nil }
         var best: NSRange?
@@ -1005,7 +1027,8 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         while search.length > 0 {
             let found = text.range(of: words, options: .literal, range: search)
             guard found.location != NSNotFound else { break }
-            if best.map({ abs(found.location - location) < abs($0.location - location) }) ?? true {
+            if abs(found.location - location) <= searchWindow,
+               best.map({ abs(found.location - location) < abs($0.location - location) }) ?? true {
                 best = found
             }
             search = NSRange(
@@ -1212,10 +1235,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             }
             return nil
         }
-        /// The pieces carried, and whether anything about them changed.
-        func carry(_ pieces: [Piece]) -> (pieces: [Piece], changed: Bool) {
+        /// The pieces carried, whether anything about them changed, and
+        /// whether any of them was kept only by finding its words standing
+        /// somewhere else.
+        func carry(_ pieces: [Piece]) -> (pieces: [Piece], changed: Bool, movedToCopy: Bool) {
             var result: [Piece] = []
             var changed = false
+            var movedToCopy = false
             for piece in pieces {
                 guard piece.anchoredIn != here, let (index, range) = resolved(piece) else {
                     result.append(piece)
@@ -1227,6 +1253,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 if survived.isEmpty, let kept = Self.survivingCopy(of: range, in: sources[index] as NSString,
                                                                    through: alignment(index), to: targetText) {
                     survived = [kept]
+                    movedToCopy = true
                 }
                 let moved = survived.map { Self.piece($0, in: targetText, anchoredIn: here) }
                 // Kept as it was only where it can be found again without its
@@ -1241,12 +1268,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                     changed = true
                 }
             }
-            return (result, changed)
+            return (result, changed, movedToCopy)
         }
         var result = self
         result.marks = []
         for mark in marks {
             let carried = carry(mark.pieces)
+            // Its words went, and the same words standing elsewhere kept
+            // the mark alive — which is right for reading it, and wrong
+            // for putting anything back: that passage is not the one the
+            // assistant changed, and replacing it with this mark's old
+            // wording would rewrite a sentence nobody touched.
+            if carried.movedToCopy {
+                result.wordings.removeAll { $0.markID == mark.id }
+            }
             guard carried.changed else {
                 result.marks.append(mark)
                 continue
@@ -1344,8 +1379,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return left.lexicographicallyPrecedes(right) ? rhs : lhs
     }
 
+    /// The later of two restorations of one mark: by when, which is how
+    /// the cap orders them too. Settling this by bytes and keeping the
+    /// newest by date let the two disagree, and a merge of three copies
+    /// then depended on the order they were merged in.
     private static func later(_ lhs: Restoration, _ rhs: Restoration) -> Restoration {
         guard lhs != rhs else { return lhs }
+        if lhs.restoredAt != rhs.restoredAt { return lhs.restoredAt > rhs.restoredAt ? lhs : rhs }
         let left = (try? encoder.encode(lhs)) ?? Data()
         let right = (try? encoder.encode(rhs)) ?? Data()
         return left.lexicographicallyPrecedes(right) ? rhs : lhs
