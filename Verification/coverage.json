@@ -245,6 +245,18 @@
       ],
       "boundary": "How two copies of a writing's review marks merge, per mark id: the higher version of a mark both hold, no mark either retired, and the higher version of every clearance either made of a mark still held. The same whichever side merges and in whatever grouping, so a clear on one device is never undone by another's copy, and two devices clearing different parts of one mark leave only what neither cleared. What stood where a mark stands, kept so the writer can have the assistant's change put back, merges by union: it is made once and never changed, and a copy written by a writer that knows nothing of it has none rather than an older one, so whichever copy holds it is right and no tie of versions can strip it. It is offered only while its mark still stands. A restoration — the record of a wording put back, which the assistant is told of — is unioned too, and outlives the mark its own restore retired. The tables hold `merged(with:)` to the model for every pair of clean copies of two marks and a versioned clearance. How a mark is found in the text (its words and their context), what an assistant's change or the writer's edit does to the marks, which copy's pieces win a tie of versions, the words a wording or a restoration holds, which mark's words can be put back exactly, the pruning of old retirements and restorations, and the keeping of only the newest restorations of a merge, are not modelled: they decide what one device writes, not how copies combine."
     },
+    "Sources/LampCore/LampWritingReviewStore.swift": {
+      "rules": [
+        "ReviewTarget",
+        "takeInReview",
+        "arecordOfAnotherPlaceIsNeverMerged",
+        "arecordOfThisPlaceMergesAsBefore"
+      ],
+      "conformance": [
+        "reviewRouting"
+      ],
+      "boundary": "Where a device keeps its writings' review marks: one file for a writing's own prose, named as it always has been, and one for each document beside it. A copy a pass downloaded is merged only into the record of the very place it arrived — the same writing and the same document — and refused otherwise. The merge itself compares no identity at all, so a file that reached the wrong place would take its marks into another's, and each place's marks are anchored in its own words. Which file a document's record is named is outside the model: that a document's name may be too long to keep, and is then written as a digest of itself with the name carried in the record, is a fact about file names rather than about merging. So is the sweep that takes a deleted writing's documents' records with it."
+    },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [
         "choosePreference",

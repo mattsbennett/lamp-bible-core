@@ -3757,6 +3757,40 @@ def mergeReview (a b : Review) : Review :=
     wording := fun i => a.wording i || b.wording i,
     restored := fun i => a.restored i || b.restored i }
 
+/-- Which writing, and which of its documents, a record's marks are in.
+A document of 0 is the writing's own prose, whose record is the only kind
+there was before marks reached the documents beside it.
+
+The merge below compares nothing about identity: two records of different
+documents would merge, and each document's marks are anchored in its own
+words, so the marks of one would be taken for the other's. What keeps
+them apart is not the merge but the taking in — a record is merged only
+into the record of the place it arrived. -/
+structure ReviewTarget where
+  writing : Nat
+  document : Nat
+  deriving DecidableEq
+
+/-- Taking in a copy a pass downloaded: merged where it is a record of
+this very document, and refused where it is not. -/
+def takeInReview (here there : ReviewTarget) (a b : Review) : Option Review :=
+  if here = there then some (mergeReview a b) else none
+
+/-- A record of another document, or of another writing, is refused. The
+file's name says where it belongs and the record says so itself; where
+those disagree, one of them is wrong and neither can say which. -/
+theorem arecordOfAnotherPlaceIsNeverMerged
+    (here there : ReviewTarget) (a b : Review) (h : here ≠ there) :
+    takeInReview here there a b = none := by
+  simp [takeInReview, h]
+
+/-- And a record of this place merges exactly as it always did: the
+document a record is for changes nothing about how two copies of it are
+brought together. -/
+theorem arecordOfThisPlaceMergesAsBefore (here : ReviewTarget) (a b : Review) :
+    takeInReview here here a b = some (mergeReview a b) := by
+  simp [takeInReview]
+
 def Review.shows (r : Review) (i : Nat) : Bool := Decidable.decide (0 < r.version i) && !r.retired i
 
 /-- Whether the writer can be offered the assistant's wording back: only
@@ -5709,6 +5743,20 @@ def reviewMarkCode (r : Review) (i : Nat) : String :=
               IO.println <| conformanceLine "reviewWording"
                 [a1, toString aw, toString ar, b1, toString bw, toString br,
                  toString (merged.offers 1), toString (merged.restored 1)]
+
+#eval show IO Unit from do
+  -- Every pair of places a record can say it is for and arrive at: whether
+  -- it is taken in, and whether a mark of it survives when it is.
+  let places := [(1, 0), (1, 1), (1, 2), (2, 0), (2, 1)]
+  for (hw, hd) in places do
+    for (tw, td) in places do
+      let here : ReviewTarget := { writing := hw, document := hd }
+      let there : ReviewTarget := { writing := tw, document := td }
+      let taken := takeInReview here there (reviewCopy "0" "0" 0) (reviewCopy "1" "0" 0)
+      IO.println <| conformanceLine "reviewRouting"
+        [toString hw, toString hd, toString tw, toString td,
+         toString taken.isSome,
+         toString (match taken with | some r => r.shows 1 | none => false)]
 
 def documentDecisionName : DocumentDecision → String
   | .keep => "keep" | .take => "take" | .takeKeepingHeld => "takeKeepingHeld"

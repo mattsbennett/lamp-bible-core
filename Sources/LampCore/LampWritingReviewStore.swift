@@ -147,10 +147,14 @@ public struct LampWritingReviewStore: Sendable {
         downloaded data: Data, writingID: String, document: String? = nil
     ) throws -> Bool {
         let incoming = try LampWritingReview.decoded(from: data)
-        // A record that says it is another document's is refused, not
-        // merged. Its marks are anchored in that document's words, and
-        // the merge would take them for this one's.
-        guard incoming.document == document else { throw StoreError.notThisDocument }
+        // A record that says it is another place's is refused, not
+        // merged. Its marks are anchored in that place's words, and the
+        // merge compares no identity at all: it would take them for this
+        // one's. The writing as well as the document — a file routed to
+        // the wrong writing was merged in silence before this.
+        guard incoming.writingID == writingID, incoming.document == document else {
+            throw StoreError.notThisDocument
+        }
         let url = try url(writingID: writingID, document: document)
         return try Self.locks.holding(url) {
             let merged = try review(writingID: writingID, document: document).merged(with: incoming)

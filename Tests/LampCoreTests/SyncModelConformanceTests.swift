@@ -104,7 +104,7 @@ struct SyncModelConformanceTests {
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
         "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain", "recordsAdeletion",
-        "reviewWording",
+        "reviewWording", "reviewRouting",
         "deletionNotCarriedOut", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
@@ -1174,6 +1174,59 @@ struct SyncModelConformanceTests {
             let clearance = merged.retired.contains { $0.id == id(1) }
                 ? 0 : merged.clearances.first { $0.id == id(10) }?.version ?? 0
             return code(merged, 1) == f[6] && code(merged, 2) == f[7] && String(clearance) == f[8]
+        }
+    }
+
+    /// Every pair of places a review record can say it is for and arrive
+    /// at: whether it is taken in, and whether a mark of it survives when
+    /// it is.
+    ///
+    /// The merge compares nothing about identity, so two records of
+    /// different documents would merge, and each document's marks are
+    /// anchored in its own words — the marks of one would be taken for the
+    /// other's. What keeps them apart is the taking in, which is held here.
+    @Test func reviewRouting() throws {
+        func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
+        /// The model's document numbers as names: 0 is the writing's own
+        /// prose, which has no document.
+        func document(_ n: String) -> String? { n == "0" ? nil : "document-\(n).md" }
+        func writing(_ n: String) -> String { "w\(n)" }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try conform("reviewRouting") { f in
+            // A store of its own for each row: the writing a record is
+            // taken in as has to be the writing the model names, so one
+            // row's merge must not be left where the next one reads.
+            let store = LampWritingReviewStore(
+                rootURL: root.appendingPathComponent(f.joined(separator: "-"), isDirectory: true)
+            )
+            let here = (writing: writing(f[0]), document: document(f[1]))
+            let there = (writing: writing(f[2]), document: document(f[3]))
+            var incoming = LampWritingReview(writingID: there.writing, document: there.document)
+            incoming.marks.append(.init(
+                id: id(1),
+                pieces: [.init(text: "marked", before: "", after: "", hint: 0)],
+                version: 1, markedAt: Date(timeIntervalSince1970: 0), turnID: nil
+            ))
+            // A place of its own each time, so one row never reads another's.
+            let at = (writing: here.writing, document: here.document)
+            var taken = true
+            do {
+                try store.takeIn(
+                    downloaded: try incoming.encoded(),
+                    writingID: at.writing, document: at.document
+                )
+            } catch LampWritingReviewStore.StoreError.notThisDocument {
+                taken = false
+            }
+            guard String(taken) == f[4] else { return false }
+            let shows = try store
+                .review(writingID: at.writing, document: at.document)
+                .marks.contains { $0.id == id(1) }
+            return String(shows) == f[5]
         }
     }
 
