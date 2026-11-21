@@ -50,6 +50,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     public var formatVersion: Int
     public var writingID: String
+    /// The document beside the writing these marks are in, or nil for the
+    /// writing's own prose.
+    ///
+    /// Written down as well as being in the file's name, so a file that
+    /// reaches the wrong place is refused rather than merged: the merge
+    /// below compares nothing about identity, and would take another
+    /// document's marks into this one without a word.
+    ///
+    /// Safe to add, where a new field usually is not: the byte tie-break
+    /// that strips an unknown key only runs between two copies of one
+    /// record, and no app that does not know this field ever opens a file
+    /// that carries it — the name it does not make is a name it refuses
+    /// to read. For the prose file this is nil and nothing is written.
+    public var document: String?
     /// The marks still to be read, in no order that means anything.
     public var marks: [Mark]
     /// Marks cleared whole.
@@ -69,11 +83,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     public var restorations: [Restoration]
 
     public init(
-        writingID: String, marks: [Mark] = [], retired: [Retirement] = [], clearances: [Clearance] = [],
+        writingID: String, document: String? = nil,
+        marks: [Mark] = [], retired: [Retirement] = [], clearances: [Clearance] = [],
         wordings: [Wording] = [], restorations: [Restoration] = [], voidedWordings: [UUID] = []
     ) {
         self.formatVersion = Self.formatVersion
         self.writingID = writingID
+        self.document = document
         self.marks = marks
         self.retired = retired
         self.clearances = clearances
@@ -1463,7 +1479,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         restorationsByMark = Dictionary(
             newest.map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
         )
-        var result = LampWritingReview(writingID: writingID)
+        var result = LampWritingReview(writingID: writingID, document: document)
         result.formatVersion = max(formatVersion, other.formatVersion)
         result.voidedWordings = voided.sorted { $0.uuidString < $1.uuidString }
         result.marks = marksByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -1556,14 +1572,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// for the other: every record made before them has neither key, and so
     /// has every record a writer that does not know them has rewritten.
     private enum CodingKeys: String, CodingKey {
-        case formatVersion, writingID, marks, retired, clearances, wordings, restorations
-        case voidedWordings
+        case formatVersion, writingID, document, marks, retired, clearances, wordings
+        case restorations, voidedWordings
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         formatVersion = try container.decode(Int.self, forKey: .formatVersion)
         writingID = try container.decode(String.self, forKey: .writingID)
+        document = try container.decodeIfPresent(String.self, forKey: .document)
         marks = try container.decode([Mark].self, forKey: .marks)
         retired = try container.decode([Retirement].self, forKey: .retired)
         clearances = try container.decode([Clearance].self, forKey: .clearances)
@@ -1576,6 +1593,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(formatVersion, forKey: .formatVersion)
         try container.encode(writingID, forKey: .writingID)
+        if let document { try container.encode(document, forKey: .document) }
         try container.encode(marks, forKey: .marks)
         try container.encode(retired, forKey: .retired)
         try container.encode(clearances, forKey: .clearances)

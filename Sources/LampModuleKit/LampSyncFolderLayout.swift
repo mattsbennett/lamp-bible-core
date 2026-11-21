@@ -155,19 +155,81 @@ public enum LampSyncFolderLayout {
         try checked([deckAssetsDirectory], filename)
     }
 
-    public static func writingReviewPath(writingID: String) throws -> String {
-        let filename = reviewFilename(writingID: writingID)
+    /// Where a writing's review marks live, or those of one document
+    /// beside it.
+    ///
+    /// The writing's own file keeps the name it has always had, so every
+    /// record already on a server or a phone goes on being found. A
+    /// document's is that name with the document's own after it, and an
+    /// older app never opens one: the name it does not make is a name it
+    /// refuses to read, and a file whose kind is nil is skipped by every
+    /// listing. That is what makes this safe to add — not the merge,
+    /// which would happily take another document's marks into the
+    /// writing's.
+    public static func writingReviewPath(writingID: String, document: String? = nil) throws -> String {
+        try writingReviewPath(
+            writingID: writingID,
+            documentKey: document.map { reviewDocumentKey(writingID: writingID, document: $0) }
+        )
+    }
+
+    /// The same path from a document's key rather than its name, for a
+    /// caller working from the files that are there — a sweep removing the
+    /// records of a writing that is gone — which has the key and may not
+    /// have the name.
+    public static func writingReviewPath(
+        writingID: String, documentKey: String?
+    ) throws -> String {
+        let filename = reviewFilename(writingID: writingID, documentKey: documentKey)
         guard filename.utf8.count <= maximumReviewFilenameBytes else {
             throw PathError.unsafe("\(writingReviewDirectory)/\(filename)")
         }
         return try checked([writingReviewDirectory], filename)
     }
 
-    /// The writing a review file is for, or nil for any other path.
+    /// A document's part of its review file's name.
+    ///
+    /// Its escaped name, where that fits. A name may be 255 bytes and the
+    /// escape writes three for every byte that is not an ASCII letter,
+    /// digit or hyphen, so a document named in Hebrew or Greek runs past
+    /// what a name may be — and the path would then throw, which the
+    /// writer that asks for it does not look at: the document would simply
+    /// never have marks, and nothing would say why. Such a name is written
+    /// as a digest of itself instead, behind `_ZZ`, which the escape can
+    /// never produce. What the digest cost — reading the name back out of
+    /// the file's name — the record inside gives back: it carries the
+    /// document's name itself.
+    public static func reviewDocumentKey(writingID: String, document: String) -> String {
+        let escaped = escapedForReviewName(document)
+        let filename = reviewFilename(writingID: writingID, documentKey: escaped)
+        guard filename.utf8.count > maximumReviewFilenameBytes else { return escaped }
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in document.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return "\(opaqueDocumentKeyMarker)\(String(hash, radix: 16))"
+    }
+
+    /// Opens the key of a document whose name was too long to keep. Two
+    /// underscores part the id from the document, and `Z` is no hex digit,
+    /// so no escaped name is ever mistaken for one of these.
+    static let opaqueDocumentKeyMarker = "_ZZ"
+
+    /// The writing a review file is for, or nil for any other path. A
+    /// document's file answers with its writing.
     public static func writingID(ofReviewPath path: String) -> String? {
+        reviewTarget(ofPath: path)?.writingID
+    }
+
+    /// The writing and the document a review file is for: nil document for
+    /// the writing's own prose, which is the only kind of file that existed
+    /// before. The document is its key, which is its name unless the name
+    /// was too long to keep — the record inside holds the name itself.
+    public static func reviewTarget(ofPath path: String) -> (writingID: String, documentKey: String?)? {
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
         guard components.count == 2, components[0] == writingReviewDirectory else { return nil }
-        return writingID(reviewFilename: String(components[1]))
+        return reviewTarget(filename: String(components[1]))
     }
 
     /// A writing's id as its review file's name. An id stays as it is where
@@ -178,9 +240,17 @@ public enum LampSyncFolderLayout {
     /// letter that is spelled two ways in Unicode: none of those may reach
     /// a file name as it is, since a hidden or renormalised name is a file
     /// no pass would find again.
-    static func reviewFilename(writingID: String) -> String {
+    static func reviewFilename(writingID: String, documentKey: String? = nil) -> String {
+        let id = escapedForReviewName(writingID)
+        guard let documentKey else { return "\(id).\(writingReviewExtension)" }
+        // Two underscores part them, which no escaped name can hold: a
+        // bare underscore is always written `_5F`.
+        return "\(id)__\(documentKey).\(writingReviewExtension)"
+    }
+
+    private static func escapedForReviewName(_ text: String) -> String {
         var name = ""
-        for byte in writingID.utf8 {
+        for byte in text.utf8 {
             switch byte {
             case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
                  UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "-"):
@@ -189,34 +259,57 @@ public enum LampSyncFolderLayout {
                 name += String(format: "_%02X", byte)
             }
         }
-        return "\(name).\(writingReviewExtension)"
+        return name
     }
 
-    /// The id a review file's name was made from, or nil for a name
-    /// `reviewFilename` does not make: one name for each id, read back
-    /// exactly.
-    static func writingID(reviewFilename filename: String) -> String? {
-        let suffix = ".\(writingReviewExtension)"
-        guard filename.hasSuffix(suffix), filename.utf8.count > suffix.utf8.count,
-              filename.utf8.count <= maximumReviewFilenameBytes else { return nil }
+    private static func unescapedFromReviewName(_ name: Substring) -> String? {
         var bytes: [UInt8] = []
-        var rest = Substring(filename.dropLast(suffix.count)).utf8[...]
+        var rest = name.utf8[...]
         while let byte = rest.first {
             rest = rest.dropFirst()
             guard byte == UInt8(ascii: "_") else {
                 bytes.append(byte)
                 continue
             }
-            guard rest.count >= 2, let value = UInt8(String(decoding: rest.prefix(2), as: UTF8.self), radix: 16) else {
-                return nil
-            }
+            guard rest.count >= 2,
+                  let value = UInt8(String(decoding: rest.prefix(2), as: UTF8.self), radix: 16)
+            else { return nil }
             bytes.append(value)
             rest = rest.dropFirst(2)
         }
-        guard let id = String(bytes: bytes, encoding: .utf8), reviewFilename(writingID: id) == filename else {
+        return String(bytes: bytes, encoding: .utf8)
+    }
+
+    /// The id a review file's name was made from, or nil for a name
+    /// `reviewFilename` does not make: one name for each id, read back
+    /// exactly.
+    static func writingID(reviewFilename filename: String) -> String? {
+        reviewTarget(filename: filename)?.writingID
+    }
+
+    static func reviewTarget(filename: String) -> (writingID: String, documentKey: String?)? {
+        let suffix = ".\(writingReviewExtension)"
+        guard filename.hasSuffix(suffix), filename.utf8.count > suffix.utf8.count,
+              filename.utf8.count <= maximumReviewFilenameBytes else { return nil }
+        let body = Substring(filename.dropLast(suffix.count))
+        let parts = body.components(separatedBy: "__")
+        guard parts.count <= 2, !parts.contains(where: \.isEmpty) else { return nil }
+        guard let id = unescapedFromReviewName(Substring(parts[0])) else { return nil }
+        let key: String? = parts.count == 2 ? parts[1] : nil
+        if let key, !key.hasPrefix(opaqueDocumentKeyMarker),
+           unescapedFromReviewName(Substring(key)) == nil {
             return nil
         }
-        return id
+        // Read back exactly: one name for each pair, and nothing else.
+        guard reviewFilename(writingID: id, documentKey: key) == filename else { return nil }
+        return (id, key)
+    }
+
+    /// A document's name from its key, or nil where the key is a digest of
+    /// a name too long to keep — then the record inside holds the name.
+    public static func documentName(fromReviewKey key: String) -> String? {
+        guard !key.hasPrefix(opaqueDocumentKeyMarker) else { return nil }
+        return unescapedFromReviewName(Substring(key))
     }
 
     /// Within what every file system and server Lamp syncs through takes

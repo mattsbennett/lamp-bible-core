@@ -12,6 +12,83 @@ struct LampWritingReviewFileTests {
         return LampWritingReviewStore(rootURL: root)
     }
 
+    // MARK: Documents beside the writing
+
+    /// A document's marks are their own file, and the writing's own file
+    /// keeps the name it has always had — every record already on a server
+    /// goes on being found.
+    @Test func adocumentsMarksAreTheirOwnFileAndTheProsesKeepsItsName() throws {
+        let id = "exhortation-2026-01-18"
+        #expect(try LampSyncFolderLayout.writingReviewPath(writingID: id) == "WritingReview/\(id).json")
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: id, document: "outline.md")
+        #expect(path == "WritingReview/\(id)__outline_2Emd.json")
+        let target = try #require(LampSyncFolderLayout.reviewTarget(ofPath: path))
+        #expect(target.writingID == id)
+        #expect(LampSyncFolderLayout.documentName(fromReviewKey: try #require(target.documentKey)) == "outline.md")
+        // And the writing's own file still answers with no document.
+        let prose = try #require(
+            LampSyncFolderLayout.reviewTarget(ofPath: "WritingReview/\(id).json")
+        )
+        #expect(prose.documentKey == nil)
+    }
+
+    /// A name too long to keep is written as a digest of itself rather than
+    /// throwing: the writer that asks for the path does not look at the
+    /// error, so the document would otherwise never have marks and nothing
+    /// would say why. The record inside carries the name.
+    @Test func adocumentNameTooLongToKeepIsADigestAndStillHasAFile() throws {
+        let long = String(repeating: "\u{5D0}", count: 90) + ".md"
+        let id = "exhortation-2026-01-18"
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: id, document: long)
+        #expect(path.utf8.count <= LampSyncFolderLayout.maximumReviewFilenameBytes + "WritingReview/".utf8.count)
+        let target = try #require(LampSyncFolderLayout.reviewTarget(ofPath: path))
+        #expect(target.writingID == id)
+        let key = try #require(target.documentKey)
+        #expect(LampSyncFolderLayout.documentName(fromReviewKey: key) == nil)
+        // The same name always makes the same key, so the file is found again.
+        #expect(LampSyncFolderLayout.reviewDocumentKey(writingID: id, document: long) == key)
+        // And the record says which document it is for.
+        let store = try temporaryStore()
+        try store.save(LampWritingReview(writingID: id, document: long))
+        #expect(try store.review(writingID: id, document: long).document == long)
+    }
+
+    /// A record that says it is another document's is refused rather than
+    /// merged: nothing in the merge compares identity, so a file that
+    /// reached the wrong place would take its marks into this one.
+    @Test func arecordOfAnotherDocumentIsRefusedRatherThanMerged() throws {
+        let store = try temporaryStore()
+        let id = "exhortation-2026-01-18"
+        let theirs = LampWritingReview(writingID: id, document: "notes.md")
+        #expect(throws: LampWritingReviewStore.StoreError.notThisDocument) {
+            try store.takeIn(downloaded: try theirs.encoded(), writingID: id, document: "outline.md")
+        }
+        #expect(throws: LampWritingReviewStore.StoreError.notThisDocument) {
+            try store.takeIn(downloaded: try theirs.encoded(), writingID: id)
+        }
+        // Its own file takes it.
+        #expect(try store.takeIn(downloaded: try theirs.encoded(), writingID: id, document: "notes.md") == false)
+    }
+
+    /// A deleted writing takes its documents' records with it. One left
+    /// here is fetched from the server for ever, by a device that will
+    /// never hold the document.
+    @Test func adeletedWritingSweepsItsDocumentsRecordsToo() throws {
+        let store = try temporaryStore()
+        let id = "exhortation-2026-01-18"
+        try store.save(LampWritingReview(writingID: id))
+        try store.save(LampWritingReview(writingID: id, document: "outline.md"))
+        try store.save(LampWritingReview(writingID: "kept", document: "outline.md"))
+        let prose = try LampSyncFolderLayout.writingReviewPath(writingID: id)
+        let document = try LampSyncFolderLayout.writingReviewPath(writingID: id, document: "outline.md")
+
+        let deletions = try store.deletions(
+            deleted: [id], held: [], members: [prose: 10, document: 10], now: 100
+        )
+        #expect(Set(deletions.keys) == [prose, document])
+        #expect(try store.reviewed().map(\.writingID) == ["kept"])
+    }
+
     /// Every id a writing can have has a file, named so it reads back as
     /// exactly that id; the ids Lamp makes itself are their own names.
     @Test func everyWritingIdHasAReviewFileThatReadsBackAsIt() throws {

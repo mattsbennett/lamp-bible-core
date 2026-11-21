@@ -20,18 +20,23 @@ public struct LampWritingReviewStore: Sendable {
         rootURL.appendingPathComponent(LampSyncFolderLayout.writingReviewDirectory, isDirectory: true)
     }
 
-    public func url(writingID: String) throws -> URL {
-        rootURL.appendingPathComponent(try LampSyncFolderLayout.writingReviewPath(writingID: writingID))
+    /// Where a writing's marks are kept, or those of one document beside
+    /// it. Nil document throughout here means the writing's own prose,
+    /// whose file keeps the name and the meaning it has always had.
+    public func url(writingID: String, document: String? = nil) throws -> URL {
+        rootURL.appendingPathComponent(
+            try LampSyncFolderLayout.writingReviewPath(writingID: writingID, document: document)
+        )
     }
 
     /// The writing's marks, or an empty record where it has none. A file
     /// that cannot be read is an error, not an empty record: reading it as
     /// none would let the next write replace marks the writer still has.
-    public func review(writingID: String) throws -> LampWritingReview {
-        let url = try url(writingID: writingID)
+    public func review(writingID: String, document: String? = nil) throws -> LampWritingReview {
+        let url = try url(writingID: writingID, document: document)
         return try Self.locks.holding(url) {
             guard FileManager.default.fileExists(atPath: url.path) else {
-                return LampWritingReview(writingID: writingID)
+                return LampWritingReview(writingID: writingID, document: document)
             }
             return try LampWritingReview.decoded(from: Data(contentsOf: url))
         }
@@ -49,10 +54,13 @@ public struct LampWritingReviewStore: Sendable {
         public let modified: Date?
     }
 
-    public func snapshot(writingID: String) throws -> Snapshot {
-        let url = try url(writingID: writingID)
+    public func snapshot(writingID: String, document: String? = nil) throws -> Snapshot {
+        let url = try url(writingID: writingID, document: document)
         return try Self.locks.holding(url) {
-            Snapshot(review: try review(writingID: writingID), modified: Self.modified(url))
+            Snapshot(
+                review: try review(writingID: writingID, document: document),
+                modified: Self.modified(url)
+            )
         }
     }
 
@@ -60,11 +68,15 @@ public struct LampWritingReviewStore: Sendable {
     /// that holds it, both taken before the lock is let go.
     @discardableResult
     public func updating(
-        writingID: String, _ change: (LampWritingReview) throws -> LampWritingReview
+        writingID: String, document: String? = nil,
+        _ change: (LampWritingReview) throws -> LampWritingReview
     ) throws -> Snapshot {
-        let url = try url(writingID: writingID)
+        let url = try url(writingID: writingID, document: document)
         return try Self.locks.holding(url) {
-            Snapshot(review: try update(writingID: writingID, change), modified: Self.modified(url))
+            Snapshot(
+                review: try update(writingID: writingID, document: document, change),
+                modified: Self.modified(url)
+            )
         }
     }
 
@@ -79,7 +91,9 @@ public struct LampWritingReviewStore: Sendable {
     /// Returns whether it wrote, which is whether a pass has anything to send.
     @discardableResult
     public func save(_ review: LampWritingReview) throws -> Bool {
-        let url = try url(writingID: review.writingID)
+        // The record's own document, so a record cannot be saved into
+        // another document's file by a caller that passed the wrong one.
+        let url = try url(writingID: review.writingID, document: review.document)
         let data = try review.encoded()
         return try Self.locks.holding(url) {
             if (try? Data(contentsOf: url)) == data { return false }
@@ -98,13 +112,24 @@ public struct LampWritingReviewStore: Sendable {
     /// over a copy read before the other wrote would lose a mark or a clear.
     @discardableResult
     public func update(
-        writingID: String, _ change: (LampWritingReview) throws -> LampWritingReview
+        writingID: String, document: String? = nil,
+        _ change: (LampWritingReview) throws -> LampWritingReview
     ) throws -> LampWritingReview {
-        try Self.locks.holding(try url(writingID: writingID)) {
-            let next = try change(review(writingID: writingID))
+        try Self.locks.holding(try url(writingID: writingID, document: document)) {
+            let next = try change(review(writingID: writingID, document: document))
+            guard next.writingID == writingID, next.document == document else {
+                throw StoreError.notThisDocument
+            }
             try save(next)
             return next
         }
+    }
+
+    public enum StoreError: Error, Equatable {
+        /// A record whose own writing or document is not the one it was
+        /// read for. Nothing in the merge checks identity, so a file that
+        /// reached the wrong place would otherwise merge in silence.
+        case notThisDocument
     }
 
     /// Takes in a copy a pass downloaded: merged with the copy here, if any.
@@ -118,11 +143,17 @@ public struct LampWritingReviewStore: Sendable {
     /// file dates would not see it, and the clear would wait for something
     /// else to start one.
     @discardableResult
-    public func takeIn(downloaded data: Data, writingID: String) throws -> Bool {
+    public func takeIn(
+        downloaded data: Data, writingID: String, document: String? = nil
+    ) throws -> Bool {
         let incoming = try LampWritingReview.decoded(from: data)
-        let url = try url(writingID: writingID)
+        // A record that says it is another document's is refused, not
+        // merged. Its marks are anchored in that document's words, and
+        // the merge would take them for this one's.
+        guard incoming.document == document else { throw StoreError.notThisDocument }
+        let url = try url(writingID: writingID, document: document)
         return try Self.locks.holding(url) {
-            let merged = try review(writingID: writingID).merged(with: incoming)
+            let merged = try review(writingID: writingID, document: document).merged(with: incoming)
             let wrote = try save(merged)
             let differs = try merged.encoded() != incoming.encoded()
             if differs, !wrote {
@@ -134,8 +165,11 @@ public struct LampWritingReviewStore: Sendable {
 
     /// Removes the writing's marks, as its writing is deleted. The caller
     /// records the removal as a deletion, so other devices remove theirs.
-    public func remove(writingID: String) throws {
-        let url = try url(writingID: writingID)
+    public func remove(writingID: String, document: String? = nil) throws {
+        try removeFile(at: try url(writingID: writingID, document: document))
+    }
+
+    private func removeFile(at url: URL) throws {
         try Self.locks.holding(url) {
             guard FileManager.default.fileExists(atPath: url.path) else { return }
             try FileManager.default.removeItem(at: url)
@@ -176,9 +210,14 @@ public struct LampWritingReviewStore: Sendable {
             members[path].map { max(now, $0 + 1) } ?? now
         }
         var result: [String: Int64] = [:]
-        for id in try writingIDs() where gone.contains(id.lowercased()) {
-            try remove(writingID: id)
-            let path = try LampSyncFolderLayout.writingReviewPath(writingID: id)
+        // Every record of a deleted writing, its documents' as well as its
+        // prose's: a document's file left here is fetched from the server
+        // for ever, by a device that will never have the document.
+        for kept in try reviewed() where gone.contains(kept.writingID.lowercased()) {
+            let path = try LampSyncFolderLayout.writingReviewPath(
+                writingID: kept.writingID, documentKey: kept.documentKey
+            )
+            try removeFile(at: rootURL.appendingPathComponent(path))
             result[path] = stamp(path)
         }
         for path in members.keys {
@@ -201,10 +240,21 @@ public struct LampWritingReviewStore: Sendable {
 
     /// The writing ids that have a file here.
     public func writingIDs() throws -> [String] {
+        Array(Set(try reviewed().map(\.writingID))).sorted()
+    }
+
+    /// Every record kept here, each with the writing and the document it
+    /// is for. A writing can have several: its prose and a document beside
+    /// it are separate records in separate files.
+    public func reviewed() throws -> [(writingID: String, documentKey: String?)] {
         guard FileManager.default.fileExists(atPath: directoryURL.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(atPath: directoryURL.path)
-            .compactMap { LampSyncFolderLayout.writingID(ofReviewPath: "\(LampSyncFolderLayout.writingReviewDirectory)/\($0)") }
-            .sorted()
+            .compactMap {
+                LampSyncFolderLayout.reviewTarget(
+                    ofPath: "\(LampSyncFolderLayout.writingReviewDirectory)/\($0)"
+                )
+            }
+            .sorted { ($0.writingID, $0.documentKey ?? "") < ($1.writingID, $1.documentKey ?? "") }
     }
 
     private static let locks = FileLocks()
