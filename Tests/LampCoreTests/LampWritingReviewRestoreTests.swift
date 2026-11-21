@@ -842,3 +842,66 @@ struct LampWritingReviewRestoreTests {
         #expect(put.review.pruning(before: Date().addingTimeInterval(60)).restorations.isEmpty)
     }
 }
+
+/// What a save proves of the restores still owed. Both apps decide this
+/// and neither had a test for it.
+struct WritingRestoreSettlementTests {
+    private typealias Standing = LampWritingReview.RestorePlan.Standing
+    private func id(_ n: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))!
+    }
+
+    @Test func apassageTheSavedTextHoldsIsWrittenDown() {
+        let a = id(1)
+        let out = LampWritingReview.RestorePlan.settlement(
+            pending: [a], inSaved: [a: .stands], inCurrent: [a: .stands]
+        )
+        #expect(out.record == [a])
+        #expect(out.waiting.isEmpty)
+    }
+
+    /// What the words cannot answer for waits. Read as gone it loses the
+    /// record; read as standing it invents one.
+    @Test func apassageTheWordsCannotAnswerForWaits() {
+        let a = id(1)
+        let out = LampWritingReview.RestorePlan.settlement(
+            pending: [a], inSaved: [a: .unknown], inCurrent: [a: .gone]
+        )
+        #expect(out.record.isEmpty)
+        #expect(out.waiting == [a])
+    }
+
+    /// A save taken before the restore was made does not hold it, but
+    /// the writing does: it waits for the save that will.
+    @Test func asaveTakenBeforeTheRestoreLeavesItWaiting() {
+        let a = id(1)
+        let out = LampWritingReview.RestorePlan.settlement(
+            pending: [a], inSaved: [a: .gone], inCurrent: [a: .stands]
+        )
+        #expect(out.waiting == [a])
+    }
+
+    /// Undone by the writer, and that is the end of it: neither written
+    /// down nor waiting for a save that will never come.
+    @Test func apassageTheWriterUndidIsNeitherRecordedNorWaited() {
+        let a = id(1)
+        let out = LampWritingReview.RestorePlan.settlement(
+            pending: [a], inSaved: [a: .gone], inCurrent: [a: .gone]
+        )
+        #expect(out.record.isEmpty)
+        #expect(out.waiting.isEmpty)
+    }
+
+    /// Several passages decided apart: one written down while another
+    /// waits, which is why they are a set rather than one answer.
+    @Test func passagesAreDecidedOneByOne() {
+        let a = id(1), b = id(2), c = id(3)
+        let out = LampWritingReview.RestorePlan.settlement(
+            pending: [a, b, c],
+            inSaved: [a: .stands, b: .unknown, c: .gone],
+            inCurrent: [a: .stands, b: .stands, c: .gone]
+        )
+        #expect(out.record == [a])
+        #expect(out.waiting == [b])
+    }
+}

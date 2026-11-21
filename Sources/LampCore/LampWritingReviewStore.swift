@@ -268,6 +268,19 @@ public struct LampWritingReviewStore: Sendable {
         Array(Set(try reviewed().map(\.writingID))).sorted()
     }
 
+    /// The server path of every record kept here.
+    ///
+    /// What a pass sends up. Both apps listed these for themselves, one
+    /// from the folder and one from the records, and a file the layout
+    /// does not name must not be sent under a path it does not have.
+    public func paths() throws -> [String] {
+        try reviewed().compactMap {
+            try? LampSyncFolderLayout.writingReviewPath(
+                writingID: $0.writingID, documentKey: $0.documentKey
+            )
+        }
+    }
+
     /// Every record kept here, each with the writing and the document it
     /// is for. A writing can have several: its prose and a document beside
     /// it are separate records in separate files.
@@ -574,5 +587,38 @@ public final class LampWritingReviewTexts: @unchecked Sendable {
 
     public func forget(_ place: LampWritingReviewPlace) {
         lock.withLock { texts[place] = nil }
+    }
+}
+
+extension LampWritingReview.RestorePlan {
+    /// What a save proves of the restores still owed, and what waits.
+    ///
+    /// `saved` is what the text just written says of each passage;
+    /// `current` what the text the writer has now says. Both come from
+    /// `standingByMark(from:in:)`.
+    ///
+    /// A passage the saved text holds is written down. One the words
+    /// cannot answer for waits — `unknown` is not `gone`, and treating
+    /// it as either loses a record or invents one. One the save does not
+    /// hold but the writing still does waits too: that save was taken
+    /// before the restore was made. A passage in neither has been undone
+    /// by the writer, and that is the end of it.
+    ///
+    /// Both apps decide this and neither had a test for it.
+    public static func settlement(
+        pending: Set<UUID>,
+        inSaved saved: [UUID: Standing],
+        inCurrent current: [UUID: Standing]
+    ) -> (record: Set<UUID>, waiting: Set<UUID>) {
+        var record: Set<UUID> = []
+        var waiting: Set<UUID> = []
+        for mark in pending {
+            if saved[mark] == .stands {
+                record.insert(mark)
+            } else if saved[mark] == .unknown || current[mark] != .gone {
+                waiting.insert(mark)
+            }
+        }
+        return (record, waiting)
     }
 }

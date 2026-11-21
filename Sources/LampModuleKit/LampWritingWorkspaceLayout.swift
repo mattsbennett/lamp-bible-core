@@ -45,6 +45,16 @@ public enum LampWritingWorkspaceLayout {
         return "\(prefix.isEmpty ? "devotional" : prefix)-\(String(hash, radix: 16))"
     }
 
+    /// The writing a workspace folder belongs to, among the ids given.
+    ///
+    /// A folder's name is its writing's id made safe and shortened with a
+    /// digest of the id after it, so it cannot be read back: the ids are
+    /// asked instead, and the one whose id makes this name is it. Both
+    /// apps needed this and each asked a different place for the ids.
+    public static func writingID(ofFolder folder: String, among ids: some Sequence<String>) -> String? {
+        ids.first { directoryName(for: $0) == folder }
+    }
+
     /// Whether a file of this name, at the top of a workspace, is one of the
     /// writer's documents: Markdown or text, not one Lamp generates, and a
     /// name every file system keeps. Judged in NFC.
