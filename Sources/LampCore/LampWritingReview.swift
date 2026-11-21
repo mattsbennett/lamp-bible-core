@@ -731,14 +731,37 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return result
     }
 
-    /// Every mark the selection touches put back, or nil where any one of
-    /// them cannot be.
+    /// What a restore of `range` would come to.
+    ///
+    /// Three answers rather than a plan or nothing, because a writer told
+    /// no is owed which no it was: a selection standing in no marked
+    /// passage at all is a different thing from one whose passage cannot be
+    /// put back, and only the record knows which.
+    public enum RestoreOutcome: Equatable, Sendable {
+        /// The selection stands in nothing the assistant changed.
+        case nothingTouched
+        /// It does, but at least one of those passages cannot be put back
+        /// exactly: typed into, partly read, or made before wordings were
+        /// kept.
+        case notExact
+        case plan(RestorePlan)
+    }
+
+    /// Every mark the selection touches put back.
     ///
     /// All of them or none: a restore cannot be made of part of a passage,
     /// the way a clear can, so a selection holding one mark that has been
     /// typed into is refused whole rather than quietly leaving it behind.
-    /// Nil, too, where two marks claim the same spaces between them, which
-    /// one restore would take twice.
+    /// Refused too where two marks claim the same spaces between them,
+    /// which one restore would take twice.
+    public func restoring(_ range: NSRange, in text: String) -> RestoreOutcome {
+        guard let plan = restorePlan(for: range, in: text) else {
+            let touched = located(in: text).contains { $0.ranges.contains { Self.touches($0, range) } }
+            return touched ? .notExact : .nothingTouched
+        }
+        return .plan(plan)
+    }
+
     public func restorePlan(for range: NSRange, in text: String) -> RestorePlan? {
         let touched = located(in: text).filter { $0.ranges.contains { Self.touches($0, range) } }
         guard !touched.isEmpty else { return nil }

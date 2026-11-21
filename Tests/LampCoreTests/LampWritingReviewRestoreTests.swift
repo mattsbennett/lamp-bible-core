@@ -142,6 +142,25 @@ struct LampWritingReviewRestoreTests {
         #expect(put.text == "Alpha stands here.\n\nBeta rests very quietly here.")
     }
 
+    /// A writer told no is owed which no it was.
+    @Test func thereAreTwoWaysToBeToldNoAndTheyAreNotTheSame() throws {
+        let old = "One two three."
+        let new = "One alpha beta three."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        // A caret standing where the assistant changed nothing.
+        #expect(review.restoring(NSRange(location: 0, length: 0), in: new) == .nothingTouched)
+        // A caret standing in the passage it changed.
+        let inside = NSRange(location: ((new as NSString).range(of: "alpha")).location + 1, length: 0)
+        guard case .plan = review.restoring(inside, in: new) else {
+            Issue.record("a caret in a marked passage offers it")
+            return
+        }
+        // The same caret once the writer has typed into that passage.
+        let typed = "One alpha mine beta three."
+        let carried = review.carryingWriterEdit(from: new, to: typed)
+        #expect(carried.restoring(inside, in: typed) == .notExact)
+    }
+
     @Test func aMarkMadeBeforeWordingsWereKeptIsNotOffered() throws {
         let old = "The quick brown fox."
         let new = "The slow red fox."
