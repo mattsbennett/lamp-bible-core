@@ -905,3 +905,52 @@ struct WritingRestoreSettlementTests {
         #expect(out.waiting == [b])
     }
 }
+
+/// A restore worked out in one spelling of a text, made in another.
+///
+/// The page writes its own Markdown: `*new*` where the file says
+/// `_new_`. A plan made in the file names ranges that mean nothing
+/// there, so the page refuses it, and a passage nobody has touched
+/// cannot be put back at all.
+struct WritingRestoreSpellingTests {
+    private let empty = LampWritingReview(writingID: "w")
+
+    private func whole(_ text: String) -> NSRange {
+        NSRange(location: 0, length: (text as NSString).length)
+    }
+
+    @Test func aplanIsCarriedIntoThePagesOwnSpelling() throws {
+        let old = "A plain word stands here."
+        let new = "A plain word stands _firmly_ here."
+        // The page's spelling of the same writing.
+        let page = "A plain word stands *firmly* here."
+
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        #expect(plan.applied(to: new) == old)
+
+        let carried = try #require(plan.carried(from: new, to: page))
+        // Applied to the page's text it gives the page's spelling of the
+        // writing before the assistant touched it.
+        #expect(carried.applied(to: page) == old)
+    }
+
+    @Test func atextTheOtherSpellingBrokeUpIsRefused() throws {
+        let old = "One two three."
+        let new = "One alpha beta three."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        // A spelling that splits the marked passage with words of its
+        // own: there is no one place for it, and half a plan put back
+        // would write into the wrong words.
+        #expect(plan.carried(from: new, to: "One alpha AND beta three.") == nil)
+    }
+
+    @Test func thesameSpellingIsTheSamePlan() throws {
+        let old = "One two."
+        let new = "One three."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        #expect(plan.carried(from: new, to: new)?.edits.count == plan.edits.count)
+    }
+}

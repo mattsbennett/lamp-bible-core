@@ -2185,10 +2185,47 @@ struct LampTextAlignment {
         return result
     }
 
+    /// Whether two texts are the same words differently written: their
+    /// letters and digits, in order, ignoring everything else.
+    static func sameWords(_ one: String, _ other: String) -> Bool {
+        func letters(_ text: String) -> String {
+            String(text.lowercased().unicodeScalars.filter {
+                CharacterSet.alphanumerics.contains($0)
+            }.map(Character.init))
+        }
+        return letters(one) == letters(other)
+    }
+
     /// At most a short word and the spaces beside it, on one line.
     private static func isSmall(_ range: NSRange, in text: NSString) -> Bool {
         guard range.length <= 4 else { return false }
         return !text.substring(with: range).contains { $0.isNewline }
+    }
+
+    /// Where a position in the old text stands in the new.
+    ///
+    /// Inside a stretch that stayed the same, the same distance into it.
+    /// At the edge of one that changed, that edge — which is what makes
+    /// it answerable for a passage whose own words are spelled another
+    /// way: the edges of such a passage are where it meets text that did
+    /// not change, even when everything between them did.
+    ///
+    /// Nil for a position inside a changed stretch, where the new text
+    /// has no one place that is it.
+    func place(of position: Int) -> Int? {
+        for segment in segments {
+            if segment.isEqual, position >= segment.old.location,
+               position <= NSMaxRange(segment.old) {
+                return segment.new.location + (position - segment.old.location)
+            }
+            if !segment.isEqual, position == segment.old.location {
+                return segment.new.location
+            }
+            if !segment.isEqual, position == NSMaxRange(segment.old) {
+                return NSMaxRange(segment.new)
+            }
+        }
+        return nil
     }
 
     /// What of `range` of the old text survives in the new, as pieces: the
@@ -2250,5 +2287,60 @@ struct LampTextAlignment {
         }
         flush()
         return tokens
+    }
+}
+
+extension LampWritingReview.RestorePlan {
+    /// The same restore worked out in another spelling of the same text.
+    ///
+    /// A surface that writes its own Markdown holds the writing in its
+    /// own hand: `_new_` where the file says `*new*`, a link folded
+    /// another way. A plan made in the file's text names ranges that
+    /// mean nothing there, and the surface rightly refuses to make an
+    /// edit against text it is not holding — so a passage nobody has
+    /// touched cannot be put back at all.
+    ///
+    /// Carried through the alignment between the two spellings. Nil
+    /// unless every edit lands whole and in order: a plan half carried
+    /// would put words back in the wrong place, which is worse than
+    /// saying it cannot be done.
+    public func carried(from: String, to: String) -> LampWritingReview.RestorePlan? {
+        guard from != to else { return self }
+        // Two spellings of the same words, and nothing else. The edges
+        // of a passage are carried and whatever lies between them is
+        // taken to be it, which is right for `_firmly_` against
+        // `*firmly*` and quite wrong for a text with a word more in it:
+        // the restore would take that word out with the rest. Letters
+        // and digits alone, so the markup either hand uses does not
+        // count and the words must match exactly.
+        guard LampTextAlignment.sameWords(from, to) else { return nil }
+        let alignment = LampTextAlignment(from: from, to: to, absorbingSmallEqualities: false)
+        let target = to as NSString
+        var moved: [LampWritingReview.Edit] = []
+        // The edges, not the words between them. What differs between
+        // two spellings is usually *inside* a marked passage — `_firmly_`
+        // for `*firmly*` — so asking for the words to match can never
+        // succeed where it is most needed. The passage is whatever
+        // stands between the places its edges moved to, and what goes
+        // back in its stead is the wording either spelling began with.
+        for edit in edits {
+            guard let start = alignment.place(of: edit.range.location),
+                  let end = alignment.place(of: NSMaxRange(edit.range)),
+                  end >= start, end <= target.length
+            else { return nil }
+            moved.append(LampWritingReview.Edit(
+                markID: edit.markID,
+                range: NSRange(location: start, length: end - start),
+                replacement: edit.replacement,
+                discarded: edit.discarded, unread: edit.unread
+            ))
+        }
+        // In order and apart, as a plan's edits must be to apply.
+        let ordered = moved.sorted { $0.range.location < $1.range.location }
+        for (earlier, later) in zip(ordered, ordered.dropFirst())
+        where NSMaxRange(earlier.range) > later.range.location {
+            return nil
+        }
+        return LampWritingReview.RestorePlan(edits: moved)
     }
 }

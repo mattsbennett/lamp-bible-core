@@ -435,3 +435,49 @@ struct WritingDocumentReviewFateTimeTests {
         ) == .deleted(at: 200))
     }
 }
+
+/// Where a marker lands in Markdown that is not plain prose.
+///
+/// `markedMarkdown` puts a marker at each edge of a marked passage, on
+/// the stated grounds that a private-use character is a letter to every
+/// Markdown rule. A letter is exactly the problem: inside a link's
+/// address it is part of the address, and between the stars of an
+/// emphasis run it stops the run being one.
+struct WritingMarkedMarkdownPlacementTests {
+    private let start = LampWritingReview.markStart
+    private let end = LampWritingReview.markEnd
+
+    private func marked(_ old: String, _ new: String) -> String? {
+        LampWritingReview(writingID: "w")
+            .markingAssistantChange(from: old, to: new)
+            .markedMarkdown(in: new)
+    }
+
+    @Test func amarkerCanLandInsideALinksAddress() throws {
+        let old = "See the note."
+        let new = "See [the note](https://example.com/a)."
+        let out = try #require(marked(old, new))
+        let address = try #require(out.range(of: "https://example.com/a"))
+        let inside = out[address].contains(start) || out[address].contains(end)
+        #expect(
+            !inside,
+            """
+            A marker inside the address makes it a different address. \
+            Marked Markdown: \(out.debugDescription)
+            """
+        )
+    }
+
+    @Test func amarkerCanSplitAnEmphasisRun() throws {
+        let old = "A plain word."
+        let new = "A *stressed* word."
+        let out = try #require(marked(old, new))
+        #expect(
+            !out.contains("*\(start)") && !out.contains("\(end)*"),
+            """
+            A marker between the star and the word stops the pair reading as \
+            emphasis, so the page draws the stars. Marked Markdown: \(out.debugDescription)
+            """
+        )
+    }
+}
