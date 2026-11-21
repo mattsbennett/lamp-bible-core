@@ -491,3 +491,88 @@ extension LampWritingDocumentReview {
         return .deleted(at: max(asked ?? now, now))
     }
 }
+
+extension LampWritingDocumentReview {
+    /// Which writing and which document a review file at `path` is for.
+    ///
+    /// The writing's own prose answers with a nil document. A document's
+    /// file answers with its name, which is in the file's name unless
+    /// that name was too long to keep — then only the record inside has
+    /// it, and `record` is asked for.
+    ///
+    /// Whatever the name comes from, it must be the name that makes this
+    /// file's name. Taking it from the record alone is the record
+    /// agreeing with itself: a file put at another document's path would
+    /// be read as the document it names and merged into that one's
+    /// marks. Both apps needed this and both wrote it wrong once.
+    public static func place(
+        of path: String, record: @autoclosure () -> LampWritingReview?
+    ) -> (writingID: String, document: String?)? {
+        guard let target = LampSyncFolderLayout.reviewTarget(ofPath: path) else { return nil }
+        guard let key = target.documentKey else { return (target.writingID, nil) }
+        if let name = LampSyncFolderLayout.documentName(fromReviewKey: key) {
+            return (target.writingID, name)
+        }
+        guard let name = record()?.document,
+              LampSyncFolderLayout.reviewDocumentKey(
+                  writingID: target.writingID, document: name
+              ) == key
+        else { return nil }
+        return (target.writingID, name)
+    }
+}
+
+/// What a set of review marks is for: a writing, and one of the
+/// documents beside it or its own prose.
+///
+/// A type rather than the two joined into a string. Joined, a writing
+/// `"w"` with a document `"a.md"` and a writing `"wa"` with `".md"` are
+/// one key, and one document's texts would carry another's marks.
+public struct LampWritingReviewPlace: Hashable, Sendable {
+    public let writingID: String
+    /// Nil for the writing's own prose.
+    public let document: String?
+
+    public init(writingID: String, document: String? = nil) {
+        self.writingID = writingID
+        self.document = document
+    }
+}
+
+/// The texts of a writing, or of one document beside it, that a device
+/// has held.
+///
+/// A mark is anchored in the words it was made of, so carrying it to a
+/// text nobody here has seen needs the texts in between. Both apps keep
+/// these and both kept them the same way; this is that, once.
+///
+/// Not persisted, by design. These exist to carry marks across edits
+/// this run has seen; a text from a run that has ended is a text the
+/// record has already been carried through.
+public final class LampWritingReviewTexts: @unchecked Sendable {
+    /// How many of each are kept: enough to span a clear and the saves
+    /// after it, few enough that a long manuscript costs little.
+    public static let kept = 24
+
+    private let lock = NSLock()
+    private var texts: [LampWritingReviewPlace: [String]] = [:]
+
+    public init() {}
+
+    public func remember(_ text: String, for place: LampWritingReviewPlace) {
+        lock.withLock {
+            var held = texts[place, default: []]
+            guard held.last != text else { return }
+            held.append(text)
+            texts[place] = Array(held.suffix(Self.kept))
+        }
+    }
+
+    public func known(for place: LampWritingReviewPlace) -> [String] {
+        lock.withLock { texts[place, default: []] }
+    }
+
+    public func forget(_ place: LampWritingReviewPlace) {
+        lock.withLock { texts[place] = nil }
+    }
+}

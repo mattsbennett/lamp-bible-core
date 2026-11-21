@@ -370,3 +370,41 @@ struct WritingDocumentReviewFateTests {
         ) == .none)
     }
 }
+
+/// Which writing and document a review file is for, which both apps
+/// worked out for themselves and both got wrong once.
+struct WritingDocumentReviewPlaceTests {
+    private let id = "exhortation-2026-11-21"
+
+    @Test func theprosesFileAnswersWithNoDocument() throws {
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: id)
+        let place = try #require(LampWritingDocumentReview.place(of: path, record: nil))
+        #expect(place.writingID == id)
+        #expect(place.document == nil)
+    }
+
+    @Test func adocumentsFileAnswersWithItsName() throws {
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: id, document: "outline.md")
+        let place = try #require(LampWritingDocumentReview.place(of: path, record: nil))
+        #expect(place.document == "outline.md")
+    }
+
+    /// A name too long to keep is a digest, so the record is asked — and
+    /// then checked, or a file put at another document's path would be
+    /// read as the document it names rather than refused.
+    @Test func anameFromTheRecordMustBeTheNameThatMakesThisFilesName() throws {
+        let long = String(repeating: "\u{5D0}", count: 90) + ".md"
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: id, document: long)
+
+        #expect(LampWritingDocumentReview.place(of: path, record: nil) == nil)
+        let its = LampWritingReview(writingID: id, document: long)
+        #expect(LampWritingDocumentReview.place(of: path, record: its)?.document == long)
+        // Another document's record at this path is refused.
+        let another = LampWritingReview(writingID: id, document: "notes.md")
+        #expect(LampWritingDocumentReview.place(of: path, record: another) == nil)
+    }
+
+    @Test func apathThatIsNoReviewFileAnswersWithNothing() {
+        #expect(LampWritingDocumentReview.place(of: "Workspaces/Writing/x/y.md", record: nil) == nil)
+    }
+}
