@@ -582,6 +582,22 @@ struct LampWritingReviewRestoreTests {
         #expect(Set(after.retired.map(\.id)).count == after.retired.count)
     }
 
+    /// What became of a restore, asked of the text rather than of a
+    /// generation the writer can undo without touching.
+    @Test func whetherARestoreStandsIsAskedOfTheWordsThemselves() throws {
+        let old = "The quick brown fox."
+        let new = "The slow red fox."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        // Put back, and still there after the writer typed around it.
+        #expect(review.restoreStands(plan, in: old))
+        #expect(review.restoreStands(plan, in: "The quick brown fox jumps."))
+        // Undone, or never made: the assistant's words are back, and so
+        // is the mark.
+        #expect(!review.restoreStands(plan, in: new))
+        #expect(!review.restoreStands(plan, in: "Before. The slow red fox."))
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

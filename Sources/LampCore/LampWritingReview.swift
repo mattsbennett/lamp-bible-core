@@ -981,6 +981,26 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         })
     }
 
+    /// Whether `text` still holds what a restore put back.
+    ///
+    /// Asked of a text that has been through other hands since — saved,
+    /// typed into, written out by a surface in its own Markdown — where
+    /// nothing has kept track of what became of the restore. The answer
+    /// is the passages themselves: a restore takes the assistant's words
+    /// out, so while none of the marks it put back can be found, they are
+    /// gone. Undo them, or roll them back, and the words return, and so
+    /// do the marks.
+    ///
+    /// This is what a host should ask before recording a restore against
+    /// a text it saved. Positions and generations cannot answer it: the
+    /// writer can undo without changing either.
+    public func restoreStands(_ plan: RestorePlan, in text: String) -> Bool {
+        guard !plan.edits.isEmpty else { return false }
+        let put = Set(plan.marks)
+        let standing = Set(located(in: text).map(\.id))
+        return put.isDisjoint(with: standing)
+    }
+
     /// The record after a plan was applied, the writing going from `text` to
     /// `restored`.
     ///
