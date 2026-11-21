@@ -1628,51 +1628,6 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     // MARK: Internals
 
-    /// What survives of a marked passage, where it is still that passage
-    /// rather than scraps of it.
-    ///
-    /// Carrying asks the alignment for every run that stayed the same,
-    /// because placing a position wants all of them. For a mark that is
-    /// too much: a writer who rewrites a marked sentence leaves a few
-    /// characters standing by coincidence — "The" at the start, the full
-    /// stop at the end — and the mark survives as those, so the writer's
-    /// own words are drawn as the assistant's, in scraps, for ever.
-    ///
-    /// What tells that apart from an honest survival is not how much is
-    /// left but how thinly it is spread. A writer who deletes half of a
-    /// marked sentence leaves the rest standing together, and it is still
-    /// the assistant's; a writer who types a word into the middle of one
-    /// leaves two runs with their own word between them, and it still is.
-    /// A rewrite leaves a little, spread across a sentence of the
-    /// writer's own. So the runs must fill at least half of the span they
-    /// are spread over; under that, none of it is the mark, and the
-    /// caller looks for the whole passage standing elsewhere exactly as
-    /// it does when nothing survived.
-    ///
-    /// A run of no length is dropped where anything was marked: it cannot
-    /// be drawn. Where nothing was — a mark on the point a passage was
-    /// deleted from — that run is the mark, and it is kept.
-    static func enough(of marked: NSRange, in survived: [NSRange]) -> [NSRange] {
-        guard marked.length > 0 else { return survived }
-        let drawable = survived.filter { $0.length > 0 }
-        guard let first = drawable.first, let last = drawable.last else { return [] }
-        let span = NSMaxRange(last) - first.location
-        let total = drawable.reduce(0) { $0 + $1.length }
-        return total * 2 >= span ? drawable : []
-    }
-
-    /// The same judgement over everything left of one mark, however many
-    /// pieces it was in: the runs must fill half of the span they are
-    /// spread over, measured from the first to the last.
-    static func enough(ofTheMark survivors: [NSRange]) -> [NSRange] {
-        let ordered = survivors.filter { $0.length > 0 }.sorted { $0.location < $1.location }
-        guard let first = ordered.first, let last = ordered.last else { return [] }
-        return enough(
-            of: NSRange(location: first.location, length: NSMaxRange(last) - first.location),
-            in: ordered
-        )
-    }
-
     /// Every mark carried from `old` to `new`, under its own id: the words
     /// of it that survive, a raised version where they moved or changed, and
     /// retired where none survive.
@@ -1717,29 +1672,21 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             var result: [Piece] = []
             var changed = false
             var movedToCopy = false
-            /// Every run that was carried into this text, across all of
-            /// the mark's pieces. The whole mark is what the writer
-            /// sees, so what is left of it is judged together rather
-            /// than piece by piece.
-            var survivors: [NSRange] = []
-            /// Which of the results were already here and were not
-            /// carried at all. They are not scraps of anything, and a
-            /// mark keeps them however little else is left.
-            var standing: [Int] = []
+
             for piece in pieces {
                 guard piece.anchoredIn != here, let (index, range) = resolved(piece) else {
-                    // Already in this text, or nowhere to carry it from:
-                    // kept as it is, and no evidence either way about a
-                    // rewrite, since nothing was carried.
                     result.append(piece)
-                    standing.append(result.count - 1)
                     continue
                 }
                 var survived = Self.coalesced(
                     alignment(index).carried(range).map { Self.trimmed($0, in: targetText) },
                     joiningAcross: nil
                 )
-                if range.length > 0 { survivors += survived }
+                // A run of no length cannot be drawn, and is dropped
+                // where anything was marked. Where nothing was — a mark
+                // on the point a passage was deleted from — that run is
+                // the mark, and it is kept.
+                if range.length > 0 { survived = survived.filter { $0.length > 0 } }
                 if survived.isEmpty, let kept = Self.survivingCopy(of: range, in: sources[index] as NSString,
                                                                    through: alignment(index), to: targetText) {
                     survived = [kept]
@@ -1757,24 +1704,6 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                     result += moved
                     changed = true
                 }
-            }
-            // Scraps of a rewritten passage are not the mark, judged
-            // across every piece rather than one at a time: an earlier
-            // edit splits a mark in two, and a rewrite then leaves "The"
-            // whole in one piece and "." whole in the other, each
-            // filling its own little span. A mark an ordinary autosave
-            // had split survived a rewrite that would otherwise have
-            // retired it.
-            //
-            // Only what was carried is weighed, and only what was
-            // carried is dropped. A piece already standing in this text
-            // is not a scrap of anything — a mark whose middle is here
-            // and whose ends were carried away would otherwise be
-            // measured by its ends and retired whole, taking the middle
-            // the writer can plainly see with it.
-            if !survivors.isEmpty, Self.enough(ofTheMark: survivors).isEmpty, !movedToCopy {
-                let kept = standing.map { result[$0] }
-                return (kept, true, false)
             }
             return (result, changed, movedToCopy)
         }

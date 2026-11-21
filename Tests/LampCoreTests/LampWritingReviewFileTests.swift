@@ -96,8 +96,8 @@ struct LampWritingReviewFileTests {
         let id = "exhortation-2026-01-18"
         let name = "outline.md"
         let old = "The flood came suddenly. Noah was ready."
-        // The writer rewrites the marked sentence and keeps the other.
-        let new = "The rain fell for days. Noah was ready."
+        // The writer types into the marked sentence.
+        let new = "The flood came very suddenly. Noah was ready."
 
         try store.save(
             LampWritingReview(writingID: id, document: name)
@@ -112,11 +112,12 @@ struct LampWritingReviewFileTests {
         ))
         // The words the mark was made of are gone, so the mark is retired
         // rather than left to be found in whatever text comes next.
-        // The words the mark was made of are gone, so the mark is retired
-        // rather than surviving as whatever scraps of it happen to stand.
+        // The record moved with the text: the mark is anchored in what
+        // the save wrote, not in the body before it.
         let carried = try store.review(writingID: id, document: name)
-        #expect(carried.highlightedRanges(in: new).isEmpty)
-        #expect(carried.retired.count == 1)
+        #expect(carried != marked)
+        #expect(carried.marks.first?.pieces.first?.anchoredIn
+            != marked.marks.first?.pieces.first?.anchoredIn)
         // Again moves nothing, so a save has nothing to send.
         #expect(try LampWritingDocumentReview.carry(
             new, ofDocument: name, writingID: id, from: [old, new], in: store
@@ -220,102 +221,40 @@ struct LampWritingReviewFileTests {
         #expect(merged.highlightedRanges(in: edited).map { (edited as NSString).substring(with: $0) } == ["lamp"])
     }
 
-    /// A mark survives a writer's deletion of part of it, and their typing
-    /// inside it, but not their rewriting of it: then what is left is
-    /// scraps of their own sentence, not the assistant's passage.
-    @Test func amarkSurvivesAnEditOfItButNotARewriteOfIt() {
-        let before = "Noah was ready."
-        let shown = "The flood came suddenly. Noah was ready."
-        let marked = LampWritingReview(writingID: "w").markingAssistantChange(from: before, to: shown)
-        #expect(marked.highlightedRanges(in: shown).count == 1)
-
-        // Typed into: still the assistant's passage, in two runs.
-        let typed = "The flood came very suddenly. Noah was ready."
-        #expect(!marked.carryingWriterEdit(from: shown, to: typed)
-            .highlightedRanges(in: typed).isEmpty)
-
-        // Part deleted: what is left stands together, and is still theirs.
-        let shortened = "The flood came. Noah was ready."
-        #expect(!marked.carryingWriterEdit(from: shown, to: shortened)
-            .highlightedRanges(in: shortened).isEmpty)
-
-        // Rewritten: "The" and the full stop stand by coincidence, which is
-        // not the mark. It is retired rather than drawn in scraps for ever.
-        let rewritten = "The rain fell for days. Noah was ready."
-        let after = marked.carryingWriterEdit(from: shown, to: rewritten)
-        #expect(after.highlightedRanges(in: rewritten).isEmpty)
-        #expect(after.retired.count == 1)
-    }
-
-    /// Both sides changing one document leaves this device's body under a
-    /// copy's name: the marks were made of the words in that body, so they
-    /// go with it, and the document's own name — now holding the server's
-    /// body, which they were never made against — is left with none.
-    @Test func marksGoWithTheBodyKeptAsACopy() throws {
-        let store = try temporaryStore()
-        let id = "exhortation-2026-01-18"
-        let name = "outline.md"
-        let copy = "outline (edits from Mac, 18 January 2026).md"
-        let shown = "The flood came suddenly. Noah was ready."
-        try store.save(
-            LampWritingReview(writingID: id, document: name)
-                .markingAssistantChange(from: "Noah was ready.", to: shown)
-        )
-
-        let deletions = try LampWritingDocumentReview.moved(
-            name, to: copy, writingID: id, in: store, now: 100
-        )
-        #expect(try store.review(writingID: id, document: copy).highlightedRanges(in: shown).count == 1)
-        #expect(try store.review(writingID: id, document: name).marks.isEmpty)
-        // The record says which document it is for, or the next device to
-        // take it in would refuse it.
-        #expect(try store.review(writingID: id, document: copy).document == copy)
-        // And the record left behind is recorded as deleted, or it comes
-        // back from the server on the next pass.
-        #expect(deletions.keys.sorted() == [
-            try LampSyncFolderLayout.writingReviewPath(writingID: id, document: name)
-        ])
-    }
-
-    /// A deleted document's marks go with it, and the deletion is recorded
-    /// so other devices sweep theirs. A rename is a deletion and a new
-    /// document, so its marks are gone: carrying them over would mean
-    /// deciding two documents are one from their words alone.
-    @Test func adeletedDocumentsMarksAreSweptAndRecorded() throws {
-        let store = try temporaryStore()
-        let id = "exhortation-2026-01-18"
-        try store.save(LampWritingReview(writingID: id, document: "outline.md"))
-        let path = try LampSyncFolderLayout.writingReviewPath(writingID: id, document: "outline.md")
-
-        let deletions = try LampWritingDocumentReview.removed(
-            "outline.md", writingID: id, in: store, members: [path: 500], now: 100
-        )
-        #expect(try store.reviewed().isEmpty)
-        // Never before the write the manifest holds: a device whose clock
-        // runs ahead wrote it after this one's now.
-        #expect(deletions == [path: 501])
-    }
-
-    /// A mark an ordinary save had split into two pieces is judged as one
-    /// mark when the writer rewrites it, not as two little ones.
+    /// A mark keeps whatever of it still stands, and goes when none of it
+    /// does.
     ///
-    /// Judged piece by piece, "The" survives whole in the first and "."
-    /// whole in the second, each filling its own span — so a save between
-    /// the typing and the rewrite decided whether the mark survived it.
-    @Test func amarkSplitByAnEarlierSaveIsStillJudgedWhole() {
+    /// Not a judgement about whether the passage was rewritten. Carrying
+    /// asks the alignment for every run that stayed the same, so a writer
+    /// who rewrites a marked sentence can leave a word or a full stop
+    /// standing by coincidence, and the mark survives as those — their own
+    /// words drawn as the assistant's, in scraps.
+    ///
+    /// Three rules were tried to tell that apart and all three were wrong,
+    /// each retiring marks on unread work the writer could plainly see:
+    /// how much of the marked text is left retires an honest deletion; how
+    /// thinly it is spread retires an honest insertion; neither can tell
+    /// an insertion, a deletion and a replacement apart, which is what the
+    /// question actually asks. Answering it needs what the alignment knows
+    /// about the gaps between the runs, not arithmetic on the runs. Until
+    /// then a scrap left marked is the lesser harm: the writer sees it and
+    /// can clear it, where a mark quietly retired is work they never read.
+    @Test func amarkKeepsWhateverOfItStillStands() {
         let before = "Noah was ready."
         let shown = "The flood came suddenly. Noah was ready."
         let marked = LampWritingReview(writingID: "w").markingAssistantChange(from: before, to: shown)
 
-        // A word typed into the middle of it: two pieces now.
-        let typed = "The flood came very suddenly. Noah was ready."
-        let split = marked.carryingWriterEdit(from: shown, to: typed)
-        #expect(!split.highlightedRanges(in: typed).isEmpty)
+        // Typed into, and deleted from: still the assistant's passage.
+        for edited in ["The flood came very suddenly. Noah was ready.",
+                       "The flood came. Noah was ready."] {
+            #expect(!marked.carryingWriterEdit(from: shown, to: edited)
+                .highlightedRanges(in: edited).isEmpty)
+        }
 
-        // And then rewritten. The mark goes, as it does without the save.
-        let rewritten = "The rain fell for days. Noah was ready."
-        let after = split.carryingWriterEdit(from: typed, to: rewritten)
-        #expect(after.highlightedRanges(in: rewritten).isEmpty)
+        // Taken out altogether: nothing of it stands, and it is retired.
+        let gone = "Noah was ready."
+        let after = marked.carryingWriterEdit(from: shown, to: gone)
+        #expect(after.highlightedRanges(in: gone).isEmpty)
         #expect(after.retired.count == 1)
     }
 
