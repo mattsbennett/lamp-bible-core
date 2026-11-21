@@ -516,8 +516,11 @@ struct LampWritingReviewRestoreTests {
             let source = text as NSString
             return put.highlightedRanges(in: text).first.map { source.substring(with: $0) }
         }
-        // The same letters beginning a longer word are not those words.
+        // The same letters beginning a longer word are not those words,
+        // whether they are spelled as the plan had them or not.
         #expect(found("_new_", in: "newspaper") == nil)
+        #expect(found("new", in: "newspaper") == nil)
+        #expect(found("new", in: "new paper") == "new")
         // A list item comes back in the page's own markers, and stops at
         // the end of its own block rather than taking the next one's.
         #expect(found("*    foo", in: "- foo\n\n- bar") == "- foo")

@@ -1028,7 +1028,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         guard let location, location >= 0 else { return nil }
         let length = (words as NSString).length
         let exact = NSRange(location: location, length: length)
-        if NSMaxRange(exact) <= text.length, text.substring(with: exact) == words { return exact }
+        if NSMaxRange(exact) <= text.length, text.substring(with: exact) == words,
+           !touchesAWord(before: exact.location, in: text),
+           !touchesAWord(at: NSMaxRange(exact), in: text) {
+            return exact
+        }
         let wanted = wordsOf(words)
         guard !wanted.isEmpty else { return nil }
         // The markup around the same words can be a few characters longer
