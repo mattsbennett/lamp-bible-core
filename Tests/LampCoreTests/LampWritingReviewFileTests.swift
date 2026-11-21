@@ -301,3 +301,72 @@ struct LampWritingReviewFileTests {
         #expect(LampWritingReviewStore.deletedWritings(in: ledger) == ["gone"])
     }
 }
+
+/// When a document's review record goes with it, which the Mac got wrong
+/// three times before this was one rule.
+struct WritingDocumentReviewFateTests {
+    private typealias Fate = LampWritingDocumentReview.Fate
+
+    /// Absence is not deletion. A device whose document upload failed
+    /// while its review upload succeeded leaves a record the library
+    /// names and a document it does not — and another device must not
+    /// read that as the document having been deleted.
+    @Test func arecordIsNotSweptBecauseItsDocumentIsNotUploadedYet() {
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: nil, document: nil, written: 100, asked: nil, now: 500
+        ) == .none)
+    }
+
+    /// The document is here, so its marks are its own — and a deletion
+    /// asked for earlier is taken back.
+    @Test func adocumentThatIsHereKeepsItsMarksAndCancelsAnyDeletion() {
+        #expect(LampWritingDocumentReview.fate(
+            held: true, deletedHere: nil, document: nil, written: nil, asked: nil, now: 500
+        ) == .none)
+        #expect(LampWritingDocumentReview.fate(
+            held: true, deletedHere: (at: 200, revision: "r1"),
+            document: nil, written: nil, asked: 200, now: 500
+        ) == .cancelled)
+    }
+
+    /// A deletion made here stands, and takes the marks with it.
+    @Test func adeletionMadeHereTakesTheMarksWithIt() {
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: (at: 200, revision: "r1"),
+            document: (revision: "r1", isMember: true), written: 100, asked: nil, now: 500
+        ) == .deleted(at: 200))
+    }
+
+    /// Unless another device saved the document since: then the document
+    /// comes back, and its marks must not have been swept out from under
+    /// it. This is the case that cost the marks of a live document twice.
+    @Test func adeletionThatAnotherDevicesSaveBeatsTakesNothing() {
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: (at: 200, revision: "r1"),
+            document: (revision: "r2", isMember: true), written: 300, asked: nil, now: 500
+        ) == .none)
+        // And one already asked for is taken back rather than left to win.
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: (at: 200, revision: "r1"),
+            document: (revision: "r2", isMember: true), written: 300, asked: 200, now: 500
+        ) == .cancelled)
+    }
+
+    /// The library naming a document it no longer holds is the one case
+    /// where absence is evidence: it let the document go.
+    @Test func thelibraryLettingADocumentGoTakesItsMarks() {
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: nil,
+            document: (revision: "r1", isMember: false), written: 100, asked: nil, now: 500
+        ) == .deleted(at: 500))
+    }
+
+    /// A document alive on the server that this device has not fetched
+    /// yet keeps its marks: nothing here says anything about it.
+    @Test func adocumentNotFetchedYetKeepsItsMarks() {
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: nil,
+            document: (revision: "r1", isMember: true), written: 100, asked: nil, now: 500
+        ) == .none)
+    }
+}

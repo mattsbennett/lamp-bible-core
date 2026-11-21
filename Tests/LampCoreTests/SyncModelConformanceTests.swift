@@ -104,7 +104,7 @@ struct SyncModelConformanceTests {
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
         "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain", "recordsAdeletion",
-        "reviewWording", "reviewRouting",
+        "reviewWording", "reviewRouting", "reviewFate",
         "deletionNotCarriedOut", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
@@ -1176,6 +1176,37 @@ struct SyncModelConformanceTests {
             let clearance = merged.retired.contains { $0.id == id(1) }
                 ? 0 : merged.clearances.first { $0.id == id(10) }?.version ?? 0
             return code(merged, 1) == f[6] && code(merged, 2) == f[7] && String(clearance) == f[8]
+        }
+    }
+
+    /// What becomes of a document's review record, for every shape its
+    /// place can take.
+    ///
+    /// The Mac answered this three times and was wrong three times, each
+    /// one costing a live document every mark on it. It is one rule in
+    /// core now, and this holds it to the model.
+    @Test func reviewFate() throws {
+        func time(_ f: String) -> Int64? { f == "-" ? nil : Int64(f) }
+        try conform("reviewFate") { f in
+            let deletedHere = time(f[1]).map { (at: $0, revision: f[2] == "true" ? "r1" : "r2") }
+            let document = f[3] == "true"
+                ? (revision: "r1", isMember: f[4] == "true")
+                : nil
+            let fate = LampWritingDocumentReview.fate(
+                held: f[0] == "true",
+                deletedHere: deletedHere,
+                document: document,
+                written: time(f[5]),
+                asked: time(f[6]),
+                now: 500
+            )
+            let name: String
+            switch fate {
+            case .deleted(let at): name = "deleted:\(at)"
+            case .cancelled: name = "cancelled"
+            case .none: name = "none"
+            }
+            return name == f[7]
         }
     }
 

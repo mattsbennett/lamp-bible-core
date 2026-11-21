@@ -3791,6 +3791,73 @@ theorem arecordOfThisPlaceMergesAsBefore (here : ReviewTarget) (a b : Review) :
     takeInReview here here a b = some (mergeReview a b) := by
   simp [takeInReview]
 
+/-- What a pass does with a document's review record.
+
+A record belongs to its document and goes when the document goes.
+Knowing when that has happened is the difficulty: a device that has no
+document may never have had one, may have deleted it, or may simply not
+have fetched it yet, and the library naming no document means both
+"deleted" and "not published yet". Absence is never taken for deletion.
+
+Three ways of getting this wrong each cost a live document every mark on
+it: a deletion dated now beat another device's later save; a deletion
+dated from the document's own deletion still beat a record older than
+both, since the two files are dated apart; and sweeping a record whose
+document was merely absent swept the records of documents whose upload
+had failed while their record's upload had not. -/
+inductive ReviewFate where
+  | deleted (at_ : Nat)
+  | cancelled
+  | none
+  deriving DecidableEq
+
+/-- What this device holds and what the library says. `written` is when
+the library last saw the record; `asked` a deletion of it already
+queued; `deletedHere` this device's own deletion of the document, with
+whether the library's copy is the revision that deletion removed. -/
+structure ReviewPlace where
+  held : Bool
+  deletedHere : Option Nat
+  deletedRevisionStands : Bool
+  documentNamed : Bool
+  documentIsMember : Bool
+  written : Option Nat
+  asked : Option Nat
+
+def reviewFate (p : ReviewPlace) (now : Nat) : ReviewFate :=
+  if p.held then (if p.asked.isSome then .cancelled else .none)
+  else match p.deletedHere with
+    | some at_ =>
+      let stands :=
+        if p.documentNamed && p.documentIsMember then
+          p.deletedRevisionStands || (match p.written with | some w => w ≤ at_ | none => true)
+        else true
+      if stands then .deleted (max (p.asked.getD at_) at_)
+      else (if p.asked.isSome then .cancelled else .none)
+    | none =>
+      if !p.documentNamed then
+        (match p.asked with | some a => .deleted a | none => .none)
+      else if p.documentIsMember then .none
+      else .deleted (max (p.asked.getD now) now)
+
+/-- A document this device holds never loses its marks, however a
+deletion of it came to be queued. -/
+theorem adocumentThatIsHereNeverLosesItsMarks (p : ReviewPlace) (now : Nat) (h : p.held = true) :
+    reviewFate p now = .cancelled ∨ reviewFate p now = .none := by
+  simp [reviewFate, h]
+  by_cases hasked : p.asked = Option.none
+  · exact Or.inr hasked
+  · exact Or.inl hasked
+
+/-- A record is never deleted merely because nothing names its document:
+that is also what "not published yet" looks like. Only a deletion
+already asked for goes up, and something asked for it. -/
+theorem absenceAloneNeverDeletesARecord (p : ReviewPlace) (now : Nat)
+    (held : p.held = false) (mine : p.deletedHere = Option.none)
+    (named : p.documentNamed = false) (asked : p.asked = Option.none) :
+    reviewFate p now = .none := by
+  simp [reviewFate, held, mine, named, asked]
+
 def Review.shows (r : Review) (i : Nat) : Bool := Decidable.decide (0 < r.version i) && !r.retired i
 
 /-- Whether the writer can be offered the assistant's wording back: only
@@ -5757,6 +5824,33 @@ def reviewMarkCode (r : Review) (i : Nat) : String :=
         [toString hw, toString hd, toString tw, toString td,
          toString taken.isSome,
          toString (match taken with | some r => r.shows 1 | none => false)]
+
+def reviewFateName : ReviewFate → String
+  | .deleted at_ => s!"deleted:{at_}"
+  | .cancelled => "cancelled"
+  | .none => "none"
+
+#eval show IO Unit from do
+  -- Every shape a record's place can take: what becomes of it.
+  for held in [false, true] do
+    for mine in [Option.none, some 200] do
+      for stands in [false, true] do
+        for named in [false, true] do
+          for member in [false, true] do
+            for written in [Option.none, some 100, some 300] do
+              for asked in [Option.none, some 200] do
+                if !named && member then continue
+                let place : ReviewPlace :=
+                  { held := held, deletedHere := mine, deletedRevisionStands := stands,
+                    documentNamed := named, documentIsMember := member,
+                    written := written, asked := asked }
+                IO.println <| conformanceLine "reviewFate"
+                  [toString held,
+                   (match mine with | some v => toString v | none => "-"),
+                   toString stands, toString named, toString member,
+                   (match written with | some v => toString v | none => "-"),
+                   (match asked with | some v => toString v | none => "-"),
+                   reviewFateName (reviewFate place 500)]
 
 def documentDecisionName : DocumentDecision → String
   | .keep => "keep" | .take => "take" | .takeKeepingHeld => "takeKeepingHeld"

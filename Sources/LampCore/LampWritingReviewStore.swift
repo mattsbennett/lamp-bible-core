@@ -414,3 +414,80 @@ public enum LampWritingDocumentReview {
         return [path: members[path].map { max(now, $0 + 1) } ?? now]
     }
 }
+
+extension LampWritingDocumentReview {
+    /// What a pass should do with each document's review record: delete
+    /// it and tell the other devices, cancel a deletion already asked
+    /// for, or leave it alone.
+    ///
+    /// A record belongs to its document and goes when the document goes.
+    /// Deciding when that has happened is the whole difficulty, and the
+    /// Mac got it wrong three times in three different ways:
+    ///
+    /// - Dated now, a deletion still queued after a failed pass beat
+    ///   another device's later save of the document. The document came
+    ///   back and every mark on it was gone everywhere.
+    /// - Dated from the document's own deletion, it still lost: two
+    ///   files are dated independently, so a record untouched since
+    ///   before either is older than both.
+    /// - Swept because the document was neither held nor on the server,
+    ///   it deleted the records of documents that were merely **not
+    ///   uploaded yet** — one device's document upload failing while its
+    ///   review upload succeeded is enough.
+    ///
+    /// So absence is never taken for deletion. A record is deleted only
+    /// where a deletion of its document is known and still stands, or
+    /// where the library itself has let the document go.
+    public enum Fate: Equatable, Sendable {
+        /// Delete the record here and record the deletion at this time.
+        case deleted(at: Int64)
+        /// Take back a deletion asked for earlier: the document is here.
+        case cancelled
+        /// Nothing to do.
+        case none
+    }
+
+    /// `held` whether this device has the document; `deletedHere` the
+    /// deletion this device has recorded for it, if any, with the
+    /// revision it deleted; `document` what the library's manifest says
+    /// of the document, nil where it names none; `written` when the
+    /// manifest last saw the record itself; `asked` a deletion of the
+    /// record already queued.
+    public static func fate(
+        held: Bool,
+        deletedHere: (at: Int64, revision: String?)?,
+        document: (revision: String?, isMember: Bool)?,
+        written: Int64?,
+        asked: Int64?,
+        now: Int64
+    ) -> Fate {
+        // The document is here, so its marks are its own, and any
+        // deletion asked for earlier is taken back.
+        if held { return asked == nil ? .none : .cancelled }
+        if let deletedHere {
+            // A deletion this device made. It stands unless the library
+            // holds a newer write of the document than the one deleted,
+            // which is another device saving it since.
+            var stands = true
+            if let document, document.isMember {
+                let sameRevision = document.revision != nil
+                    && document.revision == deletedHere.revision
+                stands = sameRevision || (written.map { $0 <= deletedHere.at } ?? true)
+            }
+            guard stands else { return asked == nil ? .none : .cancelled }
+            return .deleted(at: max(asked ?? deletedHere.at, deletedHere.at))
+        }
+        guard let document else {
+            // The library names no such document and this device has
+            // none. Nothing says it was ever there, so nothing is
+            // concluded — except that a deletion already asked for goes
+            // up, since something asked for it.
+            return asked.map { Fate.deleted(at: $0) } ?? .none
+        }
+        // Named by the library but no longer one of its members: the
+        // library itself let it go, which is the one case where absence
+        // is evidence.
+        guard !document.isMember else { return .none }
+        return .deleted(at: max(asked ?? now, now))
+    }
+}
