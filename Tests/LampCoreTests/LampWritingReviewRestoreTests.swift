@@ -228,6 +228,23 @@ struct LampWritingReviewRestoreTests {
         #expect(read.restorable(in: "The slow red fox.").map(\.restored) == ["quick brown"])
     }
 
+    @Test func aRestoreDropsRestorationsThatHaveHadTheirDay() throws {
+        let old = "The quick brown fox."
+        let new = "The slow red fox."
+        var review = empty.markingAssistantChange(from: old, to: new)
+        // More than are kept, and one from long enough ago to go.
+        let stale = Date().addingTimeInterval(-LampWritingReview.restorationWindow - 60)
+        review.restorations = (0..<LampWritingReview.restorationsKept + 5).map {
+            .init(markID: UUID(), turnID: nil, restored: "a", discarded: "b",
+                  restoredAt: Date().addingTimeInterval(-Double($0)))
+        } + [.init(markID: UUID(), turnID: nil, restored: "old", discarded: "older", restoredAt: stale)]
+        let put = try #require(restoring(review, in: new))
+        #expect(put.review.restorations.count == LampWritingReview.restorationsKept)
+        #expect(!put.review.restorations.contains { $0.restored == "old" })
+        // The one just made is among them, which is the point of keeping any.
+        #expect(put.review.restorations.contains { $0.restored == "quick brown" })
+    }
+
     @Test func restorationsAreNotKeptForEver() throws {
         let old = "The quick brown fox."
         let new = "The slow red fox."

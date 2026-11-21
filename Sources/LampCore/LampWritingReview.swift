@@ -38,6 +38,16 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// by.
     public static let contextLength = 24
 
+    /// How many restorations are kept, and for how long.
+    ///
+    /// They are kept to be told to the assistant, so that it does not make
+    /// again a change the writer has just put back. That is a thing of the
+    /// next turns, not of for ever, and nothing prunes this record on a
+    /// schedule — so a restore drops the ones that have had their day rather
+    /// than letting the file, and the note built from it, only grow.
+    public static let restorationsKept = 20
+    public static let restorationWindow: TimeInterval = 7 * 24 * 60 * 60
+
     public var formatVersion: Int
     public var writingID: String
     /// The marks still to be read, in no order that means anything.
@@ -787,6 +797,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             ))
         }
         result.marks.removeAll { put.contains($0.id) }
+        result.restorations = Array(
+            result.restorations
+                .filter { date.timeIntervalSince($0.restoredAt) < Self.restorationWindow }
+                .sorted { ($0.restoredAt, $0.markID.uuidString) > ($1.restoredAt, $1.markID.uuidString) }
+                .prefix(Self.restorationsKept)
+        )
         result = result.tidied().carryingWriterEdit(from: text, to: restored, at: date)
         let target = restored as NSString
         let anchor = Self.digest(of: restored)
