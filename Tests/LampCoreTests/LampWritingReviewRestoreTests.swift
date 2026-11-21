@@ -664,6 +664,28 @@ struct LampWritingReviewRestoreTests {
         #expect(plan.standing(from: held, in: new) == .gone)
     }
 
+    /// A plan can put several passages back at once, and a later
+    /// restore over one of them says nothing about the others.
+    @Test func eachPassagePutBackIsAnsweredOnItsOwn() throws {
+        let old = "Alpha stands here.\n\nBeta waits here."
+        let new = "Alpha sits here.\n\nBeta rests here."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        #expect(plan.edits.count == 2)
+        let held = plan.applied(to: new)
+        #expect(held == old)
+
+        // One of the two rewritten since; the other is still standing.
+        let after = "Alpha SOMETHING ELSE here.\n\nBeta waits here."
+        let answers = plan.standingByMark(from: held, in: after)
+        print("ANSWERS:", answers.values.map { "\($0)" }.sorted())
+        print("WHOLE:", plan.standing(from: held, in: after))
+        #expect(answers.values.filter { $0 == .stands }.count == 1)
+        #expect(answers.values.filter { $0 == .gone }.count == 1)
+        // Asked whole it is simply gone, and both records would be lost.
+        #expect(plan.standing(from: held, in: after) == .gone)
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

@@ -718,7 +718,10 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     }
 
     /// One text put in the place of another.
-    public struct Edit: Equatable, Sendable {
+    /// Codable so that a host can keep a restore it has made and not yet
+    /// written down — across a quit, which is exactly when losing it
+    /// matters. `NSRange` is not Codable, so it is written as what it is.
+    public struct Edit: Equatable, Sendable, Codable {
         public let markID: UUID
         public let range: NSRange
         public let replacement: String
@@ -730,6 +733,42 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         public let discarded: String
         /// Whether what it puts back is still to be read.
         public let unread: Bool
+
+        public init(
+            markID: UUID, range: NSRange, replacement: String, discarded: String, unread: Bool
+        ) {
+            self.markID = markID
+            self.range = range
+            self.replacement = replacement
+            self.discarded = discarded
+            self.unread = unread
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case markID, location, length, replacement, discarded, unread
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            markID = try container.decode(UUID.self, forKey: .markID)
+            range = NSRange(
+                location: try container.decode(Int.self, forKey: .location),
+                length: try container.decode(Int.self, forKey: .length)
+            )
+            replacement = try container.decode(String.self, forKey: .replacement)
+            discarded = try container.decode(String.self, forKey: .discarded)
+            unread = try container.decode(Bool.self, forKey: .unread)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(markID, forKey: .markID)
+            try container.encode(range.location, forKey: .location)
+            try container.encode(range.length, forKey: .length)
+            try container.encode(replacement, forKey: .replacement)
+            try container.encode(discarded, forKey: .discarded)
+            try container.encode(unread, forKey: .unread)
+        }
     }
 
     /// What a restore of one range would come to, with the marks that range
@@ -742,9 +781,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     /// The marks to put back and the edits that do it, **last first**, so
     /// that each range still means what it meant when the plan was made.
-    public struct RestorePlan: Equatable, Sendable {
+    public struct RestorePlan: Equatable, Sendable, Codable {
         public let edits: [Edit]
         public var marks: [UUID] { edits.map(\.markID) }
+
+        public init(edits: [Edit]) {
+            self.edits = edits
+        }
 
         /// `text` with these edits made. They come last first, so each
         /// range still means what it meant when the plan was made.
@@ -797,6 +840,37 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             case stands
             case gone
             case unknown
+        }
+
+        /// What became of each passage this restore put back, one mark
+        /// at a time.
+        ///
+        /// A plan can put back several passages at once, and a later
+        /// restore overlapping one of them says nothing about the rest:
+        /// answered whole, the others lost their record with it.
+        public func standingByMark(from held: String, in text: String) -> [UUID: Standing] {
+            var answers: [UUID: Standing] = [:]
+            for (edit, _) in spans {
+                answers[edit.markID] = only(edit).standing(from: held, in: text)
+            }
+            return answers
+        }
+
+        /// This plan with one of its edits, at the place that edit's
+        /// words came to in the writing the whole plan made.
+        public func only(_ edit: Edit) -> RestorePlan {
+            guard let at = spans.first(where: { $0.edit.markID == edit.markID })?.range else {
+                return RestorePlan(edits: [edit])
+            }
+            // Its range is the one it ends up occupying, so that asked on
+            // its own it looks where the whole plan put it.
+            return RestorePlan(edits: [Edit(
+                markID: edit.markID,
+                range: NSRange(location: at.location, length: (edit.discarded as NSString).length),
+                replacement: edit.replacement,
+                discarded: edit.discarded,
+                unread: edit.unread
+            )])
         }
 
         public func standing(from held: String, in text: String) -> Standing {
