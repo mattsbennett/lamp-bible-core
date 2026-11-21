@@ -568,3 +568,84 @@ struct WritingReviewMarkdownPlacementTests {
         #expect(Markdown.drawable(marked).contains(LampWritingReviewMarkdown.placeEnd))
     }
 }
+
+/// What every marker move must leave alone, over the shapes the rules
+/// exist for.
+///
+/// The rules are about a Markdown parser neither app owns, so they are
+/// not modelled; what is (`Verification/SyncMerge.lean`:
+/// `movingAMarkerLeavesTheWritingAlone`, `movingAMarkerLosesNoPassage`)
+/// is what must hold however they move a marker — the writing itself
+/// untouched, and no passage left without something for the writer to
+/// reach. A rule that dropped a marker, or took a character with it,
+/// would be a change the writer can never see or never clear.
+struct WritingReviewMarkdownContractTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+    private let p = String(LampWritingReview.markPoint)
+
+    private var shapes: [String] {
+        [
+            "A \(s)changed\(e) word.",
+            "See [the note](https://example.com/\(s)a\(e)).",
+            "See \(s)[the note](https://example.com/a)\(e).",
+            "An image ![alt](pic\(s)ture\(e).png) here.",
+            "An autolink <https://exa\(s)mple\(e).com/x> here.",
+            "Bare https://exa\(s)mple\(e).com/x here.",
+            "A *\(s)stressed\(e)* word.",
+            "A *\(s)*strong*\(e)* word.",
+            "A `co\(s)de\(e)` span.",
+            "An escape \\\(s)*not emphasis\(e)*.",
+            "\(s)# A heading\(e)",
+            "\(s)- A list item\(e)",
+            "\(s)> A quotation\(e)",
+            "\(s)1. A numbered item\(e)",
+            "\(s)---\(e)",
+            "An entity &l\(s)t\(e); here.",
+            "A point\(p) where words went.",
+            "| a | b |\n|\(s)---\(e)|---|\n| 1 | 2 |",
+            "Two \(s)one\(e) and \(s)two\(e) in a line.",
+            "\(s)Across\nlines\(e) here.",
+            "Nothing marked at all.",
+        ]
+    }
+
+    /// The writing itself is what it was: the markers moved, and nothing
+    /// of the writer's words went with them.
+    @Test func everyShapeKeepsTheWritingItself() {
+        for shape in shapes {
+            for numbering in [false, true] {
+                let drawn = Markdown.drawable(shape, numbering: numbering)
+                #expect(
+                    Markdown.unmarked(drawn) == Markdown.unmarked(shape),
+                    """
+                    The writing changed. From \(shape.debugDescription) \
+                    came \(drawn.debugDescription)
+                    """
+                )
+            }
+        }
+    }
+
+    /// And every passage still has something the writer can reach: a
+    /// start or a point for each one there was.
+    @Test func everyShapeKeepsEveryPassageReachable() {
+        func reachable(_ text: String) -> Int {
+            text.filter { $0 == LampWritingReview.markStart || $0 == LampWritingReview.markPoint }
+                .count
+        }
+        for shape in shapes {
+            for numbering in [false, true] {
+                let drawn = Markdown.drawable(shape, numbering: numbering)
+                #expect(
+                    reachable(drawn) == reachable(shape),
+                    """
+                    A passage lost what the writer reaches for. From \
+                    \(shape.debugDescription) came \(drawn.debugDescription)
+                    """
+                )
+            }
+        }
+    }
+}

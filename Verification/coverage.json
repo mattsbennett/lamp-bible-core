@@ -245,6 +245,17 @@
       ],
       "boundary": "How two copies of a writing's review marks merge, per mark id: the higher version of a mark both hold, no mark either retired, and the higher version of every clearance either made of a mark still held. The same whichever side merges and in whatever grouping, so a clear on one device is never undone by another's copy, and two devices clearing different parts of one mark leave only what neither cleared. What stood where a mark stands, kept so the writer can have the assistant's change put back, merges by union: it is made once and never changed, and a copy written by a writer that knows nothing of it has none rather than an older one, so whichever copy holds it is right and no tie of versions can strip it. It is offered only while its mark still stands. A restoration — the record of a wording put back, which the assistant is told of — is unioned too, and outlives the mark its own restore retired. The tables hold `merged(with:)` to the model for every pair of clean copies of two marks and a versioned clearance. How a mark is found in the text (its words and their context), what an assistant's change or the writer's edit does to the marks, which copy's pieces win a tie of versions, the words a wording or a restoration holds, which mark's words can be put back exactly, the pruning of old retirements and restorations, and the keeping of only the newest restorations of a merge, are not modelled: they decide what one device writes, not how copies combine."
     },
+    "Sources/LampCore/LampWritingReviewMarkdown.swift": {
+      "rules": [
+        "Marked",
+        "writing",
+        "reachable",
+        "Moves",
+        "movingAMarkerLeavesTheWritingAlone",
+        "movingAMarkerLosesNoPassage"
+      ],
+      "boundary": "Where a review marker may be put in a copy of a writing's Markdown. A marker is a letter to a Markdown parser, so where it falls decides whether the copy still reads as the writing: inside a link's address it is part of the address, between the stars of a run it stops the run being one. Each is moved to the nearest place that leaves the parse alone. The rules for that are not modelled — they are about a parser neither app owns, and modelling them would be the same guess written twice. What is modelled is what must hold of every move however it was made: the writing itself untouched, and no passage left without a start or a point for the writer to reach. Which shapes of Markdown need a move, and how a surface then draws what it finds, are outside it."
+    },
     "Sources/LampCore/LampWritingReviewStore.swift": {
       "rules": [
         "ReviewTarget",

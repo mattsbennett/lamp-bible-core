@@ -3863,6 +3863,96 @@ theorem absenceAloneNeverDeletesARecord (p : ReviewPlace) (now : Nat)
     reviewFate p now = .none := by
   simp [reviewFate, held, mine, named, asked]
 
+/-! ## Where review markers may be put
+
+Marks cross to a surface as markers written into a copy of the writing's
+Markdown. A marker is a letter to a Markdown parser, so where it falls
+decides whether the copy still reads as the writing: inside a link's
+address it is part of the address, between the stars of a run it stops
+the run being one.
+
+`LampWritingReviewMarkdown` moves each marker to the nearest place that
+leaves the parse alone. What must hold of every such move, whatever the
+rule that made it, is modelled here: the writing itself is untouched,
+and no passage loses the thing the writer reaches for. The rules
+themselves are not modelled — they are about a Markdown parser neither
+app owns, and a model of them would be the same guess written twice. -/
+
+/-- A piece of a marked copy: a character of the writing, or a marker.
+A start opens a passage, an end closes one, a point is a passage with
+no words left to show. -/
+inductive Marked where
+  | letter (c : Nat)
+  | start
+  | «end»
+  | point
+  deriving DecidableEq
+
+/-- The writing itself, with the markers taken out. What a surface draws
+once it has found the marks, and what it must still equal. -/
+def writing : List Marked → List Marked
+  | [] => []
+  | .letter c :: rest => .letter c :: writing rest
+  | _ :: rest => writing rest
+
+/-- How many passages the writer can reach: one for each start, and one
+for each point. -/
+def reachable : List Marked → Nat
+  | [] => 0
+  | .start :: rest => reachable rest + 1
+  | .point :: rest => reachable rest + 1
+  | _ :: rest => reachable rest
+
+/-- Moving a marker: the same pieces, reordered, with the writing's own
+letters in the order they were. Every rule in the Swift is one of these,
+whatever it matched on. -/
+inductive Moves : List Marked → List Marked → Prop where
+  | refl : Moves xs xs
+  | step (before after : List Marked) (m : Marked) (hm : writing [m] = [])
+      (rest : List Marked) :
+      Moves (before ++ m :: after ++ rest) (before ++ after ++ m :: rest)
+  | trans : Moves xs ys → Moves ys zs → Moves xs zs
+
+theorem writing_append (xs ys : List Marked) :
+    writing (xs ++ ys) = writing xs ++ writing ys := by
+  induction xs with
+  | nil => simp [writing]
+  | cons x xs ih => cases x <;> simp [writing, ih]
+
+/-- A marker moved leaves the writing exactly as it was. This is the
+whole contract with a surface: it may draw the marks where the markers
+fell, and what it has drawn them on is still the writing. -/
+theorem movingAMarkerLeavesTheWritingAlone (xs ys : List Marked) (h : Moves xs ys) :
+    writing xs = writing ys := by
+  induction h with
+  | refl => rfl
+  | step before after m hm rest =>
+      have marker : ∀ xs : List Marked, writing (m :: xs) = writing xs := by
+        intro xs
+        cases m with
+        | letter c => simp [writing] at hm
+        | start => simp [writing]
+        | «end» => simp [writing]
+        | point => simp [writing]
+      simp [writing_append, marker]
+  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+
+/-- And no passage loses what the writer reaches for: a marker moved is
+still a marker, so the count of passages is what it was. A rule that
+dropped one would leave a change with nothing to tap. -/
+theorem movingAMarkerLosesNoPassage (xs ys : List Marked) (h : Moves xs ys) :
+    reachable xs = reachable ys := by
+  have append : ∀ as bs : List Marked, reachable (as ++ bs) = reachable as + reachable bs := by
+    intro as bs
+    induction as with
+    | nil => simp [reachable]
+    | cons a as ih => cases a <;> simp [reachable, ih] <;> omega
+  induction h with
+  | refl => rfl
+  | step before after m hm rest =>
+      cases m <;> simp [append, reachable] <;> omega
+  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+
 def Review.shows (r : Review) (i : Nat) : Bool := Decidable.decide (0 < r.version i) && !r.retired i
 
 /-- Whether the writer can be offered the assistant's wording back: only
