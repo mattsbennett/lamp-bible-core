@@ -3821,7 +3821,12 @@ structure ReviewPlace where
   deletedRevisionStands : Bool
   documentNamed : Bool
   documentIsMember : Bool
-  written : Option Nat
+  /-- When the library last saw **the document**, never the record.
+  Whether a deletion still stands is a question about the document:
+  another device saving it since overtakes the deletion, and the record
+  may not have been touched for months. Named for the record, this
+  model said the same wrong thing as the code and its table agreed. -/
+  documentWritten : Option Nat
   asked : Option Nat
 
 def reviewFate (p : ReviewPlace) (now : Nat) : ReviewFate :=
@@ -3830,7 +3835,7 @@ def reviewFate (p : ReviewPlace) (now : Nat) : ReviewFate :=
     | some at_ =>
       let stands :=
         if p.documentNamed && p.documentIsMember then
-          p.deletedRevisionStands || (match p.written with | some w => w ≤ at_ | none => true)
+          p.deletedRevisionStands || (match p.documentWritten with | some w => w ≤ at_ | none => true)
         else true
       if stands then .deleted (max (p.asked.getD at_) at_)
       else (if p.asked.isSome then .cancelled else .none)
@@ -5843,7 +5848,7 @@ def reviewFateName : ReviewFate → String
                 let place : ReviewPlace :=
                   { held := held, deletedHere := mine, deletedRevisionStands := stands,
                     documentNamed := named, documentIsMember := member,
-                    written := written, asked := asked }
+                    documentWritten := written, asked := asked }
                 IO.println <| conformanceLine "reviewFate"
                   [toString held,
                    (match mine with | some v => toString v | none => "-"),

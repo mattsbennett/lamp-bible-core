@@ -313,7 +313,7 @@ struct WritingDocumentReviewFateTests {
     /// read that as the document having been deleted.
     @Test func arecordIsNotSweptBecauseItsDocumentIsNotUploadedYet() {
         #expect(LampWritingDocumentReview.fate(
-            held: false, deletedHere: nil, document: nil, written: 100, asked: nil, now: 500
+            held: false, deletedHere: nil, document: nil, documentWritten: 100, asked: nil, now: 500
         ) == .none)
     }
 
@@ -321,11 +321,11 @@ struct WritingDocumentReviewFateTests {
     /// asked for earlier is taken back.
     @Test func adocumentThatIsHereKeepsItsMarksAndCancelsAnyDeletion() {
         #expect(LampWritingDocumentReview.fate(
-            held: true, deletedHere: nil, document: nil, written: nil, asked: nil, now: 500
+            held: true, deletedHere: nil, document: nil, documentWritten: nil, asked: nil, now: 500
         ) == .none)
         #expect(LampWritingDocumentReview.fate(
             held: true, deletedHere: (at: 200, revision: "r1"),
-            document: nil, written: nil, asked: 200, now: 500
+            document: nil, documentWritten: nil, asked: 200, now: 500
         ) == .cancelled)
     }
 
@@ -333,7 +333,7 @@ struct WritingDocumentReviewFateTests {
     @Test func adeletionMadeHereTakesTheMarksWithIt() {
         #expect(LampWritingDocumentReview.fate(
             held: false, deletedHere: (at: 200, revision: "r1"),
-            document: (revision: "r1", isMember: true), written: 100, asked: nil, now: 500
+            document: (revision: "r1", isMember: true), documentWritten: 100, asked: nil, now: 500
         ) == .deleted(at: 200))
     }
 
@@ -343,12 +343,12 @@ struct WritingDocumentReviewFateTests {
     @Test func adeletionThatAnotherDevicesSaveBeatsTakesNothing() {
         #expect(LampWritingDocumentReview.fate(
             held: false, deletedHere: (at: 200, revision: "r1"),
-            document: (revision: "r2", isMember: true), written: 300, asked: nil, now: 500
+            document: (revision: "r2", isMember: true), documentWritten: 300, asked: nil, now: 500
         ) == .none)
         // And one already asked for is taken back rather than left to win.
         #expect(LampWritingDocumentReview.fate(
             held: false, deletedHere: (at: 200, revision: "r1"),
-            document: (revision: "r2", isMember: true), written: 300, asked: 200, now: 500
+            document: (revision: "r2", isMember: true), documentWritten: 300, asked: 200, now: 500
         ) == .cancelled)
     }
 
@@ -357,7 +357,7 @@ struct WritingDocumentReviewFateTests {
     @Test func thelibraryLettingADocumentGoTakesItsMarks() {
         #expect(LampWritingDocumentReview.fate(
             held: false, deletedHere: nil,
-            document: (revision: "r1", isMember: false), written: 100, asked: nil, now: 500
+            document: (revision: "r1", isMember: false), documentWritten: 100, asked: nil, now: 500
         ) == .deleted(at: 500))
     }
 
@@ -366,7 +366,7 @@ struct WritingDocumentReviewFateTests {
     @Test func adocumentNotFetchedYetKeepsItsMarks() {
         #expect(LampWritingDocumentReview.fate(
             held: false, deletedHere: nil,
-            document: (revision: "r1", isMember: true), written: 100, asked: nil, now: 500
+            document: (revision: "r1", isMember: true), documentWritten: 100, asked: nil, now: 500
         ) == .none)
     }
 }
@@ -406,5 +406,32 @@ struct WritingDocumentReviewPlaceTests {
 
     @Test func apathThatIsNoReviewFileAnswersWithNothing() {
         #expect(LampWritingDocumentReview.place(of: "Workspaces/Writing/x/y.md", record: nil) == nil)
+    }
+}
+
+/// The time that decides whether a deletion still stands is the
+/// document's, never its record's.
+///
+/// Handed the record's, a document deleted here at 200 and saved by
+/// another device at 300 lost every mark on it: the record had not been
+/// touched since 100, so the deletion looked unopposed. The document
+/// came back and its marks did not. The model said the same thing in the
+/// same wrong words, so its table agreed — which is why this is a test
+/// about the two times and not another row.
+struct WritingDocumentReviewFateTimeTests {
+    @Test func adeletionIsBeatenByAnewerDocumentNotAnewerRecord() {
+        // The record last seen at 100, the document saved at 300, the
+        // deletion made here at 200: the document wins and keeps its marks.
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: (at: 200, revision: "r1"),
+            document: (revision: "r2", isMember: true),
+            documentWritten: 300, asked: nil, now: 500
+        ) == .none)
+        // The same deletion against a document nobody has saved since.
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: (at: 200, revision: "r1"),
+            document: (revision: "r1", isMember: true),
+            documentWritten: 100, asked: nil, now: 500
+        ) == .deleted(at: 200))
     }
 }

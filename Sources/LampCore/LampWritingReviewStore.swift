@@ -463,14 +463,22 @@ extension LampWritingDocumentReview {
     /// `held` whether this device has the document; `deletedHere` the
     /// deletion this device has recorded for it, if any, with the
     /// revision it deleted; `document` what the library's manifest says
-    /// of the document, nil where it names none; `written` when the
-    /// manifest last saw the record itself; `asked` a deletion of the
+    /// of the document, nil where it names none; `documentWritten` when
+    /// the library last saw **the document**; `asked` a deletion of the
     /// record already queued.
+    ///
+    /// `documentWritten` is the document's, never the record's. Whether
+    /// a deletion of the document still stands is a question about the
+    /// document: another device saving it since is what overtakes the
+    /// deletion, and the record may not have been touched for months.
+    /// Handed the record's time instead, this deleted every mark on a
+    /// document whose newer version survived — and the model said the
+    /// same thing in the same wrong words, so the table agreed with it.
     public static func fate(
         held: Bool,
         deletedHere: (at: Int64, revision: String?)?,
         document: (revision: String?, isMember: Bool)?,
-        written: Int64?,
+        documentWritten: Int64?,
         asked: Int64?,
         now: Int64
     ) -> Fate {
@@ -485,7 +493,7 @@ extension LampWritingDocumentReview {
             if let document, document.isMember {
                 let sameRevision = document.revision != nil
                     && document.revision == deletedHere.revision
-                stands = sameRevision || (written.map { $0 <= deletedHere.at } ?? true)
+                stands = sameRevision || (documentWritten.map { $0 <= deletedHere.at } ?? true)
             }
             guard stands else { return asked == nil ? .none : .cancelled }
             return .deleted(at: max(asked ?? deletedHere.at, deletedHere.at))

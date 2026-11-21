@@ -1196,7 +1196,7 @@ struct SyncModelConformanceTests {
                 held: f[0] == "true",
                 deletedHere: deletedHere,
                 document: document,
-                written: time(f[5]),
+                documentWritten: time(f[5]),
                 asked: time(f[6]),
                 now: 500
             )
