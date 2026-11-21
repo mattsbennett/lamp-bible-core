@@ -3729,23 +3729,39 @@ as the Swift keeps them:
 - clearing a whole mark retires its id, and a retired id is never shown,
 - clearing part of a mark records a clearance, which is taken out of the
   mark wherever it is drawn; carried through edits as a mark is, it too has
-  a version, and it is kept until its mark is retired.
+  a version, and it is kept until its mark is retired,
+- what stood where a mark stands is kept beside the marks, one to a mark, so
+  that the writer can have the assistant's change put back; it is made once
+  and never changed, and merges by union,
+- putting one back retires its mark and records a restoration, which the
+  assistant is told of and which therefore outlives the mark.
 A version of 0 is no mark, or no clearance. How a mark is found in the text, and what its
 pieces are, is outside the model: which copy's pieces are drawn is decided
 by the version, and a tie between two copies of one version by their bytes,
-the same on both sides. -/
+the same on both sides. The words a wording holds are outside it too; that
+it is held, and whose mark it belongs to, is what a merge decides. -/
 
 structure Review where
   version : Nat → Nat
   retired : Nat → Bool
   cleared : Nat → Nat
+  /-- Whether what stood where this mark stands is held, to put back. -/
+  wording : Nat → Bool
+  /-- Whether this mark was put back, which the assistant is to be told. -/
+  restored : Nat → Bool
 
 def mergeReview (a b : Review) : Review :=
   { version := fun i => max (a.version i) (b.version i),
     retired := fun i => a.retired i || b.retired i,
-    cleared := fun c => max (a.cleared c) (b.cleared c) }
+    cleared := fun c => max (a.cleared c) (b.cleared c),
+    wording := fun i => a.wording i || b.wording i,
+    restored := fun i => a.restored i || b.restored i }
 
 def Review.shows (r : Review) (i : Nat) : Bool := Decidable.decide (0 < r.version i) && !r.retired i
+
+/-- Whether the writer can be offered the assistant's wording back: only
+while the mark still stands, and only where what stood there is held. -/
+def Review.offers (r : Review) (i : Nat) : Bool := r.shows i && r.wording i
 
 -- A clear on any device holds, whatever the other copy still shows.
 theorem aRetiredMarkNeverReturns (a b : Review) (i : Nat) (h : a.retired i = true ∨ b.retired i = true) :
@@ -3768,28 +3784,57 @@ theorem aClearanceIsNeverLost (a b : Review) (c : Nat) :
     a.cleared c ≤ (mergeReview a b).cleared c :=
   Nat.le_max_left _ _
 
+-- A wording is never lost to a copy that does not have it. This is why what
+-- stood where a mark stands is kept beside the marks and merged by union,
+-- rather than as a field of the mark: a mark's own fields are settled by
+-- taking the greater encoding at an equal version, and with sorted keys the
+-- copy carrying one more key is always the smaller of the two — so a device
+-- running a core that knew nothing of wordings would strip it and win every
+-- tie, both ways round.
+theorem aWordingIsNeverLostToACopyThatHasNone (a b : Review) (i : Nat)
+    (h : a.wording i = true) : (mergeReview a b).wording i = true := by
+  simp [mergeReview, h]
+
+-- And it is offered only while its mark stands, so a passage cleared on any
+-- device is never offered back on another.
+theorem aMarkThatIsNotShownIsNeverOfferedBack (a b : Review) (i : Nat)
+    (h : a.retired i = true ∨ b.retired i = true) :
+    (mergeReview a b).offers i = false := by
+  simp [Review.offers, aRetiredMarkNeverReturns a b i h]
+
+-- Putting a wording back retires the mark, so what the assistant has to be
+-- told of must outlive it: a restoration is kept though its mark is gone.
+theorem aRestorationOutlivesTheMarkItRetired (a b : Review) (i : Nat)
+    (h : a.restored i = true) (hr : a.retired i = true) :
+    (mergeReview a b).restored i = true ∧ (mergeReview a b).shows i = false := by
+  refine ⟨by simp [mergeReview, h], aRetiredMarkNeverReturns a b i (Or.inl hr)⟩
+
 -- The same whichever side merges, in whatever grouping, and merging a copy
 -- with itself changes nothing, so devices agree however their passes
 -- interleave.
 theorem mergeReview_comm (a b : Review) : mergeReview a b = mergeReview b a := by
   simp only [mergeReview, Review.mk.injEq]
-  refine ⟨?_, ?_, ?_⟩ <;> funext i
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> funext i
   · exact Nat.max_comm _ _
   · exact Bool.or_comm _ _
   · exact Nat.max_comm _ _
+  · exact Bool.or_comm _ _
+  · exact Bool.or_comm _ _
 
 theorem mergeReview_assoc (a b c : Review) :
     mergeReview (mergeReview a b) c = mergeReview a (mergeReview b c) := by
   simp only [mergeReview, Review.mk.injEq]
-  refine ⟨?_, ?_, ?_⟩ <;> funext i
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> funext i
   · exact Nat.max_assoc _ _ _
   · exact Bool.or_assoc _ _ _
   · exact Nat.max_assoc _ _ _
+  · exact Bool.or_assoc _ _ _
+  · exact Bool.or_assoc _ _ _
 
 theorem mergeReview_idem (a : Review) : mergeReview a a = a := by
   cases a
   simp only [mergeReview, Review.mk.injEq]
-  refine ⟨?_, ?_, ?_⟩ <;> funext i <;> simp
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> funext i <;> simp
 
 /-! ### A writing's documents
 
@@ -5618,7 +5663,16 @@ def reviewCopy (one two : String) (clearance : Nat) : Review :=
   let version := fun (code : String) => if code == "1" then 1 else if code == "2" then 2 else 0
   { version := fun i => if i == 1 then version one else if i == 2 then version two else 0,
     retired := fun i => (i == 1 && one == "r") || (i == 2 && two == "r"),
-    cleared := fun c => if c == 10 then clearance else 0 }
+    cleared := fun c => if c == 10 then clearance else 0,
+    wording := fun _ => false,
+    restored := fun _ => false }
+
+-- One copy as far as mark 1 goes: the mark at its code, with or without the
+-- wording that would put it back, and with or without a restoration of it.
+def reviewWordingCopy (one : String) (wording restored : Bool) : Review :=
+  { reviewCopy one "0" 0 with
+    wording := fun i => i == 1 && wording,
+    restored := fun i => i == 1 && restored }
 
 def reviewMarkCode (r : Review) (i : Nat) : String :=
   if r.retired i then "r" else if r.shows i then toString (r.version i) else "0"
@@ -5640,6 +5694,21 @@ def reviewMarkCode (r : Review) (i : Nat) : String :=
                 [a1, a2, toString ac, b1, b2, toString bc,
                  reviewMarkCode merged 1, reviewMarkCode merged 2,
                  toString (if merged.retired 1 then 0 else merged.cleared 10)]
+
+#eval show IO Unit from do
+  -- Every pair of copies of one mark, each holding its wording or not and a
+  -- restoration of it or not: whether the merge offers the wording back,
+  -- and whether it still has the restoration to tell the assistant of.
+  for a1 in ["0", "1", "2", "r"] do
+    for aw in [false, true] do
+      for ar in [false, true] do
+        for b1 in ["0", "1", "2", "r"] do
+          for bw in [false, true] do
+            for br in [false, true] do
+              let merged := mergeReview (reviewWordingCopy a1 aw ar) (reviewWordingCopy b1 bw br)
+              IO.println <| conformanceLine "reviewWording"
+                [a1, toString aw, toString ar, b1, toString bw, toString br,
+                 toString (merged.offers 1), toString (merged.restored 1)]
 
 def documentDecisionName : DocumentDecision → String
   | .keep => "keep" | .take => "take" | .takeKeepingHeld => "takeKeepingHeld"

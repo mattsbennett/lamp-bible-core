@@ -233,12 +233,17 @@
         "aClearanceIsNeverLost",
         "mergeReview_comm",
         "mergeReview_assoc",
-        "mergeReview_idem"
+        "mergeReview_idem",
+        "Review.offers",
+        "aWordingIsNeverLostToACopyThatHasNone",
+        "aMarkThatIsNotShownIsNeverOfferedBack",
+        "aRestorationOutlivesTheMarkItRetired"
       ],
       "conformance": [
-        "reviewMerge"
+        "reviewMerge",
+        "reviewWording"
       ],
-      "boundary": "How two copies of a writing's review marks merge, per mark id: the higher version of a mark both hold, no mark either retired, and the higher version of every clearance either made of a mark still held. The same whichever side merges and in whatever grouping, so a clear on one device is never undone by another's copy, and two devices clearing different parts of one mark leave only what neither cleared. The table holds `merged(with:)` to the model for every pair of clean copies of two marks and a versioned clearance. How a mark is found in the text (its words and their context), what an assistant's change or the writer's edit does to the marks, which copy's pieces win a tie of versions, and the pruning of old retirements are not modelled: they decide what one device writes, not how copies combine."
+      "boundary": "How two copies of a writing's review marks merge, per mark id: the higher version of a mark both hold, no mark either retired, and the higher version of every clearance either made of a mark still held. The same whichever side merges and in whatever grouping, so a clear on one device is never undone by another's copy, and two devices clearing different parts of one mark leave only what neither cleared. What stood where a mark stands, kept so the writer can have the assistant's change put back, merges by union: it is made once and never changed, and a copy written by a writer that knows nothing of it has none rather than an older one, so whichever copy holds it is right and no tie of versions can strip it. It is offered only while its mark still stands. A restoration — the record of a wording put back, which the assistant is told of — is unioned too, and outlives the mark its own restore retired. The tables hold `merged(with:)` to the model for every pair of clean copies of two marks and a versioned clearance. How a mark is found in the text (its words and their context), what an assistant's change or the writer's edit does to the marks, which copy's pieces win a tie of versions, the words a wording or a restoration holds, which mark's words can be put back exactly, and the pruning of old retirements and restorations are not modelled: they decide what one device writes, not how copies combine."
     },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [

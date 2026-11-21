@@ -549,7 +549,8 @@ struct LampWritingReviewTests {
         let review = empty.markingAssistantChange(from: "a b c", to: "a x c", at: Date(timeIntervalSince1970: 1))
         let shuffled = LampWritingReview(
             writingID: "w", marks: review.marks.reversed(), retired: review.retired.reversed(),
-            clearances: review.clearances.reversed()
+            clearances: review.clearances.reversed(), wordings: review.wordings.reversed(),
+            restorations: review.restorations.reversed()
         )
         #expect(try review.encoded() == shuffled.encoded())
         #expect(try LampWritingReview.decoded(from: review.encoded()) == review)

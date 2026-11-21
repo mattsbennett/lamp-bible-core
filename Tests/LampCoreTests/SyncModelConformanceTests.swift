@@ -104,6 +104,7 @@ struct SyncModelConformanceTests {
         "mediaBatchComplete", "macHighlightAllowsPublish", "archiveCaptureChoice",
         "sameColumn", "manifestMerge", "recordWrite", "adoptFile", "pruneTombstone",
         "filePlanAction", "deleteTarget", "listedRevision", "fetchedAgain", "recordsAdeletion",
+        "reviewWording",
         "deletionNotCarriedOut", "settingsUpdate", "bundlePathHolds", "directoryWrite",
         "directoryDelete", "emptyBundlePath", "versionMerges", "settingsWrite", "versionMerge",
         "preferenceStamp", "bundleRead", "earlierLibrary", "mayClaim", "archiveKeeper", "entryFate",
@@ -1173,6 +1174,52 @@ struct SyncModelConformanceTests {
             let clearance = merged.retired.contains { $0.id == id(1) }
                 ? 0 : merged.clearances.first { $0.id == id(10) }?.version ?? 0
             return code(merged, 1) == f[6] && code(merged, 2) == f[7] && String(clearance) == f[8]
+        }
+    }
+
+    /// Two copies of one mark, each holding what stood where it stands or
+    /// not, and a restoration of it or not: whether the merge can offer the
+    /// assistant's wording back, and whether it still holds the restoration
+    /// the assistant has to be told of.
+    ///
+    /// The first of those is why a wording is kept beside the marks and
+    /// unioned rather than carried on the mark: a mark's own fields are
+    /// settled by the greater encoding at an equal version, and a copy with
+    /// one more key is always the smaller, so a writer that knew nothing of
+    /// wordings would strip every one of them and win.
+    @Test func reviewWording() throws {
+        func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
+        let when = Date(timeIntervalSince1970: 0)
+        func copy(_ one: String, _ wording: String, _ restored: String) -> LampWritingReview {
+            var review = LampWritingReview(writingID: "w")
+            if one == "r" {
+                review.retired.append(.init(id: id(1), retiredAt: when))
+            } else if let version = Int(one), version > 0 {
+                review.marks.append(.init(
+                    id: id(1), pieces: [.init(text: "m1v\(version)", before: "", after: "", hint: 0)],
+                    version: version, markedAt: when, turnID: nil
+                ))
+            }
+            if wording == "true" {
+                review.wordings.append(.init(
+                    markID: id(1), old: "as it was", lead: "", trail: "",
+                    markedDigest: LampWritingReview.digest(of: "as it is"), wasUnread: false
+                ))
+            }
+            if restored == "true" {
+                review.restorations.append(.init(
+                    markID: id(1), turnID: nil, restored: "as it was", discarded: "as it is",
+                    restoredAt: when
+                ))
+            }
+            return review
+        }
+        try conform("reviewWording") { f in
+            let merged = copy(f[0], f[1], f[2]).merged(with: copy(f[3], f[4], f[5]))
+            let offers = merged.marks.contains { $0.id == id(1) }
+                && merged.wordings.contains { $0.markID == id(1) }
+            let restored = merged.restorations.contains { $0.markID == id(1) }
+            return String(offers) == f[6] && String(restored) == f[7]
         }
     }
 

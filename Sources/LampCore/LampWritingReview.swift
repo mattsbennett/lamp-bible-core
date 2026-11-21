@@ -46,15 +46,22 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     public var retired: [Retirement]
     /// Parts of marks cleared.
     public var clearances: [Clearance]
+    /// What stood where each mark stands, for a writer who wants it back.
+    public var wordings: [Wording]
+    /// The wordings put back, for the assistant to be told of.
+    public var restorations: [Restoration]
 
     public init(
-        writingID: String, marks: [Mark] = [], retired: [Retirement] = [], clearances: [Clearance] = []
+        writingID: String, marks: [Mark] = [], retired: [Retirement] = [], clearances: [Clearance] = [],
+        wordings: [Wording] = [], restorations: [Restoration] = []
     ) {
         self.formatVersion = Self.formatVersion
         self.writingID = writingID
         self.marks = marks
         self.retired = retired
         self.clearances = clearances
+        self.wordings = wordings
+        self.restorations = restorations
     }
 
     /// Some words of a mark, or a place where words were taken out and none
@@ -133,6 +140,77 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             self.pieces = pieces
             self.version = version
             self.clearedAt = LampWritingReview.toTheMillisecond(clearedAt)
+        }
+    }
+
+    /// What stood where a mark stands, so the writer can put it back.
+    ///
+    /// Kept beside the marks rather than on them, and merged by union.
+    /// A mark's own fields are settled by `later(_:_:)`, which at an equal
+    /// version takes the greater encoding — and with sorted keys a copy
+    /// carrying one more key is always the smaller of the two, so a device
+    /// running a core that knows nothing of this would strip it and win
+    /// every tie. A union has no tie to lose: whichever side has the entry
+    /// keeps it.
+    public struct Wording: Codable, Equatable, Hashable, Sendable {
+        public let markID: UUID
+        /// The words the assistant replaced; empty where it only put words
+        /// in, which a restore takes back out.
+        public let old: String
+        /// The spaces and line breaks the mark's range was trimmed of
+        /// (`trimmed(_:in:)`), which a restore takes with it. A mark covers
+        /// the words a reader sees changed, so a restore of those alone
+        /// would leave the space the assistant put in beside them: "one two"
+        /// made "one three two" and restored would read "one  two", and an
+        /// inserted paragraph would leave an empty one behind.
+        public let lead: String
+        public let trail: String
+        /// `digest(of:)` the words as they were marked. A restore is offered
+        /// only while exactly those words still stand: inside a passage the
+        /// writer has since edited, nothing here can tell their words from
+        /// the assistant's, and a restore would take both.
+        public let markedDigest: String
+        /// Whether the words coming back were themselves marked and unread
+        /// when this mark was made — a second draft within one turn, or a
+        /// turn writing inside a passage still to be read. Put back
+        /// unmarked, they would be unread work that looked read.
+        public let wasUnread: Bool
+
+        public init(
+            markID: UUID, old: String, lead: String, trail: String, markedDigest: String, wasUnread: Bool
+        ) {
+            self.markID = markID
+            self.old = old
+            self.lead = lead
+            self.trail = trail
+            self.markedDigest = markedDigest
+            self.wasUnread = wasUnread
+        }
+    }
+
+    /// A wording the writer put back, for the assistant to be told of.
+    ///
+    /// It hears only what is still marked, in the note each turn is sent
+    /// with, so a change put back is a change it knows nothing about: it
+    /// would make it again, and mark it again. Recorded here because this
+    /// record is what reaches the Mac that hosts the turn when the restore
+    /// was made on a phone.
+    public struct Restoration: Codable, Equatable, Hashable, Sendable {
+        public let markID: UUID
+        public let turnID: UUID?
+        /// The words put back, and the assistant's that went.
+        public let restored: String
+        public let discarded: String
+        public let restoredAt: Date
+
+        public init(
+            markID: UUID, turnID: UUID?, restored: String, discarded: String, restoredAt: Date
+        ) {
+            self.markID = markID
+            self.turnID = turnID
+            self.restored = restored
+            self.discarded = discarded
+            self.restoredAt = LampWritingReview.toTheMillisecond(restoredAt)
         }
     }
 
@@ -408,11 +486,48 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         var result = carried(to: new, from: [old], at: date)
         let alignment = LampTextAlignment(from: old, to: new)
         let target = new as NSString
-        let changed = alignment.segments.filter { !$0.isEqual }.map { Self.trimmed($0.new, in: target) }
+        let source = old as NSString
+        // Each change with the whole of its new range beside the trimmed one
+        // the mark covers, and the old words it stands in the place of: what
+        // a restore needs, and what nothing else here keeps.
+        let changes = alignment.segments.filter { !$0.isEqual }
+            .map { (trimmed: Self.trimmed($0.new, in: target), whole: $0.new, old: $0.old) }
+        // What of the old text was still to be read. Words put back there by
+        // a restore are read work only if they were read before.
+        let unread = located(in: old).flatMap(\.ranges)
         let anchor = Self.digest(of: new)
-        for range in Self.coalesced(changed, joiningAcross: target) {
-            result.marks.append(Mark(
+        for range in Self.coalesced(changes.map { $0.trimmed }, joiningAcross: target) {
+            let mark = Mark(
                 pieces: [Self.piece(range, in: target, anchoredIn: anchor)], markedAt: date, turnID: turnID
+            )
+            result.marks.append(mark)
+            // Several changes can coalesce into one mark — across a space,
+            // or across a word or two that stayed — and the old words the
+            // whole of it replaced run from the first to the last, which is
+            // contiguous because the segments tile both texts. A mark no
+            // change can be found for keeps no wording, and is not offered.
+            let covered = changes.filter {
+                $0.trimmed.location >= range.location && NSMaxRange($0.trimmed) <= NSMaxRange(range)
+            }
+            guard let first = covered.min(by: { $0.whole.location < $1.whole.location }),
+                  let last = covered.max(by: { NSMaxRange($0.whole) < NSMaxRange($1.whole) })
+            else { continue }
+            let replaced = NSRange(
+                location: first.old.location, length: NSMaxRange(last.old) - first.old.location
+            )
+            let lead = NSRange(
+                location: first.whole.location, length: max(0, range.location - first.whole.location)
+            )
+            let trail = NSRange(
+                location: NSMaxRange(range), length: max(0, NSMaxRange(last.whole) - NSMaxRange(range))
+            )
+            result.wordings.append(Wording(
+                markID: mark.id,
+                old: source.substring(with: replaced),
+                lead: lead.length > 0 ? target.substring(with: lead) : "",
+                trail: trail.length > 0 ? target.substring(with: trail) : "",
+                markedDigest: Self.digest(of: target.substring(with: range)),
+                wasUnread: replaced.length > 0 && unread.contains { Self.touches($0, replaced) }
             ))
         }
         return result
@@ -530,6 +645,197 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return result.tidied().carryingWriterEdit(from: current, to: restored, at: date)
     }
 
+    // MARK: Putting a wording back
+
+    /// A mark whose words can be put back exactly as they stood.
+    public struct Restorable: Equatable, Sendable {
+        public let markID: UUID
+        /// What a restore replaces: the mark's words, and the spaces the
+        /// assistant put in with them.
+        public let range: NSRange
+        /// What stands there now, and what would stand there instead — both,
+        /// because a writer about to press this is comparing, and because
+        /// where the assistant only took words out there is nothing to see.
+        public let words: String
+        public let restored: String
+        /// Whether what comes back is itself still to be read.
+        public let wasUnread: Bool
+
+        public init(
+            markID: UUID, range: NSRange, words: String, restored: String, wasUnread: Bool
+        ) {
+            self.markID = markID
+            self.range = range
+            self.words = words
+            self.restored = restored
+            self.wasUnread = wasUnread
+        }
+    }
+
+    /// One text put in the place of another.
+    public struct Edit: Equatable, Sendable {
+        public let markID: UUID
+        public let range: NSRange
+        public let replacement: String
+        /// Whether what it puts back is still to be read.
+        public let unread: Bool
+    }
+
+    /// The marks to put back and the edits that do it, **last first**, so
+    /// that each range still means what it meant when the plan was made.
+    public struct RestorePlan: Equatable, Sendable {
+        public let edits: [Edit]
+        public var marks: [UUID] { edits.map(\.markID) }
+    }
+
+    /// The marks in `text` that can be put back, in the order they stand.
+    ///
+    /// A mark is offered whole and only while it is still exactly the words
+    /// that were marked: one piece, nothing cleared out of it, and the
+    /// spaces the assistant put in still beside it. A passage the writer has
+    /// typed into is not offered at all — nothing here can tell their words
+    /// from the assistant's inside it, and a restore would take both. A mark
+    /// made before wordings were kept, or whose wording a writer that knew
+    /// nothing of them dropped, has none and is not offered.
+    public func restorable(in text: String) -> [Restorable] {
+        guard !wordings.isEmpty else { return [] }
+        let source = text as NSString
+        let byMark = Dictionary(wordings.map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first })
+        let cleared = Set(clearances.map(\.markID))
+        var result: [Restorable] = []
+        for mark in located(in: text) {
+            guard let wording = byMark[mark.id], !cleared.contains(mark.id), mark.ranges.count == 1
+            else { continue }
+            let range = mark.ranges[0]
+            guard Self.digest(of: source.substring(with: range)) == wording.markedDigest,
+                  let extended = Self.extended(range, by: wording, in: source)
+            else { continue }
+            result.append(Restorable(
+                markID: mark.id,
+                range: extended,
+                words: source.substring(with: extended),
+                restored: wording.old,
+                wasUnread: wording.wasUnread
+            ))
+        }
+        return result
+    }
+
+    /// Every mark the selection touches put back, or nil where any one of
+    /// them cannot be.
+    ///
+    /// All of them or none: a restore cannot be made of part of a passage,
+    /// the way a clear can, so a selection holding one mark that has been
+    /// typed into is refused whole rather than quietly leaving it behind.
+    /// Nil, too, where two marks claim the same spaces between them, which
+    /// one restore would take twice.
+    public func restorePlan(for range: NSRange, in text: String) -> RestorePlan? {
+        let touched = located(in: text).filter { $0.ranges.contains { Self.touches($0, range) } }
+        guard !touched.isEmpty else { return nil }
+        let offered = Dictionary(
+            restorable(in: text).map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        var plan: [Restorable] = []
+        for mark in touched {
+            guard let one = offered[mark.id] else { return nil }
+            plan.append(one)
+        }
+        let ordered = plan.sorted { $0.range.location < $1.range.location }
+        for (earlier, later) in zip(ordered, ordered.dropFirst()) {
+            guard NSMaxRange(earlier.range) <= later.range.location else { return nil }
+        }
+        return RestorePlan(edits: ordered.reversed().map {
+            Edit(markID: $0.markID, range: $0.range, replacement: $0.restored, unread: $0.wasUnread)
+        })
+    }
+
+    /// The record after a plan was applied, the writing going from `text` to
+    /// `restored`.
+    ///
+    /// The marks put back are retired, and what each held is recorded for
+    /// the assistant to be told; words that were themselves still to be read
+    /// are marked again, under fresh ids, since nobody has read them; and
+    /// every other mark is carried across the text the restore made, which
+    /// is nobody's new work.
+    ///
+    /// `restored` is what the surface that made the edits ended up holding,
+    /// not what this worked out they would come to: the visual page writes
+    /// its own Markdown, and a word of it may be spelled another way. So the
+    /// words put back are found again in it by their own text, nearest where
+    /// the edit was made, and one that cannot be found is left unmarked
+    /// rather than marked somewhere else.
+    ///
+    /// A mark made here keeps no wording of its own: what stood before it is
+    /// the assistant's wording that was just put back, and putting *that*
+    /// back would be making the change again, not restoring anything.
+    public func restoringWording(
+        _ plan: RestorePlan, from text: String, to restored: String, at date: Date = Date()
+    ) -> LampWritingReview {
+        guard !plan.edits.isEmpty else { return self }
+        let put = Set(plan.marks)
+        let turns = Dictionary(marks.map { ($0.id, $0.turnID) }, uniquingKeysWith: { first, _ in first })
+        let held = Dictionary(
+            restorable(in: text).map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        var result = self
+        for id in plan.marks {
+            result.retired.append(Retirement(id: id, retiredAt: date))
+            guard let one = held[id] else { continue }
+            result.restorations.append(Restoration(
+                markID: id, turnID: turns[id] ?? nil,
+                restored: one.restored, discarded: one.words, restoredAt: date
+            ))
+        }
+        result.marks.removeAll { put.contains($0.id) }
+        result = result.tidied().carryingWriterEdit(from: text, to: restored, at: date)
+        let target = restored as NSString
+        let anchor = Self.digest(of: restored)
+        for edit in plan.edits where edit.unread && !edit.replacement.isEmpty {
+            guard let found = Self.nearest(edit.replacement, in: target, to: edit.range.location)
+            else { continue }
+            result.marks.append(Mark(
+                pieces: [Self.piece(Self.trimmed(found, in: target), in: target, anchoredIn: anchor)],
+                markedAt: date,
+                turnID: turns[edit.markID] ?? nil
+            ))
+        }
+        return result.tidied()
+    }
+
+    /// `range` with the spaces the assistant put in beside its words, where
+    /// those still stand there; nil where they do not, which is the writer
+    /// having typed at its edge.
+    private static func extended(_ range: NSRange, by wording: Wording, in text: NSString) -> NSRange? {
+        let lead = (wording.lead as NSString).length
+        let trail = (wording.trail as NSString).length
+        let start = range.location - lead
+        let end = NSMaxRange(range) + trail
+        guard start >= 0, end <= text.length,
+              text.substring(with: NSRange(location: start, length: lead)) == wording.lead,
+              text.substring(with: NSRange(location: NSMaxRange(range), length: trail)) == wording.trail
+        else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// Where `words` stand in `text` nearest `location`; nil where they do
+    /// not stand there at all.
+    private static func nearest(_ words: String, in text: NSString, to location: Int) -> NSRange? {
+        guard !words.isEmpty else { return nil }
+        var best: NSRange?
+        var search = NSRange(location: 0, length: text.length)
+        while search.length > 0 {
+            let found = text.range(of: words, options: .literal, range: search)
+            guard found.location != NSNotFound else { break }
+            if best.map({ abs(found.location - location) < abs($0.location - location) }) ?? true {
+                best = found
+            }
+            search = NSRange(
+                location: found.location + 1, length: text.length - found.location - 1
+            )
+        }
+        return best
+    }
+
     /// The record with what another copy of it knows. Each mark either has,
     /// at the higher version of the two; less every mark either retired;
     /// with every part either cleared. The same whichever side merges.
@@ -550,6 +856,25 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         for clearance in clearances + other.clearances where retiredByID[clearance.markID] == nil {
             clearancesByID[clearance.id] = clearancesByID[clearance.id].map { Self.later($0, clearance) } ?? clearance
         }
+        // A union, with nothing held back: a wording is made once and never
+        // changed, and a copy written by a core that does not know of them
+        // has none rather than an older one, so whichever side has it is
+        // right. One whose mark has gone is dropped by tidying rather than
+        // here, so that a merge is a union and nothing else — which is what
+        // `mergeReview` is proved of in SyncMerge.lean, and what keeps two
+        // devices' merges the same in any order or grouping.
+        var wordingsByMark: [UUID: Wording] = [:]
+        for wording in wordings + other.wordings {
+            wordingsByMark[wording.markID] = wordingsByMark[wording.markID]
+                .map { Self.later($0, wording) } ?? wording
+        }
+        // Kept though their mark is retired: a restore is what retired it,
+        // and the assistant has still to be told.
+        var restorationsByMark: [UUID: Restoration] = [:]
+        for restoration in restorations + other.restorations {
+            restorationsByMark[restoration.markID] = restorationsByMark[restoration.markID]
+                .map { Self.later($0, restoration) } ?? restoration
+        }
         var result = LampWritingReview(writingID: writingID)
         result.formatVersion = max(formatVersion, other.formatVersion)
         result.marks = marksByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -557,6 +882,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             .map { Retirement(id: $0.key, retiredAt: $0.value) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         result.clearances = clearancesByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        result.wordings = wordingsByMark.values.sorted { $0.markID.uuidString < $1.markID.uuidString }
+        result.restorations = restorationsByMark.values
+            .sorted { $0.markID.uuidString < $1.markID.uuidString }
         return result
     }
 
@@ -574,14 +902,22 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     public func pruning(before date: Date) -> LampWritingReview {
         var result = self
         result.retired.removeAll { $0.retiredAt < date }
-        return result
+        // A restoration is there to be told to the assistant, which happens
+        // on the turns just after it. Past the same window as a retirement
+        // it is only size, and a record that only grows is resent for ever.
+        result.restorations.removeAll { $0.restoredAt < date }
+        // A merge is a union, so it can leave the wording of a mark the
+        // other copy had retired. Nothing offers it — a restore needs the
+        // mark — and this is where it goes.
+        return result.tidied()
     }
 
-    /// Without the clearances of marks no longer held.
+    /// Without the clearances and wordings of marks no longer held.
     private func tidied() -> LampWritingReview {
         let held = Set(marks.map(\.id))
         var result = self
         result.clearances.removeAll { !held.contains($0.markID) }
+        result.wordings.removeAll { !held.contains($0.markID) }
         return result
     }
 
@@ -593,7 +929,40 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         sorted.marks.sort { $0.id.uuidString < $1.id.uuidString }
         sorted.retired.sort { $0.id.uuidString < $1.id.uuidString }
         sorted.clearances.sort { $0.id.uuidString < $1.id.uuidString }
+        sorted.wordings.sort { $0.markID.uuidString < $1.markID.uuidString }
+        sorted.restorations.sort { $0.markID.uuidString < $1.markID.uuidString }
         return try Self.encoder.encode(sorted)
+    }
+
+    /// Written by hand for one reason: a record that has never held a
+    /// wording or a restoration encodes to the bytes it always did, so
+    /// nothing is resent for a field it has nothing to say in. Read by hand
+    /// for the other: every record made before them has neither key, and so
+    /// has every record a writer that does not know them has rewritten.
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion, writingID, marks, retired, clearances, wordings, restorations
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decode(Int.self, forKey: .formatVersion)
+        writingID = try container.decode(String.self, forKey: .writingID)
+        marks = try container.decode([Mark].self, forKey: .marks)
+        retired = try container.decode([Retirement].self, forKey: .retired)
+        clearances = try container.decode([Clearance].self, forKey: .clearances)
+        wordings = try container.decodeIfPresent([Wording].self, forKey: .wordings) ?? []
+        restorations = try container.decodeIfPresent([Restoration].self, forKey: .restorations) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(formatVersion, forKey: .formatVersion)
+        try container.encode(writingID, forKey: .writingID)
+        try container.encode(marks, forKey: .marks)
+        try container.encode(retired, forKey: .retired)
+        try container.encode(clearances, forKey: .clearances)
+        if !wordings.isEmpty { try container.encode(wordings, forKey: .wordings) }
+        if !restorations.isEmpty { try container.encode(restorations, forKey: .restorations) }
     }
 
     public static func decoded(from data: Data) throws -> LampWritingReview {
@@ -775,6 +1144,22 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// changed — on another device, by a writer who never saw the clear —
     /// and the rest of what was cleared showed as marked again. A word with
     /// one side of its context intact is still found. A point is one piece.
+    /// Two copies of one wording or restoration, which are made once and
+    /// never changed: the same one on both sides, whichever side merges.
+    private static func later(_ lhs: Wording, _ rhs: Wording) -> Wording {
+        guard lhs != rhs else { return lhs }
+        let left = (try? encoder.encode(lhs)) ?? Data()
+        let right = (try? encoder.encode(rhs)) ?? Data()
+        return left.lexicographicallyPrecedes(right) ? rhs : lhs
+    }
+
+    private static func later(_ lhs: Restoration, _ rhs: Restoration) -> Restoration {
+        guard lhs != rhs else { return lhs }
+        let left = (try? encoder.encode(lhs)) ?? Data()
+        let right = (try? encoder.encode(rhs)) ?? Data()
+        return left.lexicographicallyPrecedes(right) ? rhs : lhs
+    }
+
     static func wordPieces(of range: NSRange, in text: NSString, anchoredIn: String? = nil) -> [Piece] {
         guard range.length > 0 else { return [piece(range, in: text, anchoredIn: anchoredIn)] }
         var pieces: [Piece] = []
