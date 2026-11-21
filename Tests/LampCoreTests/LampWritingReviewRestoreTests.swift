@@ -521,6 +521,8 @@ struct LampWritingReviewRestoreTests {
         #expect(found("_new_", in: "newspaper") == nil)
         #expect(found("new", in: "newspaper") == nil)
         #expect(found("new", in: "new paper") == "new")
+        // Nor the letter in front of the accent that belongs to it.
+        #expect(found("e", in: "e\u{301}tude") == nil)
         // A list item comes back in the page's own markers, and stops at
         // the end of its own block rather than taking the next one's.
         #expect(found("*    foo", in: "- foo\n\n- bar") == "- foo")

@@ -1105,7 +1105,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         let exact = NSRange(location: location, length: length)
         if NSMaxRange(exact) <= text.length, text.substring(with: exact) == words,
            !touchesAWord(before: exact.location, in: text),
-           !touchesAWord(at: NSMaxRange(exact), in: text) {
+           !touchesAWord(at: NSMaxRange(exact), in: text),
+           // And whole characters: "e" matches the front of a decomposed
+           // "é", whose accent is neither letter nor number, so the word
+           // checks let it through.
+           wholeCharacters(exact, in: text) {
             return exact
         }
         let wanted = wordsOf(words)
@@ -1119,13 +1123,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         let crossesBlocks = words.contains { $0.isNewline }
         for width in widths {
             let span = NSRange(location: location, length: width)
-            guard NSMaxRange(span) <= text.length,
-                  // Whole characters: a span may not stop between a letter
-                  // and the accent that belongs to it.
-                  text.rangeOfComposedCharacterSequence(at: span.location).location == span.location,
-                  NSMaxRange(span) == text.length
-                      || text.rangeOfComposedCharacterSequence(at: NSMaxRange(span)).location == NSMaxRange(span)
-            else { continue }
+            guard NSMaxRange(span) <= text.length, wholeCharacters(span, in: text) else { continue }
             let found = text.substring(with: span)
             guard wordsOf(found) == wanted else { continue }
             // Whole words: "new" is not the start of "newspaper".
@@ -1137,6 +1135,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             return span
         }
         return nil
+    }
+
+    /// Whether a span begins and ends between characters rather than
+    /// inside one: a letter and the accent that belongs to it are one.
+    private static func wholeCharacters(_ span: NSRange, in text: NSString) -> Bool {
+        guard text.rangeOfComposedCharacterSequence(at: span.location).location == span.location
+        else { return false }
+        guard NSMaxRange(span) < text.length else { return true }
+        return text.rangeOfComposedCharacterSequence(at: NSMaxRange(span)).location == NSMaxRange(span)
     }
 
     private static func touchesAWord(before location: Int, in text: NSString) -> Bool {
