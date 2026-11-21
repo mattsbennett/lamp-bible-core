@@ -184,6 +184,11 @@ struct LampWritingReviewRestoreTests {
         let typed = "One alpha mine beta three."
         let carried = review.carryingWriterEdit(from: new, to: typed)
         #expect(carried.restoring(inside, in: typed) == .notExact)
+        // And a passage whose wording was never kept is a different no: the
+        // writer did nothing to it, so they are not told that they did.
+        var stripped = review
+        stripped.wordings = []
+        #expect(stripped.restoring(inside, in: new) == .notKept)
     }
 
     @Test func aMarkMadeBeforeWordingsWereKeptIsNotOffered() throws {

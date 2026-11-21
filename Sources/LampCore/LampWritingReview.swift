@@ -740,10 +740,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     public enum RestoreOutcome: Equatable, Sendable {
         /// The selection stands in nothing the assistant changed.
         case nothingTouched
-        /// It does, but at least one of those passages cannot be put back
-        /// exactly: typed into, partly read, or made before wordings were
-        /// kept.
+        /// It does, and what stood there is kept, but the words have moved
+        /// since: typed into, partly read, or the spaces beside them gone.
+        /// The writer did this, and can be told so.
         case notExact
+        /// What stood there was never kept: the change was made before Lamp
+        /// kept it, or by a device whose Lamp does not. Nothing the writer
+        /// did, so they are not told they edited it.
+        case notKept
         case plan(RestorePlan)
     }
 
@@ -755,11 +759,17 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// Refused too where two marks claim the same spaces between them,
     /// which one restore would take twice.
     public func restoring(_ range: NSRange, in text: String) -> RestoreOutcome {
-        guard let plan = restorePlan(for: range, in: text) else {
-            let touched = located(in: text).contains { $0.ranges.contains { Self.touches($0, range) } }
-            return touched ? .notExact : .nothingTouched
-        }
-        return .plan(plan)
+        if let plan = restorePlan(for: range, in: text) { return .plan(plan) }
+        let touched = located(in: text).filter { $0.ranges.contains { Self.touches($0, range) } }
+        guard !touched.isEmpty else { return .nothingTouched }
+        // Which of them stopped it, and whether that is the writer's doing:
+        // a passage whose wording was never kept did not become unrestorable
+        // through anything they did, and telling them they edited it would
+        // be a lie they would go looking for.
+        let offered = Set(restorable(in: text).map(\.markID))
+        let kept = Set(wordings.map(\.markID))
+        let blocking = touched.map(\.id).filter { !offered.contains($0) }
+        return blocking.contains(where: { kept.contains($0) }) ? .notExact : .notKept
     }
 
     public func restorePlan(for range: NSRange, in text: String) -> RestorePlan? {
