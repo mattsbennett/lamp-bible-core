@@ -481,3 +481,90 @@ struct WritingMarkedMarkdownPlacementTests {
         )
     }
 }
+
+/// Markers placed so the Markdown still reads as what it is.
+///
+/// Every case here was a round of review on the iOS app, where this
+/// came from. The Mac's editor page fails differently — it compares
+/// what it parsed against the document it holds and refuses the marks
+/// when they differ — so there the cost is a passage with no mark on it
+/// rather than a mangled one. Both are the feature not working.
+struct WritingReviewMarkdownPlacementTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let start = String(LampWritingReview.markStart)
+    private let end = String(LampWritingReview.markEnd)
+
+    /// What a renderer is given must read as what the writing says once
+    /// the markers come out: that is the whole contract.
+    private func readsTheSame(_ marked: String) -> Bool {
+        let drawn = Markdown.drawable(marked, numbering: false)
+        return Markdown.unmarked(drawn) == Markdown.unmarked(marked)
+    }
+
+    @Test func amarkerInsideALinksAddressComesOut() {
+        let marked = "See [the note](https://example.com/\(start)a\(end))."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(!drawn.contains("example.com/\(start)"))
+        #expect(drawn.contains("(https://example.com/a)"))
+        #expect(readsTheSame(marked))
+    }
+
+    /// A marker inside an emphasis is harmless — both stars still flank
+    /// a letter, so it is still an emphasis — and is left alone.
+    @Test func amarkerInsideAnEmphasisIsLeftWhereItIs() {
+        let marked = "A *\(start)stressed\(end)* word."
+        #expect(readsTheSame(marked))
+        #expect(Markdown.drawable(marked, numbering: false).contains("*\(start)stressed"))
+    }
+
+    /// A marker that splits a run of delimiters is the one that breaks:
+    /// `**` with something between the stars is two runs of one, and the
+    /// stars are drawn instead of the strength. It is moved out.
+    @Test func amarkerSplittingADelimiterRunIsMovedOut() {
+        let marked = "A *\(start)*strong*\(end)* word."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("**"), "the run came apart: \(drawn.debugDescription)")
+        #expect(readsTheSame(marked))
+    }
+
+    @Test func amarkerBeforeAHeadingsHashMovesAfterIt() {
+        let marked = "\(start)# A heading\(end)"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.hasPrefix("# "))
+        #expect(readsTheSame(marked))
+    }
+
+    @Test func amarkerBetweenABackslashAndWhatItEscapesMovesPastIt() {
+        let marked = "A \\\(start)*not emphasis\(end)*"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("\\*"))
+        #expect(readsTheSame(marked))
+    }
+
+    /// Two gaps the iOS rounds left, taken with the lift.
+    @Test func amarkerInsideAnEntityMovesPastIt() {
+        for entity in ["&lt;", "&#65;", "&#x41;"] {
+            let inside = entity.dropLast() + start + ";"
+            let drawn = Markdown.drawable(String(inside), numbering: false)
+            #expect(drawn.hasPrefix(entity), "\(entity) came out as \(drawn.debugDescription)")
+        }
+    }
+
+    @Test func amarkedRuleIsStillARule() {
+        let marked = "\(start)---\(end)"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.hasPrefix("---"), "came out as \(drawn.debugDescription)")
+        #expect(Markdown.unmarked(drawn) == "---")
+    }
+
+    /// Numbering is for a surface that draws whatever it parses; one that
+    /// refuses marks it cannot place needs none, and the markers it is
+    /// given are the three it knows.
+    @Test func withoutNumberingNoNewCharactersAreAdded() {
+        let marked = "A \(start)changed\(end) word."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(!drawn.contains(where: { Markdown.placeDigit($0) != nil }))
+        #expect(!drawn.contains(LampWritingReviewMarkdown.placeEnd))
+        #expect(Markdown.drawable(marked).contains(LampWritingReviewMarkdown.placeEnd))
+    }
+}
