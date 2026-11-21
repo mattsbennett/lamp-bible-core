@@ -247,6 +247,55 @@ struct LampWritingReviewFileTests {
         #expect(after.retired.count == 1)
     }
 
+    /// Both sides changing one document leaves this device's body under a
+    /// copy's name: the marks were made of the words in that body, so they
+    /// go with it, and the document's own name — now holding the server's
+    /// body, which they were never made against — is left with none.
+    @Test func marksGoWithTheBodyKeptAsACopy() throws {
+        let store = try temporaryStore()
+        let id = "exhortation-2026-01-18"
+        let name = "outline.md"
+        let copy = "outline (edits from Mac, 18 January 2026).md"
+        let shown = "The flood came suddenly. Noah was ready."
+        try store.save(
+            LampWritingReview(writingID: id, document: name)
+                .markingAssistantChange(from: "Noah was ready.", to: shown)
+        )
+
+        let deletions = try LampWritingDocumentReview.moved(
+            name, to: copy, writingID: id, in: store, now: 100
+        )
+        #expect(try store.review(writingID: id, document: copy).highlightedRanges(in: shown).count == 1)
+        #expect(try store.review(writingID: id, document: name).marks.isEmpty)
+        // The record says which document it is for, or the next device to
+        // take it in would refuse it.
+        #expect(try store.review(writingID: id, document: copy).document == copy)
+        // And the record left behind is recorded as deleted, or it comes
+        // back from the server on the next pass.
+        #expect(deletions.keys.sorted() == [
+            try LampSyncFolderLayout.writingReviewPath(writingID: id, document: name)
+        ])
+    }
+
+    /// A deleted document's marks go with it, and the deletion is recorded
+    /// so other devices sweep theirs. A rename is a deletion and a new
+    /// document, so its marks are gone: carrying them over would mean
+    /// deciding two documents are one from their words alone.
+    @Test func adeletedDocumentsMarksAreSweptAndRecorded() throws {
+        let store = try temporaryStore()
+        let id = "exhortation-2026-01-18"
+        try store.save(LampWritingReview(writingID: id, document: "outline.md"))
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: id, document: "outline.md")
+
+        let deletions = try LampWritingDocumentReview.removed(
+            "outline.md", writingID: id, in: store, members: [path: 500], now: 100
+        )
+        #expect(try store.reviewed().isEmpty)
+        // Never before the write the manifest holds: a device whose clock
+        // runs ahead wrote it after this one's now.
+        #expect(deletions == [path: 501])
+    }
+
     /// A piece that began or ended inside a word is still found there.
     @Test func apieceInsideAWordIsFoundInsideOne() {
         let piece = LampWritingReview.Piece(text: "our", before: "col", after: "", hint: 3)

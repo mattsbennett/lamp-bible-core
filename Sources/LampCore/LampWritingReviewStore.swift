@@ -330,4 +330,66 @@ public enum LampWritingDocumentReview {
         }
         return moved
     }
+
+    /// Moves a document's marks to the copy its body was kept as.
+    ///
+    /// Both sides changing one document leaves this device's body under a
+    /// copy's name and the server's at the document's own. The marks were
+    /// made of the words in the body that moved, so they move with it:
+    /// left where they were, they would be drawn against a body they were
+    /// never made against — the server's — and the copy, which is the
+    /// text they are the marks of, would carry none.
+    ///
+    /// The same when a deletion made elsewhere is carried out here and
+    /// this device's edits are kept instead.
+    ///
+    /// Returns the deletion to record for the record left behind, by path
+    /// and time, so other devices drop their copy of it; nothing where
+    /// there was no record to move.
+    @discardableResult
+    public static func moved(
+        _ document: String, to copy: String, writingID: String,
+        in store: LampWritingReviewStore, members: [String: Int64] = [:], now: Int64
+    ) throws -> [String: Int64] {
+        let from = try store.url(writingID: writingID, document: document)
+        guard FileManager.default.fileExists(atPath: from.path) else { return [:] }
+        var review = try store.review(writingID: writingID, document: document)
+        review.document = copy
+        _ = try store.save(review)
+        try store.remove(writingID: writingID, document: document)
+        return try deletion(of: document, writingID: writingID, members: members, now: now)
+    }
+
+    /// Sweeps a deleted document's marks, and says what deletion to record
+    /// so other devices sweep theirs.
+    ///
+    /// A document deleted anywhere is deleted everywhere, and its marks go
+    /// with it. A record only removed here would be fetched again from the
+    /// server's copy on the next pass, for ever, by a device that will
+    /// never hold the document it belongs to.
+    ///
+    /// A rename is a deletion and a new document, here as everywhere else
+    /// in sync: the marks of the name that went are gone, and the name
+    /// that arrived has none. Carrying them across would mean deciding
+    /// that two documents are one from their words alone, which no part of
+    /// Lamp does.
+    @discardableResult
+    public static func removed(
+        _ document: String, writingID: String,
+        in store: LampWritingReviewStore, members: [String: Int64] = [:], now: Int64
+    ) throws -> [String: Int64] {
+        try store.remove(writingID: writingID, document: document)
+        return try deletion(of: document, writingID: writingID, members: members, now: now)
+    }
+
+    /// Dated now, and never before the write the manifest holds: a device
+    /// whose clock runs ahead can have written the file after this one's
+    /// now, and a deletion dated before that write would lose to it — the
+    /// file would come back down and be swept again on every pass.
+    private static func deletion(
+        of document: String, writingID: String, members: [String: Int64], now: Int64
+    ) throws -> [String: Int64] {
+        let path = try LampSyncFolderLayout.writingReviewPath(writingID: writingID, document: document)
+        return [path: members[path].map { max(now, $0 + 1) } ?? now]
+    }
 }
