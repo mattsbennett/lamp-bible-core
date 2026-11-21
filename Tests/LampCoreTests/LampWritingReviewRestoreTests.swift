@@ -230,6 +230,70 @@ struct LampWritingReviewRestoreTests {
         #expect(marked(put.review, in: put.text).isEmpty, "it was read before, and it is read now")
     }
 
+    // MARK: Asked about many at once, and asked by id
+
+    @Test func askingAboutEveryPassageGivesTheSameAnswersAsAskingOneByOne() throws {
+        let old = "Alpha stands here.\n\nBeta stands here.\n\nGamma stands here."
+        let new = "Alpha sits here.\n\nBeta stands here.\n\nGamma rests here."
+        var review = empty.markingAssistantChange(from: old, to: new)
+        // One of them typed into, one with its wording gone: all three
+        // answers in one text.
+        let typed = "Alpha sits calmly here.\n\nBeta stands here.\n\nGamma rests here."
+        review = review.carryingWriterEdit(from: new, to: typed)
+        let ranges = review.highlightedRanges(in: typed)
+        let together = review.restoring(ranges, in: typed)
+        #expect(together.map(\.outcome) == ranges.map { review.restoring($0, in: typed) })
+        #expect(together.allSatisfy { !$0.marks.isEmpty }, "each names the marks its range stands in")
+    }
+
+    @Test func aRangeThatStandsInNoMarkNamesNoMarks() throws {
+        let review = empty.markingAssistantChange(from: "One two.", to: "One alpha two.")
+        let answers = review.restoring([NSRange(location: 0, length: 1)], in: "One alpha two.")
+        #expect(answers[0].marks.isEmpty)
+        #expect(answers[0].outcome == .nothingTouched)
+    }
+
+    /// A surface that cannot hand a range back exactly — the visual page
+    /// widens one to a whole link — asks for the passages by id instead.
+    @Test func marksCanBeAskedForByIDRatherThanByRange() throws {
+        let old = "The quick brown fox jumps."
+        let new = "The slow red fox jumps."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let id = try #require(review.marks.first?.id)
+        guard case .plan(let plan) = review.restoring(marks: [id], in: new) else {
+            Issue.record("the mark can be put back")
+            return
+        }
+        #expect(plan.marks == [id])
+        #expect(applying(plan, to: new) == old)
+    }
+
+    /// Everything between the marks named goes back with them, so a stretch
+    /// that holds a third marked passage is refused: what the writer was
+    /// shown would not be what they got.
+    @Test func askingByIDRefusesWhenTheStretchHoldsAnotherMark() throws {
+        let old = "Alpha one here. Beta two here. Gamma three here."
+        let new = "Alpha ONE here. Beta TWO here. Gamma THREE here."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        #expect(review.marks.count == 3)
+        let ends = review.located(in: new)
+        let first = try #require(ends.first?.id)
+        let last = try #require(ends.last?.id)
+        #expect(review.restoring(marks: [first, last], in: new) == .notExact)
+        // The pair either side of nothing else is fine.
+        let middle = ends[1].id
+        guard case .plan = review.restoring(marks: [first, middle], in: new) else {
+            Issue.record("two marks with nothing marked between them go back together")
+            return
+        }
+    }
+
+    @Test func askingByIDForAMarkThatHasGoneIsRefused() throws {
+        let review = empty.markingAssistantChange(from: "One two.", to: "One alpha two.")
+        #expect(review.restoring(marks: [UUID()], in: "One alpha two.") == .notExact)
+        #expect(review.restoring(marks: [], in: "One alpha two.") == .nothingTouched)
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

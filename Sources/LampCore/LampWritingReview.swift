@@ -691,6 +691,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         public let unread: Bool
     }
 
+    /// What a restore of one range would come to, with the marks that range
+    /// stands in — the identity a surface uses when it cannot hand the
+    /// range itself back.
+    public struct RangeRestore: Equatable, Sendable {
+        public let marks: [UUID]
+        public let outcome: RestoreOutcome
+    }
+
     /// The marks to put back and the edits that do it, **last first**, so
     /// that each range still means what it meant when the plan was made.
     public struct RestorePlan: Equatable, Sendable {
@@ -708,12 +716,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// made before wordings were kept, or whose wording a writer that knew
     /// nothing of them dropped, has none and is not offered.
     public func restorable(in text: String) -> [Restorable] {
+        restorable(in: text, located: located(in: text))
+    }
+
+    /// `restorable(in:)` where the marks have already been found, for a
+    /// caller asking about many ranges of one text: finding them again for
+    /// each is quadratic in the marks, and measured at ten seconds for a
+    /// thousand of them.
+    private func restorable(in text: String, located: [Located]) -> [Restorable] {
         guard !wordings.isEmpty else { return [] }
         let source = text as NSString
         let byMark = Dictionary(wordings.map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first })
         let cleared = Set(clearances.map(\.markID))
         var result: [Restorable] = []
-        for mark in located(in: text) {
+        for mark in located {
             guard let wording = byMark[mark.id], !cleared.contains(mark.id), mark.ranges.count == 1
             else { continue }
             let range = mark.ranges[0]
@@ -759,25 +775,89 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// Refused too where two marks claim the same spaces between them,
     /// which one restore would take twice.
     public func restoring(_ range: NSRange, in text: String) -> RestoreOutcome {
-        if let plan = restorePlan(for: range, in: text) { return .plan(plan) }
-        let touched = located(in: text).filter { $0.ranges.contains { Self.touches($0, range) } }
+        let found = located(in: text)
+        return restoring(
+            range, in: text, located: found,
+            offered: Self.byMark(restorable(in: text, located: found))
+        )
+    }
+
+    /// What a restore of each range would come to, worked out together.
+    ///
+    /// For an editor asking about every passage it draws at once — the
+    /// visual page is told what each of its marks would do when the marks
+    /// are sent. Asking one at a time finds every mark again for each
+    /// range, which is quadratic and was measured at about ten seconds for
+    /// a thousand marks.
+    ///
+    /// Each answer names the marks its range stands in, so that a surface
+    /// which cannot hand a range back exactly — the page widens one to a
+    /// whole link — can ask for those marks by id instead.
+    public func restoring(_ ranges: [NSRange], in text: String) -> [RangeRestore] {
+        let found = located(in: text)
+        let offered = Self.byMark(restorable(in: text, located: found))
+        return ranges.map { range in
+            RangeRestore(
+                marks: found.filter { $0.ranges.contains { Self.touches($0, range) } }.map(\.id),
+                outcome: restoring(range, in: text, located: found, offered: offered)
+            )
+        }
+    }
+
+    /// The restore of exactly these marks, wherever they stand in `text`.
+    ///
+    /// For a surface that presses a button belonging to passages rather
+    /// than to a range of text. Everything between them goes back too, so
+    /// this refuses unless the stretch they span holds nothing else that is
+    /// marked: what the writer was shown is then what they get.
+    public func restoring(marks ids: Set<UUID>, in text: String) -> RestoreOutcome {
+        guard !ids.isEmpty else { return .nothingTouched }
+        let found = located(in: text)
+        let wanted = found.filter { ids.contains($0.id) }
+        guard wanted.count == ids.count else { return .notExact }
+        let edges = wanted.flatMap(\.ranges)
+        guard let start = edges.map(\.location).min(),
+              let end = edges.map({ NSMaxRange($0) }).max() else { return .nothingTouched }
+        let span = NSRange(location: start, length: end - start)
+        let outcome = restoring(
+            span, in: text, located: found,
+            offered: Self.byMark(restorable(in: text, located: found))
+        )
+        guard case .plan(let plan) = outcome else { return outcome }
+        return Set(plan.marks) == ids ? outcome : .notExact
+    }
+
+    private static func byMark(_ offered: [Restorable]) -> [UUID: Restorable] {
+        Dictionary(offered.map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private func restoring(
+        _ range: NSRange, in text: String, located: [Located], offered: [UUID: Restorable]
+    ) -> RestoreOutcome {
+        if let plan = restorePlan(for: range, located: located, offered: offered) { return .plan(plan) }
+        let touched = located.filter { $0.ranges.contains { Self.touches($0, range) } }
         guard !touched.isEmpty else { return .nothingTouched }
         // Which of them stopped it, and whether that is the writer's doing:
         // a passage whose wording was never kept did not become unrestorable
         // through anything they did, and telling them they edited it would
         // be a lie they would go looking for.
-        let offered = Set(restorable(in: text).map(\.markID))
         let kept = Set(wordings.map(\.markID))
-        let blocking = touched.map(\.id).filter { !offered.contains($0) }
+        let blocking = touched.map(\.id).filter { offered[$0] == nil }
         return blocking.contains(where: { kept.contains($0) }) ? .notExact : .notKept
     }
 
     public func restorePlan(for range: NSRange, in text: String) -> RestorePlan? {
-        let touched = located(in: text).filter { $0.ranges.contains { Self.touches($0, range) } }
-        guard !touched.isEmpty else { return nil }
-        let offered = Dictionary(
-            restorable(in: text).map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
+        let found = located(in: text)
+        return restorePlan(
+            for: range, located: found, offered: Self.byMark(restorable(in: text, located: found))
         )
+    }
+
+    private func restorePlan(
+        for range: NSRange, located: [Located], offered: [UUID: Restorable]
+    ) -> RestorePlan? {
+        let touched = located.filter { $0.ranges.contains { Self.touches($0, range) } }
+        guard !touched.isEmpty else { return nil }
         var plan: [Restorable] = []
         for mark in touched {
             guard let one = offered[mark.id] else { return nil }
