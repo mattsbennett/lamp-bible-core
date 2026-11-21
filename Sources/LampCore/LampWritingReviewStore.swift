@@ -176,6 +176,18 @@ public struct LampWritingReviewStore: Sendable {
     /// The same by the document's key rather than its name, for a caller
     /// working from the files that are there — a pass carrying out a
     /// deletion — which has the key and may have no name to look it up by.
+    /// A record by its document's key rather than its name, for a caller
+    /// working from the files that are there. Nil where there is none.
+    public func review(writingID: String, documentKey: String?) throws -> LampWritingReview? {
+        let url = rootURL.appendingPathComponent(
+            try LampSyncFolderLayout.writingReviewPath(writingID: writingID, documentKey: documentKey)
+        )
+        return try Self.locks.holding(url) {
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return try LampWritingReview.decoded(from: Data(contentsOf: url))
+        }
+    }
+
     public func remove(writingID: String, documentKey: String?) throws {
         try removeFile(at: rootURL.appendingPathComponent(
             try LampSyncFolderLayout.writingReviewPath(writingID: writingID, documentKey: documentKey)
