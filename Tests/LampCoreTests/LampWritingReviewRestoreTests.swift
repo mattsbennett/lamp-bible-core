@@ -634,6 +634,36 @@ struct LampWritingReviewRestoreTests {
         #expect(!plan.stands(from: held, in: "Alpha ONE here. Beta one here."))
     }
 
+    /// Where the same words stand twice, no comparison of text can say
+    /// which copy a restore put back, so it says so.
+    @Test func thePoofSaysUnknownRatherThanGuessBetweenIdenticalPassages() throws {
+        let old = "Echo.\n\nOther."
+        let new = "Changed.\n\nOther."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        let held = plan.applied(to: new)
+        #expect(held == old)
+        #expect(plan.standing(from: held, in: held) == .stands)
+        // A second copy of the restored words, and then one of them gone:
+        // the text reads the same whichever was taken out.
+        let twice = "Echo.\n\nEcho."
+        #expect(plan.standing(from: twice, in: "Echo.") == .unknown)
+    }
+
+    /// Typing into the gap a restore left is not the assistant's words
+    /// coming back.
+    @Test func typingWhereWordsWereTakenOutIsNotUndoingTheRestore() throws {
+        let old = "One two."
+        let new = "One alpha two."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        let held = plan.applied(to: new)
+        #expect(held == old)
+        #expect(plan.standing(from: held, in: "One mine two.") == .stands)
+        // And the assistant's own words there are.
+        #expect(plan.standing(from: held, in: new) == .gone)
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

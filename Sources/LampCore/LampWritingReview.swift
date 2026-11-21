@@ -767,50 +767,97 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             }
         }
 
-        /// Whether `text` still holds what this restore put back, given
-        /// `held` — the writing exactly as the restore left it.
+        /// What became of this restore in `text`, given `held` — the
+        /// writing exactly as the restore left it.
         ///
-        /// This is what a host must ask before recording a restore
-        /// against a text it saved, and nothing it keeps can answer it:
-        /// a generation, a lineage or a position does not move when the
-        /// writer presses ⌘Z.
+        /// A host recording a restore must know that the text it saved
+        /// holds it, and nothing a host keeps can say: a generation, a
+        /// lineage or a position does not move when the writer presses
+        /// ⌘Z. So the words are asked. The writing as the restore left it
+        /// is aligned with the text in hand: what it put back must still
+        /// be there — moved by whatever was typed around it, but not
+        /// rewritten — and where it took the assistant's words out and
+        /// put nothing back, they must not have come again.
         ///
-        /// Asked of the words, by aligning the writing as the restore
-        /// left it with the text in hand. The words the restore put back
-        /// must still be there — moved by whatever was typed around them,
-        /// but not rewritten — and where it took the assistant's words
-        /// out and put nothing back, they must not have come again.
+        /// **Three answers, because two would be a lie.** Where the same
+        /// words stand twice, the text cannot say which copy a restore
+        /// put back: `Echo.\n\nEcho.` with the first restored and then
+        /// deleted reads exactly like the second restored and the first
+        /// deleted. No comparison of text can tell those apart, so this
+        /// says `unknown` and the caller keeps waiting rather than
+        /// recording something it cannot see.
         ///
-        /// It was first asked of the marks: while none of the marks a
-        /// restore put back could be found, the text was said to hold it.
-        /// That is neither sufficient nor necessary. A later turn
-        /// rewriting the passage leaves no mark either, and would have
-        /// certified a restore that is not there; and a passage the
-        /// assistant had only taken words out of is marked by a point,
-        /// which is found again by the words either side of it even once
-        /// the sentence is back — so ordinary restores of a deletion were
-        /// read as undone. It also asked a record that a clear or a carry
-        /// from another device could change underneath it.
-        public func stands(from held: String, in text: String) -> Bool {
-            guard !edits.isEmpty else { return false }
-            if held == text { return true }
-            let alignment = LampTextAlignment(from: held, to: text, absorbingSmallEqualities: false)
+        /// It was first asked of the marks — while none of a restore's
+        /// marks could be found, the text was said to hold it — which was
+        /// neither sufficient (a later turn rewriting the passage leaves
+        /// no mark either) nor necessary (a deletion's point is found
+        /// again by the words either side of it once the sentence is
+        /// back).
+        public enum Standing: Equatable, Sendable {
+            case stands
+            case gone
+            case unknown
+        }
+
+        public func standing(from held: String, in text: String) -> Standing {
+            guard !edits.isEmpty else { return .gone }
+            if held == text { return .stands }
+            let source = held as NSString
             let target = text as NSString
-            for (edit, range) in spans {
+            let alignment = LampTextAlignment(from: held, to: text, absorbingSmallEqualities: false)
+            var answer = Standing.stands
+            for (edit, planned) in spans {
+                // The plan's own arithmetic is in the writing it worked
+                // the restore out in; a surface may have written `held`
+                // its own way, so the words are found in `held` first.
+                guard let range = LampWritingReview.put(edit.replacement, at: planned.location, in: source)
+                    ?? (planned.length == 0 ? planned : nil)
+                else { return .unknown }
                 if range.length > 0 {
-                    // Through unchanged, wherever it now stands.
+                    // Twice in the writing it was put into, and the text
+                    // cannot say which copy survived.
+                    if LampWritingReview.appearsMoreThanOnce(source.substring(with: range), in: source) {
+                        answer = .unknown
+                        continue
+                    }
                     let carried = LampWritingReview.coalesced(alignment.carried(range), joiningAcross: nil)
-                    guard carried.count == 1, carried[0].length == range.length else { return false }
+                    guard carried.count == 1, carried[0].length == range.length else { return .gone }
                 } else {
                     // Nothing was put back here, so the proof is that what
-                    // was taken out has not returned.
-                    let carried = alignment.carried(range)
-                    guard let point = carried.first else { return false }
-                    guard LampWritingReview.put(edit.discarded, at: point.location, in: target) == nil
-                    else { return false }
+                    // was taken out has not come again. Anything else
+                    // written at that place — the writer typing into the
+                    // gap — is not the assistant's words returning.
+                    if let point = alignment.carried(range).first?.location {
+                        if LampWritingReview.put(edit.discarded, at: point, in: target) != nil { return .gone }
+                        continue
+                    }
+                    // The gap itself was written into, so it cannot be
+                    // carried. Where it stands now is found from the
+                    // character before it, which was not: if the words
+                    // taken out are there, they came back; if what is
+                    // there is the writer's own, the restore stands.
+                    let neighbour = range.location > 0
+                        ? NSRange(location: range.location - 1, length: 1)
+                        : NSRange(location: 0, length: min(1, source.length))
+                    if let carried = alignment.carried(neighbour).first {
+                        let at = range.location > 0 ? NSMaxRange(carried) : carried.location
+                        if LampWritingReview.put(edit.discarded, at: at, in: target) != nil { return .gone }
+                        continue
+                    }
+                    // Nowhere in the writing is a clear no; anywhere else
+                    // is a question the text cannot answer.
+                    if !target.contains(edit.discarded) { continue }
+                    answer = .unknown
                 }
             }
-            return true
+            return answer
+        }
+
+        /// Whether `text` still holds what this restore put back. Where
+        /// the words cannot say, this says no: a caller that must choose
+        /// should ask `standing(from:in:)` and keep waiting on `unknown`.
+        public func stands(from held: String, in text: String) -> Bool {
+            standing(from: held, in: text) == .stands
         }
     }
 
@@ -1158,6 +1205,25 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// there whose words are these words is taken, within a little of the
     /// length expected. Only there: the same words in another sentence are
     /// another passage, at any distance.
+    /// Whether these words stand more than once in a text, as whole
+    /// words: where they do, no comparison of text can say which copy a
+    /// restore put back.
+    static func appearsMoreThanOnce(_ words: String, in text: NSString) -> Bool {
+        guard !words.isEmpty else { return false }
+        var found = 0
+        var search = NSRange(location: 0, length: text.length)
+        while search.length > 0 {
+            let at = text.range(of: words, options: .literal, range: search)
+            guard at.location != NSNotFound else { break }
+            if put(words, at: at.location, in: text) != nil {
+                found += 1
+                if found > 1 { return true }
+            }
+            search = NSRange(location: at.location + 1, length: text.length - at.location - 1)
+        }
+        return false
+    }
+
     static func put(_ words: String, at location: Int?, in text: NSString) -> NSRange? {
         guard let location, location >= 0 else { return nil }
         let length = (words as NSString).length
