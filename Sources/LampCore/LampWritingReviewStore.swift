@@ -289,3 +289,45 @@ final class FileLocks: @unchecked Sendable {
         return try body()
     }
 }
+
+/// Keeping a document's marks on its words as the writer edits it.
+///
+/// A mark is anchored in the words it was made of, so a text it was never
+/// anchored in has to be carried to: without that, the first keystroke
+/// after a mark strays every one of them. The writing's own prose has had
+/// this since marks existed, carried by the save that writes the body.
+/// The documents beside it are written by another path on each app — the
+/// workspace's own store on the Mac, the Files sheet on the phone — and
+/// neither carried anything, so the rule is here rather than twice.
+public enum LampWritingDocumentReview {
+    /// Carries a document's marks onto the text just written.
+    ///
+    /// `known` is every text of this document the app has held, newest
+    /// first or in any order: a mark anchored in one of them is carried
+    /// from it, and one anchored in a text nobody here has seen — a copy
+    /// the phone saved and this device has not read — is left alone,
+    /// unless its words stand just once in a text that is known. `saved`
+    /// is counted as known, so a carry that has already happened is not
+    /// made twice.
+    ///
+    /// Returns whether anything moved, which is whether a pass has
+    /// something to send.
+    @discardableResult
+    public static func carry(
+        _ saved: String, ofDocument document: String, writingID: String,
+        from known: [String], in store: LampWritingReviewStore, at date: Date = Date()
+    ) throws -> Bool {
+        let url = try store.url(writingID: writingID, document: document)
+        // No record is the ordinary case — most documents are never
+        // marked — and reading one in to write it back unchanged would
+        // date a file every save, which a pass would then send.
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        var moved = false
+        _ = try store.update(writingID: writingID, document: document) { review in
+            let carried = review.carryingToText(saved, from: known, at: date)
+            moved = carried != review
+            return carried
+        }
+        return moved
+    }
+}

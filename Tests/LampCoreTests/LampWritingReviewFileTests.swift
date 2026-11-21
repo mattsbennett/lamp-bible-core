@@ -89,6 +89,51 @@ struct LampWritingReviewFileTests {
         #expect(try store.reviewed().map(\.writingID) == ["kept"])
     }
 
+    /// A document's marks are carried onto the text each save writes, or
+    /// the first keystroke after a mark strays every one of them.
+    @Test func adocumentsMarksAreCarriedOntoWhatItsSaveWrote() throws {
+        let store = try temporaryStore()
+        let id = "exhortation-2026-01-18"
+        let name = "outline.md"
+        let old = "The flood came suddenly. Noah was ready."
+        // The writer rewrites the marked sentence and keeps the other.
+        let new = "The rain fell for days. Noah was ready."
+
+        try store.save(
+            LampWritingReview(writingID: id, document: name)
+                .markingAssistantChange(from: "Noah was ready.", to: old)
+        )
+        let marked = try store.review(writingID: id, document: name)
+        #expect(marked.highlightedRanges(in: old).count == 1)
+        #expect(marked.marks.count == 1)
+
+        #expect(try LampWritingDocumentReview.carry(
+            new, ofDocument: name, writingID: id, from: [old], in: store
+        ))
+        // The words the mark was made of are gone, so the mark is retired
+        // rather than left to be found in whatever text comes next.
+        // The words the mark was made of are gone, so the mark is retired
+        // rather than surviving as whatever scraps of it happen to stand.
+        let carried = try store.review(writingID: id, document: name)
+        #expect(carried.highlightedRanges(in: new).isEmpty)
+        #expect(carried.retired.count == 1)
+        // Again moves nothing, so a save has nothing to send.
+        #expect(try LampWritingDocumentReview.carry(
+            new, ofDocument: name, writingID: id, from: [old, new], in: store
+        ) == false)
+    }
+
+    /// A document nobody marked has no file, and a save of it writes none:
+    /// a record read in and written back would date a file every save, and
+    /// a pass would send it.
+    @Test func asaveOfAnUnmarkedDocumentWritesNoRecord() throws {
+        let store = try temporaryStore()
+        #expect(try LampWritingDocumentReview.carry(
+            "Anything.", ofDocument: "outline.md", writingID: "w", from: [], in: store
+        ) == false)
+        #expect(try store.reviewed().isEmpty)
+    }
+
     /// Every id a writing can have has a file, named so it reads back as
     /// exactly that id; the ids Lamp makes itself are their own names.
     @Test func everyWritingIdHasAReviewFileThatReadsBackAsIt() throws {
@@ -173,6 +218,33 @@ struct LampWritingReviewFileTests {
         let elsewhere = marked.carryingWriterEdit(from: shown, to: edited)
         let merged = cleared.merged(with: elsewhere)
         #expect(merged.highlightedRanges(in: edited).map { (edited as NSString).substring(with: $0) } == ["lamp"])
+    }
+
+    /// A mark survives a writer's deletion of part of it, and their typing
+    /// inside it, but not their rewriting of it: then what is left is
+    /// scraps of their own sentence, not the assistant's passage.
+    @Test func amarkSurvivesAnEditOfItButNotARewriteOfIt() {
+        let before = "Noah was ready."
+        let shown = "The flood came suddenly. Noah was ready."
+        let marked = LampWritingReview(writingID: "w").markingAssistantChange(from: before, to: shown)
+        #expect(marked.highlightedRanges(in: shown).count == 1)
+
+        // Typed into: still the assistant's passage, in two runs.
+        let typed = "The flood came very suddenly. Noah was ready."
+        #expect(!marked.carryingWriterEdit(from: shown, to: typed)
+            .highlightedRanges(in: typed).isEmpty)
+
+        // Part deleted: what is left stands together, and is still theirs.
+        let shortened = "The flood came. Noah was ready."
+        #expect(!marked.carryingWriterEdit(from: shown, to: shortened)
+            .highlightedRanges(in: shortened).isEmpty)
+
+        // Rewritten: "The" and the full stop stand by coincidence, which is
+        // not the mark. It is retired rather than drawn in scraps for ever.
+        let rewritten = "The rain fell for days. Noah was ready."
+        let after = marked.carryingWriterEdit(from: shown, to: rewritten)
+        #expect(after.highlightedRanges(in: rewritten).isEmpty)
+        #expect(after.retired.count == 1)
     }
 
     /// A piece that began or ended inside a word is still found there.

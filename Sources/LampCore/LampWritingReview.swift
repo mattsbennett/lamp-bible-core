@@ -1628,6 +1628,39 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     // MARK: Internals
 
+    /// What survives of a marked passage, where it is still that passage
+    /// rather than scraps of it.
+    ///
+    /// Carrying asks the alignment for every run that stayed the same,
+    /// because placing a position wants all of them. For a mark that is
+    /// too much: a writer who rewrites a marked sentence leaves a few
+    /// characters standing by coincidence — "The" at the start, the full
+    /// stop at the end — and the mark survives as those, so the writer's
+    /// own words are drawn as the assistant's, in scraps, for ever.
+    ///
+    /// What tells that apart from an honest survival is not how much is
+    /// left but how thinly it is spread. A writer who deletes half of a
+    /// marked sentence leaves the rest standing together, and it is still
+    /// the assistant's; a writer who types a word into the middle of one
+    /// leaves two runs with their own word between them, and it still is.
+    /// A rewrite leaves a little, spread across a sentence of the
+    /// writer's own. So the runs must fill at least half of the span they
+    /// are spread over; under that, none of it is the mark, and the
+    /// caller looks for the whole passage standing elsewhere exactly as
+    /// it does when nothing survived.
+    ///
+    /// A run of no length is dropped where anything was marked: it cannot
+    /// be drawn. Where nothing was — a mark on the point a passage was
+    /// deleted from — that run is the mark, and it is kept.
+    static func enough(of marked: NSRange, in survived: [NSRange]) -> [NSRange] {
+        guard marked.length > 0 else { return survived }
+        let drawable = survived.filter { $0.length > 0 }
+        guard let first = drawable.first, let last = drawable.last else { return [] }
+        let span = NSMaxRange(last) - first.location
+        let total = drawable.reduce(0) { $0 + $1.length }
+        return total * 2 >= span ? drawable : []
+    }
+
     /// Every mark carried from `old` to `new`, under its own id: the words
     /// of it that survive, a raised version where they moved or changed, and
     /// retired where none survive.
@@ -1677,8 +1710,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                     result.append(piece)
                     continue
                 }
-                var survived = Self.coalesced(
-                    alignment(index).carried(range).map { Self.trimmed($0, in: targetText) }, joiningAcross: nil
+                var survived = Self.enough(
+                    of: range,
+                    in: Self.coalesced(
+                        alignment(index).carried(range).map { Self.trimmed($0, in: targetText) },
+                        joiningAcross: nil
+                    )
                 )
                 if survived.isEmpty, let kept = Self.survivingCopy(of: range, in: sources[index] as NSString,
                                                                    through: alignment(index), to: targetText) {
