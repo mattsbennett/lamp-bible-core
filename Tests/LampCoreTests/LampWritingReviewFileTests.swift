@@ -542,19 +542,56 @@ struct WritingReviewMarkdownPlacementTests {
     }
 
     /// Two gaps the iOS rounds left, taken with the lift.
-    @Test func amarkerInsideAnEntityMovesPastIt() {
-        for entity in ["&lt;", "&#65;", "&#x41;"] {
-            let inside = entity.dropLast() + start + ";"
-            let drawn = Markdown.drawable(String(inside), numbering: false)
-            #expect(drawn.hasPrefix(entity), "\(entity) came out as \(drawn.debugDescription)")
+    /// An entity is one token: a marker anywhere inside it leaves `&lt;`
+    /// showing as itself. A change from `&lt;` to `&gt;` marks the name,
+    /// not the `&` or the `;`, which is the case rules looking only at
+    /// those two ends never caught.
+    @Test func markersAnywhereInAnEntityMovePastIt() {
+        for (entity, marked) in [
+            ("&lt;", "&lt\(start);"),
+            ("&gt;", "&\(start)gt\(end);"),
+            ("&#65;", "&#6\(start)5\(end);"),
+            ("&#x41;", "&\(start)#x41;"),
+        ] {
+            let drawn = Markdown.drawable(marked, numbering: false)
+            #expect(drawn.hasPrefix(entity), "\(marked.debugDescription) came out as \(drawn.debugDescription)")
+            #expect(Markdown.unmarked(drawn) == entity)
         }
     }
 
-    @Test func amarkedRuleIsStillARule() {
-        let marked = "\(start)---\(end)"
+    /// A rule may hold nothing but its own character and spaces, so it
+    /// can carry no marker at all: one left anywhere on the line makes
+    /// it a paragraph of hyphens. The markers go to the line before.
+    @Test func amarkedRuleKeepsItsLineToItself() {
+        let marked = "Before.\n\(start)---\(end)\nAfter."
         let drawn = Markdown.drawable(marked, numbering: false)
-        #expect(drawn.hasPrefix("---"), "came out as \(drawn.debugDescription)")
-        #expect(Markdown.unmarked(drawn) == "---")
+        let lines = drawn.components(separatedBy: "\n")
+        #expect(lines[1] == "---", "the rule line came out as \(lines[1].debugDescription)")
+        #expect(lines[0].contains(where: Markdown.isMarker), "the passage lost its place")
+        #expect(Markdown.unmarked(drawn) == "Before.\n---\nAfter.")
+    }
+
+    /// A rule that begins the writing puts them on the line after.
+    @Test func arulesMarkersGoForwardWhereThereIsNoLineBefore() {
+        let marked = "\(start)---\(end)\nAfter."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        let lines = drawn.components(separatedBy: "\n")
+        #expect(lines[0] == "---")
+        #expect(lines[1].contains(where: Markdown.isMarker))
+    }
+
+    /// The block pass runs before the inline one. An italic heading
+    /// arrives as a marker before the `#` and another inside the closing
+    /// underscore; moving the first after the `#` last would leave the
+    /// opening underscore between two letters, opening nothing.
+    @Test func amarkedItalicHeadingStillOpensItsEmphasis() {
+        let marked = "\(start)# _new_\(end)"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.hasPrefix("# "))
+        let body = drawn.dropFirst(2)
+        #expect(body.hasPrefix("_") || body.dropFirst().hasPrefix("_"),
+                "the emphasis cannot open: \(drawn.debugDescription)")
+        #expect(Markdown.unmarked(drawn) == "# _new_")
     }
 
     /// Numbering is for a surface that draws whatever it parses; one that

@@ -185,15 +185,21 @@ public enum LampWritingReviewMarkdown {
             kept = kept.replacing(#/([^\s\\_*\x{E000}-\x{E01A}])([_*]+)([\x{E000}-\x{E01A}]+)/#) {
                 "\($0.output.1)\($0.output.3)\($0.output.2)"
             }
-            // An HTML entity is one token to a renderer: a marker inside
-            // it leaves `&lt;` showing as itself. The markers go after
-            // the semicolon. (A gap the iOS rounds left; taken with the
-            // lift.)
-            kept = kept.replacing(#/&([A-Za-z][A-Za-z0-9]*|#[0-9]{1,7}|#[Xx][0-9A-Fa-f]{1,6})([\x{E000}-\x{E01A}]+);/#) {
-                "&\($0.output.1);\($0.output.2)"
-            }
-            kept = kept.replacing(#/&([\x{E000}-\x{E01A}]+)([A-Za-z][A-Za-z0-9]*|#[0-9]{1,7}|#[Xx][0-9A-Fa-f]{1,6});/#) {
-                "&\($0.output.2);\($0.output.1)"
+            // An HTML entity is one token to a renderer: a marker
+            // anywhere inside it leaves `&lt;` showing as itself. Every
+            // marker in it goes after the semicolon, wherever in it it
+            // fell — a change from `&lt;` to `&gt;` marks the name, not
+            // the `&` or the `;`, so rules that only looked at those two
+            // ends never fired.
+            kept = kept.replacing(#/&([A-Za-z0-9#xX\x{E000}-\x{E01A}]{1,12});/#) { match in
+                let inside = String(match.output.1)
+                let name = unmarked(inside)
+                guard inside != name,
+                      name.wholeMatch(
+                          of: #/[A-Za-z][A-Za-z0-9]*|#[0-9]{1,7}|#[Xx][0-9A-Fa-f]{1,6}/#
+                      ) != nil
+                else { return String(match.output.0) }
+                return "&\(name);\(markers(in: inside))"
             }
             if kept == before { break }
         }
@@ -238,14 +244,7 @@ public enum LampWritingReviewMarkdown {
     /// moved after it, so the line still reads as what it is.
     public static func clearingBlockSyntax(_ line: String) -> String {
         let bare = unmarked(line)
-        // A rule is the whole line, so a marker anywhere in it stops it
-        // being one and the hyphens are drawn. Its markers go to the end
-        // as points: there is nothing in a rule to mark a part of. (A
-        // gap the iOS rounds left; taken with the lift.)
-        if bare.wholeMatch(of: #/\s*((?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})/#) != nil,
-           line.contains(where: isMarker) {
-            return bare + asPoints(markers(in: line))
-        }
+
         guard let match = bare.prefixMatch(
             of: #/\s*(?:#{1,6}\s+|[-*+]\s+|\d{1,9}[.)]\s+|>\s?)/#
         ) else { return line }
@@ -260,6 +259,14 @@ public enum LampWritingReviewMarkdown {
         return head + asPoints(moved) + rest
     }
 
+    /// Whether a line is a rule — three or more of one mark, and
+    /// nothing else. A rule may hold nothing but its own character and
+    /// spaces, so it can carry no marker at all: a marker left anywhere
+    /// on the line makes it a paragraph of hyphens.
+    static func isRule(_ line: String) -> Bool {
+        line.wholeMatch(of: #/\s*((?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})/#) != nil
+    }
+
     /// Marked Markdown a renderer can be given: every marker moved to a
     /// place that leaves the Markdown reading as it did without them.
     ///
@@ -272,9 +279,33 @@ public enum LampWritingReviewMarkdown {
     /// dropped from — and the extra characters would only be more for it
     /// to strip.
     public static func drawable(_ marked: String, numbering: Bool = true) -> String {
-        (numbering ? numbered(marked) : marked)
+        // The block pass first: moving a marker past a heading's `#` can
+        // leave it between a word and the underscore that opened an
+        // emphasis, which the inline pass then puts right. The other way
+        // round the block pass undoes the inline one's work, and no
+        // amount of stripping markers afterwards repairs a parse.
+        var lines = (numbering ? numbered(marked) : marked)
             .components(separatedBy: "\n")
-            .map { clearingBlockSyntax(movingMarksOutOfLinks($0)) }
-            .joined(separator: "\n")
+            .map { movingMarksOutOfLinks(clearingBlockSyntax($0)) }
+        // A rule can carry no marker, so its markers go to the end of
+        // the line before it — the nearest place that is still a place,
+        // and the passage keeps something to reach. A rule that begins
+        // the writing keeps them on the line after.
+        for (index, line) in lines.enumerated() where isRule(unmarked(line)) {
+            guard line.contains(where: isMarker) else { continue }
+            let moved = asPoints(markers(in: line))
+            lines[index] = unmarked(line)
+            if index > 0 {
+                lines[index - 1] += moved
+            } else if lines.count > 1 {
+                lines[1] = moved + lines[1]
+            } else {
+                // A rule and nothing else: there is nowhere to put them
+                // that is not the rule, so it stops being one. Better a
+                // paragraph of hyphens than a change nobody can see.
+                lines[index] = unmarked(line) + moved
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 }
