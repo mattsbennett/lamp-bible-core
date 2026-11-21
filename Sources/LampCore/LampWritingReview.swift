@@ -232,6 +232,33 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
     }
 
+    /// What a restore of one drawn passage would come to, as an editor's
+    /// page is told it: the words that stand there now, the words that
+    /// would stand there instead, and — where there is nothing to offer
+    /// but something to say — why not.
+    ///
+    /// Both apps worked this out for themselves, the same way, which is
+    /// one more place for them to drift apart on a rule neither of them
+    /// owns.
+    public struct Change: Equatable, Encodable, Sendable {
+        /// The marks this passage stands in, as the page names them when
+        /// it presses: their ids sorted and joined. A page cannot hand
+        /// back a range of the writing's Markdown — it widens one to a
+        /// whole link — so it hands back this.
+        public let id: String
+        public let now: String
+        /// Nil where there is nothing to put back here.
+        public let before: String?
+        /// `edited` where the passage cannot be put back exactly because
+        /// the writer has been at it. Never said of one whose wording was
+        /// simply never kept: they did nothing to that.
+        public let reason: String?
+
+        public static func id(of marks: [UUID]) -> String {
+            marks.map(\.uuidString).sorted().joined(separator: ",")
+        }
+    }
+
     /// A mark found in a text, by the editors that draw it.
     public struct Located: Equatable, Sendable {
         public let id: UUID
@@ -718,6 +745,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     public struct RestorePlan: Equatable, Sendable {
         public let edits: [Edit]
         public var marks: [UUID] { edits.map(\.markID) }
+
+        /// `text` with these edits made. They come last first, so each
+        /// range still means what it meant when the plan was made.
+        public func applied(to text: String) -> String {
+            let result = NSMutableString(string: text)
+            for edit in edits { result.replaceCharacters(in: edit.range, with: edit.replacement) }
+            return result as String
+        }
     }
 
     /// The marks in `text` that can be put back, in the order they stand.
@@ -817,6 +852,46 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 marks: found.filter { $0.ranges.contains { Self.touches($0, range) } }.map(\.id),
                 outcome: restoring(range, in: text, located: found, offered: offered)
             )
+        }
+    }
+
+    /// What a restore of each drawn passage would come to, in the order
+    /// they stand — which is the order a page finds its markers in.
+    ///
+    /// `nil` is nothing to offer and nothing to say: the wording was
+    /// never kept, which is not the writer's doing and not theirs to fix.
+    public func changes(in text: String, ranges: [NSRange]) -> [Change?] {
+        let source = text as NSString
+        return restoring(ranges, in: text).enumerated().map { index, answer in
+            let range = ranges[index]
+            switch answer.outcome {
+            case .plan(let plan):
+                let ordered = plan.edits.sorted { $0.range.location < $1.range.location }
+                guard let first = ordered.first, let last = ordered.last else { return nil }
+                let span = NSRange(
+                    location: first.range.location,
+                    length: NSMaxRange(last.range) - first.range.location
+                )
+                var before = ""
+                var at = span.location
+                for edit in ordered {
+                    before += source.substring(with: NSRange(location: at, length: edit.range.location - at))
+                    before += edit.replacement
+                    at = NSMaxRange(edit.range)
+                }
+                before += source.substring(with: NSRange(location: at, length: NSMaxRange(span) - at))
+                return Change(
+                    id: Change.id(of: answer.marks),
+                    now: source.substring(with: span), before: before, reason: nil
+                )
+            case .notExact:
+                return Change(
+                    id: Change.id(of: answer.marks),
+                    now: source.substring(with: range), before: nil, reason: "edited"
+                )
+            case .notKept, .nothingTouched:
+                return nil
+            }
         }
     }
 
@@ -1198,10 +1273,24 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return result.tidied()
     }
 
-    /// Without the clearances and wordings of marks no longer held.
+    /// Without the clearances and wordings of marks no longer held, and
+    /// with one retirement to a mark.
+    ///
+    /// A restore retires the mark it put back, and the save that follows
+    /// carries the marks into the new text, where that mark's words have
+    /// gone — so it was retired twice, and the record grew a duplicate
+    /// every time. The earliest stands: that is the one a merge keeps.
     private func tidied() -> LampWritingReview {
         let held = Set(marks.map(\.id))
         var result = self
+        var earliest: [UUID: Date] = [:]
+        for retirement in result.retired {
+            earliest[retirement.id] = min(earliest[retirement.id] ?? retirement.retiredAt, retirement.retiredAt)
+        }
+        if earliest.count != result.retired.count {
+            result.retired = earliest.map { Retirement(id: $0.key, retiredAt: $0.value) }
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+        }
         result.clearances.removeAll { !held.contains($0.markID) }
         result.wordings.removeAll { !held.contains($0.markID) }
         result.voidedWordings.removeAll { !held.contains($0) }

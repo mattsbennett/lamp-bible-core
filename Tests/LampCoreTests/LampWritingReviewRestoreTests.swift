@@ -528,6 +528,58 @@ struct LampWritingReviewRestoreTests {
         #expect(found("_unread_", in: "*unread* after") == "*unread*")
     }
 
+    // MARK: What an editor's page is told
+
+    @Test func aPageIsToldWhatEachPassageWouldComeTo() throws {
+        let review = empty.markingAssistantChange(from: "The quick brown fox.", to: "The slow red fox.")
+        let text = "The slow red fox."
+        let told = review.changes(in: text, ranges: review.highlightedRanges(in: text))
+        #expect(told.count == 1)
+        #expect(told[0]?.now == "slow red")
+        #expect(told[0]?.before == "quick brown")
+        #expect(told[0]?.reason == nil)
+        #expect(told[0]?.id == review.marks.first?.id.uuidString)
+    }
+
+    @Test func aPassageTypedIntoSaysWhyAndOneNeverKeptSaysNothing() throws {
+        let review = empty.markingAssistantChange(from: "One two three.", to: "One alpha beta three.")
+        let typed = "One alpha mine beta three."
+        let carried = review.carryingWriterEdit(from: "One alpha beta three.", to: typed)
+        let told = carried.changes(in: typed, ranges: carried.highlightedRanges(in: typed))
+        #expect(told.contains { $0?.reason == "edited" })
+        #expect(told.allSatisfy { $0?.before == nil })
+
+        var stripped = review
+        stripped.wordings = []
+        let text = "One alpha beta three."
+        #expect(stripped.changes(in: text, ranges: stripped.highlightedRanges(in: text)) == [nil])
+    }
+
+    @Test func severalMarksInOnePassageAreNamedTogetherAndSorted() throws {
+        let one = UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001")!
+        let two = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        #expect(LampWritingReview.Change.id(of: [one, two]) == "\(two.uuidString),\(one.uuidString)")
+    }
+
+    @Test func aPlanAppliesItselfToTheText() throws {
+        let review = empty.markingAssistantChange(from: "One two.", to: "One alpha two.")
+        let plan = try #require(review.restorePlan(for: whole("One alpha two."), in: "One alpha two."))
+        #expect(plan.applied(to: "One alpha two.") == "One two.")
+    }
+
+    /// A restore retires the mark it put back; the save that follows
+    /// carries the marks into the new text, where that mark's words have
+    /// gone, and retired it again.
+    @Test func aMarkIsRetiredOnceHoweverManyTimesItIsRetired() throws {
+        let old = "The quick brown fox."
+        let new = "The slow red fox."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let put = try #require(restoring(review, in: new))
+        let after = put.review.carryingWriterEdit(from: new, to: put.text)
+        #expect(after.retired.count == 1)
+        #expect(Set(after.retired.map(\.id)).count == after.retired.count)
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {
