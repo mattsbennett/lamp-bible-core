@@ -910,12 +910,27 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                     // character before it, which was not: if the words
                     // taken out are there, they came back; if what is
                     // there is the writer's own, the restore stands.
-                    let neighbour = range.location > 0
-                        ? NSRange(location: range.location - 1, length: 1)
-                        : NSRange(location: 0, length: min(1, source.length))
-                    if let carried = alignment.carried(neighbour).first {
-                        let at = range.location > 0 ? NSMaxRange(carried) : carried.location
-                        if LampWritingReview.put(edit.discarded, at: at, in: target) != nil { return .gone }
+                    if range.location > 0 {
+                        let before = NSRange(location: range.location - 1, length: 1)
+                        if let carried = alignment.carried(before).first {
+                            if LampWritingReview.put(edit.discarded, at: NSMaxRange(carried), in: target) != nil {
+                                return .gone
+                            }
+                            continue
+                        }
+                    } else if let carried = alignment.carried(
+                        NSRange(location: 0, length: min(1, source.length))
+                    ).first {
+                        // Nothing stands before the gap, so the character
+                        // after it says where it is — and what came back
+                        // ends where that character begins, rather than
+                        // beginning where it does.
+                        let length = (edit.discarded as NSString).length
+                        if LampWritingReview.put(
+                            edit.discarded, at: carried.location - length, in: target
+                        ) != nil {
+                            return .gone
+                        }
                         continue
                     }
                     // Nowhere in the writing is a clear no; anywhere else
@@ -1190,19 +1205,26 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// retired outright, by a restore of some other passage. The marks are
     /// found in `text` by carrying from `known` first, which changes
     /// nothing stored.
+    /// `only` writes down some of a plan's passages and leaves the rest
+    /// as they were — a host settling one at a time, as the words answer
+    /// for each. The whole plan is still passed, because where each
+    /// passage ended up depends on every edit before it: a plan with its
+    /// other edits taken out gives the wrong places.
     public func restoringWording(
         _ plan: RestorePlan, from text: String, to restored: String,
+        only marks: Set<UUID>? = nil,
         carryingFrom known: [String] = [], at date: Date = Date()
     ) -> LampWritingReview {
         guard !plan.edits.isEmpty else { return self }
-        let put = Set(plan.marks)
+        let put = marks ?? Set(plan.marks)
+        guard !put.isEmpty else { return self }
         let live = known.isEmpty ? self : carryingToText(text, from: known, at: date)
         let turns = Dictionary(live.marks.map { ($0.id, $0.turnID) }, uniquingKeysWith: { first, _ in first })
         let held = Dictionary(
             live.restorable(in: text).map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
         )
         var result = self
-        for edit in plan.edits {
+        for edit in plan.edits where put.contains(edit.markID) {
             result.retired.append(Retirement(id: edit.markID, retiredAt: date))
             // From the plan, not from the record as it stands now: by the
             // time a surface has made the edit and its writing has been
@@ -1238,7 +1260,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 $0 + ($1.replacement as NSString).length - $1.range.length
             }
         }
-        for edit in plan.edits where edit.unread && !edit.replacement.isEmpty {
+        for edit in plan.edits where put.contains(edit.markID) && edit.unread && !edit.replacement.isEmpty {
             // Only where the words are: a surface that wrote its own
             // Markdown may have spelled them another way, and there is no
             // distance at which the same words elsewhere become these

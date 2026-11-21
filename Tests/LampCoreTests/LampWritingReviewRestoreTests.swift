@@ -686,6 +686,36 @@ struct LampWritingReviewRestoreTests {
         #expect(plan.standing(from: held, in: after) == .gone)
     }
 
+    /// Undo of a removal at the very start of the writing: nothing
+    /// stands before the gap, so where it is must be read from what
+    /// comes after it — and what came back ends where that begins.
+    @Test func undoingARemovalAtTheStartIsNotCertified() throws {
+        let old = "Tail."
+        let new = "Added Tail."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        let held = plan.applied(to: new)
+        #expect(held == old)
+        #expect(plan.standing(from: held, in: held) == .stands)
+        #expect(plan.standing(from: held, in: new) == .gone)
+    }
+
+    /// Some of a plan's passages written down, the rest left: the whole
+    /// plan is still what says where each one ended up.
+    @Test func someOfAPlanCanBeRecordedWithoutTakingItApart() throws {
+        let old = "Alpha stands here.\n\nBeta waits here."
+        let new = "Alpha sits here.\n\nBeta rests here."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(for: whole(new), in: new))
+        #expect(plan.edits.count == 2)
+        let first = try #require(plan.edits.first?.markID)
+        let put = review.restoringWording(plan, from: new, to: old, only: [first])
+        #expect(put.retired.map(\.id) == [first])
+        #expect(put.restorations.map(\.markID) == [first])
+        // The other is untouched and can be written down later.
+        #expect(put.marks.contains { $0.id != first })
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {
