@@ -419,6 +419,51 @@ struct LampWritingReviewRestoreTests {
         _ = copy
     }
 
+    /// Taking the wording out is not enough on its own: a copy that has
+    /// not carried the edit still holds it, and the merge would hand it
+    /// back — so Beta's untouched sentence would become restorable again
+    /// to a wording that was never Beta's.
+    @Test func aWordingThatStrayedStaysVoidAcrossAMerge() throws {
+        let start = "Alpha old here. Beta blue there."
+        let agent = "Alpha blue here. Beta blue there."
+        let before = empty.markingAssistantChange(from: start, to: agent)
+        let typed = "Alpha mine here. Beta blue there."
+        let carried = before.carryingWriterEdit(from: agent, to: typed)
+        #expect(carried.restorable(in: typed).isEmpty)
+        #expect(!carried.voidedWordings.isEmpty)
+        // The other device still holds the record as it was.
+        #expect(!before.wordings.isEmpty)
+        #expect(carried.merged(with: before).restorable(in: typed).isEmpty)
+        #expect(before.merged(with: carried).restorable(in: typed).isEmpty)
+        // And it survives the file.
+        let read = try LampWritingReview.decoded(from: try carried.encoded())
+        #expect(read.voidedWordings == carried.voidedWordings)
+        #expect(read.restorable(in: typed).isEmpty)
+    }
+
+    /// Restored words are marked again only where they are. The same
+    /// words standing elsewhere are another passage, at any distance.
+    @Test func restoredWordsAreNotMarkedSomewhereElse() throws {
+        let start = "One old here."
+        let agent = "One new here."
+        var review = empty.markingAssistantChange(from: start, to: agent)
+        let second = "One newer here."
+        review = review.markingAssistantChange(from: agent, to: second)
+        #expect(review.wordings.contains { $0.wasUnread })
+        let plan = try #require(review.restorePlan(for: whole(second), in: second))
+        // Where the plan says: the words are marked again.
+        let asPlanned = applying(plan, to: second)
+        let kept = review.restoringWording(plan, from: second, to: asPlanned)
+        #expect(marked(kept, in: asPlanned) == ["new"])
+
+        // And where a surface wrote its own text, moving them and leaving
+        // the same word standing in a sentence nobody restored: nothing is
+        // marked, rather than the wrong sentence.
+        let surfaceWrote = "A note saying new in passing. One new here."
+        let strayed = review.restoringWording(plan, from: second, to: surfaceWrote)
+        #expect(marked(strayed, in: surfaceWrote).isEmpty)
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

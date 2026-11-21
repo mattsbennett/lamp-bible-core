@@ -58,12 +58,19 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     public var clearances: [Clearance]
     /// What stood where each mark stands, for a writer who wants it back.
     public var wordings: [Wording]
+    /// Marks whose wording is no longer theirs: the passage they were made
+    /// of was rewritten, and the mark was kept alive only by the same words
+    /// standing somewhere else. Taking the wording out is not enough, since
+    /// a copy that has not carried yet still holds it and hands it back on
+    /// the next merge — so the fact that it strayed is recorded, and
+    /// unioned like everything else here.
+    public var voidedWordings: [UUID]
     /// The wordings put back, for the assistant to be told of.
     public var restorations: [Restoration]
 
     public init(
         writingID: String, marks: [Mark] = [], retired: [Retirement] = [], clearances: [Clearance] = [],
-        wordings: [Wording] = [], restorations: [Restoration] = []
+        wordings: [Wording] = [], restorations: [Restoration] = [], voidedWordings: [UUID] = []
     ) {
         self.formatVersion = Self.formatVersion
         self.writingID = writingID
@@ -72,6 +79,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         self.clearances = clearances
         self.wordings = wordings
         self.restorations = restorations
+        self.voidedWordings = voidedWordings
     }
 
     /// Some words of a mark, or a place where words were taken out and none
@@ -734,9 +742,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         let source = text as NSString
         let byMark = Dictionary(wordings.map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first })
         let cleared = Set(clearances.map(\.markID))
+        let strayed = Set(voidedWordings)
         var result: [Restorable] = []
         for mark in located {
-            guard let wording = byMark[mark.id], !cleared.contains(mark.id), mark.ranges.count == 1
+            guard let wording = byMark[mark.id], !cleared.contains(mark.id), !strayed.contains(mark.id),
+                  mark.ranges.count == 1
             else { continue }
             let range = mark.ranges[0]
             guard Self.digest(of: source.substring(with: range)) == wording.markedDigest,
@@ -974,8 +984,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             }
         }
         for edit in plan.edits where edit.unread && !edit.replacement.isEmpty {
+            // Only where the words are: a surface that wrote its own
+            // Markdown may have spelled them another way, and there is no
+            // distance at which the same words elsewhere become these
+            // ones. Unmarked is the conservative miss; marking a sentence
+            // nobody restored is not.
             guard let found = Self.put(edit.replacement, at: moved[edit.markID], in: target)
-                ?? Self.nearest(edit.replacement, in: target, to: moved[edit.markID] ?? edit.range.location)
             else { continue }
             result.marks.append(Mark(
                 pieces: [Self.piece(Self.trimmed(found, in: target), in: target, anchoredIn: anchor)],
@@ -1065,8 +1079,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         // here, so that a merge is a union and nothing else — which is what
         // `mergeReview` is proved of in SyncMerge.lean, and what keeps two
         // devices' merges the same in any order or grouping.
+        let voided = Set(voidedWordings).union(other.voidedWordings)
         var wordingsByMark: [UUID: Wording] = [:]
-        for wording in wordings + other.wordings {
+        for wording in wordings + other.wordings where !voided.contains(wording.markID) {
             wordingsByMark[wording.markID] = wordingsByMark[wording.markID]
                 .map { Self.later($0, wording) } ?? wording
         }
@@ -1091,6 +1106,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         )
         var result = LampWritingReview(writingID: writingID)
         result.formatVersion = max(formatVersion, other.formatVersion)
+        result.voidedWordings = voided.sorted { $0.uuidString < $1.uuidString }
         result.marks = marksByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
         result.retired = retiredByID
             .map { Retirement(id: $0.key, retiredAt: $0.value) }
@@ -1132,6 +1148,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         var result = self
         result.clearances.removeAll { !held.contains($0.markID) }
         result.wordings.removeAll { !held.contains($0.markID) }
+        result.voidedWordings.removeAll { !held.contains($0) }
         return result
     }
 
@@ -1145,6 +1162,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         sorted.clearances.sort { $0.id.uuidString < $1.id.uuidString }
         sorted.wordings.sort { $0.markID.uuidString < $1.markID.uuidString }
         sorted.restorations.sort { $0.markID.uuidString < $1.markID.uuidString }
+        sorted.voidedWordings.sort { $0.uuidString < $1.uuidString }
         return try Self.encoder.encode(sorted)
     }
 
@@ -1155,6 +1173,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// has every record a writer that does not know them has rewritten.
     private enum CodingKeys: String, CodingKey {
         case formatVersion, writingID, marks, retired, clearances, wordings, restorations
+        case voidedWordings
     }
 
     public init(from decoder: Decoder) throws {
@@ -1166,6 +1185,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         clearances = try container.decode([Clearance].self, forKey: .clearances)
         wordings = try container.decodeIfPresent([Wording].self, forKey: .wordings) ?? []
         restorations = try container.decodeIfPresent([Restoration].self, forKey: .restorations) ?? []
+        voidedWordings = try container.decodeIfPresent([UUID].self, forKey: .voidedWordings) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1177,6 +1197,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         try container.encode(clearances, forKey: .clearances)
         if !wordings.isEmpty { try container.encode(wordings, forKey: .wordings) }
         if !restorations.isEmpty { try container.encode(restorations, forKey: .restorations) }
+        if !voidedWordings.isEmpty { try container.encode(voidedWordings, forKey: .voidedWordings) }
     }
 
     public static func decoded(from data: Data) throws -> LampWritingReview {
@@ -1281,6 +1302,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             // wording would rewrite a sentence nobody touched.
             if carried.movedToCopy {
                 result.wordings.removeAll { $0.markID == mark.id }
+                if !result.voidedWordings.contains(mark.id) { result.voidedWordings.append(mark.id) }
             }
             guard carried.changed else {
                 result.marks.append(mark)
