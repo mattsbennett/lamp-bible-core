@@ -1717,13 +1717,22 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             var result: [Piece] = []
             var changed = false
             var movedToCopy = false
-            /// Every run of the mark that survived, across all of its
-            /// pieces: the whole mark is what the writer sees, so the
-            /// whole mark is what is judged.
+            /// Every run that was carried into this text, across all of
+            /// the mark's pieces. The whole mark is what the writer
+            /// sees, so what is left of it is judged together rather
+            /// than piece by piece.
             var survivors: [NSRange] = []
+            /// Which of the results were already here and were not
+            /// carried at all. They are not scraps of anything, and a
+            /// mark keeps them however little else is left.
+            var standing: [Int] = []
             for piece in pieces {
                 guard piece.anchoredIn != here, let (index, range) = resolved(piece) else {
+                    // Already in this text, or nowhere to carry it from:
+                    // kept as it is, and no evidence either way about a
+                    // rewrite, since nothing was carried.
                     result.append(piece)
+                    standing.append(result.count - 1)
                     continue
                 }
                 var survived = Self.coalesced(
@@ -1756,8 +1765,16 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             // filling its own little span. A mark an ordinary autosave
             // had split survived a rewrite that would otherwise have
             // retired it.
+            //
+            // Only what was carried is weighed, and only what was
+            // carried is dropped. A piece already standing in this text
+            // is not a scrap of anything — a mark whose middle is here
+            // and whose ends were carried away would otherwise be
+            // measured by its ends and retired whole, taking the middle
+            // the writer can plainly see with it.
             if !survivors.isEmpty, Self.enough(ofTheMark: survivors).isEmpty, !movedToCopy {
-                return ([], true, false)
+                let kept = standing.map { result[$0] }
+                return (kept, true, false)
             }
             return (result, changed, movedToCopy)
         }
