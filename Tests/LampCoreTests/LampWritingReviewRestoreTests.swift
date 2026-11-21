@@ -464,6 +464,42 @@ struct LampWritingReviewRestoreTests {
         #expect(marked(strayed, in: surfaceWrote).isEmpty)
     }
 
+    /// The same words in the same place, wearing different markup, are
+    /// the words that were put back: a surface writes its own Markdown,
+    /// and `_x_` comes back as `*x*`.
+    @Test func wordsPutBackAreMarkedThroughTheSurfacesOwnMarkup() throws {
+        let start = "Before original after."
+        let agent = "Before _unread_ after."
+        var review = empty.markingAssistantChange(from: start, to: agent)
+        let second = "Before revised after."
+        review = review.markingAssistantChange(from: agent, to: second)
+        #expect(review.wordings.contains { $0.wasUnread })
+        let plan = try #require(review.restorePlan(for: whole(second), in: second))
+        // What the page gives back: the same words, spelled its way.
+        let surfaceWrote = "Before *unread* after."
+        let put = review.restoringWording(plan, from: second, to: surfaceWrote)
+        #expect(marked(put, in: surfaceWrote) == ["*unread*"])
+    }
+
+    /// A carry that moves a mark onto a copy of its words must keep that
+    /// fact even when the copy happens to stand exactly where the original
+    /// did: the marks, retirements and clearances then all match, and
+    /// "nothing changed" threw the record of it away.
+    @Test func aStrayedWordingSurvivesACarryThatLooksLikeNoChange() throws {
+        let line = "A sufficiently long prefix for the word blue followed by a suffix."
+        let start = "A \(line)\n\n\(line)"
+        let agent = start.replacingOccurrences(of: "blue", with: "red", options: [], range: start.range(of: "blue"))
+        // Marked where the assistant changed it: the first copy.
+        let review = empty.markingAssistantChange(from: agent, to: start)
+        #expect(review.restorable(in: start).count == 1)
+        let typed = "B \(line)"
+        let carried = review.carryingWriterEdit(from: start, to: typed)
+        #expect(
+            carried.restorable(in: typed).isEmpty,
+            "whatever the mark is on now, it is not the passage the assistant changed"
+        )
+    }
+
     // MARK: Crossing devices and versions
 
     @Test func aCopyWrittenByACoreThatKnowsNothingOfWordingsDoesNotStripThem() throws {

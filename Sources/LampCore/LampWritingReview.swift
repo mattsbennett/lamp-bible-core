@@ -1015,14 +1015,41 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return NSRange(location: start, length: end - start)
     }
 
-    /// `words` at `location`, where that is exactly what stands there.
-    /// The surface may have written its own Markdown and moved them, which
-    /// is what the search is for; this is the ordinary case, and exact.
+    /// `words` where the plan put them: exactly, or spelled another way
+    /// in the same place.
+    ///
+    /// A surface writes its own Markdown, and `_unread_` can come back as
+    /// `*unread*` — the same words, the same place, different markup. So
+    /// where the text does not match to the character, the span beginning
+    /// there whose words are these words is taken, within a little of the
+    /// length expected. Only there: the same words in another sentence are
+    /// another passage, at any distance.
     private static func put(_ words: String, at location: Int?, in text: NSString) -> NSRange? {
         guard let location, location >= 0 else { return nil }
-        let range = NSRange(location: location, length: (words as NSString).length)
-        guard NSMaxRange(range) <= text.length, text.substring(with: range) == words else { return nil }
-        return range
+        let length = (words as NSString).length
+        let exact = NSRange(location: location, length: length)
+        if NSMaxRange(exact) <= text.length, text.substring(with: exact) == words { return exact }
+        let wanted = wordsOf(words)
+        guard !wanted.isEmpty else { return nil }
+        // The markup around the same words can be a few characters longer
+        // or shorter; it cannot be another passage. Nearest to the length
+        // expected first, so `*unread*` is taken whole rather than the
+        // `*unread` that also holds the right words.
+        let widths = (max(1, length - markupSlack)...(length + markupSlack))
+            .sorted { (abs($0 - length), $0) < (abs($1 - length), $1) }
+        for width in widths {
+            let span = NSRange(location: location, length: width)
+            guard NSMaxRange(span) <= text.length else { continue }
+            if wordsOf(text.substring(with: span)) == wanted { return span }
+        }
+        return nil
+    }
+
+    /// How much more or less markup the same words may be wearing.
+    static let markupSlack = 8
+
+    private static func wordsOf(_ text: String) -> [Substring] {
+        text.split { !($0.isLetter || $0.isNumber) }
     }
 
     /// Where `words` stand in `text` nearest `location`; nil where they do
@@ -1328,7 +1355,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             )
         }
         result = result.tidied()
-        return result.marks == marks && result.retired == retired && result.clearances == clearances ? self : result
+        // The wordings too. A mark can come through a carry with the same
+        // words, context and place — the copy that survived happening to
+        // stand where the original did — and the marks, retirements and
+        // clearances then all match, so returning `self` threw away the
+        // very record that this one had strayed.
+        let same = result.marks == marks && result.retired == retired
+            && result.clearances == clearances && result.wordings == wordings
+            && result.voidedWordings == voidedWordings
+        return same ? self : result
     }
 
     /// Where a marked passage went when the difference says it was deleted
