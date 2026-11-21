@@ -801,14 +801,26 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// A mark made here keeps no wording of its own: what stood before it is
     /// the assistant's wording that was just put back, and putting *that*
     /// back would be making the change again, not restoring anything.
+    ///
+    /// Only the marks put back change. Every other mark, and its clearances,
+    /// stays exactly as it was stored — not carried across the restore —
+    /// for the reason `clearing(_:in:carryingFrom:)` gives: the text a
+    /// restore is made in can be a moment older or newer than the latest
+    /// marks, and a mark with no words in it, made by a turn the editor has
+    /// not shown yet, would be moved to text that is already gone, or
+    /// retired outright, by a restore of some other passage. The marks are
+    /// found in `text` by carrying from `known` first, which changes
+    /// nothing stored.
     public func restoringWording(
-        _ plan: RestorePlan, from text: String, to restored: String, at date: Date = Date()
+        _ plan: RestorePlan, from text: String, to restored: String,
+        carryingFrom known: [String] = [], at date: Date = Date()
     ) -> LampWritingReview {
         guard !plan.edits.isEmpty else { return self }
         let put = Set(plan.marks)
-        let turns = Dictionary(marks.map { ($0.id, $0.turnID) }, uniquingKeysWith: { first, _ in first })
+        let live = known.isEmpty ? self : carryingToText(text, from: known, at: date)
+        let turns = Dictionary(live.marks.map { ($0.id, $0.turnID) }, uniquingKeysWith: { first, _ in first })
         let held = Dictionary(
-            restorable(in: text).map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
+            live.restorable(in: text).map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first }
         )
         var result = self
         for id in plan.marks {
@@ -826,7 +838,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 .sorted { ($0.restoredAt, $0.markID.uuidString) > ($1.restoredAt, $1.markID.uuidString) }
                 .prefix(Self.restorationsKept)
         )
-        result = result.tidied().carryingWriterEdit(from: text, to: restored, at: date)
+        result = result.tidied()
         let target = restored as NSString
         let anchor = Self.digest(of: restored)
         for edit in plan.edits where edit.unread && !edit.replacement.isEmpty {

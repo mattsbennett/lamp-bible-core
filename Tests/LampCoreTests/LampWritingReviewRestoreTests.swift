@@ -86,6 +86,31 @@ struct LampWritingReviewRestoreTests {
         #expect(put.text == old)
     }
 
+    /// A restore touches only what it puts back.
+    ///
+    /// The text it is made in can be a moment older or newer than the
+    /// latest marks — the visual page's, pressed before a turn's draft
+    /// reached it — and a mark with no words in that text would otherwise
+    /// be carried to text that has gone, or retired outright, by a restore
+    /// of some other passage.
+    @Test func aRestoreLeavesEveryOtherMarkExactlyAsItWas() throws {
+        let start = "Alpha stands here.\n\nBeta stands here."
+        let first = "Alpha sits here.\n\nBeta stands here."
+        var review = empty.markingAssistantChange(from: start, to: first)
+        // A second turn the page has not been shown: its mark is anchored
+        // in text the restore below is not made in.
+        let second = "Alpha sits here.\n\nBeta rests here."
+        review = review.markingAssistantChange(from: first, to: second)
+        let untouched = try #require(review.marks.first { $0.pieces[0].text == "rests" })
+        // The restore is made in the older text, as the page would.
+        let sits = (first as NSString).range(of: "sits")
+        let plan = try #require(review.restorePlan(for: sits, in: first))
+        let after = applying(plan, to: first)
+        let put = review.restoringWording(plan, from: first, to: after)
+        #expect(put.marks.contains(untouched), "the mark the restore never touched is byte for byte as it was")
+        #expect(put.retired.count == 1)
+    }
+
     @Test func aRestoreIsRecordedForTheAssistantToBeToldOf() throws {
         let turn = UUID()
         let old = "The quick brown fox."
