@@ -53,6 +53,10 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         /// code so the device can say the right thing without reading English.
         public static let failed = Kind(rawValue: "failed")
         public static let pong = Kind(rawValue: "pong")
+        /// What the host's chats can run with (`LampAgentRemoteSetup`), in
+        /// answer to `get-setup`, and again when a provider's connection has
+        /// been checked. A host older than this never sends it.
+        public static let setup = Kind(rawValue: "setup")
 
         // Device to host
         /// What the device calls itself, for the host's list of paired devices.
@@ -68,6 +72,13 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         /// Stop the chat's running turn.
         public static let cancel = Kind(rawValue: "cancel")
         public static let startChat = Kind(rawValue: "start-chat")
+        /// Ask for the host's `setup`. An older host ignores it, so a device
+        /// that hears nothing offers no choices.
+        public static let getSetup = Kind(rawValue: "get-setup")
+        /// Change what a chat runs with (`choices`), as the menus over a Mac
+        /// window's chat do. Answered with the chat's snapshot, under its new
+        /// choices; refused as `busy` while a turn runs in it.
+        public static let setChoices = Kind(rawValue: "set-choices")
         public static let ping = Kind(rawValue: "ping")
     }
 
@@ -109,6 +120,10 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
     /// Lamp knows, which a device shows as `errorMessage`.
     public var errorCode: String?
     public var errorMessage: String?
+    /// On `setup`: what the host's chats can run with.
+    public var setup: LampAgentRemoteSetup?
+    /// On `set-choices`: what to change in the chat named by `chatID`.
+    public var choices: LampAgentRemoteChoices?
 
     public init(
         kind: Kind,
@@ -128,7 +143,9 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         deviceKey: String? = nil,
         hostSecret: String? = nil,
         errorCode: String? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        setup: LampAgentRemoteSetup? = nil,
+        choices: LampAgentRemoteChoices? = nil
     ) {
         self.kind = kind
         self.requestID = requestID
@@ -148,6 +165,8 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         self.hostSecret = hostSecret
         self.errorCode = errorCode
         self.errorMessage = errorMessage
+        self.setup = setup
+        self.choices = choices
     }
 
     public static func accepted(pairing credential: LampAgentRemoteDeviceCredential? = nil, hostSecret: String? = nil) -> Self {
@@ -214,6 +233,18 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         .init(kind: .failed, requestID: requestID, chatID: chatID, errorCode: code, errorMessage: message)
     }
 
+    public static func getSetup(requestID: UUID = UUID()) -> Self {
+        .init(kind: .getSetup, requestID: requestID)
+    }
+
+    public static func setup(_ setup: LampAgentRemoteSetup, requestID: UUID? = nil) -> Self {
+        .init(kind: .setup, requestID: requestID, setup: setup)
+    }
+
+    public static func setChoices(_ choices: LampAgentRemoteChoices, for chatID: String, requestID: UUID = UUID()) -> Self {
+        .init(kind: .setChoices, requestID: requestID, chatID: chatID, choices: choices)
+    }
+
     public static let ping = Self(kind: .ping)
     public static let pong = Self(kind: .pong)
 }
@@ -277,6 +308,11 @@ public struct LampAgentRemoteChatSummary: Codable, Equatable, Identifiable, Send
     /// `send` continues with.
     public var provider: String
     public var providerName: String
+    /// The model and effort the chat runs with under that provider, as its
+    /// menus on the Mac show them: "" for the provider's own default. Nil
+    /// from a host older than setup on devices.
+    public var model: String?
+    public var effort: String?
     /// The last thing said in it, by either side.
     public var updatedAt: Date?
     public var preview: String?
@@ -297,6 +333,8 @@ public struct LampAgentRemoteChatSummary: Codable, Equatable, Identifiable, Send
         writingID: String? = nil,
         provider: String,
         providerName: String,
+        model: String? = nil,
+        effort: String? = nil,
         updatedAt: Date? = nil,
         preview: String? = nil,
         isRunning: Bool = false,
@@ -309,6 +347,8 @@ public struct LampAgentRemoteChatSummary: Codable, Equatable, Identifiable, Send
         self.writingID = writingID
         self.provider = provider
         self.providerName = providerName
+        self.model = model
+        self.effort = effort
         self.updatedAt = updatedAt
         self.preview = preview
         self.isRunning = isRunning
@@ -474,6 +514,11 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
     /// The provider to run a new chat with, or nil for the host's default
     /// for that kind.
     public var provider: String?
+    /// The model and effort to run a new chat with: "" for the provider's
+    /// own default, nil for what the host would open it on. A writing that
+    /// already has a chat keeps the choices it has.
+    public var model: String?
+    public var effort: String?
     /// For a reader chat: where the device is reading, as with `send`.
     public var reading: LampAgentRemoteReading?
     /// For a writing chat: the writing, by the id both apps sync it under.
@@ -488,6 +533,8 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
     public init(
         kind: String = LampAgentRemoteChatSummary.reader,
         provider: String? = nil,
+        model: String? = nil,
+        effort: String? = nil,
         reading: LampAgentRemoteReading? = nil,
         writingID: String? = nil,
         selection: String? = nil,
@@ -497,6 +544,8 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
     ) {
         self.kind = kind
         self.provider = provider
+        self.model = model
+        self.effort = effort
         self.reading = reading
         self.writingID = writingID
         self.selection = selection
@@ -508,10 +557,11 @@ public struct LampAgentRemoteNewChat: Codable, Equatable, Sendable {
     /// The first message on a writing: in its chat, begun if it has none.
     public static func writing(
         _ writingID: String, firstMessage: String, selection: String? = nil,
-        writingRevision: Int? = nil, writingDigest: String? = nil, provider: String? = nil
+        writingRevision: Int? = nil, writingDigest: String? = nil, provider: String? = nil,
+        model: String? = nil, effort: String? = nil
     ) -> Self {
         .init(
-            kind: LampAgentRemoteChatSummary.writing, provider: provider,
+            kind: LampAgentRemoteChatSummary.writing, provider: provider, model: model, effort: effort,
             writingID: writingID, selection: selection, writingRevision: writingRevision,
             writingDigest: writingDigest, firstMessage: firstMessage
         )
