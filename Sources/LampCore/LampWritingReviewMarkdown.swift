@@ -330,6 +330,29 @@ public enum LampWritingReviewMarkdown {
         return out
     }
 
+    /// Markers moved after a line's leading quote marks.
+    ///
+    /// Only the quote marks: inside a code block the line's own text
+    /// is code, so a `-` there is a hyphen and not a list — but the
+    /// `>` that carries the block is the container's, and a marker
+    /// before it splits the quote in two. The narrow repair, where
+    /// `clearingBlockSyntax` would be too broad.
+    static func clearingQuotePrefix(_ line: String) -> String {
+        guard line.contains(where: isMarker) else { return line }
+        guard let match = unmarked(line).firstMatch(of: #/^(\s{0,3}(?:>\s?)+)/#) else {
+            return line
+        }
+        let prefix = match.output.1.count
+        var head = ""
+        var moved = ""
+        var rest = Substring(line)
+        while head.count < prefix, let character = rest.first {
+            rest = rest.dropFirst()
+            if isMarker(character) { moved.append(character) } else { head.append(character) }
+        }
+        return head + asPoints(moved) + rest
+    }
+
     /// A range a surface gave back, reaching to the start of its line
     /// where only that line's own block syntax stands before it.
     ///
@@ -398,10 +421,25 @@ public enum LampWritingReviewMarkdown {
         guard range.length > 0 else { return range }
         let source = text as NSString
         guard range.location >= 0, NSMaxRange(range) <= source.length else { return range }
-        guard let inline = LampMarkdownModel(parsing: text).inlineCovered(by: range),
-              inline.kind != .link, inline.kind != .image
-        else { return range }
-        return inline.range
+        // Never less than it was given. Returning the one span found
+        // would discard the rest of the selection: asked for the whole
+        // of `**one** middle **two**` it answered `**one**`, turning a
+        // complete clear into a partial one and leaving the rest
+        // unread. Every span the selection covers is taken in, and the
+        // answer is the union with the selection itself.
+        let model = LampMarkdownModel(parsing: text)
+        var result = range
+        for inline in model.coveredInlines(by: range)
+        where inline.kind != .link && inline.kind != .image {
+            result = NSUnionRange(result, inline.range)
+        }
+        // And never across a line. A clear is asked for within one,
+        // and a span the parser reports across two would otherwise
+        // widen it into text the writer never saw selected.
+        let line = source.lineRange(for: range)
+        return NSIntersectionRange(result, line).length >= range.length
+            ? NSIntersectionRange(result, line)
+            : range
     }
 
     /// Both reaches at once: a changed heading and a changed emphasis
@@ -477,7 +515,13 @@ public enum LampWritingReviewMarkdown {
             // its address would leave the changed word unmarked and a
             // point beside the line.
             if blocks.contains(where: { NSIntersectionRange($0, lineRange).length > 0 }) {
-                lines.append(line)
+                // The code is left as written, but the container
+                // syntax around it is still repaired: a marker before
+                // the `>` of a quoted fenced block's content line
+                // splits the quote, where it used to move after the
+                // `> `. Only what the code itself holds is untouched.
+                // Found by the iOS session.
+                lines.append(clearingQuotePrefix(line))
                 continue
             }
             let (masked, spans) = maskingCodeSpans(clearingBlockSyntax(line))

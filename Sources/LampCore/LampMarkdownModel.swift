@@ -42,6 +42,27 @@ public struct LampMarkdownModel: Sendable {
             self.content = content
         }
 
+        /// Whether this span's delimiter runs are its own.
+        ///
+        /// cmark can hand a nested span the *whole* opening run it
+        /// shares with its parent: in `***one** two*` the inner strong
+        /// node's range begins at the first of three stars, one of
+        /// which opens the outer emphasis and covers the unselected
+        /// ` two`. Taking that star in would partly clear the outer
+        /// change. A run longer than the kind needs is the sign.
+        public var ownsItsDelimiters: Bool {
+            let needed: Int
+            switch kind {
+            case .emphasis: needed = 1
+            case .strong, .strikethrough: needed = 2
+            // A code span's run may be any length, and a link's
+            // brackets are not a run at all; neither is ever taken in.
+            case .inlineCode, .link, .image: return true
+            }
+            let (opening, closing) = delimiters
+            return opening.length == needed && closing.length == needed
+        }
+
         /// The delimiters themselves: what is in `range` but not
         /// `content`, as the opening and closing pieces.
         public var delimiters: (opening: NSRange, closing: NSRange) {
@@ -94,10 +115,15 @@ public struct LampMarkdownModel: Sendable {
     public init(parsing text: String) {
         self.text = text
         let offsets = Self.lineOffsets(of: text)
-        let document = Document(parsing: text, options: [.parseBlockDirectives])
+        // No `.parseBlockDirectives`: `@someone **word**` is a DocC
+        // directive to swift-markdown and loses its inline content,
+        // where the editor's markdown-it gives a plain paragraph. Core
+        // must read what the writer's editor reads. Found by the iOS
+        // session, who probed the editor's own install.
+        let document = Document(parsing: text)
         var blocks: [Block] = []
         var inlines: [Inline] = []
-        Self.walk(document, offsets: offsets, blocks: &blocks, inlines: &inlines)
+        Self.walk(document, text: text, offsets: offsets, blocks: &blocks, inlines: &inlines)
         self.blocks = blocks
         self.inlines = inlines
     }
@@ -132,24 +158,55 @@ extension LampMarkdownModel {
     static func lineOffsets(of text: String) -> [LineMap] {
         var maps: [LineMap] = []
         var start = 0
-        // `components` keeps empty lines, which `enumerateLines` drops,
-        // and the parser counts those.
-        for line in text.components(separatedBy: "\n") {
+        // cmark ends a line at `\r\n`, `\r` or `\n`, so splitting on
+        // `\n` alone counts a classic-Mac or Windows file's lines
+        // differently from the parser and every range after the first
+        // such break lands on unrelated text. The separator's own
+        // UTF-16 length is carried rather than assumed to be one.
+        for (line, separator) in Self.lines(of: text) {
             var utf16: [Int] = []
             utf16.reserveCapacity(line.utf8.count + 1)
             var offset = 0
-            for character in line {
-                let bytes = String(character).utf8.count
-                let units = String(character).utf16.count
+            // By scalar, not by Character: a grapheme may be several
+            // scalars — a letter and a combining mark, a flag — and
+            // cmark can report a column at a scalar boundary inside
+            // one. Mapping whole Characters puts every byte of the
+            // cluster at the cluster's start.
+            for scalar in line.unicodeScalars {
+                let bytes = UTF8.width(scalar)
                 for _ in 0..<bytes { utf16.append(offset) }
-                offset += units
+                offset += UTF16.width(scalar)
             }
             utf16.append(offset)
             maps.append(LineMap(start: start, utf16: utf16))
-            // The newline itself is one UTF-16 unit.
-            start += offset + 1
+            start += offset + separator
         }
         return maps
+    }
+
+    /// Each line and the UTF-16 length of the break that ended it.
+    static func lines(of text: String) -> [(line: Substring, separator: Int)] {
+        var out: [(Substring, Int)] = []
+        var index = text.startIndex
+        var lineStart = index
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "\r" {
+                let next = text.index(after: index)
+                let crlf = next < text.endIndex && text[next] == "\n"
+                out.append((text[lineStart..<index], crlf ? 2 : 1))
+                index = crlf ? text.index(after: next) : next
+                lineStart = index
+            } else if character == "\n" {
+                out.append((text[lineStart..<index], 1))
+                index = text.index(after: index)
+                lineStart = index
+            } else {
+                index = text.index(after: index)
+            }
+        }
+        out.append((text[lineStart...], 0))
+        return out
     }
 
     /// A parsed node's source range, in UTF-16.
@@ -167,17 +224,25 @@ extension LampMarkdownModel {
     }
 
     static func walk(
-        _ markup: Markup, offsets: [LineMap],
+        _ markup: Markup, text: String, offsets: [LineMap],
         blocks: inout [Block], inlines: inout [Inline]
     ) {
-        if let kind = blockKind(of: markup), let range = range(of: markup, offsets: offsets) {
+        if let kind = blockKind(of: markup), var range = range(of: markup, offsets: offsets) {
+            // cmark-gfm starts a table's source position at the
+            // paragraph before it. Its first cell is right, so the
+            // table begins where its head row does. Found by the iOS
+            // session porting the Files reader.
+            if kind == .table, let first = firstCellStart(of: markup, offsets: offsets),
+               first > range.location {
+                range = NSRange(location: first, length: NSMaxRange(range) - first)
+            }
             blocks.append(Block(kind: kind, range: range))
         }
-        if let inline = self.inline(markup, offsets: offsets) {
+        if let inline = self.inline(markup, text: text, offsets: offsets) {
             inlines.append(inline)
         }
         for child in markup.children {
-            walk(child, offsets: offsets, blocks: &blocks, inlines: &inlines)
+            walk(child, text: text, offsets: offsets, blocks: &blocks, inlines: &inlines)
         }
     }
 
@@ -195,7 +260,7 @@ extension LampMarkdownModel {
         }
     }
 
-    static func inline(_ markup: Markup, offsets: [LineMap]) -> Inline? {
+    static func inline(_ markup: Markup, text: String, offsets: [LineMap]) -> Inline? {
         let kind: Inline.Kind
         switch markup {
         case is Emphasis: kind = .emphasis
@@ -212,7 +277,12 @@ extension LampMarkdownModel {
         // its backtick runs, counted from the text.
         let content: NSRange
         if kind == .inlineCode {
-            content = whole
+            // Its children are not reported, so the content is the
+            // span less its backtick runs, counted from the text. Set
+            // to the whole span its delimiters were empty, and a clear
+            // of the code never reached the backticks the assistant
+            // added.
+            content = Self.insideBackticks(whole, in: text) ?? whole
         } else {
             let childRanges = markup.children.compactMap { range(of: $0, offsets: offsets) }
             guard let first = childRanges.first, let last = childRanges.last else { return nil }
@@ -220,6 +290,13 @@ extension LampMarkdownModel {
                 location: first.location, length: NSMaxRange(last) - first.location
             )
         }
+        // cmark can report a multi-line strikethrough's end on its
+        // opening line, which makes the closing delimiter negative and
+        // the range a truncation. A content range that does not sit
+        // inside the span is not a span this can reason about.
+        guard content.location >= whole.location,
+              NSMaxRange(content) <= NSMaxRange(whole)
+        else { return nil }
         let inline = Inline(kind: kind, range: whole, content: content)
         // cmark-gfm reads a single `~text~` as strikethrough; the
         // editor page reads Markdown with markdown-it, which needs
@@ -242,12 +319,48 @@ extension LampMarkdownModel {
     /// the outer `**` and sweep `one` and the inner `*two*` on the way
     /// — delimiters belonging to text the writer never selected,
     /// which is the whole harm this exists to avoid.
+    /// Every formatting span whose content the selection covers.
+    public func coveredInlines(by range: NSRange) -> [Inline] {
+        inlines.filter {
+            range.location <= $0.content.location
+                && NSMaxRange(range) >= NSMaxRange($0.content)
+                && $0.ownsItsDelimiters
+        }
+    }
+
     public func inlineCovered(by range: NSRange) -> Inline? {
         inlines
             .filter {
                 range.location <= $0.content.location
                     && NSMaxRange(range) >= NSMaxRange($0.content)
+                    && $0.ownsItsDelimiters
             }
             .min { $0.range.length < $1.range.length }
+    }
+}
+
+extension LampMarkdownModel {
+    /// What lies between a code span's backtick runs.
+    static func insideBackticks(_ span: NSRange, in text: String) -> NSRange? {
+        let source = text as NSString
+        guard span.length >= 2, NSMaxRange(span) <= source.length else { return nil }
+        var open = span.location
+        while open < NSMaxRange(span), source.character(at: open) == 0x60 { open += 1 }
+        var close = NSMaxRange(span)
+        while close > open, source.character(at: close - 1) == 0x60 { close -= 1 }
+        guard close >= open else { return nil }
+        return NSRange(location: open, length: close - open)
+    }
+
+    /// Where a table's first cell begins, which is where its head row
+    /// begins.
+    static func firstCellStart(of markup: Markup, offsets: [LineMap]) -> Int? {
+        for child in markup.children {
+            if child is Table.Cell, let range = range(of: child, offsets: offsets) {
+                return range.location
+            }
+            if let found = firstCellStart(of: child, offsets: offsets) { return found }
+        }
+        return nil
     }
 }

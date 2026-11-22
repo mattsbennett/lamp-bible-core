@@ -131,3 +131,102 @@ struct LampWritingReviewDelimiterTests {
         )
     }
 }
+
+/// The four faults a review of the parser work found, each of which
+/// the six hand-written versions had never reached — they are faults
+/// of trusting a parser, not of pattern-matching.
+struct LampMarkdownModelReviewTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private func slice(_ range: NSRange, of text: String) -> String {
+        (text as NSString).substring(with: range)
+    }
+
+    /// The reach must never answer with less than it was asked for.
+    /// Given the whole of a line holding two emphases it returned the
+    /// first span alone, turning a complete clear into a partial one
+    /// and leaving the rest of the selection unread.
+    @Test func thereachNeverReturnsLessThanItWasGiven() {
+        for text in [
+            "**one** middle **two**",
+            "Her **red dog** barked.",
+            "plain words only",
+            "**one *two* three** end",
+        ] {
+            let whole = NSRange(location: 0, length: (text as NSString).length)
+            let reached = Markdown.takingInDelimiters(whole, of: text)
+            #expect(
+                reached.location <= whole.location && NSMaxRange(reached) >= NSMaxRange(whole),
+                "\(text.debugDescription) shrank to \(slice(reached, of: text).debugDescription)"
+            )
+        }
+    }
+
+    /// A span sharing its opening run with its parent is not taken in.
+    /// cmark hands the inner strong node all three stars of
+    /// `***one** two*`, one of which opens the outer emphasis and
+    /// covers the unselected ` two`.
+    @Test func asharedDelimiterRunIsNotTakenIn() {
+        let text = "***one** two*"
+        let one = (text as NSString).range(of: "one")
+        let reached = Markdown.takingInDelimiters(one, of: text)
+        #expect(
+            !slice(reached, of: text).contains("two"),
+            "reached \(slice(reached, of: text).debugDescription) into unselected text"
+        )
+    }
+
+    /// The reach stays on its own line.
+    @Test func thereachDoesNotCrossALine() {
+        let text = "**one\ntwo**"
+        let first = (text as NSString).range(of: "one")
+        let reached = Markdown.takingInDelimiters(first, of: text)
+        #expect(!slice(reached, of: text).contains("\n"), "\(slice(reached, of: text))")
+    }
+
+    /// Carriage returns: cmark ends a line at a bare `\r` as well as
+    /// at `\n`, so splitting on `\n` alone counted lines differently
+    /// from the parser and dropped every span after one.
+    @Test func carriageReturnsCountAsLineEndings() {
+        for text in ["x\r**word**", "a\r\rThen **word** here"] {
+            let model = LampMarkdownModel(parsing: text)
+            let strong = model.inlines.first { $0.kind == .strong }
+            #expect(
+                strong.map { slice($0.range, of: text) } == "**word**",
+                "\(text.debugDescription) gave \(String(describing: strong))"
+            )
+        }
+    }
+
+    /// **Not yet right, and deliberately pinned as it stands.**
+    ///
+    /// A `\r\n` followed by a blank `\r\n` still loses the span: the
+    /// line map agrees with the parser on how many lines there are and
+    /// where each begins, so the cause is elsewhere and I have not
+    /// found it. The guard on a span whose content falls outside it
+    /// turns the disagreement into a dropped span rather than a wrong
+    /// range, so the reach simply does not fire — the behaviour before
+    /// any of this existed, and safe. This records the gap so the next
+    /// reader meets it as a known limit rather than a surprise.
+    @Test func acrlfBlankLineStillLosesTheSpan() {
+        let text = "a\r\n\r\nThen **word** here"
+        let model = LampMarkdownModel(parsing: text)
+        #expect(
+            model.inlines.first(where: { $0.kind == .strong }) == nil,
+            "if this now finds the span, the limit is fixed — assert the range instead"
+        )
+        // And the reach is a no-op there, which is the point: nothing
+        // wrong happens, only nothing helpful.
+        let word = (text as NSString).range(of: "word")
+        #expect(Markdown.takingInDelimiters(word, of: text) == word)
+    }
+
+    /// A grapheme of several scalars — a letter and a combining mark —
+    /// is mapped scalar by scalar, since a column can fall between
+    /// them.
+    @Test func acombiningMarkDoesNotMoveALaterRange() {
+        let text = "e\u{0301}cole **word** here"
+        let model = LampMarkdownModel(parsing: text)
+        let strong = model.inlines.first { $0.kind == .strong }
+        #expect(strong.map { slice($0.range, of: text) } == "**word**")
+    }
+}
