@@ -334,3 +334,77 @@ struct LampMarkdownLinkReaderTests {
         #expect(drawn.contains("\(s)note\(e)"), "\(drawn.debugDescription)")
     }
 }
+
+/// The parser judging where markers may stand.
+///
+/// A marker is a private-use scalar, which to cmark is an ordinary
+/// character like a letter — so it can turn a literal `*` into a
+/// delimiter, or split a run so a real one stops pairing. A parse of
+/// the unmarked text cannot see either. The marked line is parsed too
+/// and the two shapes compared. The design is the iOS session's.
+struct LampMarkdownJudgeTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    /// The shape, not the rendering: a run a marker split writes back
+    /// the same characters as a real strong once the markers are off,
+    /// so only the kinds tell them apart.
+    @Test func asplitRunIsNotTheSameAsAStrongOne() {
+        let split = "A *\(s)*strong*\(e)* word."
+        #expect(!Markdown.readsTheSame(split), "a split run read as unchanged")
+        // And the repair is judged sound.
+        #expect(Markdown.readsTheSame(Markdown.repairingInlineSyntax(split)))
+    }
+
+    /// Markers that change nothing are left exactly where they are.
+    @Test func harmlessMarkersAreNotMoved() {
+        for line in [
+            "A \(s)plain\(e) word.",
+            "Some **\(s)bold\(e)** here.",
+            "A [\(s)label\(e)](https://x.com/a).",
+        ] {
+            #expect(Markdown.readsTheSame(line), "\(line.debugDescription)")
+            #expect(Markdown.keepingInlineSyntax(line) == line)
+        }
+    }
+
+    /// An entity is text to the parser, so a marker inside one is a
+    /// difference in words rather than in spans — which a comparison
+    /// of spans alone would miss.
+    @Test func amarkerInsideAnEntityIsSeen() {
+        #expect(!Markdown.readsTheSame("a &l\(s)t\(e); b"))
+    }
+
+    /// The fallback: where no repair satisfies the judge, the line's
+    /// markers become points at its start. That loses where in the
+    /// line each passage was; it never loses the reading.
+    @Test func thefallbackKeepsTheReading() {
+        // A line built to defeat the hand rules: markers inside a
+        // fence's info string, where no rule moves them.
+        let awkward = "```s\(s)h\(e)\n"
+        let kept = Markdown.keepingInlineSyntax(awkward)
+        #expect(
+            Markdown.unmarked(kept) == Markdown.unmarked(awkward),
+            "the words changed: \(kept.debugDescription)"
+        )
+        #expect(Markdown.readsTheSame(kept) || kept == awkward)
+    }
+
+    /// Whatever the judge decides, the words are never changed.
+    @Test func thewordsAreNeverChanged() {
+        for line in [
+            "A *\(s)*strong*\(e)* word.",
+            "a &l\(s)t\(e); b",
+            "\(s)# Heading\(e)",
+            "`co\(s)de\(e)` and *it*",
+            "[a](https://x.com/\(s)b\(e))",
+        ] {
+            let kept = Markdown.keepingInlineSyntax(line)
+            #expect(
+                Markdown.unmarked(kept) == Markdown.unmarked(line),
+                "\(line.debugDescription) became \(kept.debugDescription)"
+            )
+        }
+    }
+}

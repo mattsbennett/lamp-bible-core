@@ -171,6 +171,51 @@ public enum LampWritingReviewMarkdown {
     /// moves, so a run of delimiters a marker split comes back together.
     public static func keepingInlineSyntax(_ line: String) -> String {
         guard line.contains(where: isMarker) else { return line }
+        // The parser judges, the hand rules repair.
+        //
+        // A marker is a private-use scalar, which to cmark is an
+        // ordinary character like a letter — so it can turn a literal
+        // `*` into a delimiter, or split a run so a real one stops
+        // pairing. A parse of the *unmarked* text cannot see either:
+        // it never had the marker. So the marked line is parsed too,
+        // and the two readings compared.
+        //
+        // Where they agree the markers changed nothing and stay where
+        // they are. Where they differ the hand rules below run and the
+        // comparison is made again. If they still differ, the line's
+        // markers become points at its start: that loses where in the
+        // line each passage was, and never loses the reading.
+        //
+        // The design is the iOS session's. It answers the thing six
+        // rounds of findings had in common — a rule that decided what
+        // Markdown means by looking at the marked text.
+        if readsTheSame(line) { return line }
+        let repaired = repairingInlineSyntax(line)
+        if readsTheSame(repaired) { return repaired }
+        return asPoints(markers(in: repaired)) + unmarked(repaired)
+    }
+
+    /// Whether a marked line reads as the same Markdown it does with
+    /// its markers taken out: the same spans, in order, holding the
+    /// same words.
+    static func readsTheSame(_ marked: String) -> Bool {
+        reading(of: marked) == reading(of: unmarked(marked))
+    }
+
+    /// The shape a line parses to, with the markers taken out of its
+    /// words.
+    ///
+    /// The shape, because the rendering cannot tell a real
+    /// `**strong**` from the literal stars of a run a marker split:
+    /// both write back the same characters once the markers are off.
+    /// And the whole shape rather than its spans alone, because an
+    /// HTML entity is text to the parser, so `&l\u{E000}t;` and `&lt;`
+    /// have the same spans and different words.
+    private static func reading(of text: String) -> String {
+        LampMarkdownModel.structure(of: text)
+    }
+
+    static func repairingInlineSyntax(_ line: String) -> String {
         var kept = keepingEscapes(line)
         for _ in 0..<8 {
             let before = kept

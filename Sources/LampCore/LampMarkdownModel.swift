@@ -472,3 +472,45 @@ extension LampMarkdownModel {
         return nil
     }
 }
+
+extension LampMarkdownModel {
+    /// A text parsed and written back out as Markdown.
+    ///
+    /// Used to ask whether two spellings of a line read the same: the
+    /// parser resolves entities, pairs delimiters and decides blocks,
+    /// so two texts that format alike are two texts a reader cannot
+    /// tell apart.
+    public static func rendering(of text: String) -> String {
+        Document(parsing: hidingSingleTildes(text)).format()
+    }
+
+    /// The shape a text parses to: every node's kind, nested, with its
+    /// words and the markers taken out of them.
+    ///
+    /// The shape and not the rendering. Writing a parse back out and
+    /// then stripping the markers cannot tell a real `**strong**` from
+    /// the literal stars of a run a marker split — both write back the
+    /// same characters, and the difference is the one thing being
+    /// asked about. The kinds say it: `strong(text)` against
+    /// `text(**strong**)`.
+    public static func structure(of text: String) -> String {
+        func dump(_ markup: Markup) -> String {
+            let name = String(describing: type(of: markup))
+            if let text = markup as? Markdown.Text {
+                return "\(name)(\(withoutMarkers(text.string)))"
+            }
+            if let code = markup as? InlineCode {
+                return "\(name)(\(withoutMarkers(code.code)))"
+            }
+            let children = markup.children.map(dump).joined(separator: ",")
+            return "\(name)[\(children)]"
+        }
+        return dump(Document(parsing: hidingSingleTildes(text)))
+    }
+
+    /// A string with the review markers taken out, without reaching
+    /// into the review code from here.
+    static func withoutMarkers(_ text: String) -> String {
+        String(text.unicodeScalars.filter { !(0xE000...0xE01A).contains(Int($0.value)) })
+    }
+}
