@@ -559,25 +559,26 @@ struct WritingReviewMarkdownPlacementTests {
         }
     }
 
-    /// A rule may hold nothing but its own character and spaces, so it
-    /// can carry no marker at all: one left anywhere on the line makes
-    /// it a paragraph of hyphens. The markers go to the line before.
-    @Test func amarkedRuleKeepsItsLineToItself() {
-        let marked = "Before.\n\(start)---\(end)\nAfter."
-        let drawn = Markdown.drawable(marked, numbering: false)
-        let lines = drawn.components(separatedBy: "\n")
-        #expect(lines[1] == "---", "the rule line came out as \(lines[1].debugDescription)")
-        #expect(lines[0].contains(where: Markdown.isMarker), "the passage lost its place")
-        #expect(Markdown.unmarked(drawn) == "Before.\n---\nAfter.")
-    }
-
-    /// A rule that begins the writing puts them on the line after.
-    @Test func arulesMarkersGoForwardWhereThereIsNoLineBefore() {
-        let marked = "\(start)---\(end)\nAfter."
-        let drawn = Markdown.drawable(marked, numbering: false)
-        let lines = drawn.components(separatedBy: "\n")
-        #expect(lines[0] == "---")
-        #expect(lines[1].contains(where: Markdown.isMarker))
+    /// A marked rule is left as it is.
+    ///
+    /// There is no place on a rule's line for a marker, and every place
+    /// off it belongs to another line: appended to the one before, the
+    /// markers end a fence that was closing, break a rule already
+    /// placed, or stand before a list's dash and make it a paragraph.
+    /// Each breaks a line that was correct to save one that cannot be,
+    /// and a surface that checks what it parsed then refuses every mark
+    /// in the writing — so a marked rule took the lot down with it.
+    @Test func amarkedRuleIsLeftAloneRatherThanBreakingItsNeighbours() {
+        for neighbour in ["- item", "```", "| a |", "---"] {
+            let marked = "\(start)---\(end)\n\(neighbour)"
+            let drawn = Markdown.drawable(marked, numbering: false)
+            let lines = drawn.components(separatedBy: "\n")
+            #expect(
+                lines.last == neighbour,
+                "the rule's markers broke \(neighbour.debugDescription): \(drawn.debugDescription)"
+            )
+            #expect(Markdown.unmarked(drawn) == "---\n\(neighbour)")
+        }
     }
 
     /// The block pass runs before the inline one. An italic heading
@@ -736,5 +737,26 @@ struct WritingReviewMarkdownOrderTests {
     @Test func alistThatDoesNotMatchIsLeftAsItIs() {
         #expect(Markdown.reordered(["only"], by: [1, 0]) == ["only"])
         #expect(Markdown.reordered(["a", "b"], by: [0, 0]) == ["a", "b"])
+    }
+}
+
+/// An entity's name has no length anyone can guess.
+struct WritingReviewMarkdownEntityTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    @Test func alongEntityNameIsStillAnEntity() {
+        for (entity, marked) in [
+            ("&LeftRightArrow;", "&\(s)LeftRightArrow\(e);"),
+            ("&LeftRightArrow;", "&LeftRightArrow\(e);"),
+            ("&CounterClockwiseContourIntegral;", "&Counter\(s)ClockwiseContourIntegral;"),
+        ] {
+            let drawn = Markdown.drawable(marked, numbering: false)
+            #expect(
+                drawn.hasPrefix(entity),
+                "\(marked.debugDescription) came out as \(drawn.debugDescription)"
+            )
+        }
     }
 }

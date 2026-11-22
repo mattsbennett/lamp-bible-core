@@ -191,7 +191,9 @@ public enum LampWritingReviewMarkdown {
             // fell — a change from `&lt;` to `&gt;` marks the name, not
             // the `&` or the `;`, so rules that only looked at those two
             // ends never fired.
-            kept = kept.replacing(#/&([A-Za-z0-9#xX\x{E000}-\x{E01A}]{1,12});/#) { match in
+            // No bound on the name: `&LeftRightArrow;` is longer than
+            // any guess, and the markers in it count too.
+            kept = kept.replacing(#/&([A-Za-z0-9#xX\x{E000}-\x{E01A}]+);/#) { match in
                 let inside = String(match.output.1)
                 let name = unmarked(inside)
                 guard inside != name,
@@ -284,29 +286,26 @@ public enum LampWritingReviewMarkdown {
         // emphasis, which the inline pass then puts right. The other way
         // round the block pass undoes the inline one's work, and no
         // amount of stripping markers afterwards repairs a parse.
-        var lines = (numbering ? numbered(marked) : marked)
+        // A marked rule is left as it is, and the surface makes of it
+        // what it can.
+        //
+        // A rule may hold nothing but its own character and spaces, so
+        // there is no place on its line for a marker, and every place
+        // off it belongs to another line: appended to the one before,
+        // the markers end a fence that was closing, break a rule that
+        // was already placed, or stand before a list's dash and make it
+        // a paragraph. Each of those breaks a line that was correct to
+        // save one that cannot be, and a surface comparing what it
+        // parsed then refuses the lot — so a marked rule took every
+        // other mark in the writing down with it.
+        //
+        // Left alone, the rule itself draws as a paragraph of hyphens
+        // on a surface that redraws the Markdown, and is refused whole
+        // on one that checks. Both are poor; neither spreads.
+        (numbering ? numbered(marked) : marked)
             .components(separatedBy: "\n")
             .map { movingMarksOutOfLinks(clearingBlockSyntax($0)) }
-        // A rule can carry no marker, so its markers go to the end of
-        // the line before it — the nearest place that is still a place,
-        // and the passage keeps something to reach. A rule that begins
-        // the writing keeps them on the line after.
-        for (index, line) in lines.enumerated() where isRule(unmarked(line)) {
-            guard line.contains(where: isMarker) else { continue }
-            let moved = asPoints(markers(in: line))
-            lines[index] = unmarked(line)
-            if index > 0 {
-                lines[index - 1] += moved
-            } else if lines.count > 1 {
-                lines[1] = moved + lines[1]
-            } else {
-                // A rule and nothing else: there is nowhere to put them
-                // that is not the rule, so it stops being one. Better a
-                // paragraph of hyphens than a change nobody can see.
-                lines[index] = unmarked(line) + moved
-            }
-        }
-        return lines.joined(separator: "\n")
+            .joined(separator: "\n")
     }
 }
 
