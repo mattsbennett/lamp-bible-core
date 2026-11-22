@@ -267,43 +267,6 @@ public enum LampWritingReviewMarkdown {
         return head + asPoints(moved) + rest
     }
 
-    /// Whether a line is a rule — three or more of one mark, and
-    /// nothing else. A rule may hold nothing but its own character and
-    /// spaces, so it can carry no marker at all: a marker left anywhere
-    /// on the line makes it a paragraph of hyphens.
-    static func isRule(_ line: String) -> Bool {
-        line.wholeMatch(of: #/\s*((?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})/#) != nil
-    }
-
-    /// A fence's opening: its character and how many of them. A fence
-    /// is closed only by a run of the same character, at least as long,
-    /// with nothing but spaces after it — so a `~~~` written inside a
-    /// ```` ```` ```` block is content, not a close, and the prose
-    /// after the block is not left thinking it is still inside one.
-    struct Fence: Equatable {
-        let character: Character
-        let length: Int
-        /// How far the opener was indented, which its closer may differ
-        /// from but which tells an indented-code line from a fence.
-        let indent: Int
-    }
-
-    static func fenceOpening(_ line: String) -> Fence? {
-        guard let match = line.wholeMatch(of: #/(\s{0,3})(`{3,}|~{3,})([^`]*)/#) else { return nil }
-        let run = String(match.output.2)
-        // A backtick fence's info string may hold no backtick.
-        if run.first == "`", match.output.3.contains("`") { return nil }
-        return Fence(
-            character: run.first ?? "`", length: run.count, indent: match.output.1.count
-        )
-    }
-
-    static func closes(_ fence: Fence, _ line: String) -> Bool {
-        guard let match = line.wholeMatch(of: #/\s{0,3}(`{3,}|~{3,})\s*/#) else { return false }
-        let run = String(match.output.1)
-        return run.first == fence.character && run.count >= fence.length
-    }
-
     /// `line` with its code spans taken out, and what to put back.
     ///
     /// Taken out rather than the line cut into pieces: a link may hold
@@ -487,27 +450,40 @@ public enum LampWritingReviewMarkdown {
         // marker moved out of its address leaves the changed word with
         // no mark and a point beside the line. Found by the iOS
         // session, marking `new` in `curl https://x.com/new`.
-        var fence: Fence?
-        return (numbering ? numbered(marked) : marked)
-            .components(separatedBy: "\n")
-            .map { line -> String in
-                let bare = unmarked(line)
-                if let open = fence {
-                    if closes(open, bare) { fence = nil }
-                    return line
-                }
-                if let opening = fenceOpening(bare) {
-                    fence = opening
-                    return line
-                }
-                // The code spans held out of the way, the line put
-                // right whole — a link's label may hold one, and a line
-                // cut at the span is a line no rule can see that link
-                // in.
-                let (masked, spans) = maskingCodeSpans(clearingBlockSyntax(line))
-                return unmasking(movingMarksOutOfLinks(masked), spans)
+        // The parser says what is code, rather than a fence tracker
+        // and a span scanner written here. Six rounds of review found
+        // six ways a hand-written reader of this disagrees with the
+        // page about what the writer sees; the page reads CommonMark,
+        // so this does too.
+        let text = numbering ? numbered(marked) : marked
+        let bare = unmarked(text)
+        let model = LampMarkdownModel(parsing: bare)
+        // A code *block* takes its whole line out of every rule. An
+        // inline span does not: a line may hold a span and a link, and
+        // the link still needs putting right — the span is held aside
+        // for that, not used to skip the line.
+        let blocks = model.blocks.filter { $0.kind == .codeBlock }.map(\.range)
+        var lines: [String] = []
+        // Where each line of the bare text begins, to ask the model
+        // about it.
+        var bareStart = 0
+        for line in text.components(separatedBy: "\n") {
+            let bareLine = unmarked(line)
+            let length = (bareLine as NSString).length
+            let lineRange = NSRange(location: bareStart, length: max(length, 1))
+            bareStart += length + 1
+            // A line any code covers is drawn as it was written: a link
+            // inside it is text, not a link, and a marker moved out of
+            // its address would leave the changed word unmarked and a
+            // point beside the line.
+            if blocks.contains(where: { NSIntersectionRange($0, lineRange).length > 0 }) {
+                lines.append(line)
+                continue
             }
-            .joined(separator: "\n")
+            let (masked, spans) = maskingCodeSpans(clearingBlockSyntax(line))
+            lines.append(unmasking(movingMarksOutOfLinks(masked), spans))
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
