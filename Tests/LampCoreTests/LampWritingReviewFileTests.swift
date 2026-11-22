@@ -828,3 +828,62 @@ struct WritingReviewMarkdownCodeTests {
         #expect(Markdown.unmarked(drawn) == "`code` and [a](https://x.com/y).")
     }
 }
+
+/// Fences matched to their opener, code spans masked rather than cut,
+/// and the point a syntax-only change leaves behind.
+///
+/// Round nine and the iOS session's own review, which found the fence
+/// fault from opposite directions on the same hour.
+struct WritingReviewMarkdownCodeFencesTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    /// A fence is closed only by its own character, at least as long.
+    /// Toggling on any fence-looking line left the prose after a block
+    /// holding a literal fence thinking it was still inside one, so its
+    /// markers stayed where they broke the parse.
+    @Test func aliteralFenceInsideABlockDoesNotCloseIt() {
+        let marked = "````\n~~~\n```\n````\n\(s)# After\(e)"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        let lines = drawn.components(separatedBy: "\n")
+        #expect(lines.last?.hasPrefix("# ") == true, "\(drawn.debugDescription)")
+        // And what is inside is untouched.
+        #expect(lines[1] == "~~~" && lines[2] == "```")
+    }
+
+    /// A link whose label holds a code span is still put right. Cutting
+    /// the line at the span left no rule able to see the link whole, so
+    /// a marker in its address stayed there.
+    @Test func alinkWhoseLabelHoldsCodeIsStillPutRight() {
+        let marked = "See [the `curl` note](https://x.com/\(s)a\(e))."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("(https://x.com/a)"), "\(drawn.debugDescription)")
+        #expect(drawn.contains("`curl`"))
+        #expect(Markdown.unmarked(drawn) == "See [the `curl` note](https://x.com/a).")
+    }
+
+    /// An escaped backtick opens nothing. Pairing it with a real span
+    /// later in the line swallowed the link between them.
+    @Test func anEscapedBacktickOpensNoCodeSpan() {
+        let marked = "\\` [l](https://x.com/\(s)new\(e)) `code`"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("(https://x.com/new)"), "\(drawn.debugDescription)")
+        #expect(drawn.contains("`code`"))
+    }
+
+    /// A change to block syntax alone is drawn as a point after the
+    /// syntax, while the mark is on the syntax: a range from there
+    /// reaches back, or clearing and restoring do nothing at all.
+    @Test func arangeAfterBlockSyntaxReachesBackToIt() {
+        let text = "# Title\n\nBody."
+        let afterHash = NSRange(location: 2, length: 0)
+        #expect(Markdown.takingInSyntax(afterHash, of: text) == NSRange(location: 0, length: 2))
+        // A range already at the line's start is left alone, and so is
+        // one inside ordinary prose.
+        #expect(Markdown.takingInSyntax(NSRange(location: 0, length: 0), of: text)
+            == NSRange(location: 0, length: 0))
+        #expect(Markdown.takingInSyntax(NSRange(location: 11, length: 2), of: text)
+            == NSRange(location: 11, length: 2))
+    }
+}

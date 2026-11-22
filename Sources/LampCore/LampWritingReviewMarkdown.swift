@@ -269,6 +269,127 @@ public enum LampWritingReviewMarkdown {
         line.wholeMatch(of: #/\s*((?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})/#) != nil
     }
 
+    /// A fence's opening: its character and how many of them. A fence
+    /// is closed only by a run of the same character, at least as long,
+    /// with nothing but spaces after it — so a `~~~` written inside a
+    /// ```` ```` ```` block is content, not a close, and the prose
+    /// after the block is not left thinking it is still inside one.
+    struct Fence: Equatable {
+        let character: Character
+        let length: Int
+        /// How far the opener was indented, which its closer may differ
+        /// from but which tells an indented-code line from a fence.
+        let indent: Int
+    }
+
+    static func fenceOpening(_ line: String) -> Fence? {
+        guard let match = line.wholeMatch(of: #/(\s{0,3})(`{3,}|~{3,})([^`]*)/#) else { return nil }
+        let run = String(match.output.2)
+        // A backtick fence's info string may hold no backtick.
+        if run.first == "`", match.output.3.contains("`") { return nil }
+        return Fence(
+            character: run.first ?? "`", length: run.count, indent: match.output.1.count
+        )
+    }
+
+    static func closes(_ fence: Fence, _ line: String) -> Bool {
+        guard let match = line.wholeMatch(of: #/\s{0,3}(`{3,}|~{3,})\s*/#) else { return false }
+        let run = String(match.output.1)
+        return run.first == fence.character && run.count >= fence.length
+    }
+
+    /// `line` with its code spans taken out, and what to put back.
+    ///
+    /// Taken out rather than the line cut into pieces: a link may hold
+    /// a code span in its label, and a line cut at the span is a line
+    /// where no rule can see that link whole — so a marker in its
+    /// address stays there and the whole copy is refused. What stands
+    /// in their place is a character no rule looks at and no writing
+    /// holds, so the line reads to every rule as it did, less whatever
+    /// the code said.
+    static let codeStandIn: Character = "\u{E030}"
+
+    static func maskingCodeSpans(_ line: String) -> (masked: String, spans: [String]) {
+        guard line.contains("`") else { return (line, []) }
+        var masked = ""
+        var spans: [String] = []
+        var rest = Substring(line)
+        while let open = rest.firstMatch(of: #/`+/#) {
+            let ticks = String(open.output)
+            let before = rest[rest.startIndex..<open.range.lowerBound]
+            let after = rest[open.range.upperBound...]
+            // A backtick a backslash escapes opens nothing. Left to
+            // pair with a real span later in the line, it swallowed
+            // everything between — a link whose address holds markers
+            // among it, which then stayed in the address. An even run
+            // of backslashes is the backslashes themselves escaped.
+            if before.last == "\\",
+               before.dropLast().reversed().prefix(while: { $0 == "\\" }).count % 2 == 0 {
+                masked += before + ticks
+                rest = after
+                continue
+            }
+            // Closed by a run of exactly the same length, as Markdown
+            // has it: a longer or shorter run is other code's.
+            guard let close = after.firstRange(of: ticks),
+                  after[close.upperBound...].first != "`"
+            else {
+                masked += before + ticks
+                rest = after
+                continue
+            }
+            masked += before
+            masked.append(codeStandIn)
+            spans.append(ticks + after[after.startIndex..<close.lowerBound] + ticks)
+            rest = after[close.upperBound...]
+        }
+        return (masked + rest, spans)
+    }
+
+    static func unmasking(_ line: String, _ spans: [String]) -> String {
+        guard !spans.isEmpty else { return line }
+        var out = ""
+        var next = 0
+        for character in line {
+            if character == codeStandIn, next < spans.count {
+                out += spans[next]
+                next += 1
+            } else {
+                out.append(character)
+            }
+        }
+        return out
+    }
+
+    /// A range a surface gave back, reaching to the start of its line
+    /// where only that line's own block syntax stands before it.
+    ///
+    /// The inverse of `clearingBlockSyntax`'s move. A change to block
+    /// syntax alone — `Title` becoming `# Title`, a line becoming a
+    /// list item or a quotation — is drawn as a point after the syntax,
+    /// since a marker before it would stop the line being what it now
+    /// is. The mark itself is still on the `#`. So a surface stepping
+    /// to that point and asking to clear or put back sends a range
+    /// beginning after the syntax, which touches no mark at all, and
+    /// nothing happens — twice over, since the writer tries again.
+    ///
+    /// Found by the iOS session; both apps' selections meet it.
+    public static func takingInSyntax(_ range: NSRange, of text: String) -> NSRange {
+        let source = text as NSString
+        guard range.location <= source.length else { return range }
+        let line = source.lineRange(for: NSRange(location: range.location, length: 0))
+        guard range.location > line.location else { return range }
+        let head = source.substring(
+            with: NSRange(location: line.location, length: range.location - line.location)
+        )
+        guard !head.isEmpty, head.wholeMatch(
+            of: #/\s*(?:#{1,6}\s+|[-*+]\s+|\d{1,9}[.)]\s+|>\s?)+\s*/#
+        ) != nil else { return range }
+        return NSRange(
+            location: line.location, length: range.length + (range.location - line.location)
+        )
+    }
+
     /// Marked Markdown a renderer can be given: every marker moved to a
     /// place that leaves the Markdown reading as it did without them.
     ///
@@ -280,34 +401,6 @@ public enum LampWritingReviewMarkdown {
     /// needs none of that — it is never drawing from a copy a marker was
     /// dropped from — and the extra characters would only be more for it
     /// to strip.
-    /// Whether a line opens or closes a fenced block: three or more
-    /// backticks or tildes, with nothing but an info string after them.
-    static func isFence(_ line: String) -> Bool {
-        line.wholeMatch(of: #/\s{0,3}(`{3,}[^`]*|~{3,}.*)/#) != nil
-    }
-
-    /// `line` split into the stretches outside code spans and the code
-    /// spans themselves, in order. A code span is a run of backticks
-    /// and whatever stands until the same run again.
-    static func partedAtCodeSpans(_ line: String) -> [(text: String, isCode: Bool)] {
-        var parts: [(String, Bool)] = []
-        var plain = ""
-        var rest = Substring(line)
-        while let open = rest.firstMatch(of: #/`+/#) {
-            let ticks = String(open.output)
-            let before = rest[rest.startIndex..<open.range.lowerBound]
-            let after = rest[open.range.upperBound...]
-            guard let close = after.firstRange(of: ticks) else { break }
-            plain += before
-            parts.append((plain, false))
-            plain = ""
-            parts.append((ticks + after[after.startIndex..<close.lowerBound] + ticks, true))
-            rest = after[close.upperBound...]
-        }
-        parts.append((plain + rest, false))
-        return parts.filter { !$0.0.isEmpty }.map { (text: $0.0, isCode: $0.1) }
-    }
-
     public static func drawable(_ marked: String, numbering: Bool = true) -> String {
         // The block pass first: moving a marker past a heading's `#` can
         // leave it between a word and the underscore that opened an
@@ -335,18 +428,25 @@ public enum LampWritingReviewMarkdown {
         // marker moved out of its address leaves the changed word with
         // no mark and a point beside the line. Found by the iOS
         // session, marking `new` in `curl https://x.com/new`.
-        var inFence = false
+        var fence: Fence?
         return (numbering ? numbered(marked) : marked)
             .components(separatedBy: "\n")
             .map { line -> String in
-                if isFence(unmarked(line)) {
-                    inFence.toggle()
+                let bare = unmarked(line)
+                if let open = fence {
+                    if closes(open, bare) { fence = nil }
                     return line
                 }
-                guard !inFence else { return line }
-                return partedAtCodeSpans(clearingBlockSyntax(line))
-                    .map { $0.isCode ? $0.text : movingMarksOutOfLinks($0.text) }
-                    .joined()
+                if let opening = fenceOpening(bare) {
+                    fence = opening
+                    return line
+                }
+                // The code spans held out of the way, the line put
+                // right whole — a link's label may hold one, and a line
+                // cut at the span is a line no rule can see that link
+                // in.
+                let (masked, spans) = maskingCodeSpans(clearingBlockSyntax(line))
+                return unmasking(movingMarksOutOfLinks(masked), spans)
             }
             .joined(separator: "\n")
     }
