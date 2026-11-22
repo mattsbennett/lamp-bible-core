@@ -418,13 +418,88 @@ public enum LampWritingReviewMarkdown {
     /// The runs on a line, paired as Markdown pairs them: within each
     /// delimiter character, the first unclosed run opens and the next
     /// closes. Returns each pair as (opener, closer).
+    /// Where code spans stand on a line, in the whole text's
+    /// coordinates. What is inside them is drawn as written, so its
+    /// delimiters are letters and pair with nothing.
+    static func codeSpans(onLineOf range: NSRange, in source: NSString) -> [NSRange] {
+        let line = source.lineRange(for: range)
+        var spans: [NSRange] = []
+        var index = line.location
+        var openAt: Int?
+        var openLength = 0
+        while index < NSMaxRange(line) {
+            guard source.character(at: index) == 0x60 else {
+                index += 1
+                continue
+            }
+            guard !isEscaped(at: index, from: line.location, in: source) else {
+                index += 1
+                continue
+            }
+            var end = index
+            while end < NSMaxRange(line), source.character(at: end) == 0x60 { end += 1 }
+            let length = end - index
+            if let start = openAt, length == openLength {
+                // The interior alone. The span's own backtick runs are
+                // delimiters in their own right — the assistant
+                // wrapping a word in them marks those runs, and a
+                // clear of the word must still reach them.
+                let interior = start + openLength
+                if index > interior {
+                    spans.append(NSRange(location: interior, length: index - interior))
+                }
+                openAt = nil
+                openLength = 0
+            } else if openAt == nil {
+                openAt = index
+                openLength = length
+            }
+            index = end
+        }
+        return spans
+    }
+
+    /// Whether the character at `index` is escaped: preceded by an odd
+    /// number of backslashes, the even ones being backslashes escaping
+    /// each other.
+    static func isEscaped(at index: Int, from start: Int, in source: NSString) -> Bool {
+        var slashes = 0
+        var back = index - 1
+        while back >= start, source.character(at: back) == 0x5C {
+            slashes += 1
+            back -= 1
+        }
+        return slashes % 2 == 1
+    }
+
     static func delimiterPairs(onLineOf range: NSRange, in source: NSString) -> [(NSRange, NSRange)] {
         let line = source.lineRange(for: range)
+        // Delimiters inside a code span are letters, and an escaped one
+        // is the character itself. Neither opens nor closes anything,
+        // and pairing them made the stars in `` `**` `` the opener for
+        // a later real one — so a clear between them reached over the
+        // real opener and partly cleared an untouched word's mark.
+        // Found by the iOS session.
+        let spans = codeSpans(onLineOf: range, in: source)
         var runs: [DelimiterRun] = []
         var index = line.location
         while index < NSMaxRange(line) {
             guard isDelimiter(source.character(at: index)) else {
                 index += 1
+                continue
+            }
+            if spans.contains(where: { NSLocationInRange(index, $0) }) {
+                index += 1
+                continue
+            }
+            if isEscaped(at: index, from: line.location, in: source) {
+                // The whole run, not just the escaped character: `\**`
+                // is two literal stars. Skipping one left the other to
+                // pair with a real opener further along.
+                let escaped = source.character(at: index)
+                while index < NSMaxRange(line), source.character(at: index) == escaped {
+                    index += 1
+                }
                 continue
             }
             let character = Character(UnicodeScalar(source.character(at: index)) ?? " ")
@@ -479,6 +554,13 @@ public enum LampWritingReviewMarkdown {
     public static func takingInDelimiters(_ range: NSRange, of text: String) -> NSRange {
         let source = text as NSString
         guard range.location >= 0, NSMaxRange(range) <= source.length else { return range }
+        // A caret is left exactly where it is. Widening it to the
+        // delimiters beside it turns a clear of the whole mark under
+        // the caret into a partial clear of the delimiters: the words
+        // stay marked and a later restore answers `.notExact`.
+        // `takingInSyntax` has its own rule for a point after block
+        // syntax; this one has nothing to add to a point.
+        guard range.length > 0 else { return range }
         let pairs = delimiterPairs(onLineOf: range, in: source)
         let end = NSMaxRange(range)
         var from = range.location

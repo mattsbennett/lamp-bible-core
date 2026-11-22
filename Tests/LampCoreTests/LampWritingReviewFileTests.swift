@@ -1113,3 +1113,69 @@ struct WritingReviewDelimiterPairingTests {
         #expect(Markdown.takingInDelimiters(lonely, of: text) == lonely)
     }
 }
+
+/// Delimiters that are not delimiters, and carets.
+///
+/// The iOS session's third and fourth findings on `takingInDelimiters`.
+struct WritingReviewDelimiterLiteralsTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+
+    /// Stars inside a code span are letters. Paired with a real run
+    /// they made the code span's opener the partner of a real word's,
+    /// so a clear between them reached over that word's opener and
+    /// partly cleared its mark.
+    @Test func starsInsideACodeSpanPairWithNothing() {
+        let text = "`**` middle **word**"
+        let middle = (text as NSString).range(of: "middle ")
+        #expect(Markdown.takingInDelimiters(middle, of: text) == middle)
+    }
+
+    /// And the real pair on that line still works.
+    @Test func therealPairBesideCodeStillReaches() {
+        let text = "`**` middle **word**"
+        let word = (text as NSString).range(of: "word")
+        let reached = Markdown.takingInDelimiters(word, of: text)
+        #expect((text as NSString).substring(with: reached) == "**word**")
+    }
+
+    /// An escaped delimiter is the character itself.
+    @Test func anescapedDelimiterPairsWithNothing() {
+        let text = "\\** middle **word**"
+        let middle = (text as NSString).range(of: "middle ")
+        #expect(Markdown.takingInDelimiters(middle, of: text) == middle)
+    }
+
+    /// A caret is left where it is. Widened to the delimiters beside
+    /// it, Mark Selection as Reviewed became a partial clear of them
+    /// rather than a clear of the whole mark under the caret.
+    @Test func acaretIsLeftExactlyWhereItIs() {
+        let text = "Her **red dog** barked."
+        let beforeRed = NSRange(location: 6, length: 0)
+        #expect((text as NSString).substring(with: NSRange(location: 6, length: 3)) == "red")
+        #expect(Markdown.takingInDelimiters(beforeRed, of: text) == beforeRed)
+        let afterDog = NSRange(location: 13, length: 0)
+        #expect(Markdown.takingInDelimiters(afterDog, of: text) == afterDog)
+    }
+
+    /// A caret is left alone by the combined form too.
+    @Test func thecombinedFormLeavesACaretToTheBlockRule() {
+        let text = "# **Title** here"
+        let caret = NSRange(location: 2, length: 0)
+        // The block rule still reaches back over the `# `.
+        #expect(
+            Markdown.takingInSyntaxAndDelimiters(caret, of: text)
+                == NSRange(location: 0, length: 2)
+        )
+    }
+}
+
+/// An escaped run of one kind does not swallow the next kind.
+struct WritingReviewEscapedRunBoundaryTests {
+    @Test func anescapedRunStopsAtItsOwnCharacter() {
+        // `\*` is literal; the `_it_` beside it still pairs.
+        let text = "\\* _it_ here"
+        let it = (text as NSString).range(of: "it")
+        let reached = LampWritingReviewMarkdown.takingInDelimiters(it, of: text)
+        #expect((text as NSString).substring(with: reached) == "_it_")
+    }
+}
