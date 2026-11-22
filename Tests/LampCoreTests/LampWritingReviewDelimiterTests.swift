@@ -197,27 +197,21 @@ struct LampMarkdownModelReviewTests {
         }
     }
 
-    /// **Not yet right, and deliberately pinned as it stands.**
-    ///
-    /// A `\r\n` followed by a blank `\r\n` still loses the span: the
-    /// line map agrees with the parser on how many lines there are and
-    /// where each begins, so the cause is elsewhere and I have not
-    /// found it. The guard on a span whose content falls outside it
-    /// turns the disagreement into a dropped span rather than a wrong
-    /// range, so the reach simply does not fire — the behaviour before
-    /// any of this existed, and safe. This records the gap so the next
-    /// reader meets it as a known limit rather than a surprise.
-    @Test func acrlfBlankLineStillLosesTheSpan() {
+    /// Windows line endings. `"\r\n"` is a single Character in Swift,
+    /// so a splitter comparing Characters sees no line break at all
+    /// and calls the whole text one line — after which every range is
+    /// measured against the wrong line and the span is lost. Found by
+    /// a review, diagnosed by printing both sides' line count: the
+    /// parser said line 3 and this said line 1.
+    @Test func windowsLineEndingsAreLineEndings() {
         let text = "a\r\n\r\nThen **word** here"
+        #expect(LampMarkdownModel.lines(of: text).count == 3)
         let model = LampMarkdownModel(parsing: text)
+        let strong = model.inlines.first { $0.kind == .strong }
         #expect(
-            model.inlines.first(where: { $0.kind == .strong }) == nil,
-            "if this now finds the span, the limit is fixed — assert the range instead"
+            strong.map { slice($0.range, of: text) } == "**word**",
+            "got \(String(describing: strong.map { slice($0.range, of: text) }))"
         )
-        // And the reach is a no-op there, which is the point: nothing
-        // wrong happens, only nothing helpful.
-        let word = (text as NSString).range(of: "word")
-        #expect(Markdown.takingInDelimiters(word, of: text) == word)
     }
 
     /// A grapheme of several scalars — a letter and a combining mark —

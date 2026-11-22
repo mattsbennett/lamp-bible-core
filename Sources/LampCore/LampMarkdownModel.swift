@@ -115,12 +115,25 @@ public struct LampMarkdownModel: Sendable {
     public init(parsing text: String) {
         self.text = text
         let offsets = Self.lineOffsets(of: text)
+        // A one-tilde run is literal here. cmark-gfm reads `~text~` as
+        // strikethrough; the editor page reads Markdown with
+        // markdown-it, which needs `~~`, and core must not see
+        // formatting the writer does not see.
+        //
+        // Dropping the nodes afterwards was not enough: a single tilde
+        // still took part in pairing, so `~~a ~b~~ c~` produced no
+        // strikethrough at all where markdown-it strikes `a ~b`. The
+        // tildes are made literal *before* parsing instead, each
+        // replaced by a character of the same UTF-8 and UTF-16 width
+        // so every offset still lands where it did. Found by the iOS
+        // session.
+        let forParsing = Self.hidingSingleTildes(text)
         // No `.parseBlockDirectives`: `@someone **word**` is a DocC
         // directive to swift-markdown and loses its inline content,
         // where the editor's markdown-it gives a plain paragraph. Core
         // must read what the writer's editor reads. Found by the iOS
         // session, who probed the editor's own install.
-        let document = Document(parsing: text)
+        let document = Document(parsing: forParsing)
         var blocks: [Block] = []
         var inlines: [Inline] = []
         Self.walk(document, text: text, offsets: offsets, blocks: &blocks, inlines: &inlines)
@@ -185,27 +198,35 @@ extension LampMarkdownModel {
     }
 
     /// Each line and the UTF-16 length of the break that ended it.
-    static func lines(of text: String) -> [(line: Substring, separator: Int)] {
-        var out: [(Substring, Int)] = []
-        var index = text.startIndex
-        var lineStart = index
-        while index < text.endIndex {
-            let character = text[index]
-            if character == "\r" {
-                let next = text.index(after: index)
-                let crlf = next < text.endIndex && text[next] == "\n"
-                out.append((text[lineStart..<index], crlf ? 2 : 1))
-                index = crlf ? text.index(after: next) : next
-                lineStart = index
-            } else if character == "\n" {
-                out.append((text[lineStart..<index], 1))
-                index = text.index(after: index)
-                lineStart = index
+    ///
+    /// By Unicode scalar, not by Character. In Swift `"\r\n"` is a
+    /// *single* Character — one grapheme cluster — so a splitter
+    /// comparing Characters matches neither `"\r"` nor `"\n"` and
+    /// hands back the whole text as one line. Every range after the
+    /// first Windows line ending then lands wherever that one line's
+    /// map happens to reach, which here meant the span was dropped.
+    static func lines(of text: String) -> [(line: String, separator: Int)] {
+        var out: [(String, Int)] = []
+        var current = String.UnicodeScalarView()
+        var scalars = Array(text.unicodeScalars)
+        var index = 0
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if scalar == "\r" {
+                let crlf = index + 1 < scalars.count && scalars[index + 1] == "\n"
+                out.append((String(current), crlf ? 2 : 1))
+                current = String.UnicodeScalarView()
+                index += crlf ? 2 : 1
+            } else if scalar == "\n" {
+                out.append((String(current), 1))
+                current = String.UnicodeScalarView()
+                index += 1
             } else {
-                index = text.index(after: index)
+                current.append(scalar)
+                index += 1
             }
         }
-        out.append((text[lineStart...], 0))
+        out.append((String(current), 0))
         return out
     }
 
@@ -297,14 +318,7 @@ extension LampMarkdownModel {
         guard content.location >= whole.location,
               NSMaxRange(content) <= NSMaxRange(whole)
         else { return nil }
-        let inline = Inline(kind: kind, range: whole, content: content)
-        // cmark-gfm reads a single `~text~` as strikethrough; the
-        // editor page reads Markdown with markdown-it, which needs
-        // `~~`. Core must not see formatting the writer does not see,
-        // so a one-tilde run is literal here. Found by the iOS
-        // session, who own the page.
-        if kind == .strikethrough, inline.delimiters.opening.length < 2 { return nil }
-        return inline
+        return Inline(kind: kind, range: whole, content: content)
     }
 }
 
@@ -362,5 +376,30 @@ extension LampMarkdownModel {
             if let found = firstCellStart(of: child, offsets: offsets) { return found }
         }
         return nil
+    }
+}
+
+extension LampMarkdownModel {
+    /// The text with every one-tilde run replaced by a character the
+    /// parser reads as ordinary.
+    ///
+    /// Same width in UTF-8 and in UTF-16, so every line and column the
+    /// parser reports still points at the same place in the original.
+    /// `~` is one byte and one unit; `+` is too, and means nothing to
+    /// Markdown in any position.
+    static func hidingSingleTildes(_ text: String) -> String {
+        guard text.contains("~") else { return text }
+        var out = ""
+        out.reserveCapacity(text.count)
+        var rest = Substring(text)
+        while let run = rest.firstRange(of: "~") {
+            var end = run.lowerBound
+            while end < rest.endIndex, rest[end] == "~" { end = rest.index(after: end) }
+            let length = rest.distance(from: run.lowerBound, to: end)
+            out += rest[rest.startIndex..<run.lowerBound]
+            out += length == 1 ? "+" : String(repeating: "~", count: length)
+            rest = rest[end...]
+        }
+        return out + rest
     }
 }
