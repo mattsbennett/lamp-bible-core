@@ -10,7 +10,9 @@ import LampModuleKit
 /// Mac, through the same chat a Mac window shows, and is saved there as any
 /// other turn is. Nothing passes through a service of ours: the two find each
 /// other with Bonjour on the local network, or peer to peer when they are
-/// near, and talk directly.
+/// near, or the device is given the Mac's address on a tailnet, which
+/// carries no Bonjour (`LampAgentRemoteAddress`); either way they talk
+/// directly.
 ///
 /// A connection opens with a handshake in the clear
 /// (`LampAgentRemoteHello`, then `LampAgentRemoteAuth`), which agrees keys
