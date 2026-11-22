@@ -279,3 +279,58 @@ struct LampMarkdownTildeStandInTests {
         }
     }
 }
+
+/// Where a link's address is, taken from the parser.
+struct LampMarkdownLinkReaderTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    /// A marker in an inline link's address comes out before the link
+    /// as a point: in the address it is taken into where the link
+    /// goes, and the change it marks has nothing to reach.
+    @Test func amarkerInAnAddressComesOutAsAPoint() {
+        let marked = "See [the note](https://x.com/\(s)a\(e)) now."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("(https://x.com/a)"), "\(drawn.debugDescription)")
+        #expect(Markdown.unmarked(drawn) == "See [the note](https://x.com/a) now.")
+    }
+
+    /// An autolink is a link too.
+    @Test func anautolinksAddressIsAnAddress() {
+        let marked = "An <https://x.com/\(s)a\(e)> autolink."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("<https://x.com/a>"), "\(drawn.debugDescription)")
+    }
+
+    /// **A bare URL is not a link**, so its marks stay where they are.
+    ///
+    /// The editor page has `linkify` off in its markdown-it, so the
+    /// writer sees plain text; cmark-gfm reports no link either.
+    /// Moving the markers out cost a highlight and left a point beside
+    /// the line, for a link that was never there.
+    @Test func abareUrlKeepsItsMarksWhereTheyAre() {
+        let marked = "Bare https://x.com/\(s)a\(e) here."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(
+            drawn.contains("x.com/\(s)a\(e)"),
+            "the mark left a word that is not in a link: \(drawn.debugDescription)"
+        )
+        #expect(Markdown.unmarked(drawn) == "Bare https://x.com/a here.")
+    }
+
+    /// A label may hold a code span and the link is still seen whole.
+    @Test func alabelHoldingCodeIsStillALink() {
+        let marked = "See [the `curl` note](https://x.com/\(s)a\(e))."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("(https://x.com/a)"), "\(drawn.debugDescription)")
+        #expect(drawn.contains("`curl`"))
+    }
+
+    /// And a label marked rather than the address keeps its highlight.
+    @Test func amarkedLabelKeepsItsHighlight() {
+        let marked = "See [the \(s)note\(e)](https://x.com/a)."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("\(s)note\(e)"), "\(drawn.debugDescription)")
+    }
+}

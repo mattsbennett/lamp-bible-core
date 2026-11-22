@@ -231,20 +231,12 @@ public enum LampWritingReviewMarkdown {
             let moved = sortingOut(markers(in: link))
             return moved.before + moved.ending + "<\(unmarked(link))>" + moved.after
         }
-        // A pipe is not part of a bare URL. The markers go on before
-        // any table is split, so a run that crossed one swallowed the
-        // next cell and carried its markers out in front of this cell's
-        // address — the changed word losing its highlight. A pipe ends
-        // the cell in a table row, and a literal one in an address is
-        // rare enough to be written as a link. Found by the iOS session.
-        .replacing(
-            #/(^|[^\w(<\x{E000}-\x{E01A}])([A-Za-z][A-Za-z0-9+.\-\x{E000}-\x{E01A}]*:\/\/[^\s<>()|]+)/#
-        ) { match in
-            let link = String(match.output.2)
-            guard link.contains(where: isMarker) else { return String(match.output.0) }
-            let moved = sortingOut(markers(in: link))
-            return match.output.1 + moved.before + moved.ending + unmarked(link) + moved.after
-        }
+        // A bare URL is left alone. cmark-gfm reports no link for
+        // one, and the editor page has `linkify` off in its
+        // markdown-it, so the writer sees plain text — moving the
+        // markers out cost a highlight and left a point beside the
+        // line, for a link that was never there. The rule that a pipe
+        // ends such a URL goes with it; there is no URL to end.
     }
 
     /// A line with any marker standing before its block's own syntax — a
