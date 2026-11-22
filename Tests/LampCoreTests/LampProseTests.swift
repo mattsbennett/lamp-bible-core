@@ -167,6 +167,38 @@ struct LampProseTests {
         #expect(text.text.runs.first?.link?.absoluteString == "/url")
     }
 
+    /// A piece that ends inside an unclosed fence must not swallow the
+    /// definitions carried to it.
+    ///
+    /// They were written after each piece, and an unclosed fence, HTML block
+    /// or indented code at its end took them in and drew them as code the
+    /// writer never typed. They go in front now, where nothing can precede
+    /// them. Found by Codex, reviewing the phone's adoption.
+    @Test func anunclosedFenceDoesNotSwallowTheDefinitionsCarriedToIt() {
+        let blocks = LampProse.blocks("[guide]: /docs\n\n```\nnever closed")
+        let code = blocks.compactMap { block -> String? in
+            if case .code(_, let text) = block { return text } else { return nil }
+        }
+        #expect(code == ["never closed"], "the fence drew \(code)")
+        #expect(!blocks.contains { block in
+            if case .code(_, let text) = block { return text.contains("/docs") }
+            return false
+        }, "a definition was drawn as code")
+    }
+
+    /// The same, for a piece ending in indented code.
+    @Test func indentedCodeDoesNotSwallowThemEither() {
+        let blocks = LampProse.blocks("[guide]: /docs\n\nSee [it][guide].\n\n    indented")
+        #expect(!blocks.contains { block in
+            if case .code(_, let text) = block { return text.contains("/docs") }
+            return false
+        })
+        guard case .paragraph(let text)? = blocks.first(where: {
+            if case .paragraph = $0 { return true } else { return false }
+        }) else { return #expect(Bool(false), "no paragraph") }
+        #expect(text.text.runs.contains { $0.link?.absoluteString == "/docs" })
+    }
+
     /// A paragraph whose whole content is a space set in code is still a
     /// paragraph: trimming its words away deleted it.
     @Test func aparagraphOfOnlyACodeSpanSurvives() {

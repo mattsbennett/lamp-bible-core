@@ -98,11 +98,11 @@ public enum LampProse {
             .flatMap { region -> [LampProseBlock] in
                 switch region {
                 case .prose(let source):
-                    return children(of: document(source + definitions), options: options)
+                    return children(of: document(definitions + source), options: options)
                 case .footnote(let label, let source):
                     return [.footnote(
                         label: restored(label),
-                        blocks: children(of: document(source + definitions), options: options)
+                        blocks: children(of: document(definitions + source), options: options)
                     )]
                 }
             }
@@ -444,6 +444,14 @@ public enum LampProse {
 
     /// Every `[label]: address` the text defines, gathered so each piece
     /// of it can resolve a link written in another.
+    ///
+    /// They go in **front** of a piece, never after it. A block can only
+    /// swallow what follows it, and a piece ending in an unclosed fence,
+    /// HTML block or indented code swallowed the definitions written after
+    /// it and drew them as code the writer never typed. Nothing can precede
+    /// them to swallow them. A definition repeated in the piece that already
+    /// held it is harmless: the first of a label wins, and a definition
+    /// draws nothing. Found by Codex, reviewing the phone's adoption.
     private static func referenceDefinitions(of text: String) -> String {
         var fence: String?
         var out = ""
@@ -457,7 +465,7 @@ public enum LampProse {
                   trimmed.index(after: close) < trimmed.endIndex,
                   trimmed[trimmed.index(after: close)] == ":"
             else { continue }
-            out += "\n\n" + trimmed
+            out += trimmed + "\n\n"
         }
         return out
     }
