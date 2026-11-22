@@ -244,6 +244,46 @@ struct LampProseTests {
         #expect(try paragraph("about \\~ three days").plain == "about ~ three days")
     }
 
+    /// Nothing is written into indented code.
+    ///
+    /// The quote-break pass skipped fences but not indented code, so a
+    /// quoted line inside an indented block was given a backslash the writer
+    /// never typed, and drew and copied with it. Found by Codex, reviewing
+    /// the phone's adoption.
+    @Test func thequoteBreakPassLeavesIndentedCodeAlone() {
+        let blocks = LampProse.blocks("Before.\n\n    > one\n    > two\n\nAfter.")
+        let code = blocks.compactMap { block -> String? in
+            if case .code(_, let text) = block { return text } else { return nil }
+        }
+        #expect(code == ["> one\n> two"], "the block drew \(code)")
+    }
+
+    /// A paragraph that wraps onto an indented line is prose, not code, so
+    /// its break is still marked where the editor marks it.
+    @Test func awrappedLineIsNotMistakenForCode() {
+        guard case .quote(let inner)? = LampProse.blocks("> one\n>     two").first,
+              case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "no quote") }
+        #expect(text.plain.contains("one"))
+        #expect(!text.plain.contains("\\"), "a backslash was written in: \(text.plain)")
+    }
+
+    /// A definition commented out in HTML is not a definition.
+    ///
+    /// It was gathered and carried to every piece, and a label keeps its
+    /// first address, so the commented-out one won and the link opened it.
+    @Test func adefinitionCommentedOutIsNotGathered() {
+        let blocks = LampProse.blocks(
+            "<!--\n[ref]: https://one.example\n-->\n\nSee [text][ref].\n\n[ref]: https://two.example"
+        )
+        guard case .paragraph(let text)? = blocks.first(where: {
+            if case .paragraph(let value) = $0 { return value.plain.contains("See") }
+            return false
+        }) else { return #expect(Bool(false), "no paragraph") }
+        let address = text.text.runs.first { $0.link != nil }?.link?.absoluteString
+        #expect(address == "https://two.example", "opened \(address ?? "nothing")")
+    }
+
     /// A paragraph whose whole content is a space set in code is still a
     /// paragraph: trimming its words away deleted it.
     @Test func aparagraphOfOnlyACodeSpanSurvives() {

@@ -117,6 +117,66 @@ public enum LampProse {
         Document(parsing: source, options: [.disableSmartOpts])
     }
 
+
+    /// Which of a text's lines are not prose, and so are left alone by every
+    /// pass that reads the text before it is parsed.
+    ///
+    /// Three passes run before the parser — the quote-break marking, the
+    /// footnote split and the definition gathering — and each used to decide
+    /// for itself what to skip. Each got it differently wrong: a quoted line
+    /// inside indented code had a backslash written into it, and a
+    /// definition commented out in HTML was gathered and won the label over
+    /// the real one. They now ask the same question once.
+    ///
+    /// A line is not prose when it is inside a fence, inside an HTML
+    /// comment, or part of an indented code block — one that opens on a line
+    /// indented four spaces or a tab where no paragraph is already running,
+    /// as CommonMark has it, so a wrapped line of prose is not mistaken for
+    /// code. Found by Codex, reviewing the phone's adoption.
+    private static func linesToLeaveAlone(
+        _ lines: [(line: String, ending: String)]
+    ) -> [Bool] {
+        var out: [Bool] = []
+        var fence: String?
+        var inComment = false
+        var inIndentedCode = false
+        var previousWasBlank = true
+        for line in lines {
+            let text = line.line
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            let blank = trimmed.isEmpty
+            let indented = text.hasPrefix("    ") || text.hasPrefix("\t")
+            let wasFenced = fence != nil
+            let wasComment = inComment
+
+            if !wasFenced, !wasComment, trimmed.contains("<!--") {
+                inComment = !trimmed.contains("-->")
+                    || trimmed.range(of: "-->")!.lowerBound
+                        < trimmed.range(of: "<!--")!.lowerBound
+            } else if wasComment, trimmed.contains("-->") {
+                inComment = false
+            }
+
+            if !inComment, !wasComment {
+                fence = fenceState(fence, after: text)
+            }
+
+            if fence == nil, !inComment, !wasComment {
+                if inIndentedCode {
+                    inIndentedCode = blank || indented
+                } else if indented, previousWasBlank {
+                    inIndentedCode = true
+                }
+            } else {
+                inIndentedCode = false
+            }
+
+            out.append(wasFenced || fence != nil || inComment || wasComment || inIndentedCode)
+            if fence == nil, !inComment { previousWasBlank = blank }
+        }
+        return out
+    }
+
     // MARK: Blocks
 
     private static func children(
@@ -402,9 +462,9 @@ public enum LampProse {
     /// looked for inside a fence, where it is code.
     private static func regions(of text: String) -> [Region] {
         let lines = LampMarkdownModel.linesWithEndings(of: text)
+        let leaveAlone = linesToLeaveAlone(lines)
         var out: [Region] = []
         var prose = ""
-        var fence: String?
         var index = 0
 
         func takeProse() {
@@ -416,10 +476,7 @@ public enum LampProse {
 
         while index < lines.count {
             let line = lines[index]
-            let wasFenced = fence != nil
-            fence = fenceState(fence, after: line.line)
-
-            if !wasFenced, fence == nil, let note = footnoteOpening(line.line) {
+            if !leaveAlone[index], let note = footnoteOpening(line.line) {
                 takeProse()
                 var body = note.text + "\n"
                 index += 1
@@ -453,17 +510,14 @@ public enum LampProse {
     /// held it is harmless: the first of a label wins, and a definition
     /// draws nothing. Found by Codex, reviewing the phone's adoption.
     private static func referenceDefinitions(of text: String) -> String {
-        var fence: String?
+        let lines = LampMarkdownModel.linesWithEndings(of: text)
+        let leaveAlone = linesToLeaveAlone(lines)
         var out = ""
-        for line in LampMarkdownModel.linesWithEndings(of: text) {
-            let wasFenced = fence != nil
-            fence = fenceState(fence, after: line.line)
-            guard !wasFenced, fence == nil else { continue }
-            // Four spaces in is code, and an example of a definition shown
-            // there is not one. Stripping the indentation gathered it, and a
-            // label defined twice keeps its first address, so an example
-            // above the real one sent a link to the wrong place.
-            guard !line.line.hasPrefix("    "), !line.line.hasPrefix("\t") else { continue }
+        for (index, line) in lines.enumerated() {
+            // A definition shown as an example in code, or commented out in
+            // HTML, is not one. A label keeps its first address, so either
+            // gathered above the real one sent a link to the wrong place.
+            guard !leaveAlone[index] else { continue }
             let trimmed = line.line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("["), !trimmed.hasPrefix("[^"),
                   let close = trimmed.firstIndex(of: "]"),
@@ -520,13 +574,11 @@ public enum LampProse {
     private static func markingQuoteLineBreaks(_ text: String) -> String {
         guard text.contains(">") else { return text }
         let lines = LampMarkdownModel.linesWithEndings(of: text)
-        var fence: String?
+        let leaveAlone = linesToLeaveAlone(lines)
         var out = ""
         for (index, line) in lines.enumerated() {
-            let wasFenced = fence != nil
-            fence = fenceState(fence, after: line.line)
             var next = line.line
-            if !wasFenced, fence == nil, index + 1 < lines.count,
+            if !leaveAlone[index], index + 1 < lines.count, !leaveAlone[index + 1],
                let body = quotedBody(of: line.line), isPlainProse(body),
                let following = quotedBody(of: lines[index + 1].line), isPlainProse(following),
                !next.hasSuffix("\\"), !next.hasSuffix("  ") {
