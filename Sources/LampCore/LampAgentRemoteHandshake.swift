@@ -231,7 +231,15 @@ public enum LampAgentRemoteHandshake {
 
     // MARK: - Pairing QR
 
-    public static func qrPayload(for code: String) -> String? {
+    /// The most addresses a QR carries; a Mac on a tailnet has two.
+    public static let qrAddressLimit = 4
+
+    /// The pairing QR: the code, and where else the Mac can be reached —
+    /// its tailnet addresses, which Bonjour cannot find — so a device that
+    /// pairs beside the Mac can reach it from anywhere on the tailnet
+    /// without anything typed. A device that knows nothing of addresses
+    /// reads only the code, as before.
+    public static func qrPayload(for code: String, addresses: [LampAgentRemoteAddress] = []) -> String? {
         guard let code = LampPresentationRemotePairing.normalizedCode(code) else { return nil }
         var components = URLComponents()
         components.scheme = "lampbible"
@@ -239,8 +247,21 @@ public enum LampAgentRemoteHandshake {
         components.queryItems = [
             URLQueryItem(name: "v", value: String(LampAgentRemoteProtocol.currentVersion)),
             URLQueryItem(name: "code", value: code),
-        ]
+        ] + addresses.prefix(qrAddressLimit).map { URLQueryItem(name: "at", value: $0.text) }
         return components.url?.absoluteString
+    }
+
+    /// The addresses a pairing QR names, each as `LampAgentRemoteAddress.parse`
+    /// reads one; none for a QR that is not this one's, or names none. One
+    /// that does not parse is left out rather than spoiling the rest.
+    public static func addresses(fromQRPayload payload: String) -> [LampAgentRemoteAddress] {
+        guard code(fromQRPayload: payload) != nil, let items = URLComponents(string: payload)?.queryItems else { return [] }
+        var seen = Set<LampAgentRemoteAddress>()
+        return items.filter { $0.name == "at" }
+            .compactMap { $0.value.flatMap(LampAgentRemoteAddress.parse) }
+            .filter { seen.insert($0).inserted }
+            .prefix(qrAddressLimit)
+            .map { $0 }
     }
 
     public static func code(fromQRPayload payload: String) -> String? {

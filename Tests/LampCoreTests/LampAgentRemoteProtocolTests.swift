@@ -159,6 +159,38 @@ final class LampAgentRemoteProtocolTests: XCTestCase {
         XCTAssertNil(LampAgentRemoteHandshake.code(fromQRPayload: slides))
     }
 
+    func testThePairingQRCarriesTheMacsTailnetAddresses() throws {
+        let addresses = [
+            LampAgentRemoteAddress(host: "100.90.115.76"),
+            LampAgentRemoteAddress(host: "fd7a:115c:a1e0::9c01:734c", port: 50192),
+        ]
+        let payload = try XCTUnwrap(LampAgentRemoteHandshake.qrPayload(for: code, addresses: addresses))
+        XCTAssertEqual(LampAgentRemoteHandshake.addresses(fromQRPayload: payload), addresses)
+        // A device that reads only the code still reads it.
+        XCTAssertEqual(LampAgentRemoteHandshake.code(fromQRPayload: payload), code)
+        // No addresses: the QR is what it always was.
+        XCTAssertEqual(
+            LampAgentRemoteHandshake.qrPayload(for: code, addresses: []),
+            LampAgentRemoteHandshake.qrPayload(for: code)
+        )
+        XCTAssertEqual(LampAgentRemoteHandshake.addresses(fromQRPayload: try XCTUnwrap(LampAgentRemoteHandshake.qrPayload(for: code))), [])
+    }
+
+    func testAPairingQRsAddressesAreReadWithCare() throws {
+        let base = try XCTUnwrap(LampAgentRemoteHandshake.qrPayload(for: code))
+        // One that does not parse is left out; a repeat is read once; no
+        // more than the limit are taken.
+        let crowded = base + "&at=-flag&at=100.64.0.1&at=100.64.0.1"
+            + (2...9).map { "&at=100.64.0.\($0)" }.joined()
+        XCTAssertEqual(
+            LampAgentRemoteHandshake.addresses(fromQRPayload: crowded).map(\.host),
+            ["100.64.0.1", "100.64.0.2", "100.64.0.3", "100.64.0.4"]
+        )
+        // Not this QR at all: the slide remote's, carrying an address.
+        let slides = try XCTUnwrap(LampPresentationRemotePairing.qrPayload(for: code)) + "&at=100.64.0.1"
+        XCTAssertEqual(LampAgentRemoteHandshake.addresses(fromQRPayload: slides), [])
+    }
+
     func testASnapshotRoundTrips() throws {
         let credential = try XCTUnwrap(LampAgentRemoteCredential.device(.generate()))
         let (device, host, _) = try connect(device: credential, hostAccepts: [credential])
