@@ -413,16 +413,54 @@ public enum LampWritingReviewMarkdown {
         let source = text as NSString
         guard range.location >= 0, NSMaxRange(range) <= source.length else { return range }
         let line = source.lineRange(for: range)
-        var start = range.location
-        var end = NSMaxRange(range)
-        // Only the delimiter characters, and never past the line: a run
-        // reaching into the line before would take in text the writer
-        // never selected.
-        while start > line.location,
-              isDelimiter(source.character(at: start - 1)) { start -= 1 }
         let lineEnd = NSMaxRange(line)
-        while end < lineEnd, isDelimiter(source.character(at: end)) { end += 1 }
-        return NSRange(location: start, length: end - start)
+
+        // The run of delimiters standing against each edge, if any.
+        var openStart = range.location
+        while openStart > line.location, isDelimiter(source.character(at: openStart - 1)) {
+            openStart -= 1
+        }
+        var closeEnd = NSMaxRange(range)
+        while closeEnd < lineEnd, isDelimiter(source.character(at: closeEnd)) { closeEnd += 1 }
+
+        // A run is taken in only where the emphasis it belongs to
+        // encloses what was selected.
+        //
+        // Reaching over any run that merely touches an edge was wrong:
+        // the assistant turning `intro word` into `intro **word**`
+        // marks the two `**`, and a writer selecting the unchanged
+        // `intro ` ends their selection against the opening one. Taken
+        // in, that partly clears the mark on a word they never
+        // touched, and Restore Original Wording then answers
+        // `notExact` for it. Found by the iOS session.
+        let opening = openStart < range.location
+            ? source.substring(with: NSRange(location: openStart, length: range.location - openStart))
+            : ""
+        let closing = closeEnd > NSMaxRange(range)
+            ? source.substring(
+                with: NSRange(location: NSMaxRange(range), length: closeEnd - NSMaxRange(range))
+            )
+            : ""
+
+        var from = range.location
+        var to = NSMaxRange(range)
+        // The run before the selection counts when its match stands at
+        // or after the selection's end, still on this line.
+        if !opening.isEmpty {
+            let after = NSRange(location: to, length: lineEnd - to)
+            if source.range(of: opening, options: [], range: after).location != NSNotFound {
+                from = openStart
+            }
+        }
+        // And the mirror: the run after the selection counts when its
+        // match stands at or before the selection's start.
+        if !closing.isEmpty {
+            let before = NSRange(location: line.location, length: range.location - line.location)
+            if source.range(of: closing, options: [], range: before).location != NSNotFound {
+                to = closeEnd
+            }
+        }
+        return NSRange(location: from, length: to - from)
     }
 
     private static func isDelimiter(_ unit: unichar) -> Bool {

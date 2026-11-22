@@ -1018,3 +1018,45 @@ struct WritingRestoreDormantTests {
         #expect(out.dormant.isEmpty)
     }
 }
+
+/// A delimiter run is taken in only where its emphasis encloses the
+/// selection. Found by the iOS session, against the first version.
+struct WritingReviewDelimiterEnclosureTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+
+    /// The writer selects the unchanged words before a bolded one. The
+    /// selection's end touches the opening `**`, but that emphasis does
+    /// not enclose it, so nothing is taken in — reaching over it partly
+    /// cleared the mark on a word they never selected, and Restore
+    /// Original Wording then answered `notExact` for it.
+    @Test func arunTouchedFromOutsideIsLeftAlone() {
+        let text = "intro **word** after"
+        let intro = NSRange(location: 0, length: 6)
+        #expect((text as NSString).substring(with: intro) == "intro ")
+        #expect(Markdown.takingInDelimiters(intro, of: text) == intro)
+    }
+
+    /// The mirror: selecting what follows the closing run.
+    @Test func arunTouchedFromTheOtherSideIsLeftAlone() {
+        let text = "intro **word** after"
+        let after = NSRange(location: 14, length: 6)
+        #expect((text as NSString).substring(with: after) == " after")
+        #expect(Markdown.takingInDelimiters(after, of: text) == after)
+    }
+
+    /// And the enclosing case still reaches, which is the whole point.
+    @Test func anenclosingEmphasisIsStillTakenIn() {
+        let text = "intro **word** after"
+        let word = (text as NSString).range(of: "word")
+        let reached = Markdown.takingInDelimiters(word, of: text)
+        #expect((text as NSString).substring(with: reached) == "**word**")
+    }
+
+    /// A selection enclosed by emphasis but wider than one word.
+    @Test func awiderEnclosedSelectionReaches() {
+        let text = "Her **red dog** barked."
+        let words = (text as NSString).range(of: "red dog")
+        let reached = Markdown.takingInDelimiters(words, of: text)
+        #expect((text as NSString).substring(with: reached) == "**red dog**")
+    }
+}
