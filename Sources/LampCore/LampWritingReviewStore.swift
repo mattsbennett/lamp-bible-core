@@ -612,24 +612,36 @@ extension LampWritingReview.RestorePlan {
     /// cannot answer for waits — `unknown` is not `gone`, and treating
     /// it as either loses a record or invents one. One the save does not
     /// hold but the writing still does waits too: that save was taken
-    /// before the restore was made. A passage in neither has been undone
-    /// by the writer, and that is the end of it.
+    /// before the restore was made. A passage in neither is one the
+    /// writer has undone — but that is not the end of it, because Redo
+    /// puts the restored wording back without the surface asking
+    /// anything: the page only reports that its marks are stale.
+    ///
+    /// Dropped outright, such a passage is owed by nobody, so the save
+    /// that then holds the restored wording records nothing. No
+    /// restoration reaches the assistant, and the words it put back and
+    /// nobody has read carry no mark. So an undone passage is returned
+    /// as `dormant`: still owed, out of the queue, and recorded by a
+    /// later save that holds it. Found by the iOS session.
     ///
     /// Both apps decide this and neither had a test for it.
     public static func settlement(
         pending: Set<UUID>,
         inSaved saved: [UUID: Standing],
         inCurrent current: [UUID: Standing]
-    ) -> (record: Set<UUID>, waiting: Set<UUID>) {
+    ) -> (record: Set<UUID>, waiting: Set<UUID>, dormant: Set<UUID>) {
         var record: Set<UUID> = []
         var waiting: Set<UUID> = []
+        var dormant: Set<UUID> = []
         for mark in pending {
             if saved[mark] == .stands {
                 record.insert(mark)
             } else if saved[mark] == .unknown || current[mark] != .gone {
                 waiting.insert(mark)
+            } else {
+                dormant.insert(mark)
             }
         }
-        return (record, waiting)
+        return (record, waiting, dormant)
     }
 }

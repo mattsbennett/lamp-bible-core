@@ -922,3 +922,99 @@ struct WritingReviewMarkdownTableTests {
         #expect(Markdown.unmarked(drawn) == "See https://example.com/a for more.")
     }
 }
+
+/// Reaching outward over emphasis delimiters, and an undone restore
+/// that stays owed. Both from the iOS session's review.
+struct WritingReviewDelimiterReachTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+
+    /// `red dog` becoming `**red dog**`: the marks are on the two `**`,
+    /// placement puts them at the words' edges, and a clear of the words
+    /// alone left the delimiters marked with the count unmoved.
+    @Test func aclearOfTheWordsReachesTheEmphasisAroundThem() {
+        let text = "Her **red dog** barked."
+        // "red dog" alone.
+        let words = NSRange(location: 6, length: 7)
+        #expect((text as NSString).substring(with: words) == "red dog")
+        let reached = Markdown.takingInDelimiters(words, of: text)
+        #expect((text as NSString).substring(with: reached) == "**red dog**")
+    }
+
+    @Test func otherDelimitersReachTheSameWay() {
+        for (text, inner) in [
+            ("a *it* b", "it"), ("a _it_ b", "it"), ("a ~~it~~ b", "it"), ("a `it` b", "it"),
+        ] {
+            let source = text as NSString
+            let at = source.range(of: inner)
+            let reached = Markdown.takingInDelimiters(at, of: text)
+            #expect(
+                source.substring(with: reached).contains(inner),
+                "\(text): reached \(source.substring(with: reached).debugDescription)"
+            )
+            #expect(reached.length > at.length, "\(text)")
+        }
+    }
+
+    /// It never reaches past the line, which would take in text the
+    /// writer never selected.
+    @Test func itneverReachesPastTheLine() {
+        let text = "*\nword\n*"
+        let word = (text as NSString).range(of: "word")
+        #expect(Markdown.takingInDelimiters(word, of: text) == word)
+    }
+
+    /// Plain prose is left exactly as it was.
+    @Test func plainProseIsUntouched() {
+        let text = "Nothing to reach here."
+        let at = NSRange(location: 8, length: 2)
+        #expect(Markdown.takingInDelimiters(at, of: text) == at)
+    }
+
+    /// A heading whose words are emphasised wants both reaches.
+    @Test func bothReachesTogether() {
+        let text = "# **Title** here"
+        let title = (text as NSString).range(of: "Title")
+        let reached = Markdown.takingInSyntaxAndDelimiters(title, of: text)
+        #expect((text as NSString).substring(with: reached) == "# **Title**")
+    }
+}
+
+/// An undone restore stays owed rather than being dropped.
+struct WritingRestoreDormantTests {
+    private typealias Plan = LampWritingReview.RestorePlan
+
+    /// Redo puts the restored wording back without the surface asking
+    /// anything, so a passage gone from both texts is not finished with:
+    /// dropped, it is owed by nobody, and the save that then holds it
+    /// records nothing — no restoration reaches the assistant and its
+    /// unread words carry no mark.
+    @Test func anundonePassageIsDormantRatherThanDropped() {
+        let a = UUID()
+        let out = Plan.settlement(
+            pending: [a], inSaved: [a: .gone], inCurrent: [a: .gone]
+        )
+        #expect(out.record.isEmpty)
+        #expect(out.waiting.isEmpty, "it must not hold up the queue")
+        #expect(out.dormant == [a], "it must still be owed")
+    }
+
+    /// And a later save that holds the restored wording records it.
+    @Test func alaterSaveRecordsWhatWasDormant() {
+        let a = UUID()
+        let out = Plan.settlement(
+            pending: [a], inSaved: [a: .stands], inCurrent: [a: .stands]
+        )
+        #expect(out.record == [a])
+        #expect(out.dormant.isEmpty)
+    }
+
+    /// A passage still standing in the writer's text waits as before.
+    @Test func apassageStillInTheWritersTextWaits() {
+        let a = UUID()
+        let out = Plan.settlement(
+            pending: [a], inSaved: [a: .gone], inCurrent: [a: .stands]
+        )
+        #expect(out.waiting == [a])
+        #expect(out.dormant.isEmpty)
+    }
+}

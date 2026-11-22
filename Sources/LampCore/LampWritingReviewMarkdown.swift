@@ -396,6 +396,48 @@ public enum LampWritingReviewMarkdown {
         )
     }
 
+    /// A range reaching outward over the emphasis delimiters against
+    /// its edges.
+    ///
+    /// The inline counterpart of `takingInSyntax`. When the assistant
+    /// puts `red dog` in bold, what it changed is the two runs of `**`,
+    /// and placement moves their marks to the words' edges — so a clear
+    /// of the paragraph, or of a selection of `red dog`, sends a range
+    /// covering the words and not the delimiters the marks are on. The
+    /// delimiters stay marked, the count does not move, and the writer
+    /// has no way to clear what they can see is highlighted.
+    ///
+    /// Suggested by the iOS session, in their words: the inline
+    /// counterpart of what this already does for block syntax.
+    public static func takingInDelimiters(_ range: NSRange, of text: String) -> NSRange {
+        let source = text as NSString
+        guard range.location >= 0, NSMaxRange(range) <= source.length else { return range }
+        let line = source.lineRange(for: range)
+        var start = range.location
+        var end = NSMaxRange(range)
+        // Only the delimiter characters, and never past the line: a run
+        // reaching into the line before would take in text the writer
+        // never selected.
+        while start > line.location,
+              isDelimiter(source.character(at: start - 1)) { start -= 1 }
+        let lineEnd = NSMaxRange(line)
+        while end < lineEnd, isDelimiter(source.character(at: end)) { end += 1 }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func isDelimiter(_ unit: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(unit) else { return false }
+        return "*_~`".unicodeScalars.contains(scalar)
+    }
+
+    /// Both reaches at once, which is what a surface wants: a changed
+    /// heading and a changed emphasis are the same kind of trouble.
+    public static func takingInSyntaxAndDelimiters(
+        _ range: NSRange, of text: String
+    ) -> NSRange {
+        takingInSyntax(takingInDelimiters(range, of: text), of: text)
+    }
+
     /// Marked Markdown a renderer can be given: every marker moved to a
     /// place that leaves the Markdown reading as it did without them.
     ///
