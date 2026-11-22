@@ -686,3 +686,55 @@ struct WritingReviewMarkdownContractTests {
         }
     }
 }
+
+/// Placing markers can reorder passages, and a surface that pairs by
+/// order must be handed its things in the new one.
+struct WritingReviewMarkdownOrderTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    /// A change to a link's words and a change to where it points. The
+    /// second one's markers come out of the address and go before the
+    /// first, so the passages swap: a surface pairing in order would
+    /// give the label the destination's change, and a writer putting one
+    /// back would get the other.
+    @Test func alinksLabelAndDestinationComeBackInTheOtherOrder() {
+        let marked = "[\(s)later\(e)](https://host/\(s)newpath\(e))"
+        let placed = Markdown.placed(marked)
+        #expect(!placed.markdown.contains(where: { Markdown.placeDigit($0) != nil }))
+        #expect(placed.order == [1, 0], "came out \(placed.order)")
+        // So what the surface is handed goes over in that order.
+        #expect(Markdown.reordered(["label", "destination"], by: placed.order)
+            == ["destination", "label"])
+    }
+
+    /// Where nothing moved, nothing is reordered.
+    @Test func plainProseKeepsItsOrder() {
+        let marked = "One \(s)alpha\(e) and two \(s)beta\(e) here."
+        let placed = Markdown.placed(marked)
+        #expect(placed.order == [0, 1])
+        #expect(Markdown.reordered(["a", "b"], by: placed.order) == ["a", "b"])
+        #expect(Markdown.unmarked(placed.markdown) == Markdown.unmarked(marked))
+    }
+
+    /// The placed text is the same as the unnumbered placement, so a
+    /// surface sees exactly what it saw before.
+    @Test func whatTheSurfaceSeesCarriesNoPlaces() {
+        for marked in [
+            "[\(s)later\(e)](https://host/\(s)newpath\(e))",
+            "A \(s)changed\(e) word.",
+            "Before.\n\(s)---\(e)\nAfter.",
+        ] {
+            let placed = Markdown.placed(marked)
+            #expect(placed.markdown == Markdown.drawable(marked, numbering: false))
+        }
+    }
+
+    /// A caller whose things do not match its passages is left alone
+    /// rather than paired by a guess.
+    @Test func alistThatDoesNotMatchIsLeftAsItIs() {
+        #expect(Markdown.reordered(["only"], by: [1, 0]) == ["only"])
+        #expect(Markdown.reordered(["a", "b"], by: [0, 0]) == ["a", "b"])
+    }
+}

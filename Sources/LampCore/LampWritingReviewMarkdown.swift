@@ -309,3 +309,60 @@ public enum LampWritingReviewMarkdown {
         return lines.joined(separator: "\n")
     }
 }
+
+extension LampWritingReviewMarkdown {
+    /// Markers placed, and the order the passages ended up in.
+    ///
+    /// Placing can put two passages in the other order — a change to a
+    /// link's words and a change to where it points, when the second
+    /// one's markers come out of the address and go before the first.
+    /// A surface that pairs what it is handed with the passages it finds,
+    /// in order, then gives each the other's change.
+    ///
+    /// `numbered` lets a surface read each passage's own place out of
+    /// the text, and that is right for one that draws whatever it
+    /// parses. A surface that cannot be taught the places does not have
+    /// to be: the order is worked out here, by placing the numbered
+    /// copy, reading the places off it, and taking them out again. What
+    /// it is handed is the plain placed Markdown it already understands,
+    /// and the caller hands its own per-passage things over in `order`.
+    ///
+    /// `order` holds, for each passage in the placed text, which passage
+    /// of the original it is.
+    public static func placed(_ marked: String) -> (markdown: String, order: [Int]) {
+        let drawn = drawable(marked, numbering: true)
+        var order: [Int] = []
+        var plain = ""
+        let characters = Array(drawn)
+        var index = 0
+        while index < characters.count {
+            let character = characters[index]
+            if character == LampWritingReview.markStart || character == LampWritingReview.markPoint,
+               let found = place(after: index, in: characters) {
+                plain.append(character)
+                order.append(found.place)
+                index = found.end + 1
+                continue
+            }
+            // A place that is not there to read leaves the passage in
+            // the order it stands, which is what an unplaced copy does.
+            if character == LampWritingReview.markStart || character == LampWritingReview.markPoint {
+                order.append(order.count)
+            }
+            plain.append(character)
+            index += 1
+        }
+        return (plain, order)
+    }
+
+    /// `things`, one to each passage of the original, put in the order
+    /// the placed text's passages stand. Short or long lists are left
+    /// alone: a caller whose things do not match its passages is one
+    /// this cannot help, and guessing would pair them wrongly.
+    public static func reordered<T>(_ things: [T], by order: [Int]) -> [T] {
+        guard things.count == order.count, Set(order) == Set(0..<things.count) else {
+            return things
+        }
+        return order.map { things[$0] }
+    }
+}
