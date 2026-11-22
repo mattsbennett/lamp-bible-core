@@ -199,6 +199,51 @@ struct LampProseTests {
         #expect(text.text.runs.contains { $0.link?.absoluteString == "/docs" })
     }
 
+    /// A line that merely looks like a definition is an ordinary line.
+    ///
+    /// A destination cannot hold a space unless it is written in angle
+    /// brackets, so cmark reads no definition in "[Status]: Ready for
+    /// review" — but it was carried to every piece as one, and drawn twice.
+    /// Found by Codex, reviewing the phone's adoption.
+    @Test func alineThatLooksLikeADefinitionIsStillALine() throws {
+        let blocks = LampProse.blocks("[Status]: Ready for review\n\nThe body.")
+        let drawn = blocks.compactMap { block -> String? in
+            if case .paragraph(let text) = block { return text.plain } else { return nil }
+        }
+        #expect(drawn == ["[Status]: Ready for review", "The body."], "drew \(drawn)")
+    }
+
+    /// A definition shown as an example in code is not a definition.
+    ///
+    /// The scan stripped the indentation and gathered it; a label keeps its
+    /// first address, so an example above the real one sent the link to the
+    /// wrong place.
+    @Test func anexampleOfADefinitionInCodeIsNotOne() throws {
+        let blocks = LampProse.blocks(
+            "    [guide]: /wrong\n\nSee [it][guide].\n\n[guide]: /right"
+        )
+        guard case .paragraph(let text)? = blocks.first(where: {
+            if case .paragraph = $0 { return true } else { return false }
+        }) else { return #expect(Bool(false), "no paragraph") }
+        #expect(text.text.runs.first(where: { $0.link != nil })?.link?.absoluteString == "/right")
+    }
+
+    /// A tilde the writer escaped is their character, and keeps no backslash.
+    ///
+    /// Standing it in before cmark consumed the backslash left it in the
+    /// address: `[x](/a\~b)` opened `/a%5C~b`. Found by Codex, reviewing the
+    /// phone's adoption.
+    @Test func anescapedTildeInAnAddressStaysATilde() throws {
+        let text = try paragraph("[profile](https://example.com/\\~name)")
+        let link = text.text.runs.first { $0.link != nil }?.link?.absoluteString
+        #expect(link == "https://example.com/~name", "opened \(link ?? "nothing")")
+    }
+
+    /// And in the words, where it is drawn rather than followed.
+    @Test func anescapedTildeInTheWordsIsDrawnAsATilde() throws {
+        #expect(try paragraph("about \\~ three days").plain == "about ~ three days")
+    }
+
     /// A paragraph whose whole content is a space set in code is still a
     /// paragraph: trimming its words away deleted it.
     @Test func aparagraphOfOnlyACodeSpanSurvives() {

@@ -459,15 +459,40 @@ public enum LampProse {
             let wasFenced = fence != nil
             fence = fenceState(fence, after: line.line)
             guard !wasFenced, fence == nil else { continue }
+            // Four spaces in is code, and an example of a definition shown
+            // there is not one. Stripping the indentation gathered it, and a
+            // label defined twice keeps its first address, so an example
+            // above the real one sent a link to the wrong place.
+            guard !line.line.hasPrefix("    "), !line.line.hasPrefix("\t") else { continue }
             let trimmed = line.line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("["), !trimmed.hasPrefix("[^"),
                   let close = trimmed.firstIndex(of: "]"),
                   trimmed.index(after: close) < trimmed.endIndex,
-                  trimmed[trimmed.index(after: close)] == ":"
+                  trimmed[trimmed.index(after: close)] == ":",
+                  isDefinition(after: trimmed[trimmed.index(close, offsetBy: 2)...])
             else { continue }
             out += trimmed + "\n\n"
         }
         return out
+    }
+
+    /// Whether what follows a label is an address, rather than words that
+    /// merely look like one.
+    ///
+    /// `[Status]: Ready for review` is an ordinary line: a destination
+    /// cannot hold a space unless it is written in angle brackets, so cmark
+    /// reads no definition there. Carried to every piece as one, the line
+    /// was drawn twice. Found by Codex, reviewing the phone's adoption.
+    private static func isDefinition(after text: Substring) -> Bool {
+        let rest = text.drop { $0 == " " || $0 == "\t" }
+        guard let first = rest.first else { return false }
+        if first == "<" { return rest.contains(">") }
+        let destination = rest.prefix { $0 != " " && $0 != "\t" }
+        guard !destination.isEmpty else { return false }
+        // Only a title may follow the address, in quotes or parentheses.
+        let after = rest.dropFirst(destination.count).drop { $0 == " " || $0 == "\t" }
+        guard let opening = after.first else { return true }
+        return opening == "\"" || opening == "'" || opening == "("
     }
 
     /// `[^label]: text`, at the start of a line.
@@ -567,10 +592,23 @@ public enum LampProse {
         var out = ""
         out.reserveCapacity(text.count)
         var index = text.startIndex
+        var escaped = false
         while index < text.endIndex {
             guard text[index] == "~" else {
+                // A run of backslashes escapes what follows it when it is odd.
+                escaped = text[index] == "\\" ? !escaped : false
                 out.append(text[index])
                 index = text.index(after: index)
+                continue
+            }
+            // A tilde the writer escaped is already their character and
+            // opens nothing, and standing it in left the backslash behind:
+            // `[x](/a\~b)` opened `/a%5C~b` where the address is `/a~b`.
+            // Found by Codex, reviewing the phone's adoption.
+            if escaped {
+                out.append(text[index])
+                index = text.index(after: index)
+                escaped = false
                 continue
             }
             var end = index
