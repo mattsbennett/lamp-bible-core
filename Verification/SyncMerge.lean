@@ -3842,7 +3842,8 @@ def reviewFate (p : ReviewPlace) (now : Nat) : ReviewFate :=
     | none =>
       if !p.documentNamed then
         (match p.asked with | some a => .deleted a | none => .none)
-      else if p.documentIsMember then .none
+      else if p.documentIsMember then
+        (if p.asked.isSome then .cancelled else .none)
       else .deleted (max (p.asked.getD now) now)
 
 /-- A document this device holds never loses its marks, however a
@@ -3850,6 +3851,20 @@ deletion of it came to be queued. -/
 theorem adocumentThatIsHereNeverLosesItsMarks (p : ReviewPlace) (now : Nat) (h : p.held = true) :
     reviewFate p now = .cancelled ∨ reviewFate p now = .none := by
   simp [reviewFate, h]
+  by_cases hasked : p.asked = Option.none
+  · exact Or.inr hasked
+  · exact Or.inl hasked
+
+/-- A document the library holds never loses its marks either, whatever
+deletion of them was asked for before: another device making it again
+after a deletion this one acknowledged brings its marks with it, and
+the tombstone would delete them as the same pass fetches the document. -/
+theorem adocumentTheLibraryHoldsTakesBackTheDeletionOfItsMarks
+    (p : ReviewPlace) (now : Nat)
+    (held : p.held = false) (mine : p.deletedHere = Option.none)
+    (named : p.documentNamed = true) (member : p.documentIsMember = true) :
+    reviewFate p now = .cancelled ∨ reviewFate p now = .none := by
+  simp [reviewFate, held, mine, named, member]
   by_cases hasked : p.asked = Option.none
   · exact Or.inr hasked
   · exact Or.inl hasked

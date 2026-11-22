@@ -865,9 +865,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         /// restore overlapping one of them says nothing about the rest:
         /// answered whole, the others lost their record with it.
         public func standingByMark(from held: String, in text: String) -> [UUID: Standing] {
+            // One alignment of the two texts, shared by every passage.
+            // Each asking for its own aligned the whole writing again:
+            // the iOS session measured a writing of forty-three
+            // thousand characters with three hundred passages at about
+            // 1.9 seconds, against 29 milliseconds for one whole-plan
+            // answer. The work is the same for all of them, and a
+            // restore of a long writing is exactly where there are many.
+            guard held != text else {
+                return Dictionary(uniqueKeysWithValues: spans.map { ($0.edit.markID, .stands) })
+            }
+            let alignment = LampTextAlignment(from: held, to: text, absorbingSmallEqualities: false)
             var answers: [UUID: Standing] = [:]
             for (edit, _) in spans {
-                answers[edit.markID] = only(edit).standing(from: held, in: text)
+                answers[edit.markID] = only(edit).standing(from: held, in: text, through: alignment)
             }
             return answers
         }
@@ -890,11 +901,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
 
         public func standing(from held: String, in text: String) -> Standing {
+            standing(from: held, in: text, through: nil)
+        }
+
+        /// `through` is an alignment of the same two texts, where the
+        /// caller has one already. Making it is the whole cost of this.
+        func standing(
+            from held: String, in text: String, through shared: LampTextAlignment?
+        ) -> Standing {
             guard !edits.isEmpty else { return .gone }
             if held == text { return .stands }
             let source = held as NSString
             let target = text as NSString
-            let alignment = LampTextAlignment(from: held, to: text, absorbingSmallEqualities: false)
+            let alignment = shared
+                ?? LampTextAlignment(from: held, to: text, absorbingSmallEqualities: false)
             var answer = Standing.stands
             for (edit, planned) in spans {
                 // The plan's own arithmetic is in the writing it worked

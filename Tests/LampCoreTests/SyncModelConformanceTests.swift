@@ -1186,6 +1186,8 @@ struct SyncModelConformanceTests {
     /// one costing a live document every mark on it. It is one rule in
     /// core now, and this holds it to the model.
     @Test func reviewFate() throws {
+        // The rows come from the model, which now cancels where the
+        // library holds the document and a deletion was asked for.
         func time(_ f: String) -> Int64? { f == "-" ? nil : Int64(f) }
         try conform("reviewFate") { f in
             let deletedHere = time(f[1]).map { (at: $0, revision: f[2] == "true" ? "r1" : "r2") }

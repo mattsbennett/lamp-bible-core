@@ -280,6 +280,34 @@ public enum LampWritingReviewMarkdown {
     /// needs none of that — it is never drawing from a copy a marker was
     /// dropped from — and the extra characters would only be more for it
     /// to strip.
+    /// Whether a line opens or closes a fenced block: three or more
+    /// backticks or tildes, with nothing but an info string after them.
+    static func isFence(_ line: String) -> Bool {
+        line.wholeMatch(of: #/\s{0,3}(`{3,}[^`]*|~{3,}.*)/#) != nil
+    }
+
+    /// `line` split into the stretches outside code spans and the code
+    /// spans themselves, in order. A code span is a run of backticks
+    /// and whatever stands until the same run again.
+    static func partedAtCodeSpans(_ line: String) -> [(text: String, isCode: Bool)] {
+        var parts: [(String, Bool)] = []
+        var plain = ""
+        var rest = Substring(line)
+        while let open = rest.firstMatch(of: #/`+/#) {
+            let ticks = String(open.output)
+            let before = rest[rest.startIndex..<open.range.lowerBound]
+            let after = rest[open.range.upperBound...]
+            guard let close = after.firstRange(of: ticks) else { break }
+            plain += before
+            parts.append((plain, false))
+            plain = ""
+            parts.append((ticks + after[after.startIndex..<close.lowerBound] + ticks, true))
+            rest = after[close.upperBound...]
+        }
+        parts.append((plain + rest, false))
+        return parts.filter { !$0.0.isEmpty }.map { (text: $0.0, isCode: $0.1) }
+    }
+
     public static func drawable(_ marked: String, numbering: Bool = true) -> String {
         // The block pass first: moving a marker past a heading's `#` can
         // leave it between a word and the underscore that opened an
@@ -302,9 +330,24 @@ public enum LampWritingReviewMarkdown {
         // Left alone, the rule itself draws as a paragraph of hyphens
         // on a surface that redraws the Markdown, and is refused whole
         // on one that checks. Both are poor; neither spreads.
-        (numbering ? numbered(marked) : marked)
+        // Code is drawn as it is written, so none of these rules apply
+        // inside it: a link in a code span is text, not a link, and a
+        // marker moved out of its address leaves the changed word with
+        // no mark and a point beside the line. Found by the iOS
+        // session, marking `new` in `curl https://x.com/new`.
+        var inFence = false
+        return (numbering ? numbered(marked) : marked)
             .components(separatedBy: "\n")
-            .map { movingMarksOutOfLinks(clearingBlockSyntax($0)) }
+            .map { line -> String in
+                if isFence(unmarked(line)) {
+                    inFence.toggle()
+                    return line
+                }
+                guard !inFence else { return line }
+                return partedAtCodeSpans(clearingBlockSyntax(line))
+                    .map { $0.isCode ? $0.text : movingMarksOutOfLinks($0.text) }
+                    .joined()
+            }
             .joined(separator: "\n")
     }
 }

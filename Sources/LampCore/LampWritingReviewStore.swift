@@ -505,10 +505,13 @@ extension LampWritingDocumentReview {
             // up, since something asked for it.
             return asked.map { Fate.deleted(at: $0) } ?? .none
         }
-        // Named by the library but no longer one of its members: the
-        // library itself let it go, which is the one case where absence
-        // is evidence.
-        guard !document.isMember else { return .none }
+        // The library holds it, and this device deleted nothing. A
+        // deletion of the record asked for earlier was asked for about
+        // a document that is alive — another device made it again after
+        // a deletion this one acknowledged, and its marks came with it.
+        // Left to go up, that tombstone deletes marks of a document the
+        // same pass is fetching.
+        guard !document.isMember else { return asked == nil ? .none : .cancelled }
         return .deleted(at: max(asked ?? now, now))
     }
 }

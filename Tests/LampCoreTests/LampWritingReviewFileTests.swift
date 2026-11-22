@@ -760,3 +760,71 @@ struct WritingReviewMarkdownEntityTests {
         }
     }
 }
+
+/// A document the library holds takes back a deletion of its marks.
+///
+/// Another device making the document again after a deletion this one
+/// acknowledged brings its marks with it. The tombstone queued for
+/// those marks would delete them while the same pass fetches the
+/// document — found by the iOS session's review of its adoption.
+struct WritingDocumentReviewFateRevivalTests {
+    @Test func alivingDocumentCancelsTheDeletionOfItsMarks() {
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: nil,
+            document: (revision: "r1", isMember: true),
+            documentWritten: 300, asked: 200, now: 500
+        ) == .cancelled)
+        // With nothing asked for, there is nothing to take back.
+        #expect(LampWritingDocumentReview.fate(
+            held: false, deletedHere: nil,
+            document: (revision: "r1", isMember: true),
+            documentWritten: 300, asked: nil, now: 500
+        ) == .none)
+    }
+}
+
+/// Code is drawn as it is written, so no marker is moved inside it.
+///
+/// A link in a code span is text, not a link. Moving a marker out of
+/// its "address" leaves the changed word unmarked and a point beside
+/// the line — and on the page Next Change then lands on that point,
+/// where Mark Selection as Reviewed clears nothing. Found by the iOS
+/// session's review of its adoption.
+struct WritingReviewMarkdownCodeTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    @Test func amarkInACodeSpanStaysOnTheWord() {
+        let marked = "Run `curl https://x.com/\(s)new\(e)` first."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(
+            drawn.contains("x.com/\(s)new\(e)"),
+            "the mark left the word: \(drawn.debugDescription)"
+        )
+        #expect(Markdown.unmarked(drawn) == "Run `curl https://x.com/new` first.")
+    }
+
+    @Test func amarkInAFencedBlockStaysWhereItIs() {
+        let marked = "```sh\ncurl https://x.com/\(s)new\(e)\n```"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("x.com/\(s)new\(e)"), "\(drawn.debugDescription)")
+        #expect(Markdown.unmarked(drawn) == "```sh\ncurl https://x.com/new\n```")
+    }
+
+    /// A list marker inside a fence is code, not a list, so nothing is
+    /// moved past it either.
+    @Test func blockSyntaxInsideAFenceIsLeftAlone() {
+        let marked = "```\n\(s)- not a list\(e)\n```"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("\(s)- not a list"), "\(drawn.debugDescription)")
+    }
+
+    /// And a real link outside the code on the same line is still moved.
+    @Test func alinkBesideCodeIsStillPutRight() {
+        let marked = "`code` and [a](https://x.com/\(s)y\(e))."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("(https://x.com/y)"), "\(drawn.debugDescription)")
+        #expect(Markdown.unmarked(drawn) == "`code` and [a](https://x.com/y).")
+    }
+}

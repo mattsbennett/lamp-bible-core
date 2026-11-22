@@ -954,3 +954,51 @@ struct WritingRestoreSpellingTests {
         #expect(plan.carried(from: new, to: new)?.edits.count == plan.edits.count)
     }
 }
+
+/// Asking what a save proves of many passages at once.
+struct WritingRestoreStandingCostTests {
+    private let empty = LampWritingReview(writingID: "w")
+
+    /// One alignment for all of them, not one each. The iOS session
+    /// measured a writing of forty-three thousand characters with three
+    /// hundred passages at about 1.9 seconds, against 29 milliseconds
+    /// for a single whole-plan answer — each passage was aligning the
+    /// whole writing again, and a restore of a long writing is exactly
+    /// where there are many.
+    @Test func manyPassagesAreAnsweredInOnePass() throws {
+        let sentences = (0..<120).map { "Sentence number \($0) stands here as written." }
+        let old = sentences.joined(separator: " ")
+        let new = sentences.enumerated()
+            .map { $0.offset % 2 == 0 ? $0.element.replacingOccurrences(of: "stands", with: "sits") : $0.element }
+            .joined(separator: " ")
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(
+            for: NSRange(location: 0, length: (new as NSString).length), in: new
+        ))
+        #expect(plan.edits.count >= 50)
+        let held = plan.applied(to: new)
+
+        let began = Date()
+        let answers = plan.standingByMark(from: held, in: held)
+        let took = Date().timeIntervalSince(began)
+        #expect(answers.count == plan.edits.count)
+        #expect(answers.values.allSatisfy { $0 == .stands })
+        // Generous, since a shared machine's timings wander; one
+        // alignment per passage put this in the seconds.
+        #expect(took < 2.0, "took \(took)s for \(plan.edits.count) passages")
+    }
+
+    /// And a text that is the restored text answers without aligning
+    /// anything at all: every passage stands by definition.
+    @Test func therestoredTextItselfNeedsNoAlignment() throws {
+        let old = "Alpha stands. Beta stands. Gamma stands."
+        let new = "Alpha sits. Beta sits. Gamma sits."
+        let review = empty.markingAssistantChange(from: old, to: new)
+        let plan = try #require(review.restorePlan(
+            for: NSRange(location: 0, length: (new as NSString).length), in: new
+        ))
+        let answers = plan.standingByMark(from: old, in: old)
+        #expect(answers.count == plan.edits.count)
+        #expect(answers.values.allSatisfy { $0 == .stands })
+    }
+}
