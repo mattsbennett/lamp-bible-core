@@ -224,3 +224,58 @@ struct LampMarkdownModelReviewTests {
         #expect(strong.map { slice($0.range, of: text) } == "**word**")
     }
 }
+
+/// The stand-in a lone tilde is hidden behind must have no Markdown
+/// meaning anywhere. `+` had one — at a line's start it opens a
+/// bullet list — which the iOS session caught.
+struct LampMarkdownTildeStandInTests {
+    private func slice(_ range: NSRange, of text: String) -> String {
+        (text as NSString).substring(with: range)
+    }
+
+    /// A line beginning `~ ` is a paragraph, as the editor shows it,
+    /// not a list.
+    @Test func atildeAtALineStartDoesNotOpenAList() {
+        let text = "~ approx 3 days"
+        let model = LampMarkdownModel(parsing: text)
+        #expect(
+            !model.blocks.contains { $0.kind == .listItem },
+            "the stand-in opened a list: \(model.blocks.map(\.kind))"
+        )
+        #expect(model.blocks.contains { $0.kind == .paragraph })
+    }
+
+    /// And after a container's prefix, where a bullet would also open.
+    @Test func atildeAfterAQuoteDoesNotOpenAList() {
+        let model = LampMarkdownModel(parsing: "> ~ approx")
+        #expect(!model.blocks.contains { $0.kind == .listItem })
+    }
+
+    /// The stand-in is ASCII punctuation, so an adjacent emphasis run
+    /// pairs exactly as it does with the real tilde.
+    @Test func emphasisAroundATildePairsTheSame() {
+        let text = "*~a~*"
+        let model = LampMarkdownModel(parsing: text)
+        let emphasis = model.inlines.first { $0.kind == .emphasis }
+        #expect(
+            emphasis.map { slice($0.range, of: text) } == "*~a~*",
+            "got \(String(describing: emphasis.map { slice($0.range, of: text) }))"
+        )
+    }
+
+    /// A doubled tilde is still a strikethrough, which is the point of
+    /// hiding only lone ones.
+    @Test func adoubledTildeIsStillStrikethrough() {
+        let text = "a ~~two~~ b"
+        let model = LampMarkdownModel(parsing: text)
+        #expect(model.inlines.contains { $0.kind == .strikethrough })
+    }
+
+    /// And the text itself is never changed by any of this.
+    @Test func thetextIsUnchanged() {
+        for text in ["~ approx", "a ~b~ c", "~~x~~", "no tildes here"] {
+            let model = LampMarkdownModel(parsing: text)
+            #expect(model.text == text)
+        }
+    }
+}

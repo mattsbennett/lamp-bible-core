@@ -383,10 +383,22 @@ extension LampMarkdownModel {
     /// The text with every one-tilde run replaced by a character the
     /// parser reads as ordinary.
     ///
-    /// Same width in UTF-8 and in UTF-16, so every line and column the
-    /// parser reports still points at the same place in the original.
-    /// `~` is one byte and one unit; `+` is too, and means nothing to
-    /// Markdown in any position.
+    /// The stand-in has to meet three things, and `%` does:
+    ///
+    /// 1. one byte and one UTF-16 unit, as `~` is, so every line and
+    ///    column the parser reports still points where it did;
+    /// 2. ASCII punctuation, so the left- and right-flanking test for
+    ///    an adjacent `*` or `_` run is unchanged — a letter or digit
+    ///    would change how `*~a~*` pairs;
+    /// 3. no Markdown meaning in any position.
+    ///
+    /// `+` was the first choice and fails the third: at a line's
+    /// start, or after a container's prefix, `+ ` opens a bullet list,
+    /// so `~ approx 3 days` became a list where the editor shows a
+    /// paragraph. Not `&`, which opens an entity; not `!`, `[`, `<` or
+    /// `\`; not `#`, `=` or `-`, which open headings, setext
+    /// underlines and lists; not `.` or `)` after a digit. Found by
+    /// the iOS session, who also worked out the criteria.
     static func hidingSingleTildes(_ text: String) -> String {
         guard text.contains("~") else { return text }
         var out = ""
@@ -397,9 +409,45 @@ extension LampMarkdownModel {
             while end < rest.endIndex, rest[end] == "~" { end = rest.index(after: end) }
             let length = rest.distance(from: run.lowerBound, to: end)
             out += rest[rest.startIndex..<run.lowerBound]
-            out += length == 1 ? "+" : String(repeating: "~", count: length)
+            out += length == 1 ? "%" : String(repeating: "~", count: length)
             rest = rest[end...]
         }
         return out + rest
+    }
+}
+
+extension LampMarkdownModel {
+    /// How much of the line at `location` is the block syntax that
+    /// opens it: a heading's `#`s, a list item's marker, a quotation's
+    /// `>`, and the spaces after them.
+    ///
+    /// Taken from the parse rather than matched by hand: the syntax is
+    /// what stands between a block's start and the first thing inside
+    /// it. A pattern has to guess how many `#`s, whether a `)` counts
+    /// after a number, how much indentation is a list and how much is
+    /// code — all of which the parser has already decided, the same
+    /// way the writer's editor decided it.
+    public func blockSyntaxLength(ofLineAt location: Int) -> Int {
+        let source = text as NSString
+        guard location <= source.length else { return 0 }
+        let line = source.lineRange(for: NSRange(location: location, length: 0))
+        // The innermost block that begins on this line, and the first
+        // content inside it.
+        let opening = blocks
+            .filter { $0.range.location >= line.location && $0.range.location < NSMaxRange(line) }
+            .filter { $0.kind == .heading || $0.kind == .listItem || $0.kind == .blockQuote }
+            .min { $0.range.length < $1.range.length }
+        guard let opening, let inner = firstContentStart(after: opening) else { return 0 }
+        guard inner > line.location, inner <= NSMaxRange(line) else { return 0 }
+        return inner - line.location
+    }
+
+    private func firstContentStart(after block: Block) -> Int? {
+        // The earliest inline or nested block that begins inside it.
+        let inner = (inlines.map(\.range) + blocks.map(\.range))
+            .filter { $0.location > block.range.location && $0.location < NSMaxRange(block.range) }
+            .map(\.location)
+            .min()
+        return inner
     }
 }
