@@ -266,7 +266,14 @@
         "ReviewPlace",
         "reviewFate",
         "adocumentThatIsHereNeverLosesItsMarks",
-        "absenceAloneNeverDeletesARecord"
+        "absenceAloneNeverDeletesARecord",
+        "adocumentTheLibraryHoldsTakesBackTheDeletionOfItsMarks",
+        "Standing",
+        "Settled",
+        "settlement",
+        "nopassageOfARestoreIsEverDropped",
+        "apassageTheWriterStillHoldsWaits",
+        "onlyApassageGoneFromBothIsDormant"
       ],
       "conformance": [
         "reviewRouting",

@@ -3893,6 +3893,74 @@ and no passage loses the thing the writer reaches for. The rules
 themselves are not modelled — they are about a Markdown parser neither
 app owns, and a model of them would be the same guess written twice. -/
 
+/-- What a save proves of one passage of a restore: it stands in the
+text that was saved, it stands in the writer's text, or it is in
+neither. -/
+inductive Standing where
+  | stands
+  | unknown
+  | gone
+  deriving DecidableEq, Repr
+
+/-- What becomes of a passage once a save has been proved against it.
+`dormant` is still owed: out of the queue, taken up by a later save. -/
+inductive Settled where
+  | recorded
+  | waiting
+  | dormant
+  deriving DecidableEq, Repr
+
+/-- `LampWritingReview.RestorePlan.settlement`, for one passage. -/
+def settlement (saved current : Standing) : Settled :=
+  if saved = .stands then .recorded
+  else if saved = .unknown ∨ current ≠ .gone then .waiting
+  else .dormant
+
+/-- No passage is ever dropped.
+
+The fault this answers: a passage in neither text was treated as undone
+and let go. But Redo puts the restored wording back without the surface
+asking anything — it only reports that its marks are stale — so a
+passage let go is owed by nobody, and the save that then holds it
+records nothing: no restoration reaches the assistant, and the words it
+put back that nobody has read carry no mark.
+
+Every passage therefore lands in exactly one of the three, and none of
+the three is "forgotten". Found by the iOS session. -/
+theorem nopassageOfARestoreIsEverDropped (saved current : Standing) :
+    settlement saved current = .recorded
+      ∨ settlement saved current = .waiting
+      ∨ settlement saved current = .dormant := by
+  unfold settlement
+  split
+  · exact Or.inl rfl
+  · split
+    · exact Or.inr (Or.inl rfl)
+    · exact Or.inr (Or.inr rfl)
+
+/-- A passage still standing in the writer's text always waits, so a
+save that cannot answer for it never finishes its obligation. -/
+theorem apassageTheWriterStillHoldsWaits (saved : Standing) (h : saved ≠ .stands) :
+    settlement saved .stands = .waiting := by
+  unfold settlement
+  simp [h]
+
+/-- Only a passage gone from both texts is dormant: the writer undid it,
+and nothing of this save speaks for it. -/
+theorem onlyApassageGoneFromBothIsDormant (saved current : Standing)
+    (h : settlement saved current = .dormant) :
+    saved = .gone ∧ current = .gone := by
+  unfold settlement at h
+  split at h
+  · exact absurd h (by decide)
+  · split at h
+    · exact absurd h (by decide)
+    · rename_i hs hw
+      refine ⟨?_, ?_⟩
+      · cases saved <;> simp_all
+      · cases current <;> simp_all
+
+
 /-- A piece of a marked copy: a character of the writing, or a marker.
 A start opens a passage, an end closes one, a point is a passage with
 no words left to show. -/
