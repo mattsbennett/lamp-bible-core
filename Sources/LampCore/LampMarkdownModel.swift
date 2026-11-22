@@ -91,9 +91,15 @@ public struct LampMarkdownModel: Sendable {
 
         public let kind: Kind
         public let range: NSRange
-        public init(kind: Kind, range: NSRange) {
+        /// Where the first thing inside the block begins, which is
+        /// where its opening syntax ends. Taken from the parse: the
+        /// block's own children, plain text included, not only the
+        /// spans this model records separately.
+        public let contentStart: Int?
+        public init(kind: Kind, range: NSRange, contentStart: Int? = nil) {
             self.kind = kind
             self.range = range
+            self.contentStart = contentStart
         }
     }
 
@@ -257,7 +263,12 @@ extension LampMarkdownModel {
                first > range.location {
                 range = NSRange(location: first, length: NSMaxRange(range) - first)
             }
-            blocks.append(Block(kind: kind, range: range))
+            blocks.append(
+                Block(
+                    kind: kind, range: range,
+                    contentStart: firstChildStart(of: markup, offsets: offsets)
+                )
+            )
         }
         if let inline = self.inline(markup, text: text, offsets: offsets) {
             inlines.append(inline)
@@ -442,12 +453,22 @@ extension LampMarkdownModel {
         return inner - line.location
     }
 
-    private func firstContentStart(after block: Block) -> Int? {
-        // The earliest inline or nested block that begins inside it.
-        let inner = (inlines.map(\.range) + blocks.map(\.range))
-            .filter { $0.location > block.range.location && $0.location < NSMaxRange(block.range) }
-            .map(\.location)
-            .min()
-        return inner
+    private func firstContentStart(after block: Block) -> Int? { block.contentStart }
+}
+
+extension LampMarkdownModel {
+    /// Where the first child of a block begins, following nested
+    /// containers down: a list item holds a paragraph, which holds the
+    /// text, and the syntax is everything before that text.
+    static func firstChildStart(of markup: Markup, offsets: [LineMap]) -> Int? {
+        for child in markup.children {
+            // The child's own start, before descending: a heading's
+            // first child may be a `**bold**`, and the syntax ends at
+            // its first star, not at the text inside it. Descend only
+            // where the child has no position of its own.
+            if let range = range(of: child, offsets: offsets) { return range.location }
+            if let inner = firstChildStart(of: child, offsets: offsets) { return inner }
+        }
+        return nil
     }
 }

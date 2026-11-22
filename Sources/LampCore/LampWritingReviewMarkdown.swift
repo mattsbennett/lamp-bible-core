@@ -252,15 +252,20 @@ public enum LampWritingReviewMarkdown {
     /// moved after it, so the line still reads as what it is.
     public static func clearingBlockSyntax(_ line: String) -> String {
         let bare = unmarked(line)
-
-        guard let match = bare.prefixMatch(
-            of: #/\s*(?:#{1,6}\s+|[-*+]\s+|\d{1,9}[.)]\s+|>\s?)/#
-        ) else { return line }
-        let syntax = bare[match.range].count
+        // The parser says how much of the line is its opening syntax,
+        // rather than a pattern guessing how many `#`s, whether a `)`
+        // counts after a number, and how much indentation is a list
+        // and how much is code. The editor decides that with
+        // CommonMark, so this does too.
+        let syntax = LampMarkdownModel(parsing: bare).blockSyntaxLength(ofLineAt: 0)
+        guard syntax > 0 else { return line }
         var head = ""
         var moved = ""
         var rest = Substring(line)
-        while head.count < syntax, let character = rest.first {
+        // Counted in UTF-16 units, as the model reports them: a
+        // Character count would stop early on any line whose syntax
+        // followed a wide character.
+        while (head as NSString).length < syntax, let character = rest.first {
             rest = rest.dropFirst()
             if isMarker(character) { moved.append(character) } else { head.append(character) }
         }
@@ -371,12 +376,11 @@ public enum LampWritingReviewMarkdown {
         guard range.location <= source.length else { return range }
         let line = source.lineRange(for: NSRange(location: range.location, length: 0))
         guard range.location > line.location else { return range }
-        let head = source.substring(
-            with: NSRange(location: line.location, length: range.location - line.location)
-        )
-        guard !head.isEmpty, head.wholeMatch(
-            of: #/\s*(?:#{1,6}\s+|[-*+]\s+|\d{1,9}[.)]\s+|>\s?)+\s*/#
-        ) != nil else { return range }
+        // The parser again: the range reaches back only where what
+        // stands before it on the line is exactly that line's own
+        // opening syntax.
+        let syntax = LampMarkdownModel(parsing: text).blockSyntaxLength(ofLineAt: range.location)
+        guard syntax > 0, line.location + syntax == range.location else { return range }
         return NSRange(
             location: line.location, length: range.length + (range.location - line.location)
         )
