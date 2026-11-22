@@ -12,6 +12,7 @@ struct LampAgentRemoteAddressTests {
         #expect(LampAgentRemoteAddress.parse("[fd7a:115c:a1e0::1]") == .init(host: "fd7a:115c:a1e0::1"))
         #expect(LampAgentRemoteAddress.parse("[fd7a:115c:a1e0::1]:5000") == .init(host: "fd7a:115c:a1e0::1", port: 5000))
         #expect(LampAgentRemoteAddress.parse("my-mac.ts.net.") == .init(host: "my-mac.ts.net."))
+        #expect(LampAgentRemoteAddress.parse("[fe80::1%en0]:5000") == .init(host: "fe80::1%en0", port: 5000))
     }
 
     @Test func refusesWhatIsNotAnAddress() {
@@ -19,6 +20,7 @@ struct LampAgentRemoteAddressTests {
             "", "   ", "my mac", "my-mac:", "my-mac:0", "my-mac:65536", "my-mac:12a",
             "-flag", "a..b", "host-.ts.net", "lamp://my-mac", "my-mac:5000:1",
             "[fd7a::1", "[fd7a::1]5000", "[my-mac]:5000", "fd7a::zz", "[::1]:",
+            "[fe80::1%en0%junk]:5000", "fe80::1%", "fe80::1%en 0", "[fe80::1%]:5000",
             String(repeating: "a", count: 64) + ".net",
         ] {
             #expect(LampAgentRemoteAddress.parse(typed) == nil, "\(typed)")

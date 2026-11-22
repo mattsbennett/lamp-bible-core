@@ -99,10 +99,19 @@ public struct LampAgentRemoteAddress: Equatable, Hashable, Sendable {
         }
     }
 
+    /// An IPv6 address, with at most one zone after a `%`: an interface's
+    /// name, letters, digits, dots, hyphens and underscores.
     private static func isIPv6(_ text: Substring) -> Bool {
+        let parts = text.split(separator: "%", omittingEmptySubsequences: false)
+        guard parts.count <= 2 else { return false }
+        if parts.count == 2 {
+            let zone = parts[1]
+            guard !zone.isEmpty, zone.count <= 32,
+                  zone.allSatisfy({ $0.isASCIIDigit || $0.isASCIILetter || "._-".contains($0) })
+            else { return false }
+        }
         var bytes = in6_addr()
-        let bare = text.split(separator: "%", maxSplits: 1).first.map(String.init) ?? String(text)
-        return inet_pton(AF_INET6, bare, &bytes) == 1
+        return inet_pton(AF_INET6, String(parts[0]), &bytes) == 1
     }
 }
 
