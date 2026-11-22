@@ -37,6 +37,9 @@ struct WritingReviewMarkdownRoundTripTests {
         ("a heading and a link", "\(s)# Title\(e)\n\nBody, [link](https://x.com/\(s)b\(e))."),
         ("markers either side of a span", "\(s)before\(e) `code` \(s)after\(e)"),
         ("a link inside a fence", "```\n[a](https://x.com/\(s)y\(e))\n```"),
+        ("a table row with a bare URL", "|https://example.com|\(s)new\(e)|"),
+        ("a table of three cells", "| a | \(s)b\(e) | c |\n|---|---|---|\n| 1 | 2 | 3 |"),
+        ("a table cell holding code", "| `x | y` | \(s)marked\(e) |"),
     ]
 
     @Test("the document is unchanged", arguments: documents)

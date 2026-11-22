@@ -231,8 +231,14 @@ public enum LampWritingReviewMarkdown {
             let moved = sortingOut(markers(in: link))
             return moved.before + moved.ending + "<\(unmarked(link))>" + moved.after
         }
+        // A pipe is not part of a bare URL. The markers go on before
+        // any table is split, so a run that crossed one swallowed the
+        // next cell and carried its markers out in front of this cell's
+        // address — the changed word losing its highlight. A pipe ends
+        // the cell in a table row, and a literal one in an address is
+        // rare enough to be written as a link. Found by the iOS session.
         .replacing(
-            #/(^|[^\w(<\x{E000}-\x{E01A}])([A-Za-z][A-Za-z0-9+.\-\x{E000}-\x{E01A}]*:\/\/[^\s<>()]+)/#
+            #/(^|[^\w(<\x{E000}-\x{E01A}])([A-Za-z][A-Za-z0-9+.\-\x{E000}-\x{E01A}]*:\/\/[^\s<>()|]+)/#
         ) { match in
             let link = String(match.output.2)
             guard link.contains(where: isMarker) else { return String(match.output.0) }

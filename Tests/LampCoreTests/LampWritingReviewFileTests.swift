@@ -887,3 +887,38 @@ struct WritingReviewMarkdownCodeFencesTests {
             == NSRange(location: 11, length: 2))
     }
 }
+
+/// A bare URL stops at a table's pipe.
+///
+/// The markers go on before any table is split, so a bare-URL run that
+/// crossed a pipe swallowed the next cell and carried its markers out
+/// in front of this cell's address: the changed word lost its highlight
+/// and a stray caret appeared beside a URL nobody had touched. Found by
+/// the iOS session.
+struct WritingReviewMarkdownTableTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    @Test func abareUrlDoesNotReachIntoTheNextCell() {
+        let marked = "|https://example.com|\(s)new\(e)|"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.contains("|\(s)new\(e)|"), "\(drawn.debugDescription)")
+        #expect(Markdown.unmarked(drawn) == "|https://example.com|new|")
+    }
+
+    /// A marked bare URL in its own cell is still put right.
+    @Test func amarkedBareUrlInACellIsStillPutRight() {
+        let marked = "|https://example.com/\(s)a\(e)|next|"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(Markdown.unmarked(drawn) == "|https://example.com/a|next|")
+        #expect(drawn.contains("|next|"), "\(drawn.debugDescription)")
+    }
+
+    /// And outside a table a bare URL is unchanged by this.
+    @Test func abareUrlInProseIsUnaffected() {
+        let marked = "See https://example.com/\(s)a\(e) for more."
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(Markdown.unmarked(drawn) == "See https://example.com/a for more.")
+    }
+}
