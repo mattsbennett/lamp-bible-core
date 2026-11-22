@@ -570,14 +570,23 @@ public enum LampWritingReviewMarkdown {
         // for that, not used to skip the line.
         let blocks = model.blocks.filter { $0.kind == .codeBlock }.map(\.range)
         var lines: [String] = []
+        var separators: [String] = []
         // Where each line of the bare text begins, to ask the model
         // about it.
         var bareStart = 0
-        for line in text.components(separatedBy: "\n") {
+        // Split by scalar on CR, LF and CRLF, as the model does, and
+        // carry each line's own separator so rejoining writes the
+        // document's endings back unchanged. Splitting on `"\n"` alone
+        // ran a paragraph and the block after it together where the
+        // endings were bare CRs, and the line the model was asked
+        // about was not the line being repaired.
+        let split = LampMarkdownModel.linesWithEndings(of: text)
+        separators = split.map(\.ending)
+        for (line, ending) in split {
             let bareLine = unmarked(line)
             let length = (bareLine as NSString).length
             let lineRange = NSRange(location: bareStart, length: max(length, 1))
-            bareStart += length + 1
+            bareStart += length + (ending as NSString).length
             // A line any code covers is drawn as it was written: a link
             // inside it is text, not a link, and a marker moved out of
             // its address would leave the changed word unmarked and a
@@ -601,13 +610,13 @@ public enum LampWritingReviewMarkdown {
         // it make the underscores intraword, which loses the emphasis.
         // Each half reads soundly on its own, so a line-by-line judge
         // sees nothing wrong. The iOS session found it.
-        return judgingParagraphs(of: lines, against: model)
+        return judgingParagraphs(of: lines, separators: separators, against: model)
     }
 
     /// The repaired lines, judged in the groups the parser says belong
     /// together.
     static func judgingParagraphs(
-        of lines: [String], against model: LampMarkdownModel
+        of lines: [String], separators: [String], against model: LampMarkdownModel
     ) -> String {
         var out = lines
         // Lines and blocks walked together, one index each. Asking
@@ -618,7 +627,22 @@ public enum LampWritingReviewMarkdown {
         let ordered = model.blocks
             .filter { $0.kind == .paragraph || $0.kind == .codeBlock }
             .sorted { $0.range.location < $1.range.location }
-        let bareLines = model.text.components(separatedBy: "\n")
+        // Split the way the model splits, which is by Unicode scalar
+        // on CR, LF and CRLF. Splitting on `"\n"` alone ran a
+        // paragraph and the fenced block after it together as one
+        // entry, and the lookup then took the first paragraph that
+        // entry met — so a paragraph needing the fallback hoisted
+        // markers out of the code block with it, losing the code's
+        // highlight. The same fault as the line splitter's, a third
+        // time. Found by the iOS session.
+        let bareLines = LampMarkdownModel.lines(of: model.text).map(\.line)
+        // Rejoined with each line's own ending, so a document written
+        // with CRs keeps them.
+        func rejoin(_ pieces: [String]) -> String {
+            pieces.enumerated()
+                .map { $0.element + (separators.indices.contains($0.offset) ? separators[$0.offset] : "") }
+                .joined()
+        }
         var block = 0
         var group: [Int] = []
         var current: Int?
@@ -692,7 +716,7 @@ public enum LampWritingReviewMarkdown {
             }
         }
         if !group.isEmpty { settle() }
-        return out.joined(separator: "\n")
+        return rejoin(out)
     }
 }
 

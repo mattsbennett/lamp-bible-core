@@ -211,6 +211,32 @@ extension LampMarkdownModel {
     /// hands back the whole text as one line. Every range after the
     /// first Windows line ending then lands wherever that one line's
     /// map happens to reach, which here meant the span was dropped.
+    /// Each line with the ending that followed it, as written.
+    static func linesWithEndings(of text: String) -> [(line: String, ending: String)] {
+        var out: [(String, String)] = []
+        let scalars = Array(text.unicodeScalars)
+        var current = String.UnicodeScalarView()
+        var index = 0
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if scalar == "\r" {
+                let crlf = index + 1 < scalars.count && scalars[index + 1] == "\n"
+                out.append((String(current), crlf ? "\r\n" : "\r"))
+                current = String.UnicodeScalarView()
+                index += crlf ? 2 : 1
+            } else if scalar == "\n" {
+                out.append((String(current), "\n"))
+                current = String.UnicodeScalarView()
+                index += 1
+            } else {
+                current.append(scalar)
+                index += 1
+            }
+        }
+        out.append((String(current), ""))
+        return out
+    }
+
     static func lines(of text: String) -> [(line: String, separator: Int)] {
         var out: [(String, Int)] = []
         var current = String.UnicodeScalarView()

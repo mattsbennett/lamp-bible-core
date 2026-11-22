@@ -587,3 +587,45 @@ struct LampMarkdownParagraphFallbackTests {
         #expect(took < 5.0, "took \(took)s for 400 paragraphs")
     }
 }
+
+/// Line endings the document was written with.
+///
+/// The paragraph lookup split the bare text on `"\n"` while the model
+/// split on CR, LF and CRLF — so with bare CRs a paragraph and the
+/// fenced block after it became one entry, and a paragraph needing
+/// the fallback hoisted markers out of the code block with it,
+/// losing the code's highlight. The same fault as the line splitter's,
+/// a third time. Found by the iOS session.
+struct LampMarkdownLineEndingTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    /// Whatever the endings, the document comes back unchanged.
+    @Test func theendingsAreWrittenBackAsTheyWere() {
+        for marked in [
+            "A \(s)word\(e) here\nand more.",
+            "A \(s)word\(e) here\r\nand more.",
+            "A \(s)word\(e) here\rand more.",
+            "para\r```\ncode \(s)x\(e)\n```",
+            "*hi \(s)*\(e)\r```\ncode\n```",
+        ] {
+            let drawn = Markdown.drawable(marked, numbering: false)
+            #expect(
+                Markdown.unmarked(drawn) == Markdown.unmarked(marked),
+                "the text changed: \(Markdown.unmarked(drawn).debugDescription)"
+            )
+        }
+    }
+
+    /// A code block after a CR-ended paragraph keeps its own marks:
+    /// the paragraph's fallback must not reach into it.
+    @Test func acodeBlockAfterACarriageReturnKeepsItsMarks() {
+        let marked = "*hi \(s)*\(e)\r```\ncode \(s)y\(e)\n```"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(
+            drawn.contains("code \(s)y\(e)"),
+            "the code's highlight was hoisted away: \(drawn.debugDescription)"
+        )
+    }
+}
