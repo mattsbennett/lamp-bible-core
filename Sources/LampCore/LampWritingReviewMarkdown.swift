@@ -609,62 +609,87 @@ public enum LampWritingReviewMarkdown {
     static func judgingParagraphs(
         of lines: [String], against model: LampMarkdownModel
     ) -> String {
-        let bare = model.text as NSString
-        // Where each paragraph of the original stands, by line number.
-        var paragraphOfLine: [Int: Int] = [:]
-        var inCode: Set<Int> = []
-        var lineStart = 0
-        for (number, line) in model.text.components(separatedBy: "\n").enumerated() {
-            let length = (line as NSString).length
-            let at = NSRange(location: lineStart, length: max(length, 1))
-            if model.blocks.contains(where: {
-                $0.kind == .codeBlock && NSIntersectionRange($0.range, at).length > 0
-            }) {
-                // Code is drawn as written and was never repaired, so
-                // it is never judged either: judging it moved markers
-                // the fence's own content had every right to hold.
-                inCode.insert(number)
-            } else if let index = model.blocks.firstIndex(where: {
-                $0.kind == .paragraph && NSIntersectionRange($0.range, at).length > 0
-            }) {
-                paragraphOfLine[number] = index
-            }
-            lineStart += length + 1
-        }
-        _ = bare
-
         var out = lines
+        // Lines and blocks walked together, one index each. Asking
+        // every block about every line was quadratic, and every
+        // `drawable` paid it even where a single passage was marked —
+        // on a Debug build, which is what the phone runs, a long
+        // writing would feel it. Found by the iOS session.
+        let ordered = model.blocks
+            .filter { $0.kind == .paragraph || $0.kind == .codeBlock }
+            .sorted { $0.range.location < $1.range.location }
+        let bareLines = model.text.components(separatedBy: "\n")
+        var block = 0
         var group: [Int] = []
         var current: Int?
+
         func settle() {
             defer { group = [] }
             guard group.count > 1 else {
                 if let only = group.first { out[only] = judged(out[only]) }
                 return
             }
-            let joined = group.map { out[$0] }.joined(separator: "\n")
-            guard !readsTheSame(joined) else { return }
-            // The paragraph as a whole is wrong, so each of its lines
-            // is judged on its own; where that is not enough the
-            // markers become points, line by line, as before.
-            for index in group { out[index] = judged(out[index]) }
-            let again = group.map { out[$0] }.joined(separator: "\n")
-            guard !readsTheSame(again) else { return }
-            // Still wrong together: every marker in the paragraph
-            // becomes a point on its first line, which keeps the
-            // reading and loses only where in it each passage was.
-            let all = group.map { markers(in: out[$0]) }.joined()
-            for index in group { out[index] = unmarked(out[index]) }
-            if let first = group.first {
-                out[first] = asPoints(all) + out[first]
+            // Nothing marked, nothing to judge. Parsing is the cost
+            // here and most paragraphs carry no marker at all.
+            guard group.contains(where: { out[$0].contains(where: isMarker) }) else { return }
+            guard !readsTheSame(group.map { out[$0] }.joined(separator: "\n")) else { return }
+            let perLine = group.map { judged(out[$0]) }
+            func keepPerLine() {
+                for (offset, index) in group.enumerated() { out[index] = perLine[offset] }
             }
+            guard !readsTheSame(perLine.joined(separator: "\n")) else { return keepPerLine() }
+            // Every marker in the paragraph becomes a point, placed
+            // **after the first line's own opening syntax**.
+            // Prepended, they undo the block repair that has just run:
+            // a marker before a `- ` turns the list into text. That is
+            // the same fault as the per-line fallback's, which I had
+            // already fixed there and then wrote again here.
+            let first = group[0]
+            let syntax = LampMarkdownModel(parsing: unmarked(out[first]))
+                .blockSyntaxLength(ofLineAt: 0)
+            var head = ""
+            var rest = Substring(out[first])
+            while (head as NSString).length < syntax, let character = rest.first {
+                rest = rest.dropFirst()
+                if !isMarker(character) { head.append(character) }
+            }
+            let all = group.map { markers(in: out[$0]) }.joined()
+            var pointed = group.map { unmarked(out[$0]) }
+            pointed[0] = head + asPoints(all) + unmarked(String(rest))
+            // And checked, as the per-line fallback is: a wrong guess
+            // at where the points go is worse than the repairs' answer.
+            guard readsTheSame(pointed.joined(separator: "\n")) else { return keepPerLine() }
+            for (offset, index) in group.enumerated() { out[index] = pointed[offset] }
         }
+
+        var lineStart = 0
         for number in lines.indices {
-            let paragraph = paragraphOfLine[number]
+            let length = ((bareLines.indices.contains(number) ? bareLines[number] : "") as NSString)
+                .length
+            let at = NSRange(location: lineStart, length: max(length, 1))
+            lineStart += length + 1
+            while block < ordered.count, NSMaxRange(ordered[block].range) <= at.location {
+                block += 1
+            }
+            let here = block < ordered.count
+                && NSIntersectionRange(ordered[block].range, at).length > 0
+                ? ordered[block].kind : nil
+            // Code is drawn as written and was never repaired, so it is
+            // never judged: judging it moved markers a fence's own
+            // content had every right to hold.
+            if here == .codeBlock {
+                if !group.isEmpty { settle() }
+                current = nil
+                continue
+            }
+            let paragraph = here == .paragraph ? block : nil
             if paragraph != current, !group.isEmpty { settle() }
             current = paragraph
-            if inCode.contains(number) { continue }
-            if paragraph != nil { group.append(number) } else { out[number] = judged(out[number]) }
+            if paragraph != nil {
+                group.append(number)
+            } else {
+                out[number] = judged(out[number])
+            }
         }
         if !group.isEmpty { settle() }
         return out.joined(separator: "\n")

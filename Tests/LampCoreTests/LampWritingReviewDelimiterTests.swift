@@ -530,3 +530,60 @@ struct LampMarkdownParagraphJudgeTests {
         }
     }
 }
+
+/// The paragraph fallback, and what it costs.
+struct LampMarkdownParagraphFallbackTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+    private let p = String(LampWritingReview.markPoint)
+
+    private func show(_ t: String) -> String {
+        t.unicodeScalars.map { scalar in
+            (0xE000...0xE01A).contains(Int(scalar.value))
+                ? "<\(String(Int(scalar.value), radix: 16))>" : String(Character(scalar))
+        }.joined()
+    }
+
+    /// Points prepended to a paragraph undo the block repair that has
+    /// just run: a marker before a `- ` turns the list into text. The
+    /// same fault as the per-line fallback's, written a second time in
+    /// the paragraph branch. Found by the iOS session.
+    @Test func thefallbackKeepsTheFirstLinesBlockSyntax() {
+        for marked in [
+            "- first\n\(p)  second",
+            "> quoted\n\(p)  more",
+            "- a \(s)x\(e)\n  b \(s)y\(e)",
+        ] {
+            let drawn = Markdown.drawable(marked, numbering: false)
+            let first = drawn.components(separatedBy: "\n")[0]
+            let opener = Markdown.unmarked(marked).components(separatedBy: "\n")[0].prefix(2)
+            #expect(
+                first.hasPrefix(String(opener)),
+                "the block was broken: \(show(drawn))"
+            )
+            #expect(Markdown.unmarked(drawn) == Markdown.unmarked(marked))
+        }
+    }
+
+    /// A paragraph with no markers is never parsed for judging: the
+    /// parse is the cost, and most paragraphs carry none.
+    @Test func amarkerlessParagraphIsLeftExactlyAsItIs() {
+        let plain = "One line here.\nAnd a second line.\n\nA new paragraph."
+        #expect(Markdown.drawable(plain, numbering: false) == plain)
+    }
+
+    /// A long writing with one marked passage stays quick. Walking
+    /// lines and blocks together makes it linear; asking every block
+    /// about every line did not, and the phone runs Debug.
+    @Test func alongWritingWithOneMarkIsNotQuadratic() {
+        let body = (0..<400).map { "Paragraph number \($0) with several words in it." }
+            .joined(separator: "\n\n")
+        let marked = body + "\n\nA final \(s)marked\(e) passage."
+        let began = Date()
+        let drawn = Markdown.drawable(marked, numbering: false)
+        let took = Date().timeIntervalSince(began)
+        #expect(Markdown.unmarked(drawn) == Markdown.unmarked(marked))
+        #expect(took < 5.0, "took \(took)s for 400 paragraphs")
+    }
+}
