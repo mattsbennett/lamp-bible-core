@@ -409,55 +409,89 @@ public enum LampWritingReviewMarkdown {
     ///
     /// Suggested by the iOS session, in their words: the inline
     /// counterpart of what this already does for block syntax.
+    /// A run of emphasis delimiters on a line, and where it stands.
+    struct DelimiterRun {
+        let range: NSRange
+        let character: Character
+    }
+
+    /// The runs on a line, paired as Markdown pairs them: within each
+    /// delimiter character, the first unclosed run opens and the next
+    /// closes. Returns each pair as (opener, closer).
+    static func delimiterPairs(onLineOf range: NSRange, in source: NSString) -> [(NSRange, NSRange)] {
+        let line = source.lineRange(for: range)
+        var runs: [DelimiterRun] = []
+        var index = line.location
+        while index < NSMaxRange(line) {
+            guard isDelimiter(source.character(at: index)) else {
+                index += 1
+                continue
+            }
+            let character = Character(UnicodeScalar(source.character(at: index)) ?? " ")
+            var end = index
+            while end < NSMaxRange(line), source.character(at: end) == source.character(at: index) {
+                end += 1
+            }
+            runs.append(
+                DelimiterRun(
+                    range: NSRange(location: index, length: end - index), character: character
+                )
+            )
+            index = end
+        }
+        var open: [Character: NSRange] = [:]
+        var pairs: [(NSRange, NSRange)] = []
+        for run in runs {
+            if let opener = open[run.character] {
+                pairs.append((opener, run.range))
+                open[run.character] = nil
+            } else {
+                open[run.character] = run.range
+            }
+        }
+        return pairs
+    }
+
+    /// A range reaching outward over the emphasis delimiters that
+    /// enclose it.
+    ///
+    /// The inline counterpart of `takingInSyntax`. When the assistant
+    /// puts `red dog` in bold, what it changed is the two runs of `**`,
+    /// and placement moves their marks to the words' edges — so a clear
+    /// of the paragraph, or of a selection of `red dog`, sends a range
+    /// covering the words and not the delimiters the marks are on. The
+    /// delimiters stay marked, the count does not move, and the writer
+    /// has no way to clear what they can plainly see highlighted.
+    ///
+    /// A run is taken in only where it belongs to a pair that encloses
+    /// the selection: the run before the selection must be a pair's
+    /// *opener* whose closer stands at or after the selection's end,
+    /// and the run after it must be that pair's *closer* whose opener
+    /// stands at or before its start.
+    ///
+    /// Two wrong versions came before this one, both found by the iOS
+    /// session. Reaching over any run touching an edge clears part of
+    /// an untouched word's mark when the writer selects `intro ` before
+    /// a bolded word. Looking for a *matching run* rather than a pair
+    /// does the same in `**one** middle **two**`: selecting `middle `
+    /// finds `one`'s closing run earlier on the line and accepts it.
+    /// Pairing is the thing; a run that merely matches is not a pair.
     public static func takingInDelimiters(_ range: NSRange, of text: String) -> NSRange {
         let source = text as NSString
         guard range.location >= 0, NSMaxRange(range) <= source.length else { return range }
-        let line = source.lineRange(for: range)
-        let lineEnd = NSMaxRange(line)
-
-        // The run of delimiters standing against each edge, if any.
-        var openStart = range.location
-        while openStart > line.location, isDelimiter(source.character(at: openStart - 1)) {
-            openStart -= 1
-        }
-        var closeEnd = NSMaxRange(range)
-        while closeEnd < lineEnd, isDelimiter(source.character(at: closeEnd)) { closeEnd += 1 }
-
-        // A run is taken in only where the emphasis it belongs to
-        // encloses what was selected.
-        //
-        // Reaching over any run that merely touches an edge was wrong:
-        // the assistant turning `intro word` into `intro **word**`
-        // marks the two `**`, and a writer selecting the unchanged
-        // `intro ` ends their selection against the opening one. Taken
-        // in, that partly clears the mark on a word they never
-        // touched, and Restore Original Wording then answers
-        // `notExact` for it. Found by the iOS session.
-        let opening = openStart < range.location
-            ? source.substring(with: NSRange(location: openStart, length: range.location - openStart))
-            : ""
-        let closing = closeEnd > NSMaxRange(range)
-            ? source.substring(
-                with: NSRange(location: NSMaxRange(range), length: closeEnd - NSMaxRange(range))
-            )
-            : ""
-
+        let pairs = delimiterPairs(onLineOf: range, in: source)
+        let end = NSMaxRange(range)
         var from = range.location
-        var to = NSMaxRange(range)
-        // The run before the selection counts when its match stands at
-        // or after the selection's end, still on this line.
-        if !opening.isEmpty {
-            let after = NSRange(location: to, length: lineEnd - to)
-            if source.range(of: opening, options: [], range: after).location != NSNotFound {
-                from = openStart
+        var to = end
+        for (opener, closer) in pairs {
+            // The opener stands against the selection's start, and its
+            // own closer stands at or after the selection's end.
+            if NSMaxRange(opener) == range.location, NSMaxRange(closer) >= end {
+                from = min(from, opener.location)
             }
-        }
-        // And the mirror: the run after the selection counts when its
-        // match stands at or before the selection's start.
-        if !closing.isEmpty {
-            let before = NSRange(location: line.location, length: range.location - line.location)
-            if source.range(of: closing, options: [], range: before).location != NSNotFound {
-                to = closeEnd
+            // And the mirror.
+            if closer.location == end, opener.location <= range.location {
+                to = max(to, NSMaxRange(closer))
             }
         }
         return NSRange(location: from, length: to - from)

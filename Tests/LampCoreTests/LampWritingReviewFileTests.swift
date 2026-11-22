@@ -1060,3 +1060,56 @@ struct WritingReviewDelimiterEnclosureTests {
         #expect((text as NSString).substring(with: reached) == "**red dog**")
     }
 }
+
+/// Delimiters are taken in by pairing, not by matching.
+///
+/// The iOS session's second finding on this: looking for a run that
+/// merely matches finds the wrong one when a line holds two emphases.
+struct WritingReviewDelimiterPairingTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+
+    /// The assistant bolds two words; the writer clears only what lies
+    /// between them. The end touches the second's opening run, and a
+    /// matching run does stand earlier on the line — the first's
+    /// closing one — so the old check accepted it and partly cleared
+    /// the untouched second word's mark.
+    @Test func thewordsBetweenTwoEmphasesTakeNothingIn() {
+        let text = "**one** middle **two**"
+        let middle = (text as NSString).range(of: "middle ")
+        #expect(Markdown.takingInDelimiters(middle, of: text) == middle)
+    }
+
+    /// And the second word still takes in its own pair.
+    @Test func thesecondWordTakesInItsOwnPair() {
+        let text = "**one** middle **two**"
+        let two = (text as NSString).range(of: "two")
+        let reached = Markdown.takingInDelimiters(two, of: text)
+        #expect((text as NSString).substring(with: reached) == "**two**")
+    }
+
+    @Test func thefirstWordTakesInItsOwnPair() {
+        let text = "**one** middle **two**"
+        let one = (text as NSString).range(of: "one")
+        let reached = Markdown.takingInDelimiters(one, of: text)
+        #expect((text as NSString).substring(with: reached) == "**one**")
+    }
+
+    /// Mixed kinds pair within their own character.
+    @Test func mixedKindsPairWithinTheirOwnCharacter() {
+        let text = "a *it* and `code` here"
+        let it = (text as NSString).range(of: "it")
+        #expect((text as NSString).substring(with: Markdown.takingInDelimiters(it, of: text)) == "*it*")
+        let code = (text as NSString).range(of: "code")
+        #expect(
+            (text as NSString).substring(with: Markdown.takingInDelimiters(code, of: text))
+                == "`code`"
+        )
+    }
+
+    /// An unpaired run encloses nothing.
+    @Test func anunpairedRunTakesNothingIn() {
+        let text = "a * lonely star"
+        let lonely = (text as NSString).range(of: "lonely")
+        #expect(Markdown.takingInDelimiters(lonely, of: text) == lonely)
+    }
+}
