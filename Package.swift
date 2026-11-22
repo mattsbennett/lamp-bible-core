@@ -21,6 +21,15 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift", exact: "6.29.3"),
+        // Apple's cmark-gfm wrapper. Core reads Markdown in several
+        // places — where the assistant's marks may be placed, what a
+        // clear may reach, how a document is drawn — and every reader
+        // was written by hand against the cases we happened to meet.
+        // Six rounds of review found six ways one of them took in a
+        // delimiter belonging to text the writer never selected. The
+        // rule behind all of them is CommonMark's, so core reads
+        // Markdown with a CommonMark parser.
+        .package(url: "https://github.com/swiftlang/swift-markdown", exact: "0.9.0"),
     ],
     targets: [
         .target(
@@ -34,6 +43,7 @@ let package = Package(
             dependencies: [
                 "LampModuleKit",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "Markdown", package: "swift-markdown"),
             ]
         ),
         .target(

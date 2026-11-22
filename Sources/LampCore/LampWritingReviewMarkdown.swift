@@ -409,6 +409,46 @@ public enum LampWritingReviewMarkdown {
     ///
     /// Suggested by the iOS session, in their words: the inline
     /// counterpart of what this already does for block syntax.
+    /// A range reaching outward over the emphasis delimiters that
+    /// enclose it, as the parser sees them.
+    ///
+    /// When the assistant puts `red dog` in bold, what it changed is
+    /// the two runs of `**`, and placement moves their marks to the
+    /// words' edges — so a clear of the words sends a range covering
+    /// them and not the delimiters the marks sit on. The delimiters
+    /// stay marked, the count does not move, and the writer has no way
+    /// to clear what they can plainly see highlighted.
+    ///
+    /// Six hand-written versions of this were wrong, each taking in a
+    /// delimiter belonging to text the writer never selected: a run
+    /// that merely matched rather than paired, a literal run inside a
+    /// code span, an escaped run, a caret, a list bullet, a nested
+    /// emphasis. Each was one case narrower than the problem. The
+    /// parser decides it now: a span's delimiters come in only when
+    /// the selection covers that span's whole content. Covering, not
+    /// merely falling inside — a selection within a span would
+    /// otherwise widen to the span and sweep everything else it holds,
+    /// so clearing ` three` in `**one *two* three**` would reach the
+    /// outer `**` and take the inner `*two*` with it. A caret is left
+    /// alone; `takingInSyntax` has the rule for a point.
+    public static func takingInDelimiters(_ range: NSRange, of text: String) -> NSRange {
+        guard range.length > 0 else { return range }
+        let source = text as NSString
+        guard range.location >= 0, NSMaxRange(range) <= source.length else { return range }
+        guard let inline = LampMarkdownModel(parsing: text).inlineCovered(by: range),
+              inline.kind != .link, inline.kind != .image
+        else { return range }
+        return inline.range
+    }
+
+    /// Both reaches at once: a changed heading and a changed emphasis
+    /// are the same kind of trouble.
+    public static func takingInSyntaxAndDelimiters(
+        _ range: NSRange, of text: String
+    ) -> NSRange {
+        takingInSyntax(takingInDelimiters(range, of: text), of: text)
+    }
+
     /// Marked Markdown a renderer can be given: every marker moved to a
     /// place that leaves the Markdown reading as it did without them.
     ///
