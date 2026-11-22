@@ -408,3 +408,72 @@ struct LampMarkdownJudgeTests {
         }
     }
 }
+
+/// The judge running once, at the end, after every repair.
+struct LampMarkdownJudgeOrderTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+    private let p = String(LampWritingReview.markPoint)
+
+    private func show(_ t: String) -> String {
+        t.unicodeScalars.map { scalar in
+            (0xE000...0xE01A).contains(Int(scalar.value))
+                ? "<\(String(Int(scalar.value), radix: 16))>" : String(Character(scalar))
+        }.joined()
+    }
+
+    /// A marker breaking an autolink is put right by the autolink
+    /// rule, which runs *after* the inline ones. Judged inside those,
+    /// the line was condemned before its own fix had a chance and the
+    /// point went to the line's start.
+    @Test func anautolinkIsRepairedBeforeItIsJudged() {
+        let marked = "See <http\(s)s\(e)://example.com> now"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(
+            !drawn.hasPrefix(p),
+            "condemned before the autolink rule ran: \(show(drawn))"
+        )
+        #expect(drawn.contains("<https://example.com>"), "\(show(drawn))")
+        #expect(Markdown.unmarked(drawn) == "See <https://example.com> now")
+    }
+
+    /// Where the fallback does fire, its points go after the line's
+    /// block syntax. Prepended, they undid the block repair that had
+    /// just run and turned a heading back into a paragraph.
+    @Test func fallbackPointsGoAfterTheBlockSyntax() {
+        let marked = "# ~\(s)~word\(e)~~"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(drawn.hasPrefix("# "), "the heading was broken: \(show(drawn))")
+        #expect(Markdown.unmarked(drawn) == "# ~~word~~")
+    }
+
+    /// Markers beside a span leave cmark holding text nodes of nothing
+    /// but markers. Counted, identical Markdown compared unequal and
+    /// the judge condemned a line that was fine.
+    @Test func markersBesideASpanAreNotADifference() {
+        for line in ["\(s)~~word~~\(e)", "\(s)[label](https://x.com/a)\(e)", "\(s)**b**\(e)"] {
+            #expect(Markdown.readsTheSame(line), "\(show(line))")
+        }
+    }
+
+    /// A container carries through its continuation lines, so a caret
+    /// after the second `> ` reaches the mark on it.
+    @Test func aquotesSecondLineHasSyntaxToo() {
+        let text = "> first\n> second"
+        let model = LampMarkdownModel(parsing: text)
+        let secondLine = (text as NSString).range(of: "> second").location
+        #expect(model.blockSyntaxLength(ofLineAt: secondLine) == 2)
+    }
+
+    /// A block with nothing in it still has its prefix.
+    @Test func anemptyBlockStillHasItsPrefix() {
+        for text in ["# ", "- ", "> "] {
+            let model = LampMarkdownModel(parsing: text)
+            #expect(
+                model.blockSyntaxLength(ofLineAt: 0) > 0,
+                "\(text.debugDescription) reported no syntax"
+            )
+        }
+    }
+}

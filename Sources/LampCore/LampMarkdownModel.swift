@@ -470,9 +470,31 @@ extension LampMarkdownModel {
             .filter { $0.range.location >= line.location && $0.range.location < NSMaxRange(line) }
             .filter { $0.kind == .heading || $0.kind == .listItem || $0.kind == .blockQuote }
             .min { $0.range.length < $1.range.length }
-        guard let opening, let inner = firstContentStart(after: opening) else { return 0 }
-        guard inner > line.location, inner <= NSMaxRange(line) else { return 0 }
-        return inner - line.location
+        if let opening {
+            // A block with nothing in it — `# `, an empty list item or
+            // quote — has no child to measure to, so its syntax runs to
+            // the end of the line. Without this a marker before the
+            // prefix stayed put and the block drew as a paragraph.
+            guard let inner = firstContentStart(after: opening) else {
+                return max(0, NSMaxRange(line) - line.location - 1)
+            }
+            if inner > line.location, inner <= NSMaxRange(line) {
+                return inner - line.location
+            }
+            return 0
+        }
+        // No block begins here, but a container may carry on through
+        // it: the second line of `> first\n> second` has a `> ` of its
+        // own, and counting it as nothing left a caret after it
+        // reaching no mark. Found by the iOS session.
+        let carries = blocks.contains {
+            $0.kind == .blockQuote && $0.range.location < line.location
+                && NSMaxRange($0.range) >= NSMaxRange(line)
+        }
+        guard carries else { return 0 }
+        let text = source.substring(with: line)
+        guard let match = text.prefixMatch(of: #/\s{0,3}(?:>\s?)+/#) else { return 0 }
+        return (String(text[match.range]) as NSString).length
     }
 
     private func firstContentStart(after block: Block) -> Int? { block.contentStart }
@@ -519,12 +541,18 @@ extension LampMarkdownModel {
         func dump(_ markup: Markup) -> String {
             let name = String(describing: type(of: markup))
             if let text = markup as? Markdown.Text {
-                return "\(name)(\(withoutMarkers(text.string)))"
+                // A marker beside a span makes cmark emit a text node
+                // holding only markers. Stripped, it is empty, and
+                // counting it made identical Markdown compare unequal
+                // — so the judge condemned lines that were fine.
+                let words = withoutMarkers(text.string)
+                return words.isEmpty ? "" : "\(name)(\(words))"
             }
             if let code = markup as? InlineCode {
                 return "\(name)(\(withoutMarkers(code.code)))"
             }
-            let children = markup.children.map(dump).joined(separator: ",")
+            let children = markup.children.map(dump).filter { !$0.isEmpty }
+                .joined(separator: ",")
             return "\(name)[\(children)]"
         }
         return dump(Document(parsing: hidingSingleTildes(text)))

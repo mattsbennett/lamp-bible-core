@@ -189,10 +189,37 @@ public enum LampWritingReviewMarkdown {
         // The design is the iOS session's. It answers the thing six
         // rounds of findings had in common — a rule that decided what
         // Markdown means by looking at the marked text.
-        if readsTheSame(line) { return line }
-        let repaired = repairingInlineSyntax(line)
-        if readsTheSame(repaired) { return repaired }
-        return asPoints(markers(in: repaired)) + unmarked(repaired)
+        return repairingInlineSyntax(line)
+    }
+
+    /// A repaired line, judged — and made safe where no repair worked.
+    ///
+    /// Judged **once, at the end**, after every repair: the inline
+    /// rules run before the link and autolink ones, so judging inside
+    /// them condemned a line those later rules would have fixed. A
+    /// marker breaking `<https://example.com>` was sent to the line's
+    /// start as a point when the autolink rule would have put it just
+    /// before the link. Found by the iOS session.
+    ///
+    /// Where the markers still change how the line reads, they become
+    /// points — placed **after the line's own block syntax**, not at
+    /// its start. Prepended, they undid the block repair that had just
+    /// run: `# ~~word~~` with a marker in it became a point before the
+    /// `#`, and the heading turned back into a paragraph.
+    static func judged(_ line: String) -> String {
+        guard line.contains(where: isMarker), !readsTheSame(line) else { return line }
+        let syntax = LampMarkdownModel(parsing: unmarked(line)).blockSyntaxLength(ofLineAt: 0)
+        var head = ""
+        var rest = Substring(line)
+        while (head as NSString).length < syntax, let character = rest.first {
+            rest = rest.dropFirst()
+            if !isMarker(character) { head.append(character) }
+        }
+        let safe = head + asPoints(markers(in: line)) + unmarked(String(rest))
+        // And if even that does not read right, the line is left as the
+        // repairs made it: a wrong guess at where the points go is
+        // worse than the repairs' own answer.
+        return readsTheSame(safe) ? safe : line
     }
 
     /// Whether a marked line reads as the same Markdown it does with
@@ -566,7 +593,7 @@ public enum LampWritingReviewMarkdown {
                 continue
             }
             let (masked, spans) = maskingCodeSpans(clearingBlockSyntax(line))
-            lines.append(unmasking(movingMarksOutOfLinks(masked), spans))
+            lines.append(judged(unmasking(movingMarksOutOfLinks(masked), spans)))
         }
         return lines.joined(separator: "\n")
     }
