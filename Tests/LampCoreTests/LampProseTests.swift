@@ -283,6 +283,39 @@ struct LampProseTests {
         )
     }
 
+    /// A footnote's marker is marked, not left as the brackets the writer
+    /// typed. The editor draws it as a superscript number; both apps drew
+    /// `[^1]`. Found by the iOS session while adopting this.
+    @Test func afootnotesMarkerIsMarked() throws {
+        let text = try paragraph("A claim.[^1] And more.[^note]")
+        #expect(text.footnoteReferences.map(\.label) == ["1", "note"])
+        let marked = text.text.runs.compactMap { run -> String? in
+            guard run.lampFootnoteReference != nil else { return nil }
+            return String(text.text[run.range].characters)
+        }
+        #expect(marked == ["[^1]", "[^note]"])
+        // The words around it are untouched and unmarked.
+        #expect(text.plain == "A claim.[^1] And more.[^note]")
+    }
+
+    /// What is not a marker stays the characters the writer typed.
+    @Test func whatisnotAFootnoteMarkerIsLeftAlone() throws {
+        for source in ["an empty [^] one", "a spaced [^a b] one", "a caret [^a^b] one"] {
+            let text = try paragraph(source)
+            #expect(text.footnoteReferences.isEmpty, "marked something in \(source)")
+            #expect(text.plain == source)
+        }
+        // Inside code it is code.
+        let code = try paragraph("the text `[^1]` as code")
+        #expect(code.footnoteReferences.isEmpty)
+
+        // A marker followed by a bracket of its own is still a marker: the
+        // bracket is the writer's, and the editor draws it too.
+        let trailing = try paragraph("a bracket [^a]]")
+        #expect(trailing.footnoteReferences.map(\.label) == ["a"])
+        #expect(trailing.plain == "a bracket [^a]]")
+    }
+
     /// `<br>` is a break, not characters to print.
     @Test func abreakTagIsABreak() throws {
         #expect(try words(paragraph("line<br>next")) == ["line", "next"])

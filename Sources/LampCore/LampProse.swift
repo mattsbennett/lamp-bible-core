@@ -225,7 +225,15 @@ public enum LampProse {
         for child in markup.children {
             switch child {
             case let text as Markdown.Text:
-                append(restored(text.string), to: &out, intent: intent, link: link, image: image)
+                // A footnote's marker is marked rather than left as the
+                // brackets the writer typed: the editor draws it as a
+                // superscript number, and both apps drew `[^1]`.
+                for piece in markers(in: restored(text.string)) {
+                    append(
+                        piece.text, to: &out, intent: intent, link: link, image: image,
+                        footnote: piece.label
+                    )
+                }
             case let code as InlineCode:
                 // The backticks and the spaces inside them are the code's,
                 // and nothing here has to count them.
@@ -315,14 +323,51 @@ public enum LampProse {
 
     private static func append(
         _ string: String, to out: inout AttributedString,
-        intent: InlinePresentationIntent, link: String?, image: String?
+        intent: InlinePresentationIntent, link: String?, image: String?,
+        footnote: String? = nil
     ) {
         guard !string.isEmpty else { return }
         var piece = AttributedString(string)
         if !intent.isEmpty { piece.inlinePresentationIntent = intent }
         if let link, let url = URL(string: link) { piece.link = url }
         if let image, let url = URL(string: image) { piece.imageURL = url }
+        if let footnote { piece.lampFootnoteReference = footnote }
         out.append(piece)
+    }
+
+    /// A run of text cut around the footnote markers in it.
+    ///
+    /// A label is what the editor accepts between the brackets: no space, no
+    /// bracket of its own, and not empty. `[^]` and `[^a b]` are the
+    /// characters the writer typed.
+    private static func markers(in text: String) -> [(text: String, label: String?)] {
+        guard text.contains("[^") else { return [(text, nil)] }
+        var out: [(String, String?)] = []
+        var plain = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            guard text[index] == "[", text.index(after: index) < text.endIndex,
+                  text[text.index(after: index)] == "^",
+                  let close = text[index...].firstIndex(of: "]")
+            else {
+                plain.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+            let label = String(text[text.index(index, offsetBy: 2)..<close])
+            guard !label.isEmpty,
+                  !label.contains(where: { $0 == " " || $0 == "[" || $0 == "]" || $0 == "^" })
+            else {
+                plain.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+            if !plain.isEmpty { out.append((plain, nil)); plain = "" }
+            out.append((String(text[index...close]), label))
+            index = text.index(after: close)
+        }
+        if !plain.isEmpty { out.append((plain, nil)) }
+        return out.isEmpty ? [(text, nil)] : out
     }
 
     /// Whether a piece of inline HTML is a line break.

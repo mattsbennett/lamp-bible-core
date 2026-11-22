@@ -72,3 +72,44 @@ private extension AttributedString {
         characters.index(after: index)
     }
 }
+
+/// A footnote's marker in the prose, `[^1]`.
+///
+/// The editor draws it as a superscript number rather than as the
+/// characters the writer typed, in its resolveFootnotes pass, and no
+/// Markdown parser here reads it. Left as text, both apps drew the
+/// brackets. Marking it in core means both draw it the same way, and
+/// neither has to find it again with a pattern of its own.
+///
+/// The value is the label between the brackets, which is what a reader
+/// numbers by and what the matching `LampProseBlock.footnote` carries.
+public enum LampFootnoteReferenceAttribute: AttributedStringKey {
+    public typealias Value = String
+    public static let name = "lampFootnoteReference"
+}
+
+public extension AttributeScopes {
+    struct LampProseAttributes: AttributeScope {
+        public let lampFootnoteReference: LampFootnoteReferenceAttribute
+    }
+
+    var lampProse: LampProseAttributes.Type { LampProseAttributes.self }
+}
+
+public extension AttributeDynamicLookup {
+    subscript<T: AttributedStringKey>(
+        dynamicMember keyPath: KeyPath<AttributeScopes.LampProseAttributes, T>
+    ) -> T {
+        self[T.self]
+    }
+}
+
+public extension LampProseText {
+    /// The footnote markers in this text, each with its label.
+    var footnoteReferences: [(range: Range<AttributedString.Index>, label: String)] {
+        text.runs.compactMap { run in
+            guard let label = run.lampFootnoteReference else { return nil }
+            return (run.range, label)
+        }
+    }
+}
