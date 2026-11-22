@@ -593,9 +593,81 @@ public enum LampWritingReviewMarkdown {
                 continue
             }
             let (masked, spans) = maskingCodeSpans(clearingBlockSyntax(line))
-            lines.append(judged(unmasking(movingMarksOutOfLinks(masked), spans)))
+            lines.append(unmasking(movingMarksOutOfLinks(masked), spans))
         }
-        return lines.joined(separator: "\n")
+        // Judged by paragraph, not by line.
+        //
+        // A span may cross lines — `_one\ntwo_` — and markers outside
+        // it make the underscores intraword, which loses the emphasis.
+        // Each half reads soundly on its own, so a line-by-line judge
+        // sees nothing wrong. The iOS session found it.
+        return judgingParagraphs(of: lines, against: model)
+    }
+
+    /// The repaired lines, judged in the groups the parser says belong
+    /// together.
+    static func judgingParagraphs(
+        of lines: [String], against model: LampMarkdownModel
+    ) -> String {
+        let bare = model.text as NSString
+        // Where each paragraph of the original stands, by line number.
+        var paragraphOfLine: [Int: Int] = [:]
+        var inCode: Set<Int> = []
+        var lineStart = 0
+        for (number, line) in model.text.components(separatedBy: "\n").enumerated() {
+            let length = (line as NSString).length
+            let at = NSRange(location: lineStart, length: max(length, 1))
+            if model.blocks.contains(where: {
+                $0.kind == .codeBlock && NSIntersectionRange($0.range, at).length > 0
+            }) {
+                // Code is drawn as written and was never repaired, so
+                // it is never judged either: judging it moved markers
+                // the fence's own content had every right to hold.
+                inCode.insert(number)
+            } else if let index = model.blocks.firstIndex(where: {
+                $0.kind == .paragraph && NSIntersectionRange($0.range, at).length > 0
+            }) {
+                paragraphOfLine[number] = index
+            }
+            lineStart += length + 1
+        }
+        _ = bare
+
+        var out = lines
+        var group: [Int] = []
+        var current: Int?
+        func settle() {
+            defer { group = [] }
+            guard group.count > 1 else {
+                if let only = group.first { out[only] = judged(out[only]) }
+                return
+            }
+            let joined = group.map { out[$0] }.joined(separator: "\n")
+            guard !readsTheSame(joined) else { return }
+            // The paragraph as a whole is wrong, so each of its lines
+            // is judged on its own; where that is not enough the
+            // markers become points, line by line, as before.
+            for index in group { out[index] = judged(out[index]) }
+            let again = group.map { out[$0] }.joined(separator: "\n")
+            guard !readsTheSame(again) else { return }
+            // Still wrong together: every marker in the paragraph
+            // becomes a point on its first line, which keeps the
+            // reading and loses only where in it each passage was.
+            let all = group.map { markers(in: out[$0]) }.joined()
+            for index in group { out[index] = unmarked(out[index]) }
+            if let first = group.first {
+                out[first] = asPoints(all) + out[first]
+            }
+        }
+        for number in lines.indices {
+            let paragraph = paragraphOfLine[number]
+            if paragraph != current, !group.isEmpty { settle() }
+            current = paragraph
+            if inCode.contains(number) { continue }
+            if paragraph != nil { group.append(number) } else { out[number] = judged(out[number]) }
+        }
+        if !group.isEmpty { settle() }
+        return out.joined(separator: "\n")
     }
 }
 

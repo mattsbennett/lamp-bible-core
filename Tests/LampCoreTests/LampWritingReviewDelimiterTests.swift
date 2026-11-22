@@ -477,3 +477,56 @@ struct LampMarkdownJudgeOrderTests {
         }
     }
 }
+
+/// A span that crosses lines.
+///
+/// `drawable` judged line by line, so markers outside `_one\ntwo_`
+/// read as sound in each half while the pair itself was lost: the
+/// markers make the underscores intraword and the emphasis goes.
+/// Found by the iOS session.
+struct LampMarkdownParagraphJudgeTests {
+    private typealias Markdown = LampWritingReviewMarkdown
+    private let s = String(LampWritingReview.markStart)
+    private let e = String(LampWritingReview.markEnd)
+
+    private func show(_ t: String) -> String {
+        t.unicodeScalars.map { scalar in
+            (0xE000...0xE01A).contains(Int(scalar.value))
+                ? "<\(String(Int(scalar.value), radix: 16))>" : String(Character(scalar))
+        }.joined()
+    }
+
+    @Test func aspanCrossingLinesKeepsItsEmphasis() {
+        let marked = "\(s)_one\ntwo_\(e)"
+        let drawn = Markdown.drawable(marked, numbering: false)
+        #expect(
+            Markdown.readsTheSame(drawn),
+            "the pair was lost across the lines: \(show(drawn))"
+        )
+        #expect(Markdown.unmarked(drawn) == "_one\ntwo_")
+    }
+
+    /// A paragraph that is sound is left exactly as it is.
+    @Test func asoundParagraphIsUntouched() {
+        let marked = "A \(s)plain\(e) word\nand another line."
+        #expect(Markdown.drawable(marked, numbering: false) == marked)
+    }
+
+    /// And the words are never changed, whatever the paragraph judge
+    /// decides.
+    @Test func thewordsSurviveEveryParagraph() {
+        for marked in [
+            "\(s)_one\ntwo_\(e)",
+            "**\(s)bold\ncrossing\(e)**",
+            "one\n\ntwo \(s)marked\(e)",
+            "> quoted \(s)x\(e)\n> second line",
+            "- item \(s)a\(e)\n- item b",
+        ] {
+            let drawn = Markdown.drawable(marked, numbering: false)
+            #expect(
+                Markdown.unmarked(drawn) == Markdown.unmarked(marked),
+                "\(show(marked)) became \(show(drawn))"
+            )
+        }
+    }
+}
