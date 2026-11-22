@@ -254,14 +254,36 @@ extension LampMarkdownModel {
         _ markup: Markup, text: String, offsets: [LineMap],
         blocks: inout [Block], inlines: inout [Inline]
     ) {
+        // A cell whose reported position falls outside the table it
+        // belongs to is a position cmark took from the paragraph
+        // above; it says nothing true about where the cell is.
+        if markup is Table.Cell, let own = range(of: markup, offsets: offsets),
+           let table = Self.enclosingTable(of: markup),
+           let start = tableStart(of: table, offsets: offsets),
+           own.location < start {
+            for child in markup.children {
+                walk(child, text: text, offsets: offsets, blocks: &blocks, inlines: &inlines)
+            }
+            return
+        }
         if let kind = blockKind(of: markup), var range = range(of: markup, offsets: offsets) {
             // cmark-gfm starts a table's source position at the
-            // paragraph before it. Its first cell is right, so the
-            // table begins where its head row does. Found by the iOS
-            // session porting the Files reader.
-            if kind == .table, let first = firstCellStart(of: markup, offsets: offsets),
-               first > range.location {
-                range = NSRange(location: first, length: NSMaxRange(range) - first)
+            // paragraph before it — and gives its head row and that
+            // row's cells the same wrong line, so nothing inside the
+            // table can be used to find its start. Anchoring on the
+            // first cell was my first attempt and could not work.
+            //
+            // The end is right, though, and a table is always one line
+            // per row plus the alignment row. So the first line is
+            // counted back from the last: `end - (1 + body rows)`,
+            // from the parse alone with no reading of the text. The
+            // iOS session worked this out after taking their own
+            // rescan out, because every hand-written version of it
+            // misread something — an indented `--`, a form feed,
+            // `: - :`.
+            if kind == .table, let table = markup as? Table,
+               let start = tableStart(of: table, offsets: offsets) {
+                range = NSRange(location: start, length: max(NSMaxRange(range) - start, 0))
             }
             blocks.append(
                 Block(
@@ -512,5 +534,33 @@ extension LampMarkdownModel {
     /// into the review code from here.
     static func withoutMarkers(_ text: String) -> String {
         String(text.unicodeScalars.filter { !(0xE000...0xE01A).contains(Int($0.value)) })
+    }
+}
+
+extension LampMarkdownModel {
+    /// Where a table really begins, counted back from where it ends.
+    ///
+    /// A table is its head row, its alignment row, and one line per
+    /// body row, so its first line is `end − (1 + body rows)`. cmark
+    /// reports the end correctly; it is only the start it takes from
+    /// the paragraph above.
+    static func tableStart(of table: Table, offsets: [LineMap]) -> Int? {
+        guard let source = table.range else { return nil }
+        let rows = table.body.childCount
+        let first = source.upperBound.line - (1 + rows)
+        guard first >= 1, first <= offsets.count else { return nil }
+        return offsets[first - 1].start
+    }
+}
+
+
+extension LampMarkdownModel {
+    static func enclosingTable(of markup: Markup) -> Table? {
+        var parent = markup.parent
+        while let node = parent {
+            if let table = node as? Table { return table }
+            parent = node.parent
+        }
+        return nil
     }
 }
