@@ -396,10 +396,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 let gapStart = NSMaxRange(last)
                 let gap = range.location > gapStart
                     ? text.substring(with: NSRange(location: gapStart, length: range.location - gapStart)) : ""
-                if blankLine.firstMatch(in: gap, range: NSRange(location: 0, length: (gap as NSString).length)) == nil,
-                   !gap.contains(where: { $0.isLetter || $0.isNumber }) {
-                    let end = max(gapStart, NSMaxRange(range))
-                    joined[joined.count - 1] = NSRange(location: last.location, length: end - last.location)
+                let end = max(gapStart, NSMaxRange(range))
+                let span = NSRange(location: last.location, length: end - last.location)
+                // The whole of what joining would make, not only the gap:
+                // a point between two lines would otherwise carry a passage
+                // over the blank line one newline at a time.
+                if !gap.contains(where: { $0.isLetter || $0.isNumber }),
+                   blankLine.firstMatch(in: text as String, range: span) == nil {
+                    joined[joined.count - 1] = span
                     continue
                 }
             }
@@ -408,8 +412,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return joined
     }
 
-    /// A line with nothing on it: what parts one paragraph from the next.
-    private static let blankLine = try! NSRegularExpression(pattern: "\\n[ \\t]*\\n")
+    /// A line with nothing on it: what parts one paragraph from the next,
+    /// whichever line ending a writing was saved with.
+    private static let blankLine = try! NSRegularExpression(pattern: "(?:\\r\\n|\\n|\\r(?!\\n))[ \\t]*(?:\\r\\n|\\n|\\r)")
 
     // MARK: Crossing into a web editor
 

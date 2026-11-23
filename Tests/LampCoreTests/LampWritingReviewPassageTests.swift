@@ -48,6 +48,21 @@ struct LampWritingReviewPassageTests {
         #expect(LampWritingReview.passages(ranges, in: "Keep this." as NSString).count == 1)
     }
 
+    @Test func aPointDoesNotCarryAPassageOverABlankLine() {
+        // From Codex's review: "A", a point on the blank line, "B".
+        let ranges = [NSRange(location: 0, length: 1), NSRange(location: 2, length: 0), NSRange(location: 3, length: 1)]
+        #expect(LampWritingReview.passages(ranges, in: "A\n\nB" as NSString).count == 2)
+    }
+
+    @Test func paragraphsPartWhateverTheLineEndings() {
+        for text in ["First.\r\n\r\nSecond.", "First.\r\rSecond.", "First.\n\nSecond."] {
+            let ranges = [NSRange(location: 0, length: (text as NSString).length)]
+            #expect(LampWritingReview.passages(ranges, in: text as NSString).count == 2, "\(text.debugDescription)")
+        }
+        // A single line ending is not a paragraph's end.
+        #expect(LampWritingReview.passages([NSRange(location: 0, length: 14)], in: "First.\r\nSecond" as NSString).count == 1)
+    }
+
     @Test func nothingMarkedIsNothingToRead() {
         #expect(empty.passageCount(in: "Anything at all.") == 0)
     }
