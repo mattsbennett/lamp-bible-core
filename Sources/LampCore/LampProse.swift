@@ -543,10 +543,23 @@ public enum LampProse {
         if first == "<" { return rest.contains(">") }
         let destination = rest.prefix { $0 != " " && $0 != "\t" }
         guard !destination.isEmpty else { return false }
-        // Only a title may follow the address, in quotes or parentheses.
+        // Only a title may follow the address, in quotes or parentheses —
+        // and nothing may follow the title but spaces. Accepting a title and
+        // stopping there took `[Status]: Ready (see below) tomorrow` for a
+        // definition, so the line was carried to every piece and drawn
+        // twice. Found by Codex, reviewing the phone's adoption.
         let after = rest.dropFirst(destination.count).drop { $0 == " " || $0 == "\t" }
         guard let opening = after.first else { return true }
-        return opening == "\"" || opening == "'" || opening == "("
+        let closing: Character
+        switch opening {
+        case "\"": closing = "\""
+        case "'": closing = "'"
+        case "(": closing = ")"
+        default: return false
+        }
+        let title = after.dropFirst()
+        guard let end = title.firstIndex(of: closing) else { return false }
+        return title[title.index(after: end)...].allSatisfy { $0 == " " || $0 == "\t" }
     }
 
     /// `[^label]: text`, at the start of a line.

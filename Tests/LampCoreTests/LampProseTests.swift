@@ -213,6 +213,29 @@ struct LampProseTests {
         #expect(drawn == ["[Status]: Ready for review", "The body."], "drew \(drawn)")
     }
 
+    /// A title has to end the line. Taking a title and stopping there read
+    /// `[Status]: Ready (see below) tomorrow` as a definition, and the line
+    /// was drawn twice. Found by Codex, reviewing the phone's adoption.
+    @Test func alineWithWordsAfterATitleIsStillALine() throws {
+        for source in [
+            "A\n[Status]: Ready (see below) tomorrow",
+            "A\n[Status]: Ready \"today\" and tomorrow",
+            "A\n[Status]: Ready (unclosed",
+        ] {
+            let drawn = LampProse.blocks(source).compactMap { block -> String? in
+                if case .paragraph(let text) = block { return text.plain } else { return nil }
+            }
+            #expect(drawn.count == 1, "drew \(drawn) for \(source.debugDescription)")
+        }
+        // A real one, with a title that does end the line, still works.
+        let blocks = LampProse.blocks("[r]: /url \"The Title\"\n\nSee [it][r].")
+        guard case .paragraph(let text)? = blocks.first(where: {
+            if case .paragraph(let value) = $0 { return value.plain.contains("See") }
+            return false
+        }) else { return #expect(Bool(false), "no paragraph") }
+        #expect(text.text.runs.first { $0.link != nil }?.link?.absoluteString == "/url")
+    }
+
     /// A definition shown as an example in code is not a definition.
     ///
     /// The scan stripped the indentation and gathered it; a label keeps its
