@@ -382,6 +382,12 @@ struct LampWritingReviewRestoreTests {
         #expect(fresh == Set(plan.marks.map { LampWritingReview.remarkID(restoring: $0) }))
         let twice = here.restoringWording(plan, from: second, to: after)
         #expect(twice.marks.count == here.marks.count)
+        // Read and cleared, then recorded again (a retry, or another
+        // device's recording arriving first): it stays cleared.
+        let read = here.clearingAll()
+        #expect(read.highlightedRanges(in: after).isEmpty)
+        let again = read.restoringWording(plan, from: second, to: after)
+        #expect(again.highlightedRanges(in: after).isEmpty)
     }
 
     /// A mark kept alive by the same words standing somewhere else is no

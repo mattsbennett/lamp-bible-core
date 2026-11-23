@@ -1539,7 +1539,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             // phone, a copy of the edits saved in passes — makes the one
             // mark, and a clear of it on any of them clears it on all.
             let id = Self.remarkID(restoring: edit.markID)
-            guard !result.marks.contains(where: { $0.id == id }) else { continue }
+            // Not again where it stands, nor where it was cleared: a restore
+            // recorded a second time (a retry, another device's recording
+            // arriving first) must not bring back a mark the writer read.
+            guard !result.marks.contains(where: { $0.id == id }),
+                  !result.retired.contains(where: { $0.id == id })
+            else { continue }
             result.marks.append(Mark(
                 id: id,
                 pieces: [Self.piece(Self.trimmed(found, in: target), in: target, anchoredIn: anchor)],
