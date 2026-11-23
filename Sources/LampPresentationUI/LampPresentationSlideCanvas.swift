@@ -473,6 +473,13 @@ public struct LampPresentationSlideCanvas: View {
         let spoken = slide.blocks.compactMap { block -> String? in
             // What the room can see so far, and no more.
             guard isShown(.block(block.id)) else { return nil }
+            // A map says the places it draws, as they arrive.
+            if block.drawnFigure(on: slide.layout) == .map {
+                let places = block.mapStops.enumerated()
+                    .filter { $0.element.place != nil && isShown(.listItem(block: block.id, index: $0.offset)) }
+                    .map(\.element.label)
+                return places.isEmpty ? nil : "Map: " + places.joined(separator: ", ")
+            }
             // A zoomed timeline says which events are in view.
             let views = block.timelineViews(on: slide.layout)
             if !views.isEmpty {
@@ -1235,6 +1242,8 @@ public struct LampPresentationSlideCanvas: View {
             timeline(items, of: block.id, size: size, color: color)
         case .chiasm, .parallel:
             structure(items, figure: block.drawnFigure(on: slide.layout), of: block.id, size: size, color: color)
+        case .map:
+            map(block, size: size)
         case .none:
             EmptyView()
         }
@@ -1392,6 +1401,43 @@ public struct LampPresentationSlideCanvas: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(block.spokenTimeline(view, on: slide.layout))
+        )
+    }
+
+    /// A map of the places a body block names (`LampSlideMap`), as tall as
+    /// the layout leaves room for under its heading or beside its passage.
+    private func map(_ block: LampPresentationBlock, size: CGFloat) -> AnyView {
+        let widescreen = style.aspectRatio == .widescreen
+        let room: CGFloat = switch slide.layout {
+        case .blank: widescreen ? 640 : 760
+        case .titleAndBody: widescreen ? 540 : 660
+        default: widescreen ? 330 : 420
+        }
+        let groundHex = slide.backgroundColor ?? style.theme.backgroundColor
+        let dark = (LampPresentationColor(hex: groundHex)?.luminance ?? 0) < 0.35
+        // The map is its own ground, so its words take the colours that
+        // read on that ground, never those chosen for a picture behind the
+        // slide, which could be the ground's own colour.
+        let mapInk = groundInk?.text ?? Color(lampDeckHex: style.theme.foregroundColor) ?? .white
+        let mapAccent = groundInk?.accent ?? Color(lampDeckHex: style.theme.accentColor) ?? .orange
+        return AnyView(
+            LampSlideMap(
+                stops: block.mapStops,
+                isShown: { isShown(.listItem(block: block.id, index: $0)) },
+                route: block.drawsRoute,
+                size: min(size, 30 * layoutUnit * 1.4),
+                ground: background,
+                groundIsDark: dark,
+                ink: mapInk,
+                accent: mapAccent,
+                // Full height while the slide's words are at their reading
+                // size, and shorter with them as the slide steps its type
+                // down to fit, so a long heading or a second map is made
+                // room for rather than pushed off the slide.
+                height: room * layoutUnit * min(1, max(0.35, size / (32 * layoutUnit))),
+                font: { presentationFont(size: $0, weight: $1) },
+                family: style.theme.typeface
+            )
         )
     }
 

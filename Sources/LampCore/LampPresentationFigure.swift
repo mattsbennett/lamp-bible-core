@@ -14,11 +14,16 @@ import Foundation
 ///   centre. Lettered A, B, C … C′, B′, A′, and stepped in toward the centre.
 /// - `parallel`: lines in pairs, as Hebrew poetry sets them: the second of
 ///   each pair answering the first, lettered A and A′, set in beneath it.
+/// - `map`: each line a place the Bible names, drawn where OpenBible.info
+///   places it (`LampMapPlaces`), on a map of the land around them; with a
+///   dash, the words after it are what the map calls the place. See
+///   `LampPresentationMap`.
 public enum LampPresentationFigure: String, Codable, CaseIterable, Identifiable, Sendable {
     case none
     case timeline
     case chiasm
     case parallel
+    case map
 
     public var id: String { rawValue }
 
@@ -28,6 +33,7 @@ public enum LampPresentationFigure: String, Codable, CaseIterable, Identifiable,
         case .timeline: "Timeline"
         case .chiasm: "Chiasm"
         case .parallel: "Parallel"
+        case .map: "Map"
         }
     }
 
@@ -80,7 +86,7 @@ public enum LampPresentationFigure: String, Codable, CaseIterable, Identifiable,
             return index <= mirrored ? letter(index) : letter(mirrored) + "\u{2032}"
         case .parallel:
             return letter(index / 2) + (index % 2 == 1 ? "\u{2032}" : "")
-        case .none, .timeline:
+        case .none, .timeline, .map:
             return ""
         }
     }
@@ -91,7 +97,7 @@ public enum LampPresentationFigure: String, Codable, CaseIterable, Identifiable,
         switch self {
         case .chiasm: min(index, count - 1 - index)
         case .parallel: index % 2
-        case .none, .timeline: 0
+        case .none, .timeline, .map: 0
         }
     }
 }
@@ -136,6 +142,8 @@ extension LampPresentationBlock {
     /// Runs drawn with their emphasis: for a timeline, its dates and events
     /// alone, since the separator between them is not drawn.
     func drawnMarkedRuns(on layout: LampPresentationSlideLayout) -> [LampPresentationTextRun] {
+        // A map prints its places' names plain.
+        if drawnFigure(on: layout) == .map { return [] }
         guard drawnFigure(on: layout) == .timeline else { return drawnRuns(on: layout) }
         return listItemRuns.flatMap { line in
             let entry = LampPresentationFigure.timelineEntry(line)

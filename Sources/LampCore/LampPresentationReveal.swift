@@ -72,6 +72,8 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
     public let emphasisStep: Bool
 
     private let arrival: [Part: Int]
+    /// The blocks whose items arrive at more than one step.
+    private let itemised: Set<String>
 
     public init(units: [[Part]], emphasisStep: Bool) {
         self.units = units
@@ -81,6 +83,13 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
             for part in unit where arrival[part] == nil { arrival[part] = index }
         }
         self.arrival = arrival
+        // A map's first place need not be its first line, so its items are
+        // counted rather than its second line looked for.
+        var steps: [String: Set<Int>] = [:]
+        for (part, step) in arrival {
+            if case .listItem(let block, _) = part { steps[block, default: []].insert(step) }
+        }
+        self.itemised = Set(steps.filter { $0.value.count > 1 }.keys)
     }
 
     public static let together = LampPresentationRevealPlan(units: [], emphasisStep: false)
@@ -103,7 +112,7 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
 
     /// Whether `block` is a list whose items arrive one at a time.
     public func revealsItems(of block: String) -> Bool {
-        arrival[.listItem(block: block, index: 1)] != nil
+        itemised.contains(block)
     }
 
     /// Which of a zoomed timeline's `count` views `block` rests at, at
@@ -213,6 +222,17 @@ extension LampPresentationSlide {
             var units = viewUnits(of: block, on: layout)
             units[0].insert(.block(block.id), at: 0)
             return units
+        }
+        // A map: its places, one at a time; a line that names no place Lamp
+        // can draw is left off, and takes no click of its own.
+        if block.drawnFigure(on: layout) == .map {
+            let found = block.mapStops.enumerated().filter { $0.element.place != nil }.map(\.offset)
+            guard found.count > 1 else { return [[.block(block.id)]] }
+            return found.enumerated().map { order, index in
+                order == 0
+                    ? [.block(block.id), .listItem(block: block.id, index: index)]
+                    : [.listItem(block: block.id, index: index)]
+            }
         }
         // A list, or a figure: a timeline's events, a structure's lines.
         guard block.kind == .body, block.listStyle != nil || block.drawnFigure != .none else {

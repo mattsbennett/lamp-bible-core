@@ -422,6 +422,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// A timeline shown whole, then a few events at a time; see
     /// `LampPresentationTimelineZoom`. Absent means drawn whole.
     public var zoom: LampPresentationTimelineZoom?
+    /// How a map figure is drawn: whether it joins its places as a route;
+    /// see `LampPresentationMapOptions`. Absent means places alone.
+    public var map: LampPresentationMapOptions?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -439,7 +442,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         focus: LampPresentationFocus? = nil,
         tint: LampPresentationImageTint? = nil,
         figure: LampPresentationFigure? = nil,
-        zoom: LampPresentationTimelineZoom? = nil
+        zoom: LampPresentationTimelineZoom? = nil,
+        map: LampPresentationMapOptions? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -457,6 +461,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.tint = tint
         self.figure = figure
         self.zoom = zoom
+        self.map = map
     }
 
     /// An image that fills the slide behind everything else.
@@ -752,6 +757,9 @@ public enum LampPresentationDeckValidator {
                                 + "a figure is drawn on title-and-body, blank, scripture and quotation slides."
                         )
                     }
+                }
+                if block.map != nil, block.figure != .map {
+                    issue(.warning, "\(blockPath).map", "Only a map figure reads map options; this block is drawn without them.")
                 }
                 if let zoom = block.zoom {
                     zoomIssues(zoom, block: block, path: blockPath).forEach { issue($0.0, $0.1, $0.2) }
@@ -1237,6 +1245,8 @@ public enum LampPresentationDeckValidator {
                         + "such as \u{201C}c. 1000 BC \u{2014} David king in Jerusalem\u{201D}."))
             }
             return issues
+        case .map:
+            return mapIssues(block: block, path: figurePath)
         case .chiasm where lines.count < 3:
             return [(.warning, figurePath, "A chiasm needs at least three lines: a pair and its centre, or two pairs.")]
         case .parallel where lines.count % 2 == 1:
@@ -1245,6 +1255,57 @@ public enum LampPresentationDeckValidator {
         default:
             return []
         }
+    }
+
+    /// The most places a map names before its names crowd each other.
+    public static let mostMapPlaces = 16
+
+    /// A map's places Lamp cannot find, cannot tell apart, or places only
+    /// uncertainly.
+    static func mapIssues(
+        block: LampPresentationBlock,
+        path: String
+    ) -> [(LampPresentationDeckIssue.Severity, String, String)] {
+        let stops = block.mapStops
+        var issues: [(LampPresentationDeckIssue.Severity, String, String)] = []
+        if stops.count > mostMapPlaces {
+            issues.append((.warning, path,
+                "A map of \(stops.count) places is too crowded to read; keep it to \(mostMapPlaces), "
+                    + "or split it across slides."))
+        }
+        for (index, stop) in stops.enumerated() {
+            let line = "Map line \(index + 1), \u{201C}\(stop.name)\u{201D},"
+            switch stop.match {
+            case .unknown:
+                issues.append((.warning, path,
+                    "\(line) is not a place Lamp knows, so it is left off the map. "
+                        + "Name it as OpenBible.info does, such as \u{201C}Antioch 1\u{201D} or \u{201C}Ephesus\u{201D}."))
+            case .ambiguous(let places):
+                let named = places.prefix(4).map { "\($0.name) (\($0.firstVerse))" }.joined(separator: ", ")
+                issues.append((.warning, path,
+                    "\(line) names more than one place, so it is left off the map; name one of \(named)."))
+            case .place(let place) where place.isUncertain:
+                issues.append((.warning, path,
+                    "\(line) is drawn as an uncertain site: OpenBible.info's confidence in this location is "
+                        + "\(place.confidence / 10)%. Say so in the talk, or leave it off."))
+            case .place:
+                break
+            }
+        }
+        // Places a map cannot draw apart: even at its closest, about Galilee,
+        // two sites this near share one mark, and their names are set off to
+        // the side with lines back to it.
+        let found = stops.enumerated().compactMap { index, stop in stop.place.map { (index, $0) } }
+        for (offset, (index, place)) in found.enumerated() {
+            guard let (earlier, other) = found[..<offset].first(where: {
+                LampMapFrame.tooCloseToTellApart($0.1, place)
+            }) else { continue }
+            issues.append((.warning, path,
+                "Map lines \(earlier + 1) and \(index + 1), \(other.name) and \(place.name), are too close "
+                    + "together to tell apart on a map, which shows no less than about Galilee; "
+                    + "their names are set off to the side."))
+        }
+        return issues
     }
 
     /// What a timeline's zoom would draw differently from what it asks.

@@ -44,11 +44,15 @@ let package = Package(
                 "LampModuleKit",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Markdown", package: "swift-markdown"),
-            ]
+            ],
+            // The places a map can name (`LampMapPlaces`).
+            resources: [.copy("Resources/Maps")]
         ),
         .target(
             name: "LampPresentationUI",
-            dependencies: ["LampCore"]
+            dependencies: ["LampCore"],
+            // A map's land, water and relief (`LampMapShapes`).
+            resources: [.copy("Resources/Maps")]
         ),
         .target(
             name: "LampIntelligence",
