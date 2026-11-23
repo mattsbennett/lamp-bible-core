@@ -26,6 +26,8 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
     /// A caption, which belongs to the picture or chart and is only drawn with one.
     /// With no picture beside the prose, it credits the one behind the slide.
     public var caption: LampPresentationBlock?
+    /// A word slide's gloss, under its transliteration.
+    public var detail: LampPresentationBlock?
     /// Blocks this layout will not draw. A deck that lists any of these has
     /// said something the slide cannot show.
     public var ignored: [LampPresentationBlock]
@@ -119,6 +121,7 @@ public struct LampPresentationSlidePlan: Equatable, Sendable {
         result.append(contentsOf: citations)
         if let image { result.append(image) }
         if let caption { result.append(caption) }
+        if let detail { result.append(detail) }
         return result
     }
 }
@@ -216,6 +219,10 @@ extension LampPresentationSlide {
 }
 
 public extension LampPresentationSlide {
+    /// The most columns a column slide draws: four, which still leaves each
+    /// a readable measure across a widescreen slide.
+    static let mostColumns = 4
+
     /// How this slide's layout will use its blocks.
     var plan: LampPresentationSlidePlan {
         var remaining = blocks.filter { block in
@@ -261,6 +268,16 @@ public extension LampPresentationSlide {
         }
 
         switch layout {
+        // A `where` binds only the pattern it follows, so each layout
+        // carries its own.
+        case .title where drawnVariant == .word, .closing where drawnVariant == .word:
+            // A word, its transliteration, and its gloss, then any passages.
+            plan.title = take(.title)
+            plan.subtitle = take(.subtitle)
+            plan.detail = take(.body)
+            plan.prose = takeAll(.scripture, .quotation)
+            plan.citations = takeAll(.citation)
+
         case .title, .closing:
             // A heading and one line beneath it, and under those any passages
             // the slide quotes — an epigraph to sit on screen before a talk
@@ -296,8 +313,8 @@ public extension LampPresentationSlide {
 
         case .twoColumn:
             plan.title = take(.title)
-            plan.columnGroups = Array(Self.columnGroups(in: remaining).prefix(2))
-            // Anything the two columns did not take — a third column, a
+            plan.columnGroups = Array(Self.columnGroups(in: remaining).prefix(Self.mostColumns))
+            // Anything the columns did not take — a fifth column, a
             // citation with nothing to attribute — stays behind to be reported
             // rather than quietly discarded.
             let placed = Set(plan.columnGroups.flatMap(\.blocks).map(\.id))

@@ -88,7 +88,9 @@ public struct LampPresentationSlideCanvas: View {
         assetURL: @escaping (LampPresentationBlock) -> URL? = { _ in nil },
         reportsBackdrop: ((LampPresentationBackdrop.Treatment) -> Void)? = nil
     ) {
-        self.slide = slide
+        // A comparison's differences are drawn as emphasis, so they are
+        // added here, once, for everything that draws from the slide.
+        self.slide = slide.markingComparison()
         self.style = style
         self.compact = compact
         self.assetURL = assetURL
@@ -490,6 +492,16 @@ public struct LampPresentationSlideCanvas: View {
     @ViewBuilder
     private func slideContent(unit: CGFloat) -> some View {
         switch slide.layout {
+        // Type-erased: one more layout of nested views here took the
+        // compiler past its limit on opaque types (a crash, not an error).
+        // A `where` binds only the pattern it follows, so each layout
+        // carries its own.
+        case .title where slide.drawnVariant == .statement, .closing where slide.drawnVariant == .statement:
+            AnyView(statementSlide(unit: unit))
+
+        case .title where slide.drawnVariant == .word, .closing where slide.drawnVariant == .word:
+            AnyView(wordSlide(unit: unit))
+
         case .title, .closing:
             VStack(spacing: 24 * unit) {
                 if let title = plan.title {
@@ -612,6 +624,62 @@ public struct LampPresentationSlideCanvas: View {
         }
     }
 
+    /// One phrase as large as the slide allows: a heading on its own, to land
+    /// a point or open a section, with any line and passages beneath it set
+    /// as a title slide sets them.
+    private func statementSlide(unit: CGFloat) -> some View {
+        VStack(spacing: 28 * unit) {
+            if let title = plan.title {
+                ViewThatFits(in: .vertical) {
+                    ForEach(Self.statementSizes, id: \.self) { size in
+                        slideBlockText(title, size: size * unit, weight: .heavy, alignment: .center, stepsDown: false)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: 1_320 * unit)
+            }
+            if let subtitle = plan.subtitle {
+                slideBlockText(subtitle, size: 40 * unit, weight: .regular, alignment: .center, color: accent)
+            }
+            if !plan.quoteGroups.isEmpty {
+                epigraph(unit: unit)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// A statement's sizes, largest first: the largest that fits is taken.
+    static let statementSizes: [CGFloat] = [160, 140, 120, 104, 92, 80, 72]
+
+    /// A Hebrew or Greek word set large, with how it sounds and what it means
+    /// beneath it, and any passages under those. In the heading's face, as
+    /// the slide's subject.
+    private func wordSlide(unit: CGFloat) -> some View {
+        VStack(spacing: 22 * unit) {
+            if let word = plan.title {
+                ViewThatFits(in: .vertical) {
+                    ForEach([150, 128, 108, 92, 76] as [CGFloat], id: \.self) { size in
+                        slideBlockText(word, size: size * unit, weight: .medium, alignment: .center, stepsDown: false)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: 1_320 * unit)
+            }
+            if let transliteration = plan.subtitle {
+                slideBlockText(transliteration, size: 42 * unit, weight: .regular, alignment: .center, color: accent)
+                    .italic()
+            }
+            if let gloss = plan.detail {
+                slideBlockText(gloss, size: 34 * unit, weight: .regular, alignment: .center)
+                    .frame(maxWidth: 1_100 * unit)
+            }
+            if !plan.quoteGroups.isEmpty {
+                epigraph(unit: unit)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     /// An epigraph stays under the 40-unit line a title may carry, so it never
     /// competes with the heading it serves.
     static let largestEpigraph: CGFloat = 32
@@ -684,11 +752,13 @@ public struct LampPresentationSlideCanvas: View {
     /// and where that comes from.
     @ViewBuilder
     private func twoColumnSlide(unit: CGFloat) -> some View {
-        let columns = plan.columnGroups
-        let first = columns.first
-            ?? .init(prose: [LampPresentationBlock(kind: .body, text: "First idea")])
-        let second = columns.dropFirst().first
-            ?? .init(prose: [LampPresentationBlock(kind: .body, text: "Second idea")])
+        // Two columns at least, so an empty slide still shows its shape.
+        let columns = plan.columnGroups.count >= 2
+            ? plan.columnGroups
+            : plan.columnGroups + [
+                .init(prose: [LampPresentationBlock(kind: .body, text: "First idea")]),
+                .init(prose: [LampPresentationBlock(kind: .body, text: "Second idea")]),
+            ].dropFirst(plan.columnGroups.count)
         VStack(alignment: .leading, spacing: 34 * unit) {
             // The same heading as a title-and-body slide, so it does not change
             // size or lose its rule when the deck moves between the two.
@@ -698,15 +768,19 @@ public struct LampPresentationSlideCanvas: View {
             }
             // Both columns take one size, so neither reads as the lesser.
             fitted(unit: unit, largest: Self.largestBody, settled: 32, air: 56) { size in
-                HStack(alignment: .top, spacing: 50 * unit) {
-                    column(first, size: size, unit: unit)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                    Rectangle().fill(accent.opacity(0.45)).frame(width: 2 * unit)
-                        // Arrives with the second column: drawn early, it ran
-                        // the length of a column not yet shown.
-                        .opacity(second.blocks.first.map { isShown(.block($0.id)) } ?? true ? 1 : 0)
-                    column(second, size: size, unit: unit)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                // Narrower gaps as columns are added, so four still leave
+                // each a readable measure.
+                HStack(alignment: .top, spacing: (columns.count > 2 ? 34 : 50) * unit) {
+                    ForEach(Array(columns.enumerated()), id: \.offset) { index, column in
+                        if index > 0 {
+                            Rectangle().fill(accent.opacity(0.45)).frame(width: 2 * unit)
+                                // Arrives with the column after it: drawn early,
+                                // it ran the length of a column not yet shown.
+                                .opacity(column.blocks.first.map { isShown(.block($0.id)) } ?? true ? 1 : 0)
+                        }
+                        self.column(column, size: size, unit: unit)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
                 }
                 // Sized to the columns, so the divider stops where they do
                 // rather than running to the foot of the slide.

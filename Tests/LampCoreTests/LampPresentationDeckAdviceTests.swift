@@ -40,16 +40,18 @@ struct LampPresentationDeckAdviceTests {
         #expect(!messages.contains { $0.contains("does not draw") })
     }
 
-    @Test func namesAThirdColumnAndAStrandedCaption() {
+    @Test func namesAFifthColumnAndAStrandedCaption() {
         let columns = warnings([
             .init(layout: .twoColumn, blocks: [
-                .init(kind: .title, text: "Two ideas"),
+                .init(kind: .title, text: "Five ideas"),
                 .init(kind: .body, text: "First"),
                 .init(kind: .body, text: "Second"),
                 .init(kind: .body, text: "Third"),
+                .init(kind: .body, text: "Fourth"),
+                .init(kind: .body, text: "Fifth"),
             ]),
         ])
-        #expect(columns.contains { $0.contains("beyond its first two columns") })
+        #expect(columns.filter { $0.contains("beyond its first four columns") }.count == 1)
 
         let caption = warnings([
             .init(layout: .titleAndBody, blocks: [
@@ -150,8 +152,8 @@ struct LampPresentationDeckAdviceTests {
         #expect(slide.plan.ignored.isEmpty)
     }
 
-    @Test func namesAThirdHeadedColumnAndACitationWithNothingToAttribute() {
-        let third = warnings([
+    @Test func namesAFifthHeadedColumnAndACitationWithNothingToAttribute() {
+        let fifth = warnings([
             .init(layout: .twoColumn, blocks: [
                 .init(kind: .subtitle, text: "One"),
                 .init(kind: .body, text: "First"),
@@ -159,9 +161,13 @@ struct LampPresentationDeckAdviceTests {
                 .init(kind: .body, text: "Second"),
                 .init(kind: .subtitle, text: "Three"),
                 .init(kind: .body, text: "Third"),
+                .init(kind: .subtitle, text: "Four"),
+                .init(kind: .body, text: "Fourth"),
+                .init(kind: .subtitle, text: "Five"),
+                .init(kind: .body, text: "Fifth"),
             ]),
         ])
-        #expect(third.filter { $0.contains("beyond its first two columns") }.count == 2)
+        #expect(fifth.filter { $0.contains("beyond its first four columns") }.count == 2)
 
         let stranded = warnings([
             .init(layout: .twoColumn, blocks: [

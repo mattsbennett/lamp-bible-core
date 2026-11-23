@@ -296,7 +296,7 @@ struct LampPresentationSlideLabelTests {
     @Test("A slide with nothing to say falls back to its layout")
     func fallsBackToLayout() {
         #expect(slide(.blank, []).displayTitle == "Blank")
-        #expect(slide(.twoColumn, [.init(kind: .body, text: "   ")]).displayTitle == "Two Columns")
+        #expect(slide(.twoColumn, [.init(kind: .body, text: "   ")]).displayTitle == "Columns")
     }
 }
 

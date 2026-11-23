@@ -123,7 +123,7 @@ extension LampPresentationSlide {
                     units.append(contentsOf: Self.revealUnits(of: group))
                 }
             case .twoColumn:
-                for column in plan.columnGroups.prefix(2) {
+                for column in plan.columnGroups.prefix(Self.mostColumns) {
                     let parts = column.blocks.map { LampPresentationRevealPlan.Part.block($0.id) }
                     if !parts.isEmpty { units.append(parts) }
                 }
@@ -142,7 +142,12 @@ extension LampPresentationSlide {
         // is drawn without it, and a caption is drawn only beside or over a
         // picture, or on an image slide.
         let captionDrawn = layout == .image || plan.image != nil || plan.background != nil
-        let hasEmphasis = plan.drawn.contains { block in
+        // With what a comparison marks, which lights as emphasis does.
+        let compared = markingComparison()
+        let comparedBlocks = Dictionary(
+            compared.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        let hasEmphasis = plan.drawn.map { comparedBlocks[$0.id] ?? $0 }.contains { block in
             block.kind != .chart && block.kind != .image
                 && (block.kind != .caption || captionDrawn)
                 && block.drawnRuns(on: layout).contains { $0.mark != nil }

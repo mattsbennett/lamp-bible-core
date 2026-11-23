@@ -219,7 +219,7 @@ public enum LampPresentationSlideLayout: String, Codable, CaseIterable, Identifi
         case .titleAndBody: "Title & Body"
         case .scripture: "Scripture"
         case .quotation: "Quotation"
-        case .twoColumn: "Two Columns"
+        case .twoColumn: "Columns"
         case .image: "Image"
         case .closing: "Closing"
         case .blank: "Blank"
@@ -250,6 +250,10 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
     /// theme's two ground colours reads on it; see
     /// `LampPresentationTheme.ink(on:)`. Absent means the theme's.
     public var backgroundColor: String?
+    /// A form of the layout: a statement or a word on a title slide, a
+    /// comparison on columns; see `LampPresentationSlideVariant`. Absent
+    /// means the plain layout.
+    public var variant: LampPresentationSlideVariant?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -260,7 +264,8 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
         notesAnchor: String? = nil,
         reveal: LampPresentationReveal? = nil,
         revealsEmphasis: Bool? = nil,
-        backgroundColor: String? = nil
+        backgroundColor: String? = nil,
+        variant: LampPresentationSlideVariant? = nil
     ) {
         self.id = id
         self.layout = layout
@@ -269,6 +274,7 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
         self.reveal = reveal
         self.revealsEmphasis = revealsEmphasis
         self.backgroundColor = backgroundColor
+        self.variant = variant
         self.speakerNotes = speakerNotes
         self.isHidden = isHidden
     }
@@ -645,6 +651,24 @@ public enum LampPresentationDeckValidator {
             // slide passes every other check and simply becomes unreadable.
             if let crowding = crowdingMessage(for: plan, layout: slide.layout) {
                 issue(.warning, "\(slidePath).blocks", crowding)
+            }
+
+            // A variant on a layout that has no such form draws the plain
+            // layout, which the author should know.
+            if let variant = slide.variant, variant != .none, !variant.layouts.contains(slide.layout) {
+                let names = variant.layouts.map(\.rawValue).sorted().joined(separator: " or ")
+                issue(
+                    .warning,
+                    "\(slidePath).variant",
+                    "A \(variant.rawValue) is a form of a \(names) slide; this \(slide.layout.rawValue) slide is drawn plain."
+                )
+            }
+            if slide.drawnVariant == .comparison, plan.columnGroups.count < 2 {
+                issue(
+                    .warning,
+                    "\(slidePath).variant",
+                    "A comparison marks the words in which columns differ, and this slide has fewer than two."
+                )
             }
 
             // A slide's own ground is held to the theme's own floor for words,
@@ -1167,7 +1191,7 @@ public enum LampPresentationDeckValidator {
             return " beyond its heading and one line beneath it"
         case (.twoColumn, .body), (.twoColumn, .subtitle),
              (.twoColumn, .scripture), (.twoColumn, .quotation):
-            return " beyond its first two columns"
+            return " beyond its first four columns"
         case (.twoColumn, .citation):
             return " unless it directly follows the column it attributes"
         case (.twoColumn, .image), (.twoColumn, .chart):
