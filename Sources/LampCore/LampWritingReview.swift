@@ -357,6 +357,60 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         Self.coalesced(located(in: text).flatMap(\.ranges), joiningAcross: nil)
     }
 
+    /// How many passages are left to read, as the writer sees them: what is
+    /// drawn, joined where nothing but spaces and punctuation part it, and
+    /// parted at every blank line, so a paragraph's marks are one passage
+    /// unless unmarked words stand between them.
+    ///
+    /// Not the number of marks. A writer who lets the assistant work over
+    /// text still marked gets a new mark for every word it changes there,
+    /// each kept with its own wording to put back, but none of them draws
+    /// anything new, and a count that rose with each was a count of nothing
+    /// the writer could see.
+    public func passageCount(in text: String) -> Int {
+        Self.passages(highlightedRanges(in: text), in: text as NSString).count
+    }
+
+    /// `ranges` as passages: parted at blank lines, then joined across gaps
+    /// with no letter, digit or blank line in them.
+    static func passages(_ ranges: [NSRange], in text: NSString) -> [NSRange] {
+        var parted: [NSRange] = []
+        for range in ranges.sorted(by: { ($0.location, $0.length) < ($1.location, $1.length) }) {
+            guard range.length > 0 else {
+                parted.append(range)
+                continue
+            }
+            var start = range.location
+            let breaks = blankLine.matches(in: text as String, range: range).map(\.range)
+            for gap in breaks + [NSRange(location: NSMaxRange(range), length: 0)] {
+                let piece = NSRange(location: start, length: gap.location - start)
+                if piece.length > 0, text.substring(with: piece).contains(where: { !$0.isWhitespace }) {
+                    parted.append(piece)
+                }
+                start = NSMaxRange(gap)
+            }
+        }
+        var joined: [NSRange] = []
+        for range in parted {
+            if let last = joined.last {
+                let gapStart = NSMaxRange(last)
+                let gap = range.location > gapStart
+                    ? text.substring(with: NSRange(location: gapStart, length: range.location - gapStart)) : ""
+                if blankLine.firstMatch(in: gap, range: NSRange(location: 0, length: (gap as NSString).length)) == nil,
+                   !gap.contains(where: { $0.isLetter || $0.isNumber }) {
+                    let end = max(gapStart, NSMaxRange(range))
+                    joined[joined.count - 1] = NSRange(location: last.location, length: end - last.location)
+                    continue
+                }
+            }
+            joined.append(range)
+        }
+        return joined
+    }
+
+    /// A line with nothing on it: what parts one paragraph from the next.
+    private static let blankLine = try! NSRegularExpression(pattern: "\\n[ \\t]*\\n")
+
     // MARK: Crossing into a web editor
 
     /// The markers a web editor finds marks by: private-use characters, which
