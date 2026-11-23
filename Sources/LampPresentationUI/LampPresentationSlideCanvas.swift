@@ -473,6 +473,12 @@ public struct LampPresentationSlideCanvas: View {
         let spoken = slide.blocks.compactMap { block -> String? in
             // What the room can see so far, and no more.
             guard isShown(.block(block.id)) else { return nil }
+            // A zoomed timeline says which events are in view.
+            let views = block.timelineViews(on: slide.layout)
+            if !views.isEmpty {
+                let index = revealPlan.view(of: block.id, count: views.count, atStep: revealStep)
+                return block.spokenTimeline(views[min(index, views.count - 1)], on: slide.layout)
+            }
             if revealPlan.revealsItems(of: block.id) {
                 let items = block.listItemRuns.enumerated()
                     .filter { isShown(.listItem(block: block.id, index: $0.offset)) }
@@ -1223,6 +1229,8 @@ public struct LampPresentationSlideCanvas: View {
     private func figure(_ block: LampPresentationBlock, size: CGFloat, color: Color) -> some View {
         let items = block.listItemRuns
         switch block.drawnFigure(on: slide.layout) {
+        case .timeline where !block.timelineViews(on: slide.layout).isEmpty:
+            zoomingTimeline(block, size: size, color: color)
         case .timeline:
             timeline(items, of: block.id, size: size, color: color)
         case .chiasm, .parallel:
@@ -1246,8 +1254,9 @@ public struct LampPresentationSlideCanvas: View {
         // No larger than lets each column's longest word fit its width: the
         // slide only sees a figure too tall, and a word too long for a narrow
         // column was broken mid-word instead ("Solom-on").
-        let longest = entries.flatMap { $0.date + $0.event }.map(\.text).joined(separator: " ")
-            .split(whereSeparator: \.isWhitespace).map(\.count).max() ?? 1
+        let longest = max(LampPresentationTextMeasure.longestUnbreakable(
+            entries.flatMap { $0.date + $0.event }.map(\.text).joined(separator: " ")
+        ), 1)
         // The page's width less what shares it: a picture or chart beside
         // the prose (`besideImage`), and a passage's rule.
         let widescreen = style.aspectRatio == .widescreen
@@ -1292,6 +1301,98 @@ public struct LampPresentationSlideCanvas: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A timeline shown whole, then a few events at a time
+    /// (`LampZoomingTimeline`), its view where the presenter has moved it.
+    /// Everywhere else it is drawn as it ends, whole with the stretch
+    /// explored marked.
+    private func zoomingTimeline(_ block: LampPresentationBlock, size: CGFloat, color: Color) -> AnyView {
+        let entries = block.listItemRuns.map(LampPresentationFigure.timelineEntry)
+        let views = block.timelineViews(on: slide.layout)
+        let span = block.drawnZoom(on: slide.layout)?.span ?? LampPresentationTimelineZoom.defaultSpan
+        // Sized as a timeline of `span` events is, which is how many a
+        // zoomed-in view shows.
+        let longest = max(LampPresentationTextMeasure.longestUnbreakable(
+            entries.flatMap { $0.date + $0.event }.map(\.text).joined(separator: " ")
+        ), 1)
+        let widescreen = style.aspectRatio == .widescreen
+        let page: CGFloat = widescreen ? 1_408 : 1_008
+        let beside: CGFloat = imageBlock == nil ? 0 : (widescreen ? 620 : 440) + 48
+        let rule: CGFloat = slide.layout == .scripture || slide.layout == .quotation ? 34 : 0
+        let column = (page - beside - rule) * layoutUnit / CGFloat(span)
+        // A canvas with no room draws the timeline as it would unzoomed,
+        // which has nothing to divide by.
+        guard column > 0, size > 0 else {
+            return AnyView(timeline(block.listItemRuns, of: block.id, size: size, color: color))
+        }
+        let size = min(size, column / (0.52 * CGFloat(longest) + 0.3))
+        // A zoomed timeline's emphasis is drawn lit throughout: the whole
+        // view, where a slide's last step would light it, does not show its
+        // events.
+        let lit = revealed(atStep: nil)
+        // Room beneath the line for the longest event, measured, at least
+        // two lines, so a long one makes the figure taller and the slide
+        // chooses a smaller size rather than cutting it short; and the
+        // widest date, so the whole view spaces them by what they draw.
+        // Measured as drawn: in the deck's face, its emphasis bold, and no
+        // smaller than the canvas draws any text.
+        let face = style.theme.typeface
+        let floor: CGFloat = compact ? 4 : 10
+        let eventSize = size * 0.8
+        let eventHeight = max(
+            entries.map { entry in
+                LampPresentationTextMeasure.size(
+                    entry.event, family: face, size: eventSize, bold: false,
+                    width: column - size * 0.24, lineSpacing: eventSize * 0.12, floor: floor
+                ).height
+            }.max() ?? 0,
+            max(eventSize, floor) * 1.32 * 2
+        )
+        let dateWidth = (entries.map { entry in
+            LampPresentationTextMeasure.size(
+                entry.date, family: face, size: size * 0.72, bold: true, floor: floor
+            ).width
+        }.max() ?? 0) + size * 0.24
+        let index = revealPlan.view(of: block.id, count: views.count, atStep: revealStep)
+        let view = views[min(index, views.count - 1)]
+        let accent = self.accent
+        return AnyView(
+            LampZoomingTimeline(
+                count: entries.count,
+                span: span,
+                explored: block.exploredEvents(on: slide.layout) ?? 0...(entries.count - 1),
+                views: views,
+                position: Double(min(index, views.count - 1)),
+                size: size,
+                eventHeight: eventHeight,
+                accent: accent,
+                ink: color,
+                dateWidth: dateWidth,
+                date: { index in
+                    AnyView(
+                        lit.styledText(entries[index].date, size: size * 0.72, weight: .bold, alignment: .center, color: accent)
+                            .padding(.horizontal, size * 0.12)
+                    )
+                },
+                event: { index in
+                    AnyView(
+                        lit.styledText(entries[index].event, size: size * 0.8, weight: .regular, alignment: .center, color: color)
+                            .padding(.horizontal, size * 0.12)
+                    )
+                }
+            )
+            // A move along the timeline is a longer way than a part fading
+            // in, so it takes longer; with no animation, as with Reduce
+            // Motion, it still cuts.
+            .transaction { transaction in
+                if transaction.animation != nil {
+                    transaction.animation = .easeInOut(duration: 0.8)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(block.spokenTimeline(view, on: slide.layout))
+        )
     }
 
     /// A passage's structure: each line lettered in the accent and stepped

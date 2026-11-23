@@ -419,6 +419,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// A body block's lines drawn as a figure: a timeline, or a passage's
     /// structure; see `LampPresentationFigure`. Absent means drawn as text.
     public var figure: LampPresentationFigure?
+    /// A timeline shown whole, then a few events at a time; see
+    /// `LampPresentationTimelineZoom`. Absent means drawn whole.
+    public var zoom: LampPresentationTimelineZoom?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -435,7 +438,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         chart: LampPresentationChart? = nil,
         focus: LampPresentationFocus? = nil,
         tint: LampPresentationImageTint? = nil,
-        figure: LampPresentationFigure? = nil
+        figure: LampPresentationFigure? = nil,
+        zoom: LampPresentationTimelineZoom? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -452,6 +456,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.focus = focus
         self.tint = tint
         self.figure = figure
+        self.zoom = zoom
     }
 
     /// An image that fills the slide behind everything else.
@@ -709,7 +714,8 @@ public enum LampPresentationDeckValidator {
                 issue(
                     .warning,
                     "\(slidePath).revealsEmphasis",
-                    "No words on this slide are emphasised, so there is nothing to light up."
+                    "No words on this slide are emphasised, or only a zoomed timeline's, which are lit "
+                        + "throughout, so there is nothing to light up."
                 )
             }
 
@@ -746,6 +752,9 @@ public enum LampPresentationDeckValidator {
                                 + "a figure is drawn on title-and-body, blank, scripture and quotation slides."
                         )
                     }
+                }
+                if let zoom = block.zoom {
+                    zoomIssues(zoom, block: block, path: blockPath).forEach { issue($0.0, $0.1, $0.2) }
                 }
                 if let tint = block.tint, tint != .none, block.kind != .image {
                     issue(.warning, "\(blockPath).tint", "Only a picture can be tinted.")
@@ -835,7 +844,7 @@ public enum LampPresentationDeckValidator {
                 if block.kind == .title && block.text.count > 90 {
                     issue(.warning, "\(blockPath).text", "This title may be too long for a slide.")
                 }
-                if block.kind == .body && block.text.count > 700 {
+                if block.kind == .body && block.shownTextLength(on: slide.layout) > 700 {
                     issue(.warning, "\(blockPath).text", "This body may be too dense for a slide.")
                 }
             }
@@ -1207,10 +1216,18 @@ public enum LampPresentationDeckValidator {
         switch figure {
         case .timeline:
             var issues: [(LampPresentationDeckIssue.Severity, String, String)] = []
-            if lines.count > LampPresentationFigure.mostTimelineEntries {
+            if block.zoom != nil {
+                if lines.count > LampPresentationTimelineZoom.mostEvents {
+                    issues.append((.warning, figurePath,
+                        "A timeline of \(lines.count) events is too long to show whole, even as marks along a line; "
+                            + "keep a zoomed timeline to \(LampPresentationTimelineZoom.mostEvents), "
+                            + "or split it across slides."))
+                }
+            } else if lines.count > LampPresentationFigure.mostTimelineEntries {
                 issues.append((.warning, figurePath,
                     "A timeline of \(lines.count) events is too crowded to read across a slide; "
-                        + "keep it to \(LampPresentationFigure.mostTimelineEntries), or split it across slides."))
+                        + "keep it to \(LampPresentationFigure.mostTimelineEntries), zoom it, "
+                        + "or split it across slides."))
             }
             let undated = lines.enumerated().filter { LampPresentationFigure.timelineSplit($0.element) == nil }
             if !undated.isEmpty {
@@ -1228,6 +1245,43 @@ public enum LampPresentationDeckValidator {
         default:
             return []
         }
+    }
+
+    /// What a timeline's zoom would draw differently from what it asks.
+    static func zoomIssues(
+        _ zoom: LampPresentationTimelineZoom,
+        block: LampPresentationBlock,
+        path: String
+    ) -> [(LampPresentationDeckIssue.Severity, String, String)] {
+        let zoomPath = "\(path).zoom"
+        guard block.kind == .body, block.figure == .timeline else {
+            return [(.warning, zoomPath, "Only a timeline zooms; this block is drawn without it.")]
+        }
+        let spans = LampPresentationTimelineZoom.spans
+        var issues: [(LampPresentationDeckIssue.Severity, String, String)] = []
+        if !spans.contains(zoom.span) {
+            issues.append((.warning, "\(zoomPath).span",
+                "A zoomed view shows \(spans.lowerBound) to \(spans.upperBound) events; "
+                    + "this one is drawn showing \(min(max(zoom.span, spans.lowerBound), spans.upperBound))."))
+        }
+        let span = min(max(zoom.span, spans.lowerBound), spans.upperBound)
+        let count = block.listItemRuns.count
+        if count <= span {
+            issues.append((.warning, zoomPath,
+                "A view of \(span) events shows all \(count) of this timeline, so it is drawn whole without zooming."))
+            return issues
+        }
+        for (key, value) in [("from", zoom.from), ("through", zoom.through)] {
+            if let value, !(1...count).contains(value) {
+                issues.append((.warning, "\(zoomPath).\(key)",
+                    "The timeline's events are numbered 1 to \(count); \(value) is held to the nearer end."))
+            }
+        }
+        if let from = zoom.from, let through = zoom.through, from > through {
+            issues.append((.warning, zoomPath,
+                "A zoom's from comes after its through, so only event \(min(max(from, 1), count)) is explored."))
+        }
+        return issues
     }
 
     private static func ignoredHint(
@@ -1269,7 +1323,7 @@ public enum LampPresentationDeckValidator {
         layout: LampPresentationSlideLayout
     ) -> String? {
         let prose = (plan.prose + plan.columns + plan.citations)
-            .reduce(0) { $0 + $1.text.count }
+            .reduce(0) { $0 + $1.shownTextLength(on: layout) }
         guard prose > 0 else { return nil }
         // A picture takes about half the slide, so the prose beside it has
         // roughly half the room. Passages under a title share the slide with

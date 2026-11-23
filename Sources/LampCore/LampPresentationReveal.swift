@@ -55,10 +55,14 @@ public enum LampPresentationTransition: String, Codable, CaseIterable, Identifia
 /// presenter draws: the editor, thumbnails, the remote's next slide, a PDF.
 public struct LampPresentationRevealPlan: Equatable, Sendable {
     /// Something on the slide that can be held back: a block, or one item of
-    /// a list.
+    /// a list. Or where a zoomed timeline's view rests
+    /// (`LampPresentationBlock.timelineViews(on:)`): each of its views after
+    /// the first is a step, which moves the view rather than bringing
+    /// anything in.
     public enum Part: Hashable, Sendable {
         case block(String)
         case listItem(block: String, index: Int)
+        case view(block: String, index: Int)
     }
 
     /// The parts in the order they arrive; each inner list arrives together.
@@ -102,6 +106,17 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
         arrival[.listItem(block: block, index: 1)] != nil
     }
 
+    /// Which of a zoomed timeline's `count` views `block` rests at, at
+    /// `step`: the furthest it has reached. The whole slide, a step of nil,
+    /// is the last, which marks the stretch explored.
+    public func view(of block: String, count: Int, atStep step: Int?) -> Int {
+        guard count > 0 else { return 0 }
+        guard let step else { return count - 1 }
+        return (0..<count).last { index in
+            arrival[.view(block: block, index: index)].map { $0 <= step } ?? false
+        } ?? 0
+    }
+
     /// Whether emphasised words are drawn in their colour at `step`. Before
     /// their step they keep their weight, so nothing moves when they light.
     public func isEmphasisLit(atStep step: Int?) -> Bool {
@@ -116,11 +131,24 @@ extension LampPresentationSlide {
     public var revealPlan: LampPresentationRevealPlan {
         let plan = self.plan
         var units: [[LampPresentationRevealPlan.Part]] = []
+        // A zoomed timeline moves its view a step at a time whether or not
+        // the rest of the slide arrives in parts; the rest is there from the
+        // start, since a part not given a step is.
+        // Every timeline arrives at its first view, so the first views are
+        // one step, and the moves after them a step each.
+        if reveal != .stepwise {
+            let zoomed = plan.drawn.filter { $0.drawnZoom(on: layout) != nil }
+            let moves = zoomed.map { Self.viewUnits(of: $0, on: layout) }
+            if !moves.isEmpty {
+                units.append(moves.flatMap { $0.first ?? [] })
+                units.append(contentsOf: moves.flatMap { $0.dropFirst() })
+            }
+        }
         if reveal == .stepwise {
             switch layout {
             case .title, .closing, .titleAndBody, .scripture, .quotation:
                 for group in plan.quoteGroups {
-                    units.append(contentsOf: Self.revealUnits(of: group))
+                    units.append(contentsOf: Self.revealUnits(of: group, on: layout))
                 }
             case .twoColumn:
                 for column in plan.columnGroups.prefix(Self.mostColumns) {
@@ -129,7 +157,7 @@ extension LampPresentationSlide {
                 }
             case .blank:
                 for block in plan.prose {
-                    units.append(contentsOf: Self.revealUnits(of: block))
+                    units.append(contentsOf: Self.revealUnits(of: block, on: layout))
                 }
             case .image:
                 break
@@ -147,8 +175,11 @@ extension LampPresentationSlide {
         let comparedBlocks = Dictionary(
             compared.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
         )
+        // Nor a zoomed timeline's, whose events the whole view, where a
+        // last step would light them, does not show.
         let hasEmphasis = plan.drawn.map { comparedBlocks[$0.id] ?? $0 }.contains { block in
-            block.kind != .chart && block.kind != .image
+            guard block.drawnZoom(on: layout) == nil else { return false }
+            return block.kind != .chart && block.kind != .image
                 && (block.kind != .caption || captionDrawn)
                 && block.drawnMarkedRuns(on: layout).contains { $0.mark != nil }
         }
@@ -163,16 +194,26 @@ extension LampPresentationSlide {
     /// the room kept for the rest, apart from the words it credits. A
     /// citation with no passage to go with is there from the start.
     private static func revealUnits(
-        of group: LampPresentationSlidePlan.QuoteGroup
+        of group: LampPresentationSlidePlan.QuoteGroup,
+        on layout: LampPresentationSlideLayout
     ) -> [[LampPresentationRevealPlan.Part]] {
-        var units = group.quotations.flatMap(revealUnits(of:))
+        var units = group.quotations.flatMap { revealUnits(of: $0, on: layout) }
         if let citation = group.citation, !units.isEmpty {
             units[units.count - 1].append(.block(citation.id))
         }
         return units
     }
 
-    private static func revealUnits(of block: LampPresentationBlock) -> [[LampPresentationRevealPlan.Part]] {
+    private static func revealUnits(
+        of block: LampPresentationBlock,
+        on layout: LampPresentationSlideLayout
+    ) -> [[LampPresentationRevealPlan.Part]] {
+        // A zoomed timeline arrives whole, and then moves its view.
+        if block.drawnZoom(on: layout) != nil {
+            var units = viewUnits(of: block, on: layout)
+            units[0].insert(.block(block.id), at: 0)
+            return units
+        }
         // A list, or a figure: a timeline's events, a structure's lines.
         guard block.kind == .body, block.listStyle != nil || block.drawnFigure != .none else {
             return [[.block(block.id)]]
@@ -186,6 +227,17 @@ extension LampPresentationSlide {
                 ? [.block(block.id), .listItem(block: block.id, index: 0)]
                 : [.listItem(block: block.id, index: index)]
         }
+    }
+}
+
+extension LampPresentationSlide {
+    /// A zoomed timeline's views, a step each, the first arriving with the
+    /// block.
+    fileprivate static func viewUnits(
+        of block: LampPresentationBlock,
+        on layout: LampPresentationSlideLayout
+    ) -> [[LampPresentationRevealPlan.Part]] {
+        block.timelineViews(on: layout).indices.map { [.view(block: block.id, index: $0)] }
     }
 }
 
