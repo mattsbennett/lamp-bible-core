@@ -466,9 +466,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 let span = NSRange(location: last.location, length: end - last.location)
                 // The whole of what joining would make, not only the gap:
                 // a point between two lines would otherwise carry a passage
-                // over the blank line one newline at a time.
+                // over the blank line one newline at a time. `last` has no
+                // blank line in it, so one in `span` reaches past its end,
+                // and begins no earlier than the spaces and line ends it
+                // finishes with: searched from there, not from its start,
+                // or a long run of joins rescans the passage at each one.
+                var from = gapStart
+                while from > last.location, Self.spaceOrLineEnd(text.character(at: from - 1)) { from -= 1 }
                 if !gap.contains(where: { $0.isLetter || $0.isNumber }),
-                   blankLine.firstMatch(in: text as String, range: span) == nil {
+                   blankLine.firstMatch(in: text as String, range: NSRange(location: from, length: end - from)) == nil {
                     joined[joined.count - 1] = span
                     continue
                 }
@@ -481,6 +487,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// A line with nothing on it: what parts one paragraph from the next,
     /// whichever line ending a writing was saved with.
     private static let blankLine = try! NSRegularExpression(pattern: "(?:\\r\\n|\\n|\\r(?!\\n))[ \\t]*(?:\\r\\n|\\n|\\r)")
+
+    /// What `blankLine` is made of: a space, a tab, or a line end.
+    private static func spaceOrLineEnd(_ unit: unichar) -> Bool {
+        unit == 0x20 || unit == 0x09 || unit == 0x0A || unit == 0x0D
+    }
 
     // MARK: Crossing into a web editor
 

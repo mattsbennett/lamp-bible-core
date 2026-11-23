@@ -144,3 +144,101 @@ struct LampWritingReviewDrawingTests {
         #expect(bare.ranges == ranges && bare.markedMarkdown == nil && bare.changes.isEmpty)
     }
 }
+
+/// Passages are found in time that grows with the writing, and are the
+/// passages a search of each whole join would find.
+struct LampWritingReviewPassageCostTests {
+    /// `passages` as it was, searching every join whole for a blank line.
+    private static func searchingWhole(_ ranges: [NSRange], in text: NSString) -> [NSRange] {
+        let blankLine = try! NSRegularExpression(pattern: "(?:\\r\\n|\\n|\\r(?!\\n))[ \\t]*(?:\\r\\n|\\n|\\r)")
+        var parted: [NSRange] = []
+        for range in ranges.sorted(by: { ($0.location, $0.length) < ($1.location, $1.length) }) {
+            guard range.length > 0 else {
+                parted.append(range)
+                continue
+            }
+            var start = range.location
+            let breaks = blankLine.matches(in: text as String, range: range).map(\.range)
+            for gap in breaks + [NSRange(location: NSMaxRange(range), length: 0)] {
+                let piece = NSRange(location: start, length: gap.location - start)
+                if piece.length > 0, text.substring(with: piece).contains(where: { !$0.isWhitespace }) {
+                    parted.append(piece)
+                }
+                start = NSMaxRange(gap)
+            }
+        }
+        var joined: [NSRange] = []
+        for range in parted {
+            if let last = joined.last {
+                let gapStart = NSMaxRange(last)
+                let gap = range.location > gapStart
+                    ? text.substring(with: NSRange(location: gapStart, length: range.location - gapStart)) : ""
+                let end = max(gapStart, NSMaxRange(range))
+                let span = NSRange(location: last.location, length: end - last.location)
+                if !gap.contains(where: { $0.isLetter || $0.isNumber }),
+                   blankLine.firstMatch(in: text as String, range: span) == nil {
+                    joined[joined.count - 1] = span
+                    continue
+                }
+            }
+            joined.append(range)
+        }
+        return joined
+    }
+
+    @Test func passagesAreWhatSearchingEachJoinWholeFinds() {
+        var seed: UInt64 = 29
+        func random(_ n: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 33) % UInt64(n))
+        }
+        let pieces = ["a", "b", ",", ".", " ", "\t", "\n", "\r", "\r\n", "\n\n", " \n", "\n \n"]
+        var joins = 0
+        for _ in 0..<20000 {
+            let text = (0..<(1 + random(30))).map { _ in pieces[random(pieces.count)] }.joined() as NSString
+            let ranges = (0..<random(8)).map { _ -> NSRange in
+                let location = random(text.length + 1)
+                let length = random(4) == 0 ? 0 : random(text.length - location + 1)
+                return NSRange(location: location, length: length)
+            }
+            let expected = Self.searchingWhole(ranges, in: text)
+            #expect(LampWritingReview.passages(ranges, in: text) == expected, "\((text as String).debugDescription) \(ranges)")
+            if expected.count < ranges.filter({ $0.length == 0 || text.substring(with: $0).contains(where: { !$0.isWhitespace }) }).count { joins += 1 }
+        }
+        // The cases join, not only part.
+        #expect(joins > 2000, "joins: \(joins)")
+    }
+
+    /// A long list whose every item was changed is one passage, found in
+    /// time that grows with the list: searched whole at every join it grew
+    /// with the square of the list (2,500 items, 1.1 s).
+    @Test func aLongChangedListIsFoundInTimeThatGrowsWithIt() {
+        func list(_ items: Int) -> (NSString, [NSRange]) {
+            var text = ""
+            var ranges: [NSRange] = []
+            for item in 0..<items {
+                text += "- "
+                let word = "changed\(item)"
+                ranges.append(NSRange(location: (text as NSString).length, length: (word as NSString).length))
+                text += word + "\n"
+            }
+            return (text as NSString, ranges)
+        }
+        func seconds(_ items: Int) -> Double {
+            let (text, ranges) = list(items)
+            var best = Double.infinity
+            for _ in 0..<3 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                let found = LampWritingReview.passages(ranges, in: text)
+                best = min(best, Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
+                #expect(found.count == 1)
+            }
+            return best
+        }
+        let small = seconds(1000)
+        let large = seconds(8000)
+        // Eight times the list: about eight times the work, where the
+        // square would be sixty-four.
+        #expect(large / small < 20, "1,000 items \(small) s, 8,000 items \(large) s")
+    }
+}
