@@ -30,10 +30,15 @@ import Foundation
 /// survive it and be drawn as one span across words neither of them
 /// covers. Writing each start's place after its end is what stops that, and
 /// turning a half-kept passage into a point is what answers it when a parse
-/// loses an edge. A record is never at risk either way — the review file is
-/// not written from this — but a false span is worse than a missing
-/// highlight, and settling cannot prevent it. Found by Codex, reviewing
-/// this lift.
+/// loses an edge.
+///
+/// Nothing here rewrites the review record: these are strings and edits,
+/// and the caller keeps its own ranges. But a false span is worse than a
+/// missing highlight, and not only on the page — a reader taps a drawn
+/// passage to review or restore it, so a span drawn across the wrong words
+/// offers the wrong change to act on, and acting on it is persistent.
+/// Settling cannot prevent that; identity is what does. Found by Codex,
+/// reviewing this lift.
 ///
 /// Written by the iOS session, over five rounds of review, and lifted here
 /// when the Mac needed the same work, so there is one copy rather than two.
@@ -272,10 +277,12 @@ public enum LampWritingReviewPlacement {
     /// Every piece has to be looked at together: a passage's start may be in
     /// one and its end in another.
     ///
-    /// Hand in each piece's marked text as one string, a table's cells
-    /// joined rather than passed separately. A marker and the place written
-    /// after it are read as a run, so cells handed in one at a time can cut
-    /// a run in half and lose the place it names.
+    /// Hand in each piece's marked text as one string: a table's cells
+    /// concatenated in the order they are drawn, with nothing between them,
+    /// rather than passed one at a time. A marker and the place written
+    /// after it are read as a run, so a cell boundary — or a space or
+    /// newline joining the cells — can cut a run in half and lose the place
+    /// it names.
     public static func unpaired(across texts: [String]) -> Unpaired {
         var starts = Set<Int>()
         var ends = Set<Int>()

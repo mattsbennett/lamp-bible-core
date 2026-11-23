@@ -9,10 +9,12 @@ import Testing
 /// cases here were found by the iOS session over five rounds of review, on
 /// the phone's Files reader, and lifted here when the Mac needed them too.
 ///
-/// None of this has to be complete: a surface reads its file twice, with
-/// markers and without, and keeps a piece's markers only where it reads the
-/// same either way. What this misses costs a passage its highlight, never
-/// its record.
+/// The settling does not have to be complete: a surface reads its file
+/// twice, with markers and without, and keeps a piece's markers only where
+/// it reads the same either way, so a marker the settling fails to move
+/// costs that piece its highlights. The identity tests below are a
+/// different matter — a span drawn across the wrong words offers the wrong
+/// change to whoever taps it.
 struct LampWritingReviewPlacementTests {
     private let start = String(LampWritingReview.markStart)
     private let end = String(LampWritingReview.markEnd)
@@ -143,9 +145,11 @@ struct LampWritingReviewPlacementTests {
         // marker where it was and copying another into the code would pass
         // a test that only asked what the lines read as.
         #expect(lines[0] == "```", "the fence line kept a marker: \(lines[0].debugDescription)")
-        // Still a start, not a point: the passage carries on past the fence
-        // into the code, and only a marker whose end is moved with it has
-        // both edges in hand to become a point.
+        // Still a start, not a point. `asPoints` sees only what was taken
+        // off the opening line, and without the matching end there it must
+        // keep the start: the passage may carry on into the code or past
+        // it. What settling owes is this much; a start left with no end
+        // anywhere becomes a point later, in the pairing.
         #expect(lines[1] == "\(start)\(place)let x = 1", "\(lines[1].debugDescription)")
         #expect(lines[2] == "```")
     }
