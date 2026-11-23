@@ -6,9 +6,10 @@ import LampCore
 
 /// Reads a picture as a slide will show it behind its words.
 ///
-/// The canvas fills the slide with the picture and centres it, cropping what
-/// overflows, so the sampler crops the same way before it looks: a portrait
-/// photograph behind a widescreen slide loses its top and bottom in both.
+/// The canvas fills the slide with the picture, cropping what overflows
+/// around the picture's focus, so the sampler crops the same way before it
+/// looks (`LampPresentationFocus.shown`), and reads the picture in the tint
+/// the slide draws it in.
 enum LampPresentationBackdropSampler {
     /// Cells across a widescreen slide, about ten design units each — a little
     /// more than one stroke of a 48-unit heading.
@@ -21,7 +22,8 @@ enum LampPresentationBackdropSampler {
 
     static func backdrop(
         from image: CGImage,
-        aspectRatio: LampPresentationAspectRatio
+        aspectRatio: LampPresentationAspectRatio,
+        focus: LampPresentationFocus? = nil
     ) -> LampPresentationBackdrop? {
         let columns = aspectRatio == .widescreen
             ? widescreenColumns
@@ -29,27 +31,12 @@ enum LampPresentationBackdropSampler {
         let width = columns * samplesPerCell
         let height = rows * samplesPerCell
 
-        // The part of the picture the slide shows.
-        let slideRatio = aspectRatio.ratio
-        let imageRatio = Double(image.width) / Double(image.height)
-        let shown: CGRect
-        if imageRatio > slideRatio {
-            let shownWidth = Double(image.height) * slideRatio
-            shown = CGRect(
-                x: (Double(image.width) - shownWidth) / 2,
-                y: 0,
-                width: shownWidth,
-                height: Double(image.height)
-            )
-        } else {
-            let shownHeight = Double(image.width) / slideRatio
-            shown = CGRect(
-                x: 0,
-                y: (Double(image.height) - shownHeight) / 2,
-                width: Double(image.width),
-                height: shownHeight
-            )
-        }
+        // The part of the picture the slide shows, measured from its top.
+        let shown = LampPresentationFocus.shown(
+            in: CGSize(width: image.width, height: image.height),
+            frameRatio: aspectRatio.ratio,
+            focus: focus
+        )
 
         let bytesPerRow = width * 4
         var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
@@ -141,7 +128,10 @@ enum LampPresentationBackdropSampler {
     /// be drawn.
     static func backdrop(
         at url: URL,
-        aspectRatio: LampPresentationAspectRatio
+        aspectRatio: LampPresentationAspectRatio,
+        focus: LampPresentationFocus? = nil,
+        tint: LampPresentationImageTint? = nil,
+        theme: LampPresentationTheme? = nil
     ) -> LampPresentationBackdrop? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(
@@ -154,6 +144,7 @@ enum LampPresentationBackdropSampler {
                   ] as CFDictionary
               )
         else { return nil }
-        return backdrop(from: image, aspectRatio: aspectRatio)
+        let shown = theme.flatMap { LampPresentationTint.tinted(image, tint, theme: $0) } ?? image
+        return backdrop(from: shown, aspectRatio: aspectRatio, focus: focus)
     }
 }

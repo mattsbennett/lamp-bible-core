@@ -404,6 +404,12 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     public var emphasis: [LampPresentationEmphasis]?
     /// What a chart block charts, and the values Lamp worked out for it.
     public var chart: LampPresentationChart?
+    /// Where a picture's subject is, so a crop keeps it in view; see
+    /// `LampPresentationFocus`. Absent means the centre.
+    public var focus: LampPresentationFocus?
+    /// A picture drawn in the theme's colours; see
+    /// `LampPresentationImageTint`. Absent means as it is.
+    public var tint: LampPresentationImageTint?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -417,7 +423,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         typography: LampPresentationTypography? = nil,
         placement: LampPresentationImagePlacement? = nil,
         emphasis: [LampPresentationEmphasis]? = nil,
-        chart: LampPresentationChart? = nil
+        chart: LampPresentationChart? = nil,
+        focus: LampPresentationFocus? = nil,
+        tint: LampPresentationImageTint? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -431,6 +439,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.placement = placement
         self.emphasis = emphasis
         self.chart = chart
+        self.focus = focus
+        self.tint = tint
     }
 
     /// An image that fills the slide behind everything else.
@@ -682,6 +692,23 @@ public enum LampPresentationDeckValidator {
                 let blockPath = "\(slidePath).blocks[\(blockIndex)]"
                 if block.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     issue(.error, "\(blockPath).id", "A content block ID is required.")
+                }
+                if let focus = block.focus {
+                    if !focus.isValid {
+                        issue(.error, "\(blockPath).focus", "A focus's x and y each run from 0 to 1.")
+                    } else if block.kind != .image {
+                        issue(.warning, "\(blockPath).focus", "Only a picture has a focus.")
+                    } else if !block.isBackground {
+                        issue(
+                            .warning,
+                            "\(blockPath).focus",
+                            "A focus moves a picture behind the slide, which is cropped to fill it. "
+                                + "A picture beside the words is shown whole."
+                        )
+                    }
+                }
+                if let tint = block.tint, tint != .none, block.kind != .image {
+                    issue(.warning, "\(blockPath).tint", "Only a picture can be tinted.")
                 }
                 if block.kind == .image {
                     if block.assetPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {

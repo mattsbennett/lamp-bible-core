@@ -46,6 +46,38 @@ enum LampPresentationAssetImageCache {
         return image
     }
 
+    /// The picture at `url` in `tint` for `theme`, made once and kept.
+    static func image(
+        at url: URL,
+        tint: LampPresentationImageTint?,
+        theme: LampPresentationTheme
+    ) -> LampPlatformImage? {
+        guard let base = image(at: url) else { return nil }
+        guard let tint, tint != .none else { return base }
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate?
+            .timeIntervalSince1970 ?? 0
+        let key = "\(url.path)@\(modified)#\(LampPresentationTint.key(tint, theme: theme))" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        #if canImport(UIKit)
+        guard let cgImage = base.cgImage,
+              let tinted = LampPresentationTint.tinted(cgImage, tint, theme: theme) else { return base }
+        // The orientation the file asked for, which a CGImage does not carry.
+        let image = UIImage(cgImage: tinted, scale: base.scale, orientation: base.imageOrientation)
+        #elseif canImport(AppKit)
+        guard let cgImage = base.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let tinted = LampPresentationTint.tinted(cgImage, tint, theme: theme) else { return base }
+        let image = NSImage(cgImage: tinted, size: base.size)
+        #endif
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    /// The picture's shape, width over height, as drawn.
+    static func size(at url: URL) -> CGSize? {
+        image(at: url)?.size
+    }
+
     private final class BackdropBox {
         let backdrop: LampPresentationBackdrop
         init(_ backdrop: LampPresentationBackdrop) { self.backdrop = backdrop }
@@ -69,11 +101,30 @@ enum LampPresentationAssetImageCache {
     }()
 
     /// The file at `url` as it stands, so a replaced file is read again.
-    private static func backdropKey(_ url: URL, _ aspectRatio: LampPresentationAspectRatio) -> String {
+    /// The file at `url` as it stands, and as the slide shows it: its crop
+    /// and its tint, so a picture moved or recoloured is read again.
+    private static func backdropKey(
+        _ url: URL,
+        _ aspectRatio: LampPresentationAspectRatio,
+        _ look: BackdropLook
+    ) -> String {
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate?
             .timeIntervalSince1970 ?? 0
-        return "\(url.path)@\(modified)#\(aspectRatio.rawValue)"
+        // Only a focus the crop would use: an out-of-range one is drawn as
+        // the centre, and the preview reads decks it has not validated, so a
+        // huge value must not reach the conversion to an integer.
+        let focus = look.focus.flatMap { $0.isValid ? $0 : nil }
+            .map { "\(Int(($0.x * 1_000).rounded())),\(Int(($0.y * 1_000).rounded()))" } ?? "-"
+        return "\(url.path)@\(modified)#\(aspectRatio.rawValue)#\(focus)#\(LampPresentationTint.key(look.tint, theme: look.theme))"
+    }
+
+    /// How a picture behind a slide is shown: where its crop sits, and how it
+    /// is tinted in which theme's colours.
+    struct BackdropLook {
+        var focus: LampPresentationFocus?
+        var tint: LampPresentationImageTint?
+        var theme: LampPresentationTheme
     }
 
     /// How words in `regions` are set over the picture at `url`, remembered.
@@ -87,7 +138,8 @@ enum LampPresentationAssetImageCache {
         for regions: [CGRect],
         over url: URL,
         aspectRatio: LampPresentationAspectRatio,
-        theme: LampPresentationTheme
+        theme: LampPresentationTheme,
+        look: BackdropLook
     ) -> LampPresentationBackdrop.Treatment? {
         let places = regions.map { region -> String in
             guard !region.isNull, !region.isEmpty, !region.isInfinite else { return "-" }
@@ -96,7 +148,7 @@ enum LampPresentationAssetImageCache {
                 .joined(separator: ",")
         }
         let key = [
-            backdropKey(url, aspectRatio),
+            backdropKey(url, aspectRatio, look),
             theme.foregroundColor,
             theme.backgroundColor,
             theme.accentColor,
@@ -106,7 +158,7 @@ enum LampPresentationAssetImageCache {
             places.joined(separator: ";"),
         ].joined(separator: "|") as NSString
         if let cached = treatments.object(forKey: key) { return cached.treatment }
-        guard let backdrop = backdrop(at: url, aspectRatio: aspectRatio) else { return nil }
+        guard let backdrop = backdrop(at: url, aspectRatio: aspectRatio, look: look) else { return nil }
         let treatment = backdrop.treatment(for: regions, theme: theme)
         treatments.setObject(TreatmentBox(treatment), forKey: key)
         return treatment
@@ -116,20 +168,29 @@ enum LampPresentationAssetImageCache {
     /// the same key as the image so a replaced file is read again.
     static func backdrop(
         at url: URL,
-        aspectRatio: LampPresentationAspectRatio
+        aspectRatio: LampPresentationAspectRatio,
+        look: BackdropLook
     ) -> LampPresentationBackdrop? {
-        let key = backdropKey(url, aspectRatio) as NSString
+        let key = backdropKey(url, aspectRatio, look) as NSString
         if let cached = backdrops.object(forKey: key) { return cached.backdrop }
         guard let backdrop = LampPresentationBackdropSampler.backdrop(
             at: url,
-            aspectRatio: aspectRatio
+            aspectRatio: aspectRatio,
+            focus: look.focus,
+            tint: look.tint,
+            theme: look.theme
         ) else { return nil }
         backdrops.setObject(BackdropBox(backdrop), forKey: key)
         return backdrop
     }
 
-    static func swiftUIImage(at url: URL) -> Image? {
-        guard let platformImage = image(at: url) else { return nil }
+    static func swiftUIImage(
+        at url: URL,
+        tint: LampPresentationImageTint? = nil,
+        theme: LampPresentationTheme? = nil
+    ) -> Image? {
+        let platformImage = theme.map { image(at: url, tint: tint, theme: $0) } ?? image(at: url)
+        guard let platformImage else { return nil }
         #if canImport(UIKit)
         return Image(uiImage: platformImage)
         #elseif canImport(AppKit)

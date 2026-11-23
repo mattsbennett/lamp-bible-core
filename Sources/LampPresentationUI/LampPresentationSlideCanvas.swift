@@ -179,18 +179,14 @@ public struct LampPresentationSlideCanvas: View {
             let pictureURL = plan.background.flatMap(assetURL)
             ZStack {
                 background
-                if let picture = pictureURL.flatMap(LampPresentationAssetImageCache.swiftUIImage(at:)) {
-                    picture
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
+                if let pictureURL, let picture = backdropPicture(at: pictureURL) {
+                    focusedFill(picture, at: pictureURL, size: geometry.size)
                 }
                 words(
                     unit: unit,
                     over: pictureURL.flatMap { url in
                         LampPresentationAssetImageCache
-                            .backdrop(at: url, aspectRatio: style.aspectRatio)
+                            .backdrop(at: url, aspectRatio: style.aspectRatio, look: backdropLook)
                             .map { _ in url }
                     }
                 )
@@ -243,7 +239,8 @@ public struct LampPresentationSlideCanvas: View {
                             for: frames.map { Self.fraction($0, of: proxy.size) },
                             over: backdrop,
                             aspectRatio: style.aspectRatio,
-                            theme: style.theme
+                            theme: style.theme,
+                            look: backdropLook
                         ) {
                             let _ = reportsBackdrop?(treatment)
                             ZStack(alignment: .topLeading) {
@@ -253,7 +250,7 @@ public struct LampPresentationSlideCanvas: View {
                                     shown: bounds.map(\.isShown),
                                     in: proxy.size,
                                     unit: unit,
-                                    softening: LampPresentationAssetImageCache.swiftUIImage(at: backdrop)
+                                    softening: backdropPicture(at: backdrop).map { ($0, backdrop) }
                                 )
                                 inked(treatment).page(unit: unit)
                             }
@@ -294,7 +291,7 @@ public struct LampPresentationSlideCanvas: View {
         shown: [Bool],
         in size: CGSize,
         unit: CGFloat,
-        softening picture: Image?
+        softening picture: (image: Image, url: URL)?
     ) -> some View {
         let color = Color(lampDeckHex: treatment.scrim) ?? background
         let allStrengths = treatment.scrimOpacities.count == allFrames.count
@@ -324,11 +321,9 @@ public struct LampPresentationSlideCanvas: View {
         )
         return ZStack(alignment: .topLeading) {
             if let picture, reach.contains(where: { $0.strength > 0 }) {
-                picture
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size.width, height: size.height)
-                    .clipped()
+                // Placed exactly as the picture beneath it is, or the blur
+                // would show a second picture slid against the first.
+                focusedFill(picture.image, at: picture.url, size: size)
                     .blur(radius: LampPresentationBackdrop.softening * unit, opaque: true)
                     .mask {
                         LinearGradient(
@@ -962,13 +957,42 @@ public struct LampPresentationSlideCanvas: View {
 
     private var imageBlock: LampPresentationBlock? { plan.image }
 
+    /// How the picture behind the slide is shown: its focus and its tint.
+    private var backdropLook: LampPresentationAssetImageCache.BackdropLook {
+        .init(focus: plan.background?.focus, tint: plan.background?.tint, theme: style.theme)
+    }
+
+    /// The picture behind the slide, in its tint.
+    private func backdropPicture(at url: URL) -> Image? {
+        LampPresentationAssetImageCache.swiftUIImage(at: url, tint: plan.background?.tint, theme: style.theme)
+    }
+
+    /// `image` filling `size`, cropped around the picture's focus as the
+    /// sampler crops it (`LampPresentationFocus.shown`), so the words are
+    /// coloured for the part of the picture they are set over.
+    private func focusedFill(_ image: Image, at url: URL, size: CGSize) -> some View {
+        let picture = LampPresentationAssetImageCache.size(at: url) ?? size
+        let shown = LampPresentationFocus.shown(
+            in: picture,
+            frameRatio: size.height > 0 ? Double(size.width / size.height) : 1,
+            focus: plan.background?.focus
+        )
+        let scale = shown.width > 0 ? size.width / shown.width : 1
+        return image
+            .resizable()
+            .frame(width: picture.width * scale, height: picture.height * scale)
+            .offset(x: -shown.minX * scale, y: -shown.minY * scale)
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .clipped()
+    }
+
     /// The picture itself when it can be read, and an honest placeholder
     /// naming what is missing when it cannot; or the chart in its place.
     @ViewBuilder
     private func imageArea(unit: CGFloat) -> some View {
-        let resolved = imageBlock.flatMap(assetURL).flatMap(
-            LampPresentationAssetImageCache.swiftUIImage(at:)
-        )
+        let resolved = imageBlock.flatMap(assetURL).flatMap { url in
+            LampPresentationAssetImageCache.swiftUIImage(at: url, tint: imageBlock?.tint, theme: style.theme)
+        }
 
         if let chart = imageBlock, chart.kind == .chart {
             LampPresentationChartView(block: chart, unit: unit, foreground: foreground, accent: accent)
