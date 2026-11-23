@@ -192,7 +192,8 @@ struct LampWritingReviewPassageCostTests {
             seed = seed &* 6364136223846793005 &+ 1442695040888963407
             return Int((seed >> 33) % UInt64(n))
         }
-        let pieces = ["a", "b", ",", ".", " ", "\t", "\n", "\r", "\r\n", "\n\n", " \n", "\n \n"]
+        // A letter outside the BMP too, two UTF-16 units a range can part.
+        let pieces = ["a", "b", ",", ".", " ", "\t", "\n", "\r", "\r\n", "\n\n", " \n", "\n \n", "𝓐"]
         var joins = 0
         for _ in 0..<20000 {
             let text = (0..<(1 + random(30))).map { _ in pieces[random(pieces.count)] }.joined() as NSString
@@ -224,19 +225,21 @@ struct LampWritingReviewPassageCostTests {
             }
             return (text as NSString, ranges)
         }
-        func seconds(_ items: Int) -> Double {
-            let (text, ranges) = list(items)
-            var best = Double.infinity
-            for _ in 0..<3 {
-                let start = DispatchTime.now().uptimeNanoseconds
-                let found = LampWritingReview.passages(ranges, in: text)
-                best = min(best, Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
-                #expect(found.count == 1)
-            }
-            return best
+        func seconds(_ list: (NSString, [NSRange])) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let found = LampWritingReview.passages(list.1, in: list.0)
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+            #expect(found.count == 1)
+            return elapsed
         }
-        let small = seconds(1000)
-        let large = seconds(8000)
+        // Taken in turn, so load that comes and goes falls on both sizes,
+        // and the fastest of each kept.
+        let (shorter, longer) = (list(1000), list(8000))
+        var (small, large) = (Double.infinity, Double.infinity)
+        for _ in 0..<5 {
+            small = min(small, seconds(shorter))
+            large = min(large, seconds(longer))
+        }
         // Eight times the list: about eight times the work, where the
         // square would be sixty-four.
         #expect(large / small < 20, "1,000 items \(small) s, 8,000 items \(large) s")
