@@ -169,6 +169,10 @@ public struct LampPresentationRemoteState: Codable, Equatable, Sendable {
     public var isBlackout: Bool
     public var canGoPrevious: Bool
     public var canGoNext: Bool
+    /// How far the current slide's reveal has gone, so the remote shows what
+    /// the room sees (`LampPresentationSlideCanvas.revealed(atStep:)`). Nil
+    /// from a presenter that does not reveal, which shows the whole slide.
+    public var currentRevealStep: Int?
 
     public init(
         deckID: String,
@@ -183,7 +187,8 @@ public struct LampPresentationRemoteState: Codable, Equatable, Sendable {
         elapsedSeconds: Int,
         isBlackout: Bool,
         canGoPrevious: Bool,
-        canGoNext: Bool
+        canGoNext: Bool,
+        currentRevealStep: Int? = nil
     ) {
         self.deckID = deckID
         self.deckTitle = deckTitle
@@ -198,6 +203,7 @@ public struct LampPresentationRemoteState: Codable, Equatable, Sendable {
         self.isBlackout = isBlackout
         self.canGoPrevious = canGoPrevious
         self.canGoNext = canGoNext
+        self.currentRevealStep = currentRevealStep
     }
 }
 

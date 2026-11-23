@@ -16,6 +16,9 @@ public struct LampPresentationDeck: Codable, Equatable, Identifiable, Sendable {
     public var slides: [LampPresentationSlide]
     /// Where each slide's speaker notes come from. Absent means `authored`.
     public var speakerNotesSource: LampPresentationSpeakerNotesSource?
+    /// How one slide gives way to the next while presenting. Absent means a
+    /// dissolve.
+    public var transition: LampPresentationTransition?
 
     public init(
         schemaVersion: Int = LampPresentationDeck.currentSchemaVersion,
@@ -25,7 +28,8 @@ public struct LampPresentationDeck: Codable, Equatable, Identifiable, Sendable {
         aspectRatio: LampPresentationAspectRatio = .widescreen,
         theme: LampPresentationTheme = .lampDark,
         slides: [LampPresentationSlide],
-        speakerNotesSource: LampPresentationSpeakerNotesSource? = nil
+        speakerNotesSource: LampPresentationSpeakerNotesSource? = nil,
+        transition: LampPresentationTransition? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -35,6 +39,7 @@ public struct LampPresentationDeck: Codable, Equatable, Identifiable, Sendable {
         self.theme = theme
         self.slides = slides
         self.speakerNotesSource = speakerNotesSource
+        self.transition = transition
     }
 
     /// Whether this deck's notes are derived from the writing it is linked to.
@@ -226,6 +231,13 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
     /// the passage in progress stays with the previous anchored slide — which
     /// is how a title slide carries no notes.
     public var notesAnchor: String?
+    /// Whether the slide's content arrives a part at a time while it is
+    /// presented. Absent means all at once. See `revealPlan`.
+    public var reveal: LampPresentationReveal?
+    /// Whether the slide's emphasised words light up on a step of their own,
+    /// after the rest of the slide has arrived. Absent means they are lit
+    /// from the start.
+    public var revealsEmphasis: Bool?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -233,12 +245,16 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
         blocks: [LampPresentationBlock] = [],
         speakerNotes: String = "",
         isHidden: Bool = false,
-        notesAnchor: String? = nil
+        notesAnchor: String? = nil,
+        reveal: LampPresentationReveal? = nil,
+        revealsEmphasis: Bool? = nil
     ) {
         self.id = id
         self.layout = layout
         self.blocks = blocks
         self.notesAnchor = notesAnchor
+        self.reveal = reveal
+        self.revealsEmphasis = revealsEmphasis
         self.speakerNotes = speakerNotes
         self.isHidden = isHidden
     }
@@ -597,6 +613,28 @@ public enum LampPresentationDeckValidator {
             // slide passes every other check and simply becomes unreadable.
             if let crowding = crowdingMessage(for: plan, layout: slide.layout) {
                 issue(.warning, "\(slidePath).blocks", crowding)
+            }
+
+            // A reveal with nothing to bring in a part at a time leaves the
+            // slide arriving whole; said, so no one rehearses clicks that
+            // will not come.
+            let reveal = slide.revealPlan
+            if slide.reveal == .stepwise, reveal.units.isEmpty {
+                issue(
+                    .warning,
+                    "\(slidePath).reveal",
+                    slide.layout == .image
+                        ? "An image slide arrives whole. Reveal brings in passages, list items and columns."
+                        : "This slide has only one part to bring in, so it arrives whole. Reveal brings in "
+                            + "each passage, list item or column in turn."
+                )
+            }
+            if slide.revealsEmphasis == true, !reveal.emphasisStep {
+                issue(
+                    .warning,
+                    "\(slidePath).revealsEmphasis",
+                    "No words on this slide are emphasised, so there is nothing to light up."
+                )
             }
 
             let blockIDs = slide.blocks.map(\.id)

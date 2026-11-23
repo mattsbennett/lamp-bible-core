@@ -53,6 +53,28 @@ public struct LampPresentationSlideCanvas: View {
     /// theme's own.
     private var ink: Ink?
 
+    /// The presenter's step through a slide that reveals its content, and
+    /// what that slide reveals. Nil everywhere else, which draws the whole
+    /// slide. See `revealed(atStep:)`.
+    private var revealStep: Int?
+    private var revealPlan = LampPresentationRevealPlan.together
+
+    /// A passage's rule drawn beside each item of a list that arrives an
+    /// item at a time, so it never runs beside items not yet shown.
+    private var listRule: ListRule?
+
+    private struct ListRule {
+        var color: Color
+        var width: CGFloat
+        var inset: CGFloat
+        var radius: CGFloat
+        /// The gap to the next part of the passage, which the last item's
+        /// length runs on into; zero when the list ends the passage.
+        var gapAfter: CGFloat
+        var opensPassage: Bool
+        var closesPassage: Bool
+    }
+
     private struct Ink {
         var text: Color
         var accent: Color
@@ -94,6 +116,20 @@ public struct LampPresentationSlideCanvas: View {
         compact: Bool = false
     ) {
         self.init(slide: slide, style: .init(deck: deck), compact: compact)
+    }
+
+    /// This slide as the presenter shows it at `step` of its reveal: the
+    /// parts still to come laid out in place and drawn clear, so nothing on
+    /// the slide moves as they arrive. Nil draws the whole slide.
+    public func revealed(atStep step: Int?) -> Self {
+        var copy = self
+        copy.revealStep = step
+        copy.revealPlan = step == nil ? .together : slide.revealPlan
+        return copy
+    }
+
+    private func isShown(_ part: LampPresentationRevealPlan.Part) -> Bool {
+        revealPlan.isShown(part, atStep: revealStep)
     }
 
     private var foreground: Color {
@@ -179,9 +215,12 @@ public struct LampPresentationSlideCanvas: View {
         if let backdrop {
             page(unit: unit)
                 .hidden()
-                .overlayPreferenceValue(LampSlideTextBounds.self) { anchors in
+                .overlayPreferenceValue(LampSlideTextBounds.self) { bounds in
                     GeometryReader { proxy in
-                        let frames = anchors.map { proxy[$0] }
+                        // Every part's place, shown or still to come, so the
+                        // colours chosen hold for the whole reveal; but the
+                        // picture is covered only behind words already there.
+                        let frames = bounds.map { proxy[$0.anchor] }
                         if let treatment = LampPresentationAssetImageCache.treatment(
                             for: frames.map { Self.fraction($0, of: proxy.size) },
                             over: backdrop,
@@ -193,6 +232,7 @@ public struct LampPresentationSlideCanvas: View {
                                 scrim(
                                     treatment,
                                     behind: frames,
+                                    shown: bounds.map(\.isShown),
                                     in: proxy.size,
                                     unit: unit,
                                     softening: LampPresentationAssetImageCache.swiftUIImage(at: backdrop)
@@ -232,15 +272,19 @@ public struct LampPresentationSlideCanvas: View {
     /// contrast.
     private func scrim(
         _ treatment: LampPresentationBackdrop.Treatment,
-        behind frames: [CGRect],
+        behind allFrames: [CGRect],
+        shown: [Bool],
         in size: CGSize,
         unit: CGFloat,
         softening picture: Image?
     ) -> some View {
         let color = Color(lampDeckHex: treatment.scrim) ?? background
-        let strengths = treatment.scrimOpacities.count == frames.count
+        let allStrengths = treatment.scrimOpacities.count == allFrames.count
             ? treatment.scrimOpacities
-            : Array(repeating: treatment.scrimOpacity, count: frames.count)
+            : Array(repeating: treatment.scrimOpacity, count: allFrames.count)
+        let kept = allFrames.indices.filter { shown.indices.contains($0) ? shown[$0] : true }
+        let frames = kept.map { allFrames[$0] }
+        let strengths = kept.map { allStrengths[$0] }
         let joined = Self.bands(
             joining: frames,
             strengths: strengths,
@@ -402,6 +446,14 @@ public struct LampPresentationSlideCanvas: View {
     /// VoiceOver listener follows the same thread as the room.
     private var accessibilityDescription: String {
         let spoken = slide.blocks.compactMap { block -> String? in
+            // What the room can see so far, and no more.
+            guard isShown(.block(block.id)) else { return nil }
+            if revealPlan.revealsItems(of: block.id) {
+                let items = block.listItemRuns.enumerated()
+                    .filter { isShown(.listItem(block: block.id, index: $0.offset)) }
+                    .map { $0.element.map(\.text).joined() }
+                return items.isEmpty ? nil : items.joined(separator: ". ")
+            }
             if block.kind == .chart {
                 let heading = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let described = block.chart?.spokenDescription ?? "Chart"
@@ -637,6 +689,9 @@ public struct LampPresentationSlideCanvas: View {
                     column(first, size: size, unit: unit)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                     Rectangle().fill(accent.opacity(0.45)).frame(width: 2 * unit)
+                        // Arrives with the second column: drawn early, it ran
+                        // the length of a column not yet shown.
+                        .opacity(second.blocks.first.map { isShown(.block($0.id)) } ?? true ? 1 : 0)
                     column(second, size: size, unit: unit)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
@@ -702,6 +757,7 @@ public struct LampPresentationSlideCanvas: View {
                         RoundedRectangle(cornerRadius: 2 * unit)
                             .fill(accent.opacity(0.8))
                             .frame(width: 4 * unit)
+                            .opacity(group.blocks.first.map { isShown(.block($0.id)) } ?? true ? 1 : 0)
                     }
                 }
             }
@@ -783,26 +839,74 @@ public struct LampPresentationSlideCanvas: View {
         size: CGFloat,
         unit: CGFloat
     ) -> some View {
-        VStack(alignment: .leading, spacing: 30 * unit * min(size / 42, 1)) {
-            ForEach(group.quotations) { quotation in
-                slideBlockText(quotation, size: size * unit, weight: .regular, stepsDown: false)
-            }
-            if let citation = group.citation {
-                slideBlockText(
-                    citation,
-                    size: Self.citationSize(beside: size) * unit,
-                    weight: .medium,
-                    color: accent,
+        let spacing = 30 * unit * min(size / 42, 1)
+        // While a passage arrives a part at a time, the rule is drawn a part
+        // at a time with it, each length running on into the gap below so
+        // the whole reads as one rule once everything is there. Drawn whole
+        // from the start, it ran down through the room kept for parts not
+        // yet shown.
+        let blocks = group.blocks
+        let segmented = revealStep != nil
+            && (blocks.count > 1 || blocks.contains { revealPlan.revealsItems(of: $0.id) })
+        return VStack(alignment: .leading, spacing: spacing) {
+            ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
+                let isCitation = block.id == group.citation?.id
+                let itemised = revealPlan.revealsItems(of: block.id)
+                ruling(
+                    itemised && segmented
+                        ? ListRule(
+                            color: accent,
+                            width: 6 * unit,
+                            inset: 34 * unit,
+                            radius: 3 * unit,
+                            gapAfter: index == blocks.count - 1 ? 0 : spacing,
+                            opensPassage: index == 0,
+                            closesPassage: index == blocks.count - 1
+                        )
+                        : nil
+                )
+                .slideBlockText(
+                    block,
+                    size: (isCitation ? Self.citationSize(beside: size) : size) * unit,
+                    weight: isCitation ? .medium : .regular,
+                    color: isCitation ? accent : nil,
                     stepsDown: false
                 )
+                .overlay(alignment: .leading) {
+                    // A list arriving an item at a time draws its own lengths.
+                    if segmented, !itemised {
+                        let last = index == blocks.count - 1
+                        LampRuleSegment(
+                            color: accent,
+                            width: 6 * unit,
+                            radius: 3 * unit,
+                            roundsTop: index == 0,
+                            roundsBottom: last,
+                            runsOn: last ? 0 : spacing,
+                            inset: 34 * unit,
+                            isShown: isShown(.block(block.id))
+                        )
+                    }
+                }
             }
         }
         .padding(.leading, 34 * unit)
         .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3 * unit)
-                .fill(accent)
-                .frame(width: 6 * unit)
+            if !segmented {
+                RoundedRectangle(cornerRadius: 3 * unit)
+                    .fill(accent)
+                    .frame(width: 6 * unit)
+                    // A passage of one part still to come keeps its rule
+                    // back with it.
+                    .opacity(blocks.first.map { isShown(.block($0.id)) } ?? true ? 1 : 0)
+            }
         }
+    }
+
+    private func ruling(_ rule: ListRule?) -> Self {
+        var copy = self
+        copy.listRule = rule
+        return copy
     }
 
     /// Lays `content` beside the slide's picture, or returns it untouched when
@@ -889,7 +993,15 @@ public struct LampPresentationSlideCanvas: View {
             color: color,
             stepsDown: stepsDown
         )
-        .anchorPreference(key: LampSlideTextBounds.self, value: .bounds) { [$0] }
+        .opacity(isShown(.block(block.id)) ? 1 : 0)
+        // A list whose items arrive one at a time says where each item is
+        // instead (`listRows`), so a picture is not covered behind the ones
+        // still to come.
+        // Added to, not set: set, an empty answer here replaced the items'.
+        .transformAnchorPreference(key: LampSlideTextBounds.self, value: .bounds) { bounds, anchor in
+            guard !revealPlan.revealsItems(of: block.id) else { return }
+            bounds.append(LampSlideTextBound(anchor: anchor, isShown: isShown(.block(block.id))))
+        }
     }
 
     @ViewBuilder
@@ -908,6 +1020,7 @@ public struct LampPresentationSlideCanvas: View {
             // The slide has already chosen one step for everything on it.
             listRows(
                 block.listItemRuns,
+                of: block.id,
                 listStyle: listStyle,
                 size: size,
                 weight: weight,
@@ -930,6 +1043,7 @@ public struct LampPresentationSlideCanvas: View {
                 ForEach([1.0, 0.82, 0.68, 0.55, 0.45], id: \.self) { scale in
                     listRows(
                         items,
+                        of: block.id,
                         listStyle: listStyle,
                         size: size * scale,
                         weight: weight,
@@ -960,6 +1074,7 @@ public struct LampPresentationSlideCanvas: View {
     /// the text rather than under the marker.
     private func listRows(
         _ items: [[LampPresentationTextRun]],
+        of blockID: String,
         listStyle: LampPresentationListStyle,
         size: CGFloat,
         weight: Font.Weight,
@@ -983,6 +1098,30 @@ public struct LampPresentationSlideCanvas: View {
                         color: color,
                         scalesToFit: false
                     )
+                }
+                .opacity(isShown(.listItem(block: blockID, index: index)) ? 1 : 0)
+                .overlay(alignment: .leading) {
+                    if let rule = listRule {
+                        let last = index == items.count - 1
+                        LampRuleSegment(
+                            color: rule.color,
+                            width: rule.width,
+                            radius: rule.radius,
+                            roundsTop: index == 0 && rule.opensPassage,
+                            roundsBottom: last && rule.closesPassage,
+                            runsOn: last ? rule.gapAfter : size * 0.22,
+                            inset: rule.inset,
+                            isShown: isShown(.listItem(block: blockID, index: index))
+                        )
+                    }
+                }
+                .anchorPreference(key: LampSlideTextBounds.self, value: .bounds) { anchor in
+                    revealPlan.revealsItems(of: blockID)
+                        ? [LampSlideTextBound(
+                            anchor: anchor,
+                            isShown: isShown(.listItem(block: blockID, index: index))
+                        )]
+                        : []
                 }
             }
         }
@@ -1018,7 +1157,14 @@ public struct LampPresentationSlideCanvas: View {
             var piece = AttributedString(run.text)
             if let mark = run.mark {
                 piece.font = presentationFont(size: size, weight: .bold)
-                piece.foregroundColor = color(for: mark)
+                // Unlit, emphasised words keep their weight and take the plain
+                // text colour, so lighting them changes colour and nothing
+                // moves. The plain colour by name, not the block's: in a
+                // citation, already in the accent, lighting would change
+                // nothing.
+                piece.foregroundColor = revealPlan.isEmphasisLit(atStep: revealStep)
+                    ? color(for: mark)
+                    : foreground
             }
             result.append(piece)
         }
@@ -1049,11 +1195,18 @@ public struct LampPresentationSlideCanvas: View {
 /// Where each block's words landed on the slide, so a picture behind them is
 /// read where it matters and not everywhere.
 struct LampSlideTextBounds: PreferenceKey {
-    static var defaultValue: [Anchor<CGRect>] { [] }
+    static var defaultValue: [LampSlideTextBound] { [] }
 
-    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
+    static func reduce(value: inout [LampSlideTextBound], nextValue: () -> [LampSlideTextBound]) {
         value.append(contentsOf: nextValue())
     }
+}
+
+/// Where one block's words, or one list item's, landed, and whether a reveal
+/// has brought them in yet.
+struct LampSlideTextBound {
+    var anchor: Anchor<CGRect>
+    var isShown: Bool
 }
 
 extension Color {
@@ -1068,5 +1221,34 @@ extension Color {
             green: Double((rgb >> 8) & 0xff) / 255,
             blue: Double(rgb & 0xff) / 255
         )
+    }
+}
+
+/// One length of a passage's rule, beside one part of it, running on into
+/// the gap below so the lengths read as one rule once every part is there.
+struct LampRuleSegment: View {
+    var color: Color
+    var width: CGFloat
+    var radius: CGFloat
+    var roundsTop: Bool
+    var roundsBottom: Bool
+    /// How far past the part the length runs, into the gap to the next.
+    var runsOn: CGFloat
+    /// How far left of the part the rule stands.
+    var inset: CGFloat
+    var isShown: Bool
+
+    var body: some View {
+        UnevenRoundedRectangle(
+            topLeadingRadius: roundsTop ? radius : 0,
+            bottomLeadingRadius: roundsBottom ? radius : 0,
+            bottomTrailingRadius: roundsBottom ? radius : 0,
+            topTrailingRadius: roundsTop ? radius : 0
+        )
+        .fill(color)
+        .frame(width: width)
+        .padding(.bottom, -runsOn)
+        .offset(x: -inset)
+        .opacity(isShown ? 1 : 0)
     }
 }
