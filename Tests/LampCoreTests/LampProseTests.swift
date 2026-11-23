@@ -488,4 +488,283 @@ struct LampProseTests {
     @Test func anatSignOpensNothing() throws {
         #expect(try paragraph("@someone **word**").plain == "@someone word")
     }
+
+    // MARK: One parse
+
+    /// A line shaped like a definition in the middle of a paragraph is part
+    /// of the paragraph, and the real definition is the one that counts.
+    ///
+    /// It was gathered and carried to every piece, and a label keeps its
+    /// first address, so `[verse][ref]` opened verse 17 where the editor
+    /// opens verse 16. Parsed once, cmark decides. Found by Codex, reviewing
+    /// the phone's adoption.
+    @Test func adefinitionShapedLineInAParagraphIsTheParagraphs() throws {
+        let blocks = LampProse.blocks(
+            "See [verse][ref].\n\n[^n]: A note.\n\nA line\n[ref]: lampbible://verse/43003017\n\n"
+                + "[ref]: lampbible://verse/43003016"
+        )
+        let links = blocks.compactMap { block -> String? in
+            guard case .paragraph(let text) = block else { return nil }
+            return text.text.runs.first { $0.link != nil }?.link?.absoluteString
+        }
+        // The line in the paragraph is words, its `[ref]` a link like the
+        // first: both open the definition that is one.
+        #expect(links == ["lampbible://verse/43003016", "lampbible://verse/43003016"], "opened \(links)")
+        let drawn = blocks.compactMap { block -> String? in
+            if case .paragraph(let text) = block { return text.plain } else { return nil }
+        }
+        #expect(drawn == ["See verse.", "A line ref: lampbible://verse/43003017"], "drew \(drawn)")
+    }
+
+    /// A footnote comes back where it was written, between the blocks
+    /// either side of it, and ends the list it was written under.
+    @Test func afootnoteKeepsItsPlace() {
+        let blocks = LampProse.blocks("- one\n[^1]: The note.\n- two\n\nAfter.")
+        let kinds = blocks.map { block -> String in
+            switch block {
+            case .list: return "list"
+            case .footnote: return "footnote"
+            case .paragraph: return "paragraph"
+            default: return "other"
+            }
+        }
+        #expect(kinds == ["list", "footnote", "list", "paragraph"], "read \(kinds)")
+    }
+
+    /// Footnotes written one after another each come back, in order.
+    @Test func footnotesInARunComeBackInOrder() {
+        let labels = LampProse.blocks("Body.[^a][^b]\n\n[^a]: First.\n[^b]: Second.\n\nEnd.")
+            .compactMap { block -> String? in
+                if case .footnote(let label, _) = block { return label } else { return nil }
+            }
+        #expect(labels == ["a", "b"])
+    }
+
+    /// A footnote inside an HTML block the writer left open is not lost: the
+    /// block is cut around it.
+    @Test func afootnoteInsideAnOpenHTMLBlockIsKept() {
+        let blocks = LampProse.blocks("<pre>\n\n[^1]: The note.\n</pre>")
+        #expect(blocks.contains { block in
+            if case .footnote("1", _) = block { return true } else { return false }
+        }, "read \(blocks)")
+        #expect(!blocks.contains { block in
+            if case .html(let raw) = block { return raw.contains("\u{E0F1}") } else { return false }
+        }, "the marker was drawn")
+    }
+
+    /// A footnote's words are its own: the editor reads them line by line,
+    /// with none of the body's definitions, so `[x][r]` in one is words.
+    @Test func afootnoteDoesNotReadTheBodysDefinitions() {
+        let blocks = LampProse.blocks("Body.[^n]\n\n[^n]: See [x][r].\n\n[r]: /url")
+        guard case .footnote(_, let inner)? = blocks.first(where: {
+            if case .footnote = $0 { return true } else { return false }
+        }), case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "no footnote") }
+        #expect(text.plain == "See [x][r].")
+        #expect(!text.text.runs.contains { $0.link != nil })
+    }
+
+    // MARK: Media captions
+
+    /// A picture whose caption holds a bracket is one picture, as the editor
+    /// reads it, not words and a link. Found by Codex, reviewing the phone's
+    /// adoption.
+    @Test func apicturesCaptionMayHoldABracket() {
+        #expect(
+            LampProse.blocks("![Pool [north side](media/pic)")
+                == [.picture(caption: "Pool [north side", path: "media/pic")]
+        )
+        #expect(
+            LampProse.blocks("[Reading [part one](media/abc)")
+                == [.audio(caption: "Reading [part one", path: "media/abc")]
+        )
+    }
+
+    /// A caption is shown as it was typed, marks and all, as the editor's is.
+    @Test func acaptionIsTheWritersCharacters() {
+        #expect(
+            LampProse.blocks("![**Pool** at ~dawn\\](lamp-media://pic)")
+                == [.picture(caption: "**Pool** at ~dawn\\", path: "lamp-media://pic")]
+        )
+    }
+
+    /// Only the editor's own addresses: any other picture is cmark's to read.
+    @Test func anotherPicturesCaptionIsLeftToTheParser() {
+        #expect(
+            LampProse.blocks("![A *view*](https://example.com/pic.jpg)")
+                == [.picture(caption: "A view", path: "https://example.com/pic.jpg")]
+        )
+    }
+
+    // MARK: Nested quotes
+
+    /// A deeper quote opens a block of its own, so the line above it ends a
+    /// paragraph and gets no break, which would be drawn as a backslash.
+    /// Found by Codex, reviewing the phone's adoption.
+    @Test func alineAboveADeeperQuoteIsGivenNoBreak() {
+        guard case .quote(let outer)? = LampProse.blocks("> Outer\n> > Inner").first,
+              case .paragraph(let text)? = outer.first,
+              case .quote(let inner)? = outer.last,
+              case .paragraph(let innerText)? = inner.first
+        else { return #expect(Bool(false), "no nested quote") }
+        #expect(text.plain == "Outer")
+        #expect(innerText.plain == "Inner")
+    }
+
+    /// A shallower line carries the deeper paragraph on, lazily, so the
+    /// break between them is still the editor's.
+    @Test func ashallowerLineCarriesTheDeeperParagraphOn() {
+        guard case .quote(let outer)? = LampProse.blocks("> > one\n> two").first,
+              case .quote(let inner)? = outer.first,
+              case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "no nested quote") }
+        #expect(text.lines.map(\.plain) == ["one", "two"])
+    }
+
+    // MARK: Found reviewing the one parse
+
+    /// An indented link carrying a paragraph on is a link, not a recording:
+    /// the editor reads a recording only from a line's first column.
+    @Test func anindentedLinkKeepsItsEmphasis() throws {
+        let text = try paragraph("Listen to\n  [*this*](media/a)")
+        #expect(text.plain == "Listen to this")
+        #expect(text.text.runs.contains {
+            $0.inlinePresentationIntent?.contains(.emphasized) == true
+                && $0.link?.absoluteString == "media/a"
+        })
+    }
+
+    /// A `>` set four spaces in is the paragraph's own character, so the
+    /// break before its line is still the editor's.
+    @Test func alongIndentedMarkIsNoDeeperQuote() {
+        guard case .quote(let inner)? = LampProse.blocks("> one\n>     > two").first,
+              inner.count == 1, case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "no single paragraph") }
+        #expect(text.lines.map(\.plain) == ["one", "> two"])
+    }
+
+    /// Backticks in indented code open no fence. Read as one, the fence
+    /// that really opens after it was taken for its close, and a note inside
+    /// that fence was taken out of it, leaving its marker drawn as code.
+    @Test func backticksInIndentedCodeOpenNoFence() {
+        #expect(
+            LampProse.blocks("    ```\n\n```\n[^n]: note\nafter")
+                == [.code(language: nil, code: "```"), .code(language: nil, code: "[^n]: note\nafter")]
+        )
+    }
+
+    /// A note holding `</pre>` closes the `<pre>` left open above it, as the
+    /// editor's block of the note's own HTML does, and the body after it is
+    /// prose again.
+    @Test func anoteThatClosesAnOpenBlockClosesIt() {
+        let blocks = LampProse.blocks("<pre>\n[^n]: </pre>\nAfter")
+        guard case .paragraph(let after)? = blocks.last
+        else { return #expect(Bool(false), "read \(blocks)") }
+        #expect(after.plain == "After")
+    }
+
+    /// A fence set in under a list item is a fence, and the quote after the
+    /// list keeps its breaks.
+    @Test func afenceUnderAListItemIsAFence() {
+        let blocks = LampProse.blocks("- item\n\n    ```\n  code\n  ```\n\n> one\n> two")
+        guard case .quote(let inner)? = blocks.last, case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "read \(blocks)") }
+        #expect(text.lines.map(\.plain) == ["one", "two"])
+    }
+
+    /// A tab after a quote's mark runs to its stop, and the mark after it is
+    /// still a mark.
+    @Test func atabBetweenQuoteMarksIsCountedToItsStop() {
+        guard case .quote(let outer)? = LampProse.blocks("> \t> one\n> > two").first,
+              case .quote(let inner)? = outer.first,
+              case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "no nested quote") }
+        #expect(text.lines.map(\.plain) == ["one", "two"])
+    }
+
+    /// A recording is a line that is nothing else, from its first column to
+    /// its last, as the editor's pattern has it. Set in, or with a space
+    /// after it, or quoted, it is a link.
+    @Test func arecordingIsOnlyALineThatIsNothingElse() {
+        for source in ["  [*this*](media/a)", "[this](media/a) ", "> [this](media/a)"] {
+            #expect(!LampProse.blocks(source).contains { block in
+                if case .audio = block { return true }
+                if case .quote(let inner) = block {
+                    return inner.contains { if case .audio = $0 { return true } else { return false } }
+                }
+                return false
+            }, "\(source.debugDescription) was read as a recording")
+        }
+        #expect(LampProse.blocks("[this](media/a)") == [.audio(caption: "this", path: "media/a")])
+    }
+
+    /// A closing tag in a note's code span is the characters, to the editor,
+    /// and closes nothing.
+    @Test func aclosingTagInANotesCodeClosesNothing() {
+        let blocks = LampProse.blocks("<pre>\n[^n]: `</pre>`\nAfter")
+        guard case .html(let raw)? = blocks.last
+        else { return #expect(Bool(false), "read \(blocks)") }
+        #expect(raw.contains("After"))
+    }
+
+    /// A quote set in under a list item counts its marks from where it is
+    /// set in, so the line above a deeper quote is given no break there
+    /// either.
+    @Test func aquoteUnderAListItemCountsItsOwnDepth() {
+        guard case .list(_, _, let items)? = LampProse.blocks("- item\n\n    > Outer\n    > > Inner").first,
+              case .quote(let outer)? = items.first?.blocks.last,
+              case .paragraph(let text)? = outer.first
+        else { return #expect(Bool(false), "no quote under the item") }
+        #expect(text.plain == "Outer")
+    }
+
+    /// A tab that fills one column after a mark is used up by it.
+    @Test func atabFillingOneColumnIsUsedUp() {
+        guard case .quote(let outer)? = LampProse.blocks("  >\t> one\n> > two").first,
+              case .quote(let inner)? = outer.first,
+              case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "no nested quote") }
+        #expect(text.lines.map(\.plain) == ["one", "two"])
+    }
+
+    /// Code set in under a list item is code, and its backticks open no
+    /// fence that would take the quote after it.
+    @Test func codeUnderAListItemOpensNoFence() {
+        let blocks = LampProse.blocks("- An opening fence:\n\n      ```swift\n\n> one\n> two")
+        guard case .quote(let inner)? = blocks.last, case .paragraph(let text)? = inner.first
+        else { return #expect(Bool(false), "read \(blocks)") }
+        #expect(text.lines.map(\.plain) == ["one", "two"])
+    }
+
+    /// Backticks the writer escaped make no code span, so a closing tag
+    /// between them still closes.
+    @Test func escapedBackticksMakeNoCodeSpan() {
+        let blocks = LampProse.blocks("<pre>\n[^n]: \\`</pre>\\`\nAfter")
+        guard case .paragraph(let after)? = blocks.last
+        else { return #expect(Bool(false), "read \(blocks)") }
+        #expect(after.plain == "After")
+    }
+
+    /// A quote under a nested item, or under an item whose marker is
+    /// followed by a tab, is a quote, and keeps the editor's breaks.
+    @Test func aquoteUnderANestedOrTabbedItemKeepsItsBreaks() {
+        func quoteLines(_ blocks: [LampProseBlock]) -> [String]? {
+            for block in blocks {
+                switch block {
+                case .quote(let inner):
+                    if case .paragraph(let text)? = inner.first { return text.lines.map(\.plain) }
+                case .list(_, _, let items):
+                    for item in items { if let found = quoteLines(item.blocks) { return found } }
+                default: continue
+                }
+            }
+            return nil
+        }
+        for source in [
+            "- item\n    - nested\n\n        > one\n        > two",
+            "-\titem\n\n    > one\n    > two",
+        ] {
+            #expect(quoteLines(LampProse.blocks(source)) == ["one", "two"], "\(source.debugDescription)")
+        }
+    }
 }

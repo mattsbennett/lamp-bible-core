@@ -85,27 +85,165 @@ public enum LampProse {
     /// typed, and it is put back wherever text leaves this file.
     private static let tildeStandIn: Character = "\u{E0F0}"
 
+    /// Set at the front of a recording's address while parsing, on a line
+    /// the editor reads as one: from the first column to the last, and
+    /// nothing else on it. A paragraph of one media link is a recording only
+    /// with it, so an indented `[*this*](media/a)` is the link it is to the
+    /// editor. Found by Codex, reviewing the one parse.
+    private static let recordingMark: Character = "\u{E0F2}"
+
     /// The blocks of a piece of prose.
+    ///
+    /// The text is parsed **once**, as the editor parses it. Its footnotes
+    /// are taken out first, because the editor gathers them in a pass of its
+    /// own (readFootnotes) and no Markdown parser here reads them, but each
+    /// leaves a marker where it was, set apart by blank lines, as the editor
+    /// leaves its definitions block (resolveFootnotes). The footnote is put
+    /// back where its marker is read.
+    ///
+    /// Splitting the text at its footnotes instead left each piece its own
+    /// document, so a link written `[x][r]` could not see a definition in
+    /// another piece, and the definitions had to be found by hand and
+    /// carried to every piece. Every guess at where cmark reads one was
+    /// wrong somewhere: in the middle of a paragraph, with words after its
+    /// title, in code, in a comment. Parsed once, cmark resolves its own.
     public static func blocks(
         _ text: String, options: LampProseOptions = .writing
     ) -> [LampProseBlock] {
-        let prepared = markingQuoteLineBreaks(standingInForLoneTildes(text))
-        // Taking the footnotes out leaves each piece its own document, and a
-        // link written `[x][r]` is resolved by a definition that may be in
-        // another piece. So every piece is given all of them.
-        let definitions = referenceDefinitions(of: prepared)
-        return regions(of: prepared)
-            .flatMap { region -> [LampProseBlock] in
-                switch region {
-                case .prose(let source):
-                    return children(of: document(definitions + source), options: options)
-                case .footnote(let label, let source):
-                    return [.footnote(
-                        label: restored(label),
-                        blocks: children(of: document(definitions + source), options: options)
-                    )]
-                }
+        let prepared = markingQuoteLineBreaks(standingInForLoneTildes(literalMediaCaptions(text)))
+        let (body, notes) = footnotesTakenOut(of: prepared)
+        // A footnote's own words are read on their own, as the editor reads
+        // them, line by line with nothing from the body.
+        let footnotes = notes.map { note in
+            LampProseBlock.footnote(
+                label: restored(note.label),
+                blocks: children(of: document(note.source), options: options)
+            )
+        }
+        return placing(footnotes, in: children(of: document(body), options: options))
+    }
+
+    /// The marker a footnote leaves in the body: an HTML comment, which is a
+    /// block of its own wherever it starts a line, and holds a private-use
+    /// scalar so it cannot be one the writer typed.
+    ///
+    /// The editor's block holds the note's own HTML, so a note reading
+    /// `</pre>` closes a `<pre>` the writer left open above it, and the body
+    /// after it is prose again. The marker carries any such closing tag the
+    /// note holds, for the same reason. Found by Codex, reviewing the one
+    /// parse.
+    private static func footnoteMarker(_ index: Int, for source: String) -> String {
+        // Not in a code span, which the editor draws as the characters.
+        let lowered = outsideCodeSpans(source).lowercased()
+        let closing = ["</script>", "</pre>", "</style>", "</textarea>"]
+            .filter { lowered.contains($0) }
+        return "<!--\u{E0F1}\(index)" + closing.map { " " + $0 }.joined() + "-->"
+    }
+
+    /// Code with the markers it took in, and the lines set around them,
+    /// taken back out.
+    private static func withoutMarkers(_ code: String) -> String {
+        var out = ""
+        var rest = Substring(code)
+        while let open = rest.range(of: "<!--\u{E0F1}"),
+              let close = rest[open.upperBound...].range(of: "-->") {
+            var before = rest[..<open.lowerBound]
+            if before.hasSuffix("\n\n") { before = before.dropLast() }
+            else if before == "\n" { before = "" }
+            out += before
+            rest = rest[close.upperBound...]
+            if rest.hasPrefix("\n\n") { rest = rest.dropFirst(2) }
+            else if rest.hasPrefix("\n") { rest = rest.dropFirst() }
+        }
+        out += rest
+        // Taken from the end, the marker leaves the line before it ending.
+        if out.hasSuffix("\n"), !code.hasSuffix("\n") { out.removeLast() }
+        return out
+    }
+
+    /// A note's text without its code spans: a run of backticks to the next
+    /// run of the same length. A backtick the writer escaped opens nothing.
+    private static func outsideCodeSpans(_ text: String) -> String {
+        let characters = Array(text)
+        var out = ""
+        var index = 0
+        while index < characters.count {
+            let character = characters[index]
+            if character == "\\", index + 1 < characters.count {
+                out.append(character)
+                out.append(characters[index + 1])
+                index += 2
+                continue
             }
+            guard character == "`" else {
+                out.append(character)
+                index += 1
+                continue
+            }
+            var end = index
+            while end < characters.count, characters[end] == "`" { end += 1 }
+            let run = end - index
+            // The closing run, the same length and no longer.
+            var search = end
+            var close: Int?
+            while search < characters.count {
+                guard characters[search] == "`" else { search += 1; continue }
+                var runEnd = search
+                while runEnd < characters.count, characters[runEnd] == "`" { runEnd += 1 }
+                if runEnd - search == run { close = runEnd; break }
+                search = runEnd
+            }
+            if let close {
+                index = close
+            } else {
+                out += String(characters[index..<end])
+                index = end
+            }
+        }
+        return out
+    }
+
+    /// The body's blocks with each footnote put back at its marker.
+    ///
+    /// The marker is read as a block of HTML, and is one unless something
+    /// the writer left open — `<pre>` with no `</pre>` — runs on over the
+    /// blank line before it. Then it is found inside that block, which is cut
+    /// around it. A footnote whose marker is not found at all is kept, after
+    /// the rest, rather than lost.
+    private static func placing(
+        _ footnotes: [LampProseBlock], in blocks: [LampProseBlock]
+    ) -> [LampProseBlock] {
+        guard !footnotes.isEmpty else { return blocks }
+        var placed = Set<Int>()
+        var out: [LampProseBlock] = []
+        for block in blocks {
+            switch block {
+            case .html(let raw) where raw.contains("<!--\u{E0F1}"):
+                var rest = Substring(raw)
+                while let open = rest.range(of: "<!--\u{E0F1}"),
+                      let close = rest[open.upperBound...].range(of: "-->"),
+                      let index = Int(rest[open.upperBound..<close.lowerBound].prefix { $0.isNumber }),
+                      footnotes.indices.contains(index) {
+                    let before = rest[..<open.lowerBound]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !before.isEmpty { out.append(.html(before)) }
+                    out.append(footnotes[index])
+                    placed.insert(index)
+                    rest = rest[close.upperBound...]
+                }
+                let after = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !after.isEmpty { out.append(.html(after)) }
+            case .code(let language, let code) where code.contains("<!--\u{E0F1}"):
+                // A fence this file did not see open took the marker in. The
+                // marker is not the writer's and is not drawn; its footnote
+                // is kept after the rest.
+                out.append(.code(language: language, code: withoutMarkers(code)))
+            default:
+                out.append(block)
+            }
+        }
+        out += footnotes.indices.filter { !placed.contains($0) }.map { footnotes[$0] }
+        return out
     }
 
     /// `.disableSmartOpts`: cmark otherwise curls the writer's quotes and
@@ -141,13 +279,40 @@ public enum LampProse {
         var inComment = false
         var inIndentedCode = false
         var previousWasBlank = true
+        // Where the list item the text is in sets its content, if it is in
+        // one. Code under an item is set four columns past that, not past
+        // the margin: a fence set in four under `- item` is a fence, and
+        // backticks set in six are code. Found by Codex, reviewing the one
+        // parse.
+        var listContent: Int?
         for line in lines {
             let text = line.line
             let trimmed = text.trimmingCharacters(in: .whitespaces)
             let blank = trimmed.isEmpty
-            let indented = text.hasPrefix("    ") || text.hasPrefix("\t")
+            let width = indentWidth(of: text)
             let wasFenced = fence != nil
             let wasComment = inComment
+
+            if !wasFenced, !wasComment, !blank, !inIndentedCode {
+                if let content = listItemContent(text, under: listContent) {
+                    listContent = content
+                } else if width == 0 {
+                    listContent = nil
+                }
+            }
+            let indented = width >= (listContent ?? 0) + 4
+
+            // A line of indented code is code whatever it holds. Read for a
+            // fence first, three backticks in it opened one, and the fence
+            // that really opened after it was taken for its close. Found by
+            // Codex, reviewing the one parse.
+            if !wasFenced, !wasComment, !blank, indented,
+               inIndentedCode || previousWasBlank {
+                inIndentedCode = true
+                out.append(true)
+                previousWasBlank = false
+                continue
+            }
 
             if !wasFenced, !wasComment, trimmed.contains("<!--") {
                 inComment = !trimmed.contains("-->")
@@ -175,6 +340,71 @@ public enum LampProse {
             if fence == nil, !inComment { previousWasBlank = blank }
         }
         return out
+    }
+
+    /// The column a list item's content starts at, if the line opens one:
+    /// a bullet or a number set in no more than three columns past the
+    /// content of the item it is under, if any, then one to four columns of
+    /// space. Five or more after the marker are the content's own, and it
+    /// starts one past the marker. Tabs run to their stops, after the marker
+    /// as before it. A nested item set in four under `- item` is an item,
+    /// and `-<tab>item` is one. Found by Codex, reviewing the one parse.
+    private static func listItemContent(_ line: String, under content: Int?) -> Int? {
+        let expanded = expandedTabs(line)
+        let spaces = expanded.prefix { $0 == " " }
+        guard spaces.count <= (content ?? 0) + 3 else { return nil }
+        let rest = expanded.dropFirst(spaces.count)
+        var marker = 0
+        if let first = rest.first, "-*+".contains(first) {
+            marker = 1
+        } else {
+            let digits = rest.prefix { $0.isASCII && $0.isNumber }
+            guard !digits.isEmpty, digits.count <= 9 else { return nil }
+            let after = rest.dropFirst(digits.count).first
+            guard after == "." || after == ")" else { return nil }
+            marker = digits.count + 1
+        }
+        let afterMarker = spaces.count + marker
+        var gap = 0
+        var characters = 0
+        for character in rest.dropFirst(marker) {
+            if character == " " { gap += 1 }
+            else if character == "\t" { gap += 4 - (afterMarker + gap) % 4 }
+            else { break }
+            characters += 1
+        }
+        let emptyAfter = rest.dropFirst(marker + characters).isEmpty
+        guard gap > 0 || emptyAfter else { return nil }
+        return afterMarker + (gap > 4 || emptyAfter ? 1 : gap)
+    }
+
+    /// How far in a line's first character is, a tab running to its stop.
+    private static func indentWidth(of line: String) -> Int {
+        expandedTabs(line).prefix { $0 == " " }.count
+    }
+
+    /// The line with the tabs in its leading whitespace and quote marks set
+    /// out as the spaces they stand for, each running to the next stop of
+    /// four, as CommonMark measures them.
+    private static func expandedTabs(_ line: String) -> String {
+        guard line.contains("\t") else { return line }
+        var out = ""
+        var column = 0
+        var index = line.startIndex
+        while index < line.endIndex {
+            let character = line[index]
+            guard character == " " || character == "\t" || character == ">" else { break }
+            if character == "\t" {
+                let width = 4 - column % 4
+                out += String(repeating: " ", count: width)
+                column += width
+            } else {
+                out.append(character)
+                column += 1
+            }
+            index = line.index(after: index)
+        }
+        return out + line[index...]
     }
 
     // MARK: Blocks
@@ -260,10 +490,9 @@ public enum LampProse {
                 caption: restored(image.plainText), path: restored(image.source ?? "")
             )
         }
-        if let link = children.first as? Markdown.Link {
-            let path = restored(link.destination ?? "")
-            guard path.hasPrefix("media/") || path.hasPrefix("lamp-media://") else { return nil }
-            return .audio(caption: restored(link.plainText), path: path)
+        if let link = children.first as? Markdown.Link,
+           link.destination?.first == recordingMark {
+            return .audio(caption: restored(link.plainText), path: restored(link.destination ?? ""))
         }
         return nil
     }
@@ -447,119 +676,46 @@ public enum LampProse {
 
     // MARK: The editor's own blocks
 
-    private enum Region {
-        case prose(String)
-        case footnote(label: String, source: String)
-    }
-
-    /// The text split into the footnotes the editor gathers and the prose
-    /// between them.
+    /// The text with its footnotes taken out, each leaving its marker, and
+    /// the footnotes themselves in the order they were written.
     ///
     /// A footnote definition runs until a line that is neither blank nor
     /// indented: an unindented line after one is body text again, which is
     /// the rule the editor reads them by and the one that was lost when a
     /// definition and the body after it became a single paragraph. Not
-    /// looked for inside a fence, where it is code.
-    private static func regions(of text: String) -> [Region] {
+    /// looked for inside code or a comment.
+    private static func footnotesTakenOut(
+        of text: String
+    ) -> (body: String, notes: [(label: String, source: String)]) {
         let lines = LampMarkdownModel.linesWithEndings(of: text)
         let leaveAlone = linesToLeaveAlone(lines)
-        var out: [Region] = []
-        var prose = ""
+        var body = ""
+        var notes: [(label: String, source: String)] = []
         var index = 0
-
-        func takeProse() {
-            if !prose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                out.append(.prose(prose))
-            }
-            prose = ""
-        }
-
         while index < lines.count {
             let line = lines[index]
-            if !leaveAlone[index], let note = footnoteOpening(line.line) {
-                takeProse()
-                var body = note.text + "\n"
+            guard !leaveAlone[index], let note = footnoteOpening(line.line) else {
+                body += line.line + line.ending
                 index += 1
-                while index < lines.count {
-                    let next = lines[index].line
-                    let blank = next.trimmingCharacters(in: .whitespaces).isEmpty
-                    let indented = next.hasPrefix("    ") || next.hasPrefix("\t")
-                    guard blank || indented else { break }
-                    body += next.drop { $0 == " " || $0 == "\t" } + "\n"
-                    index += 1
-                }
-                out.append(.footnote(label: note.label, source: body))
                 continue
             }
-
-            prose += line.line + line.ending
+            var source = note.text + "\n"
             index += 1
+            while index < lines.count {
+                let next = lines[index].line
+                let blank = next.trimmingCharacters(in: .whitespaces).isEmpty
+                let indented = next.hasPrefix("    ") || next.hasPrefix("\t")
+                guard blank || indented else { break }
+                source += next.drop { $0 == " " || $0 == "\t" } + "\n"
+                index += 1
+            }
+            // Blank lines either side, as the editor sets its block: the one
+            // before ends the paragraph, list or quote the note was written
+            // under, and the one after lets the body start afresh.
+            body += "\n" + footnoteMarker(notes.count, for: source) + "\n\n"
+            notes.append((note.label, source))
         }
-        takeProse()
-        return out
-    }
-
-    /// Every `[label]: address` the text defines, gathered so each piece
-    /// of it can resolve a link written in another.
-    ///
-    /// They go in **front** of a piece, never after it. A block can only
-    /// swallow what follows it, and a piece ending in an unclosed fence,
-    /// HTML block or indented code swallowed the definitions written after
-    /// it and drew them as code the writer never typed. Nothing can precede
-    /// them to swallow them. A definition repeated in the piece that already
-    /// held it is harmless: the first of a label wins, and a definition
-    /// draws nothing. Found by Codex, reviewing the phone's adoption.
-    private static func referenceDefinitions(of text: String) -> String {
-        let lines = LampMarkdownModel.linesWithEndings(of: text)
-        let leaveAlone = linesToLeaveAlone(lines)
-        var out = ""
-        for (index, line) in lines.enumerated() {
-            // A definition shown as an example in code, or commented out in
-            // HTML, is not one. A label keeps its first address, so either
-            // gathered above the real one sent a link to the wrong place.
-            guard !leaveAlone[index] else { continue }
-            let trimmed = line.line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("["), !trimmed.hasPrefix("[^"),
-                  let close = trimmed.firstIndex(of: "]"),
-                  trimmed.index(after: close) < trimmed.endIndex,
-                  trimmed[trimmed.index(after: close)] == ":",
-                  isDefinition(after: trimmed[trimmed.index(close, offsetBy: 2)...])
-            else { continue }
-            out += trimmed + "\n\n"
-        }
-        return out
-    }
-
-    /// Whether what follows a label is an address, rather than words that
-    /// merely look like one.
-    ///
-    /// `[Status]: Ready for review` is an ordinary line: a destination
-    /// cannot hold a space unless it is written in angle brackets, so cmark
-    /// reads no definition there. Carried to every piece as one, the line
-    /// was drawn twice. Found by Codex, reviewing the phone's adoption.
-    private static func isDefinition(after text: Substring) -> Bool {
-        let rest = text.drop { $0 == " " || $0 == "\t" }
-        guard let first = rest.first else { return false }
-        if first == "<" { return rest.contains(">") }
-        let destination = rest.prefix { $0 != " " && $0 != "\t" }
-        guard !destination.isEmpty else { return false }
-        // Only a title may follow the address, in quotes or parentheses —
-        // and nothing may follow the title but spaces. Accepting a title and
-        // stopping there took `[Status]: Ready (see below) tomorrow` for a
-        // definition, so the line was carried to every piece and drawn
-        // twice. Found by Codex, reviewing the phone's adoption.
-        let after = rest.dropFirst(destination.count).drop { $0 == " " || $0 == "\t" }
-        guard let opening = after.first else { return true }
-        let closing: Character
-        switch opening {
-        case "\"": closing = "\""
-        case "'": closing = "'"
-        case "(": closing = ")"
-        default: return false
-        }
-        let title = after.dropFirst()
-        guard let end = title.firstIndex(of: closing) else { return false }
-        return title[title.index(after: end)...].allSatisfy { $0 == " " || $0 == "\t" }
+        return (body, notes)
     }
 
     /// `[^label]: text`, at the start of a line.
@@ -591,9 +747,16 @@ public enum LampProse {
         var out = ""
         for (index, line) in lines.enumerated() {
             var next = line.line
+            // And only when the next line carries on the same paragraph. A
+            // deeper quote opens a block of its own, so `> Outer` above
+            // `> > Inner` ended its paragraph on the backslash, which was
+            // drawn. A shallower one carries on the deeper paragraph, lazily,
+            // as CommonMark has it, so its break is still the editor's.
+            // Found by Codex, reviewing the phone's adoption.
             if !leaveAlone[index], index + 1 < lines.count, !leaveAlone[index + 1],
                let body = quotedBody(of: line.line), isPlainProse(body),
                let following = quotedBody(of: lines[index + 1].line), isPlainProse(following),
+               quoteDepth(of: lines[index + 1].line) <= quoteDepth(of: line.line),
                !next.hasSuffix("\\"), !next.hasSuffix("  ") {
                 next += "\\"
             }
@@ -610,6 +773,30 @@ public enum LampProse {
             rest = rest.dropFirst().drop { $0 == " " || $0 == "\t" }
         }
         return String(rest)
+    }
+
+    /// How many quotes deep a line is, as CommonMark counts its markers.
+    ///
+    /// A marker after the first is a `>` set in no more than three spaces
+    /// past the one before it and the space that may follow it. One set
+    /// further in is the paragraph's own character: `> one` above
+    /// `>     > two` carries the paragraph on, and its break is still the
+    /// editor's. The first may be set in any distance, since a list item
+    /// sets its quotes in under it. Tabs run to their stops. Found by Codex,
+    /// reviewing the one parse.
+    private static func quoteDepth(of line: String) -> Int {
+        var rest = Substring(expandedTabs(line))
+        rest = rest.drop { $0 == " " }
+        var depth = 0
+        while rest.first == ">" {
+            depth += 1
+            rest = rest.dropFirst()
+            if rest.first == " " { rest = rest.dropFirst() }
+            let spaces = rest.prefix { $0 == " " }
+            guard spaces.count <= 3, rest.dropFirst(spaces.count).first == ">" else { break }
+            rest = rest.dropFirst(spaces.count)
+        }
+        return depth
     }
 
     /// Whether a quoted line's words are prose, rather than opening a block
@@ -650,6 +837,63 @@ public enum LampProse {
         return closes ? nil : open
     }
 
+    // MARK: Media
+
+    /// A picture's or a recording's caption, made literal before parsing.
+    ///
+    /// The editor finds a picture by its own pattern, `![caption](media/id)`
+    /// with any caption but a closing bracket, and a recording the same way
+    /// on a line of its own (resolveMediaPaths, resolveAudioBlocks), and
+    /// shows the caption as typed. cmark reads `![Pool [north side](media/pic)`
+    /// as words and a link, so the picture was gone. Each of the caption's
+    /// marks is escaped, so cmark reads it as the editor does, and
+    /// `![**Pool**](media/pic)` keeps its stars as the editor's caption does.
+    /// Only on a line holding nothing else, where this file reads media, and
+    /// only for the editor's own addresses. Found by Codex, reviewing the
+    /// phone's adoption.
+    private static func literalMediaCaptions(_ text: String) -> String {
+        guard text.contains("](media/") || text.contains("](lamp-media://") else { return text }
+        let lines = LampMarkdownModel.linesWithEndings(of: text)
+        let leaveAlone = linesToLeaveAlone(lines)
+        var out = ""
+        for (index, line) in lines.enumerated() {
+            let literal = leaveAlone[index] ? nil : literalMediaCaption(line.line)
+            out += (literal ?? line.line) + line.ending
+        }
+        return out
+    }
+
+    private static func literalMediaCaption(_ line: String) -> String? {
+        let indent = line.prefix { $0 == " " || $0 == "\t" }
+        let trailing = line.reversed().prefix { $0 == " " || $0 == "\t" }.count
+        let rest = line.dropFirst(indent.count).dropLast(trailing)
+        let bang = rest.hasPrefix("![")
+        // The editor finds a picture wherever it is, and a recording only on
+        // a line that is nothing else, from its first column to its last.
+        // Read the same way, an indented `[*this*](media/a)` continuing a
+        // paragraph was taken for a recording and lost its emphasis. Found
+        // by Codex, reviewing the one parse.
+        guard bang || (rest.hasPrefix("[") && indent.isEmpty && trailing == 0) else { return nil }
+        let afterOpen = rest.dropFirst(bang ? 2 : 1)
+        guard let close = afterOpen.firstIndex(of: "]") else { return nil }
+        let caption = afterOpen[..<close]
+        let address = afterOpen[afterOpen.index(after: close)...]
+        guard address.hasPrefix("(media/") || address.hasPrefix("(lamp-media://"),
+              address.hasSuffix(")"),
+              !address.dropFirst().dropLast().contains(")")
+        else { return nil }
+        // A recording needs a caption, as the editor's pattern does.
+        guard bang || !caption.isEmpty else { return nil }
+        let escaped = caption.map { character -> String in
+            character.isASCII && (character.isPunctuation || character.isSymbol)
+                ? "\\" + String(character) : String(character)
+        }.joined()
+        let opening: String = bang ? "![" : "["
+        let target: String = bang
+            ? String(address) : "(" + String(recordingMark) + String(address.dropFirst())
+        return String(indent) + opening + escaped + "]" + target + String(line.suffix(trailing))
+    }
+
     // MARK: Tildes
 
     private static func standingInForLoneTildes(_ text: String) -> String {
@@ -686,8 +930,10 @@ public enum LampProse {
     }
 
     private static func restored(_ text: String) -> String {
-        text.contains(tildeStandIn)
-            ? String(text.map { $0 == tildeStandIn ? "~" : $0 })
-            : text
+        var out = text
+        if out.contains(recordingMark) { out.removeAll { $0 == recordingMark } }
+        return out.contains(tildeStandIn)
+            ? String(out.map { $0 == tildeStandIn ? "~" : $0 })
+            : out
     }
 }
