@@ -351,6 +351,72 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return range
     }
 
+    /// Everything a surface draws from the record for `text`, worked out from
+    /// one finding of the marks: the ranges to wash, how many passages they
+    /// are, the marked Markdown a web editor places them by, what of them
+    /// can be put back, and what each passage would put back. Each is what
+    /// its own call gives; asked one by one, each found every mark again.
+    public struct Drawing: Sendable {
+        public let ranges: [NSRange]
+        public let passageCount: Int
+        public let markedMarkdown: String?
+        public let restorable: [Restorable]
+        public let changes: [Change?]
+    }
+
+    /// `Drawing` for `text`: anchored first (`anchored(in:)`), so each piece
+    /// is placed at a look. Without the marked Markdown or the changes when
+    /// the surface takes no marks to place.
+    public func drawing(in text: String, forPlacing: Bool = true) -> Drawing {
+        let review = anchored(in: text)
+        let found = review.located(in: text)
+        let ranges = Self.coalesced(found.flatMap(\.ranges), joiningAcross: nil)
+        let restorable = review.restorable(in: text, located: found)
+        return Drawing(
+            ranges: ranges,
+            passageCount: Self.passages(ranges, in: text as NSString).count,
+            markedMarkdown: forPlacing ? Self.markedMarkdown(text, ranges: ranges) : nil,
+            restorable: restorable,
+            changes: forPlacing
+                ? review.changes(in: text, ranges: ranges, located: found, offered: Self.byMark(restorable))
+                : []
+        )
+    }
+
+    /// The record with every piece that can be found in `text` anchored in
+    /// it, for drawing.
+    ///
+    /// A piece anchored in the text it is placed in is placed by one look
+    /// at where its hint says. One anchored in another text is placed by
+    /// searching the whole text for its context, twice to know it stands
+    /// there once, and a draw places every piece several times over: the
+    /// ranges, the count, the page's marked copy, what each change would put
+    /// back. On a writing the assistant had worked over many times, 2,464
+    /// pieces, that was seconds after every clear. Found once here, each
+    /// where `located` would find it, they are placed the same everywhere
+    /// after, at a look each. A piece that cannot be found keeps its anchor,
+    /// and is not found after either.
+    ///
+    /// Not for saving: a save keeps an untouched piece as it was, so one
+    /// that changed nothing writes nothing.
+    public func anchored(in text: String) -> LampWritingReview {
+        let source = text as NSString
+        let here = Self.digest(of: text)
+        func anchor(_ piece: Piece) -> Piece {
+            if piece.anchoredIn == here { return piece }
+            guard let range = Self.find(piece, in: source) else { return piece }
+            return Piece(text: piece.text, before: piece.before, after: piece.after, hint: range.location, anchoredIn: here)
+        }
+        var copy = self
+        copy.marks = marks.map {
+            Mark(id: $0.id, pieces: $0.pieces.map(anchor), version: $0.version, markedAt: $0.markedAt, turnID: $0.turnID)
+        }
+        copy.clearances = clearances.map {
+            Clearance(id: $0.id, markID: $0.markID, pieces: $0.pieces.map(anchor), version: $0.version, clearedAt: $0.clearedAt)
+        }
+        return copy
+    }
+
     /// The ranges to draw: every mark's, with any that overlap or touch
     /// drawn as one.
     public func highlightedRanges(in text: String) -> [NSRange] {
@@ -429,7 +495,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// editor to place the marks in the document it shows from the Markdown
     /// it was given. Nil where nothing is marked.
     public func markedMarkdown(in text: String) -> String? {
-        let ranges = highlightedRanges(in: text)
+        Self.markedMarkdown(text, ranges: highlightedRanges(in: text))
+    }
+
+    /// `markedMarkdown(in:)` from the ranges already drawn.
+    static func markedMarkdown(_ text: String, ranges: [NSRange]) -> String? {
         guard !ranges.isEmpty else { return nil }
         let source = text as NSString
         var result = ""
@@ -1118,7 +1188,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     public func restoring(_ range: NSRange, in text: String) -> RestoreOutcome {
         let found = located(in: text)
         return restoring(
-            range, in: text, located: found,
+            range, touched: found.filter { $0.ranges.contains { Self.touches($0, range) } },
             offered: Self.byMark(restorable(in: text, located: found))
         )
     }
@@ -1136,12 +1206,67 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// whole link — can ask for those marks by id instead.
     public func restoring(_ ranges: [NSRange], in text: String) -> [RangeRestore] {
         let found = located(in: text)
-        let offered = Self.byMark(restorable(in: text, located: found))
+        return restoring(ranges, located: found, offered: Self.byMark(restorable(in: text, located: found)))
+    }
+
+    private func restoring(_ ranges: [NSRange], located found: [Located], offered: [UUID: Restorable]) -> [RangeRestore] {
+        // The marks each range touches, found by where they stand rather
+        // than by trying every mark for every range: a draw asks this of
+        // every passage, and on a writing gone over many times, 1,600
+        // passages and 1,250 marks, trying each with each was most of the
+        // seconds a clear took to show.
+        let index = TouchIndex(found)
         return ranges.map { range in
-            RangeRestore(
-                marks: found.filter { $0.ranges.contains { Self.touches($0, range) } }.map(\.id),
-                outcome: restoring(range, in: text, located: found, offered: offered)
-            )
+            let touched = index.touching(range)
+            return RangeRestore(marks: touched.map(\.id), outcome: restoring(range, touched: touched, offered: offered))
+        }
+    }
+
+    /// The located marks by where their ranges stand. A mark's range can
+    /// touch a range (`touches`) only if it starts no later than the range
+    /// ends and ends no earlier than it starts, so the candidates are found
+    /// by position, and `touches` itself decides each.
+    struct TouchIndex {
+        private let located: [Located]
+        /// Each mark's ranges, by where they start.
+        private let entries: [(location: Int, end: Int, mark: Int)]
+        /// The furthest any of entries 0...i reaches.
+        private let furthest: [Int]
+
+        init(_ located: [Located]) {
+            self.located = located
+            var entries: [(location: Int, end: Int, mark: Int)] = []
+            for (mark, found) in located.enumerated() {
+                for range in found.ranges { entries.append((range.location, NSMaxRange(range), mark)) }
+            }
+            entries.sort { $0.location < $1.location }
+            self.entries = entries
+            var furthest: [Int] = []
+            furthest.reserveCapacity(entries.count)
+            for entry in entries { furthest.append(max(furthest.last ?? Int.min, entry.end)) }
+            self.furthest = furthest
+        }
+
+        /// The marks touching `range`, in the order `located` has them.
+        func touching(_ range: NSRange) -> [Located] {
+            // The first entry starting after the range ends.
+            var low = 0
+            var high = entries.count
+            while low < high {
+                let middle = (low + high) / 2
+                if entries[middle].location <= NSMaxRange(range) { low = middle + 1 } else { high = middle }
+            }
+            var marks = Set<Int>()
+            var at = low - 1
+            while at >= 0, furthest[at] >= range.location {
+                let entry = entries[at]
+                if entry.end >= range.location,
+                   LampWritingReview.touches(NSRange(location: entry.location, length: entry.end - entry.location), range) {
+                    marks.insert(entry.mark)
+                }
+                at -= 1
+            }
+            return marks.sorted().map { located[$0] }
         }
     }
 
@@ -1151,8 +1276,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// `nil` is nothing to offer and nothing to say: the wording was
     /// never kept, which is not the writer's doing and not theirs to fix.
     public func changes(in text: String, ranges: [NSRange]) -> [Change?] {
+        let found = located(in: text)
+        return changes(in: text, ranges: ranges, located: found, offered: Self.byMark(restorable(in: text, located: found)))
+    }
+
+    private func changes(
+        in text: String, ranges: [NSRange], located found: [Located], offered: [UUID: Restorable]
+    ) -> [Change?] {
         let source = text as NSString
-        return restoring(ranges, in: text).enumerated().map { index, answer in
+        return restoring(ranges, located: found, offered: offered).enumerated().map { index, answer in
             let range = ranges[index]
             switch answer.outcome {
             case .plan(let plan):
@@ -1201,7 +1333,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
               let end = edges.map({ NSMaxRange($0) }).max() else { return .nothingTouched }
         let span = NSRange(location: start, length: end - start)
         let outcome = restoring(
-            span, in: text, located: found,
+            span, touched: found.filter { $0.ranges.contains { Self.touches($0, span) } },
             offered: Self.byMark(restorable(in: text, located: found))
         )
         guard case .plan(let plan) = outcome else { return outcome }
@@ -1213,10 +1345,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     }
 
     private func restoring(
-        _ range: NSRange, in text: String, located: [Located], offered: [UUID: Restorable]
+        _ range: NSRange, touched: [Located], offered: [UUID: Restorable]
     ) -> RestoreOutcome {
-        if let plan = restorePlan(for: range, located: located, offered: offered) { return .plan(plan) }
-        let touched = located.filter { $0.ranges.contains { Self.touches($0, range) } }
+        if let plan = restorePlan(touched: touched, offered: offered) { return .plan(plan) }
         guard !touched.isEmpty else { return .nothingTouched }
         // Which of them stopped it, and whether that is the writer's doing:
         // a passage whose wording was never kept did not become unrestorable
@@ -1243,7 +1374,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     private func restorePlan(
         for range: NSRange, located: [Located], offered: [UUID: Restorable]
     ) -> RestorePlan? {
-        let touched = located.filter { $0.ranges.contains { Self.touches($0, range) } }
+        restorePlan(touched: located.filter { $0.ranges.contains { Self.touches($0, range) } }, offered: offered)
+    }
+
+    /// The plan for the marks a range touches.
+    private func restorePlan(touched: [Located], offered: [UUID: Restorable]) -> RestorePlan? {
         guard !touched.isEmpty else { return nil }
         var plan: [Restorable] = []
         for mark in touched {
