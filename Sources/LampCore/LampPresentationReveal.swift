@@ -150,7 +150,7 @@ extension LampPresentationSlide {
         let hasEmphasis = plan.drawn.map { comparedBlocks[$0.id] ?? $0 }.contains { block in
             block.kind != .chart && block.kind != .image
                 && (block.kind != .caption || captionDrawn)
-                && block.drawnRuns(on: layout).contains { $0.mark != nil }
+                && block.drawnMarkedRuns(on: layout).contains { $0.mark != nil }
         }
         return LampPresentationRevealPlan(
             units: units.count > 1 ? units : [],
@@ -173,7 +173,10 @@ extension LampPresentationSlide {
     }
 
     private static func revealUnits(of block: LampPresentationBlock) -> [[LampPresentationRevealPlan.Part]] {
-        guard block.kind == .body, block.listStyle != nil else { return [[.block(block.id)]] }
+        // A list, or a figure: a timeline's events, a structure's lines.
+        guard block.kind == .body, block.listStyle != nil || block.drawnFigure != .none else {
+            return [[.block(block.id)]]
+        }
         let count = block.listItemRuns.count
         guard count > 1 else { return [[.block(block.id)]] }
         return (0..<count).map { index in

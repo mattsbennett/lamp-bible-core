@@ -63,6 +63,16 @@ public struct LampPresentationSlideCanvas: View {
     /// item at a time, so it never runs beside items not yet shown.
     private var listRule: ListRule?
 
+    /// Design units to points on this slide, for the few drawings that size
+    /// themselves against the slide's width rather than its prose.
+    private var layoutUnit: CGFloat = 1
+
+    private func scaled(_ unit: CGFloat) -> Self {
+        var copy = self
+        copy.layoutUnit = unit
+        return copy
+    }
+
     private struct ListRule {
         var color: Color
         var width: CGFloat
@@ -202,7 +212,7 @@ public struct LampPresentationSlideCanvas: View {
 
     /// Everything on the slide but the picture behind it.
     private func page(unit: CGFloat) -> some View {
-        slideContent(unit: unit)
+        scaled(unit).slideContent(unit: unit)
             .padding(.horizontal, 96 * unit)
             .padding(.vertical, 72 * unit)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -938,7 +948,10 @@ public struct LampPresentationSlideCanvas: View {
         return VStack(alignment: .leading, spacing: spacing) {
             ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                 let isCitation = block.id == group.citation?.id
+                // A timeline's height is the same however many events are
+                // shown, so its rule is one length, drawn with the block.
                 let itemised = revealPlan.revealsItems(of: block.id)
+                    && block.drawnFigure(on: slide.layout) != .timeline
                 ruling(
                     itemised && segmented
                         ? ListRule(
@@ -1129,7 +1142,21 @@ public struct LampPresentationSlideCanvas: View {
         color: Color?,
         stepsDown: Bool
     ) -> some View {
-        if let listStyle = block.listStyle,
+        if block.drawnFigure(on: slide.layout) != .none {
+            // Type-erased, as the layouts are: a figure's nested views took
+            // the compiler past its limit on opaque types.
+            if stepsDown {
+                // One size for the whole figure, chosen by what fits, as a
+                // list steps down as a unit.
+                AnyView(ViewThatFits(in: .vertical) {
+                    ForEach([1.0, 0.82, 0.68, 0.55, 0.45], id: \.self) { scale in
+                        figure(block, size: size * scale, color: color ?? foreground)
+                    }
+                })
+            } else {
+                AnyView(figure(block, size: size, color: color ?? foreground))
+            }
+        } else if let listStyle = block.listStyle,
            block.kind == .body,
            !block.listItemRuns.isEmpty,
            !stepsDown {
@@ -1187,6 +1214,134 @@ public struct LampPresentationSlideCanvas: View {
             // A listener hears the words, not the marks Lamp drew around them.
             .accessibilityLabel(block.text)
         }
+    }
+
+    /// A body block's lines drawn as its figure: a timeline, or a passage's
+    /// structure (`LampPresentationFigure`). Each line is a part of its own,
+    /// so a reveal brings the figure in an entry at a time.
+    @ViewBuilder
+    private func figure(_ block: LampPresentationBlock, size: CGFloat, color: Color) -> some View {
+        let items = block.listItemRuns
+        switch block.drawnFigure(on: slide.layout) {
+        case .timeline:
+            timeline(items, of: block.id, size: size, color: color)
+        case .chiasm, .parallel:
+            structure(items, figure: block.drawnFigure(on: slide.layout), of: block.id, size: size, color: color)
+        case .none:
+            EmptyView()
+        }
+    }
+
+    /// Events evenly along a line, in the order written: the date above in
+    /// the accent, a mark on the line, the event below. Each event brings its
+    /// own length of the line, so a timeline revealed an event at a time
+    /// grows rather than showing its whole span from the start.
+    private func timeline(
+        _ items: [[LampPresentationTextRun]],
+        of blockID: String,
+        size: CGFloat,
+        color: Color
+    ) -> some View {
+        let entries = items.map(LampPresentationFigure.timelineEntry)
+        // No larger than lets each column's longest word fit its width: the
+        // slide only sees a figure too tall, and a word too long for a narrow
+        // column was broken mid-word instead ("Solom-on").
+        let longest = entries.flatMap { $0.date + $0.event }.map(\.text).joined(separator: " ")
+            .split(whereSeparator: \.isWhitespace).map(\.count).max() ?? 1
+        // The page's width less what shares it: a picture or chart beside
+        // the prose (`besideImage`), and a passage's rule.
+        let widescreen = style.aspectRatio == .widescreen
+        let page: CGFloat = widescreen ? 1_408 : 1_008
+        let beside: CGFloat = imageBlock == nil ? 0 : (widescreen ? 620 : 440) + 48
+        let rule: CGFloat = slide.layout == .scripture || slide.layout == .quotation ? 34 : 0
+        let column = (page - beside - rule) * layoutUnit / CGFloat(max(entries.count, 1))
+        let size = min(size, column / (0.52 * CGFloat(longest) + 0.3))
+        let line = max(2, size * 0.06)
+        // Aligned on the line itself, so each date takes the room it needs
+        // and the whole is measured as it is: a fixed room for dates cut a
+        // long one short where the slide could not see it to shrink.
+        return HStack(alignment: .lampTimelineAxis, spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
+                VStack(spacing: size * 0.3) {
+                    // Two lines' room for every date, so the line runs
+                    // straight however the dates wrap.
+                    styledText(entry.date, size: size * 0.72, weight: .bold, alignment: .center, color: accent, scalesToFit: false)
+                        .padding(.horizontal, size * 0.12)
+                    ZStack {
+                        HStack(spacing: 0) {
+                            Rectangle().fill(accent.opacity(index == 0 ? 0 : 0.55)).frame(height: line)
+                            // Toward the next event, and only once it has
+                            // arrived: ahead of it, the line ran on past the
+                            // last event shown and gave away that more came.
+                            Rectangle().fill(accent.opacity(index == entries.count - 1 ? 0 : 0.55)).frame(height: line)
+                                .opacity(isShown(.listItem(block: blockID, index: index + 1)) ? 1 : 0)
+                        }
+                        Circle().fill(accent).frame(width: size * 0.36, height: size * 0.36)
+                    }
+                    .alignmentGuide(.lampTimelineAxis) { $0[VerticalAlignment.center] }
+                    styledText(entry.event, size: size * 0.8, weight: .regular, alignment: .center, color: color, scalesToFit: false)
+                        .padding(.horizontal, size * 0.12)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+                .opacity(isShown(.listItem(block: blockID, index: index)) ? 1 : 0)
+                .anchorPreference(key: LampSlideTextBounds.self, value: .bounds) { anchor in
+                    revealPlan.revealsItems(of: blockID)
+                        ? [LampSlideTextBound(anchor: anchor, isShown: isShown(.listItem(block: blockID, index: index)))]
+                        : []
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A passage's structure: each line lettered in the accent and stepped
+    /// in as the structure sets it, toward the centre of a chiasm, or under
+    /// the line it answers.
+    private func structure(
+        _ items: [[LampPresentationTextRun]],
+        figure: LampPresentationFigure,
+        of blockID: String,
+        size: CGFloat,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: size * 0.32) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, runs in
+                HStack(alignment: .firstTextBaseline, spacing: size * 0.4) {
+                    Text(figure.letter(at: index, of: items.count))
+                        .font(presentationFont(size: size * 0.8, weight: .bold))
+                        .foregroundStyle(accent)
+                        .frame(minWidth: size * 1.3, alignment: .leading)
+                    styledText(runs, size: size, weight: .regular, alignment: .leading, color: color, scalesToFit: false)
+                }
+                .padding(.leading, CGFloat(figure.indent(at: index, of: items.count)) * size * 1.5)
+                .opacity(isShown(.listItem(block: blockID, index: index)) ? 1 : 0)
+                // A passage's rule beside the line, a length at a time, as a
+                // list arriving an item at a time draws it.
+                .overlay(alignment: .leading) {
+                    if let rule = listRule {
+                        let last = index == items.count - 1
+                        LampRuleSegment(
+                            color: rule.color,
+                            width: rule.width,
+                            radius: rule.radius,
+                            roundsTop: index == 0 && rule.opensPassage,
+                            roundsBottom: last && rule.closesPassage,
+                            runsOn: last ? rule.gapAfter : size * 0.32,
+                            // The overlay is on the line with its step in
+                            // padding, so its leading edge is the passage's.
+                            inset: rule.inset,
+                            isShown: isShown(.listItem(block: blockID, index: index))
+                        )
+                    }
+                }
+                .anchorPreference(key: LampSlideTextBounds.self, value: .bounds) { anchor in
+                    revealPlan.revealsItems(of: blockID)
+                        ? [LampSlideTextBound(anchor: anchor, isShown: isShown(.listItem(block: blockID, index: index)))]
+                        : []
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// One list, every row at the same size, with wrapped lines hanging under
@@ -1382,4 +1537,16 @@ struct LampRuleSegment: View {
         .offset(x: -inset)
         .opacity(isShown ? 1 : 0)
     }
+}
+
+extension VerticalAlignment {
+    /// The line a timeline's events stand on, which their dates above and
+    /// events below hang from.
+    private enum LampTimelineAxis: AlignmentID {
+        static func defaultValue(in dimensions: ViewDimensions) -> CGFloat {
+            dimensions[VerticalAlignment.center]
+        }
+    }
+
+    static let lampTimelineAxis = VerticalAlignment(LampTimelineAxis.self)
 }

@@ -416,6 +416,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// A picture drawn in the theme's colours; see
     /// `LampPresentationImageTint`. Absent means as it is.
     public var tint: LampPresentationImageTint?
+    /// A body block's lines drawn as a figure: a timeline, or a passage's
+    /// structure; see `LampPresentationFigure`. Absent means drawn as text.
+    public var figure: LampPresentationFigure?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -431,7 +434,8 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         emphasis: [LampPresentationEmphasis]? = nil,
         chart: LampPresentationChart? = nil,
         focus: LampPresentationFocus? = nil,
-        tint: LampPresentationImageTint? = nil
+        tint: LampPresentationImageTint? = nil,
+        figure: LampPresentationFigure? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -447,6 +451,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.chart = chart
         self.focus = focus
         self.tint = tint
+        self.figure = figure
     }
 
     /// An image that fills the slide behind everything else.
@@ -728,6 +733,17 @@ public enum LampPresentationDeckValidator {
                             "\(blockPath).focus",
                             "A focus moves a picture behind the slide, which is cropped to fill it. "
                                 + "A picture beside the words is shown whole."
+                        )
+                    }
+                }
+                if let figure = block.figure, figure != .none {
+                    figureIssues(figure, block: block, path: blockPath).forEach { issue($0.0, $0.1, $0.2) }
+                    if block.kind == .body, !LampPresentationFigure.isDrawn(on: slide.layout) {
+                        issue(
+                            .warning,
+                            "\(blockPath).figure",
+                            "A \(slide.layout.rawValue) slide draws a figure's lines as a list; "
+                                + "a figure is drawn on title-and-body, blank, scripture and quotation slides."
                         )
                     }
                 }
@@ -1177,6 +1193,43 @@ public enum LampPresentationDeckValidator {
     }
 
     /// Why a block went undrawn, when the reason is worth naming.
+    /// What a figure's lines would draw badly or not at all.
+    static func figureIssues(
+        _ figure: LampPresentationFigure,
+        block: LampPresentationBlock,
+        path: String
+    ) -> [(LampPresentationDeckIssue.Severity, String, String)] {
+        let figurePath = "\(path).figure"
+        guard block.kind == .body else {
+            return [(.warning, figurePath, "Only a body block is drawn as a figure; this one is drawn as it is.")]
+        }
+        let lines = block.listItemRuns.map { $0.map(\.text).joined() }
+        switch figure {
+        case .timeline:
+            var issues: [(LampPresentationDeckIssue.Severity, String, String)] = []
+            if lines.count > LampPresentationFigure.mostTimelineEntries {
+                issues.append((.warning, figurePath,
+                    "A timeline of \(lines.count) events is too crowded to read across a slide; "
+                        + "keep it to \(LampPresentationFigure.mostTimelineEntries), or split it across slides."))
+            }
+            let undated = lines.enumerated().filter { LampPresentationFigure.timelineSplit($0.element) == nil }
+            if !undated.isEmpty {
+                let numbers = undated.map { String($0.offset + 1) }.joined(separator: ", ")
+                issues.append((.warning, figurePath,
+                    "Timeline line \(numbers) has no date: write each as a date, a spaced dash, and the event, "
+                        + "such as \u{201C}c. 1000 BC \u{2014} David king in Jerusalem\u{201D}."))
+            }
+            return issues
+        case .chiasm where lines.count < 3:
+            return [(.warning, figurePath, "A chiasm needs at least three lines: a pair and its centre, or two pairs.")]
+        case .parallel where lines.count % 2 == 1:
+            return [(.warning, figurePath,
+                "Parallel lines go in pairs, and the last line here has no partner; it is drawn on its own.")]
+        default:
+            return []
+        }
+    }
+
     private static func ignoredHint(
         for block: LampPresentationBlock,
         layout: LampPresentationSlideLayout
