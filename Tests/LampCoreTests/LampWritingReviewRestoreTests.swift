@@ -360,6 +360,30 @@ struct LampWritingReviewRestoreTests {
         #expect(marked.last?.location == (first as NSString).range(of: "TWO").location)
     }
 
+    /// The mark a restore makes again over unread words it put back has an
+    /// id taken from the mark it restores, so every recorder of the same
+    /// restore — two windows, the phone, a copy of the edits saved in
+    /// passes — makes the one mark: a sync merges them, and a clear of it on
+    /// one reaches the others. Recording it again makes no second mark.
+    @Test func aRestoresMarkAgainIsTheSameWhoeverRecordsIt() throws {
+        let start = "Alpha one here. Beta two here."
+        let first = "Alpha ONEONEONE here. Beta TWO here."
+        var review = empty.markingAssistantChange(from: start, to: first)
+        let second = "Alpha x here. Beta y here."
+        review = review.markingAssistantChange(from: first, to: second)
+        let plan = try #require(review.restorePlan(for: whole(second), in: second))
+        let after = applying(plan, to: second)
+        let standing = Set(review.marks.map(\.id))
+        let here = review.restoringWording(plan, from: second, to: after)
+        let there = review.restoringWording(plan, from: second, to: after)
+        let fresh = Set(here.marks.map(\.id)).subtracting(standing)
+        #expect(fresh.count == 2)
+        #expect(fresh == Set(there.marks.map(\.id)).subtracting(standing))
+        #expect(fresh == Set(plan.marks.map { LampWritingReview.remarkID(restoring: $0) }))
+        let twice = here.restoringWording(plan, from: second, to: after)
+        #expect(twice.marks.count == here.marks.count)
+    }
+
     /// A mark kept alive by the same words standing somewhere else is no
     /// longer the passage the assistant changed, so it cannot be put back:
     /// doing so would rewrite a sentence nobody touched.

@@ -287,6 +287,24 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     /// What a piece's `anchoredIn` names a text by: a digest of its UTF-16
     /// code units, the units every offset here counts in.
+    /// The id of the mark a restore makes again over words it put back
+    /// that the writer had not read: one to each restored mark, derived
+    /// from that mark's id (a name-based UUID, version 5's layout). Every
+    /// recorder of the same restore gives it the same id, so a sync merges
+    /// them as one mark and a clear of it reaches every copy. A mark is
+    /// restored once, so no two re-marks share it.
+    public static func remarkID(restoring markID: UUID) -> UUID {
+        var name = Array("lamp-review-remark".utf8)
+        withUnsafeBytes(of: markID.uuid) { name.append(contentsOf: $0) }
+        var bytes = Array(SHA256.hash(data: name).prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
     public static func digest(of text: String) -> String {
         let units = Array(text.utf16)
         let hash = units.withUnsafeBytes { SHA256.hash(data: $0) }
@@ -1516,7 +1534,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             // nobody restored is not.
             guard let found = Self.put(edit.replacement, at: moved[edit.markID], in: target)
             else { continue }
+            // Its id from the mark it puts back (`remarkID`), so whoever
+            // records this restore — this writer's window, another's, the
+            // phone, a copy of the edits saved in passes — makes the one
+            // mark, and a clear of it on any of them clears it on all.
+            let id = Self.remarkID(restoring: edit.markID)
+            guard !result.marks.contains(where: { $0.id == id }) else { continue }
             result.marks.append(Mark(
+                id: id,
                 pieces: [Self.piece(Self.trimmed(found, in: target), in: target, anchoredIn: anchor)],
                 markedAt: date,
                 turnID: turns[edit.markID] ?? nil
