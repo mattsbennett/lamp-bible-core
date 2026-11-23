@@ -132,13 +132,31 @@ public struct LampPresentationSlideCanvas: View {
         revealPlan.isShown(part, atStep: revealStep)
     }
 
+    /// The colours over a picture where there is one, else on the slide's own
+    /// ground where it has one, else the theme's.
+    private var effectiveInk: Ink? { ink ?? groundInk }
+
+    /// The words' colours on this slide's own ground.
+    private var groundInk: Ink? {
+        guard let ground = slide.backgroundColor, let chosen = style.theme.ink(on: ground) else { return nil }
+        return Ink(
+            text: Color(lampDeckHex: chosen.text) ?? .white,
+            accent: Color(lampDeckHex: chosen.accent) ?? .orange,
+            highlights: chosen.highlights.compactMapValues { Color(lampDeckHex: $0) }
+        )
+    }
+
     private var foreground: Color {
-        ink?.text ?? Color(lampDeckHex: style.theme.foregroundColor) ?? .white
+        effectiveInk?.text ?? Color(lampDeckHex: style.theme.foregroundColor) ?? .white
     }
     private var accent: Color {
-        ink?.accent ?? Color(lampDeckHex: style.theme.accentColor) ?? .orange
+        effectiveInk?.accent ?? Color(lampDeckHex: style.theme.accentColor) ?? .orange
     }
-    private var background: Color { Color(lampDeckHex: style.theme.backgroundColor) ?? .black }
+    /// The slide's own ground where it sets one, else the theme's.
+    private var background: Color {
+        slide.backgroundColor.flatMap { Color(lampDeckHex: $0) }
+            ?? Color(lampDeckHex: style.theme.backgroundColor) ?? .black
+    }
 
     /// The colour emphasised words are drawn in: the highlight they name, or
     /// the accent when the theme has none by that name.
@@ -147,7 +165,7 @@ public struct LampPresentationSlideCanvas: View {
         case .accent:
             return accent
         case .highlight(let name):
-            if let ink { return ink.highlights[name] ?? accent }
+            if let ink = effectiveInk { return ink.highlights[name] ?? accent }
             return style.theme.highlights?[name].flatMap { Color(lampDeckHex: $0) } ?? accent
         }
     }
@@ -1063,7 +1081,10 @@ public struct LampPresentationSlideCanvas: View {
                 weight: weight,
                 alignment: alignment,
                 color: color ?? foreground,
-                scalesToFit: stepsDown
+                scalesToFit: stepsDown,
+                // A title or subtitle, or a column's heading, which is a
+                // subtitle, is set in the heading typeface.
+                heading: block.kind == .title || block.kind == .subtitle
             )
             // A listener hears the words, not the marks Lamp drew around them.
             .accessibilityLabel(block.text)
@@ -1136,10 +1157,11 @@ public struct LampPresentationSlideCanvas: View {
         weight: Font.Weight,
         alignment: TextAlignment,
         color: Color,
-        scalesToFit: Bool = true
+        scalesToFit: Bool = true,
+        heading: Bool = false
     ) -> some View {
-        Text(attributed(runs, size: size))
-            .font(presentationFont(size: size, weight: weight))
+        Text(attributed(runs, size: size, heading: heading))
+            .font(presentationFont(size: size, weight: weight, heading: heading))
             .foregroundStyle(color)
             .multilineTextAlignment(alignment)
             .lineSpacing(size * 0.12)
@@ -1152,11 +1174,15 @@ public struct LampPresentationSlideCanvas: View {
 
     /// `runs` as one string, emphasised words bold and in their colour. The
     /// rest takes the font and colour the text view is given.
-    private func attributed(_ runs: [LampPresentationTextRun], size: CGFloat) -> AttributedString {
+    private func attributed(
+        _ runs: [LampPresentationTextRun],
+        size: CGFloat,
+        heading: Bool = false
+    ) -> AttributedString {
         runs.reduce(into: AttributedString()) { result, run in
             var piece = AttributedString(run.text)
             if let mark = run.mark {
-                piece.font = presentationFont(size: size, weight: .bold)
+                piece.font = presentationFont(size: size, weight: .bold, heading: heading)
                 // Unlit, emphasised words keep their weight and take the plain
                 // text colour, so lighting them changes colour and nothing
                 // moves. The plain colour by name, not the block's: in a
@@ -1170,13 +1196,20 @@ public struct LampPresentationSlideCanvas: View {
         }
     }
 
-    private func presentationFont(size: CGFloat, weight: Font.Weight) -> Font {
+    /// The deck's type at `size`: its heading typeface for a heading where it
+    /// names one, its typeface otherwise.
+    private func presentationFont(size: CGFloat, weight: Font.Weight, heading: Bool = false) -> Font {
         let resolvedSize = max(size, compact ? 4 : 10)
-        switch style.theme.typeface?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        let headingFace = style.theme.headingTypeface?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let face = heading && headingFace?.isEmpty == false ? headingFace : style.theme.typeface
+        switch face?.trimmingCharacters(in: .whitespacesAndNewlines) {
         case "system-sans":
             return .system(size: resolvedSize, weight: weight)
         case "system-serif":
             return .system(size: resolvedSize, weight: weight, design: .serif)
+        // Lamp Rounded by name, for headings in it over a body in another.
+        case "system-rounded":
+            return .system(size: resolvedSize, weight: weight, design: .rounded)
         case .some(let family) where !family.isEmpty:
             return .custom(family, size: resolvedSize).weight(weight)
         default:

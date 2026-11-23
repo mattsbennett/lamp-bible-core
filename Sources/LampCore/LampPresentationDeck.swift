@@ -157,7 +157,12 @@ public struct LampPresentationTheme: Codable, Equatable, Sendable {
     public var backgroundColor: String
     public var foregroundColor: String
     public var accentColor: String
+    /// The deck's typeface: its body text, and its headings too unless
+    /// `headingTypeface` names another.
     public var typeface: String?
+    /// The typeface of titles, subtitles and column headings, when it differs
+    /// from the body's. Absent means headings share `typeface`.
+    public var headingTypeface: String?
     /// Colours emphasised words can be drawn in besides the accent, by name:
     /// one for each idea, person or side a deck sets apart. A block's
     /// `emphasis` names one; emphasis that names none takes the accent.
@@ -169,6 +174,7 @@ public struct LampPresentationTheme: Codable, Equatable, Sendable {
         foregroundColor: String,
         accentColor: String,
         typeface: String? = nil,
+        headingTypeface: String? = nil,
         highlights: [String: String]? = nil
     ) {
         self.id = id
@@ -176,6 +182,7 @@ public struct LampPresentationTheme: Codable, Equatable, Sendable {
         self.foregroundColor = foregroundColor
         self.accentColor = accentColor
         self.typeface = typeface
+        self.headingTypeface = headingTypeface
         self.highlights = highlights
     }
 
@@ -238,6 +245,11 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
     /// after the rest of the slide has arrived. Absent means they are lit
     /// from the start.
     public var revealsEmphasis: Bool?
+    /// This slide's own ground, as `#RRGGBB`, in place of the theme's: for a
+    /// section break, or a slide set apart. The words take whichever of the
+    /// theme's two ground colours reads on it; see
+    /// `LampPresentationTheme.ink(on:)`. Absent means the theme's.
+    public var backgroundColor: String?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -247,7 +259,8 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
         isHidden: Bool = false,
         notesAnchor: String? = nil,
         reveal: LampPresentationReveal? = nil,
-        revealsEmphasis: Bool? = nil
+        revealsEmphasis: Bool? = nil,
+        backgroundColor: String? = nil
     ) {
         self.id = id
         self.layout = layout
@@ -255,6 +268,7 @@ public struct LampPresentationSlide: Codable, Equatable, Identifiable, Sendable 
         self.notesAnchor = notesAnchor
         self.reveal = reveal
         self.revealsEmphasis = revealsEmphasis
+        self.backgroundColor = backgroundColor
         self.speakerNotes = speakerNotes
         self.isHidden = isHidden
     }
@@ -480,6 +494,14 @@ public enum LampPresentationDeckValidator {
            typeface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             issue(.error, "theme.typeface", "A typeface must name a font family or system style.")
         }
+        if let typeface = deck.theme.headingTypeface,
+           typeface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issue(
+                .error,
+                "theme.headingTypeface",
+                "A heading typeface must name a font family or system style; omit it to use the body's."
+            )
+        }
         for (key, value) in [
             ("theme.backgroundColor", deck.theme.backgroundColor),
             ("theme.foregroundColor", deck.theme.foregroundColor),
@@ -613,6 +635,21 @@ public enum LampPresentationDeckValidator {
             // slide passes every other check and simply becomes unreadable.
             if let crowding = crowdingMessage(for: plan, layout: slide.layout) {
                 issue(.warning, "\(slidePath).blocks", crowding)
+            }
+
+            // A slide's own ground is held to the theme's own floor for words,
+            // since the words can only take one of the theme's two grounds.
+            if let ground = slide.backgroundColor {
+                if !isHexColor(ground) {
+                    issue(.error, "\(slidePath).backgroundColor", "Use a six-digit hexadecimal colour such as #111827.")
+                } else if let ink = deck.theme.ink(on: ground), ink.contrast < 4.5 {
+                    issue(
+                        .warning,
+                        "\(slidePath).backgroundColor",
+                        "Neither of the theme's colours reads well on this background: the words "
+                            + "contrast at only \(formattedRatio(ink.contrast)):1; aim for 4.5:1 or more."
+                    )
+                }
             }
 
             // A reveal with nothing to bring in a part at a time leaves the
