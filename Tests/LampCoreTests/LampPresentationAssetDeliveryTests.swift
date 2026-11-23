@@ -63,6 +63,24 @@ struct LampPresentationAssetDeliveryTests {
         ))
     }
 
+    @Test func bringsInAPicturesVideoAndKeepsItWhilePruning() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("still.jpg", "still bytes")
+        try fixture.write("loop.mp4", "video bytes")
+        var subject = deck(referencing: ["Assets/still.jpg"])
+        subject.slides[0].blocks[0].video = "Assets/loop.mp4"
+
+        let result = try fixture.store.importAssets(from: fixture.delivery, referencedBy: subject)
+        #expect(result.imported == ["Assets/loop.mp4", "Assets/still.jpg"])
+        #expect(subject.referencedAssetNames == ["still.jpg", "loop.mp4"])
+        try fixture.store.save(subject)
+        try fixture.store.pruneUnreferencedAssets()
+        #expect(FileManager.default.fileExists(
+            atPath: fixture.library.appendingPathComponent("Presentations/Assets/loop.mp4").path
+        ))
+    }
+
     @Test func reportsAnImageThatWasNeverDelivered() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

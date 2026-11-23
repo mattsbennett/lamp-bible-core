@@ -132,4 +132,36 @@ struct LampPresentationPictureTests {
         let written = String(decoding: try JSONEncoder().encode(LampPresentationBlock(kind: .body, text: "x")), as: UTF8.self)
         #expect(!written.contains("motion"))
     }
+
+    @Test func aVideoIsCheckedAndOlderDecksOpenWithout() throws {
+        #expect(LampPresentationVideo.isPlayable("Assets/loop.MP4"))
+        #expect(LampPresentationVideo.isPlayable("Assets/a.b.mov"))
+        #expect(!LampPresentationVideo.isPlayable("Assets/loop.avi"))
+        #expect(!LampPresentationVideo.isPlayable("Assets/.mp4"))
+        #expect(!LampPresentationVideo.isPlayable("Assets/mp4"))
+        let deck = LampPresentationDeck(title: "Deck", slides: [.init(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "T"),
+            .init(kind: .body, text: "B", video: "Assets/a.mp4"),
+            .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A", placement: .background, video: "Assets/a.avi"),
+        ]), .init(layout: .image, blocks: [
+            .init(kind: .image, assetPath: "Assets/b.jpg", altText: "B", video: "../b.mp4"),
+        ]), .init(layout: .image, blocks: [
+            .init(kind: .image, assetPath: "Assets/c.jpg", altText: "C", video: "Assets/c.mov"),
+        ])])
+        let issues = LampPresentationDeckValidator.validate(deck).filter { $0.path.hasSuffix(".video") }
+        #expect(issues.map(\.path) == [
+            "slides[0].blocks[1].video", "slides[0].blocks[2].video", "slides[1].blocks[0].video",
+        ])
+        #expect(issues.map(\.severity) == [.warning, .warning, .error])
+        let written = String(decoding: try JSONEncoder().encode(LampPresentationBlock(kind: .image, assetPath: "Assets/a.jpg")), as: UTF8.self)
+        #expect(!written.contains("video"))
+        // One video a slide: the one behind it plays, though it comes second.
+        let two = LampPresentationDeck(title: "Two", slides: [.init(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "T"),
+            .init(kind: .image, assetPath: "Assets/c.jpg", altText: "C", video: "Assets/c.mp4"),
+            .init(kind: .image, assetPath: "Assets/d.jpg", altText: "D", placement: .background, video: "Assets/d.mp4"),
+        ])])
+        #expect(LampPresentationDeckValidator.validate(two).filter { $0.path.hasSuffix(".video") }.map(\.path)
+            == ["slides[0].blocks[1].video"])
+    }
 }

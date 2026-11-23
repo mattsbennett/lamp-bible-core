@@ -21,18 +21,36 @@ enum LampPresentationTint {
     ) -> CGImage? {
         guard let tint, tint != .none else { return image }
         let input = CIImage(cgImage: image)
+        return context.createCGImage(tinted(input, tint, theme: theme), from: input.extent)
+    }
+
+    /// A video's frame, upright, in `tint` for `theme`, as a picture to draw.
+    static func rendered(
+        _ frame: CIImage,
+        _ tint: LampPresentationImageTint?,
+        theme: LampPresentationTheme
+    ) -> CGImage? {
+        context.createCGImage(tinted(frame, tint, theme: theme), from: frame.extent)
+    }
+
+    /// `input` in `tint` for `theme`: the one filter for pictures and video.
+    private static func tinted(
+        _ input: CIImage,
+        _ tint: LampPresentationImageTint?,
+        theme: LampPresentationTheme
+    ) -> CIImage {
         let output: CIImage
-        switch tint {
+        switch tint ?? .none {
         case .none:
-            return image
+            return input
         case .duotone:
             let ends = LampPresentationImageTint.duotone(of: theme)
-            guard let dark = ciColor(ends.dark), let light = ciColor(ends.light) else { return image }
+            guard let dark = ciColor(ends.dark), let light = ciColor(ends.light) else { return input }
             output = input
                 .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0])
                 .applyingFilter("CIFalseColor", parameters: ["inputColor0": dark, "inputColor1": light])
         case .muted:
-            guard let ground = LampPresentationColor(hex: theme.backgroundColor) else { return image }
+            guard let ground = LampPresentationColor(hex: theme.backgroundColor) else { return input }
             let wash = CIImage(color: CIColor(
                 red: ground.red, green: ground.green, blue: ground.blue,
                 alpha: LampPresentationImageTint.mutedWash
@@ -47,7 +65,7 @@ enum LampPresentationTint {
                 ),
             ])
         }
-        return context.createCGImage(output, from: input.extent)
+        return output
     }
 
     private static func ciColor(_ hex: String) -> CIColor? {

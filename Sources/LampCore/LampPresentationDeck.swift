@@ -419,6 +419,11 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// How a picture moves while its slide is presented; see
     /// `LampPresentationImageMotion`. Absent means still.
     public var motion: LampPresentationImageMotion?
+    /// A silent, looping video played in a picture's place while its slide
+    /// is presented, as a relative path like `assetPath`; see
+    /// `LampPresentationVideo`. The picture at `assetPath` is its still,
+    /// shown everywhere else and by anything that cannot play it.
+    public var video: String?
     /// A body block's lines drawn as a figure: a timeline, or a passage's
     /// structure; see `LampPresentationFigure`. Absent means drawn as text.
     public var figure: LampPresentationFigure?
@@ -445,6 +450,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         focus: LampPresentationFocus? = nil,
         tint: LampPresentationImageTint? = nil,
         motion: LampPresentationImageMotion? = nil,
+        video: String? = nil,
         figure: LampPresentationFigure? = nil,
         zoom: LampPresentationTimelineZoom? = nil,
         map: LampPresentationMapOptions? = nil
@@ -464,6 +470,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.focus = focus
         self.tint = tint
         self.motion = motion
+        self.video = video
         self.figure = figure
         self.zoom = zoom
         self.map = map
@@ -471,6 +478,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
 
     /// An image that fills the slide behind everything else.
     public var isBackground: Bool { kind == .image && placement == .background }
+
+    /// Every file this block names: its picture, and its video.
+    public var assetPaths: [String] { [assetPath, video].compactMap { $0 } }
 }
 
 public struct LampPresentationDeckIssue: Codable, Equatable, Identifiable, Sendable {
@@ -729,6 +739,22 @@ public enum LampPresentationDeckValidator {
                 )
             }
 
+            // One video plays on a slide: the picture behind it's, else the
+            // first that has one, of those Lamp can play (the others are
+            // warned of as unplayable below).
+            let videos = slide.blocks.indices.filter {
+                slide.blocks[$0].kind == .image
+                    && slide.blocks[$0].video.map { isSafeAssetPath($0) && LampPresentationVideo.isPlayable($0) } == true
+            }
+            let playedVideo = videos.first { slide.blocks[$0].isBackground } ?? videos.first
+            for index in videos where index != playedVideo {
+                issue(
+                    .warning,
+                    "\(slidePath).blocks[\(index)].video",
+                    "A slide plays one video, the picture behind it's or else the first; this picture is shown still."
+                )
+            }
+
             let blockIDs = slide.blocks.map(\.id)
             for duplicate in duplicates(in: blockIDs) {
                 issue(.error, "\(slidePath).blocks", "Block ID '\(duplicate)' is duplicated.")
@@ -774,6 +800,23 @@ public enum LampPresentationDeckValidator {
                 }
                 if let motion = block.motion, motion != .none, block.kind != .image {
                     issue(.warning, "\(blockPath).motion", "Only a picture can drift.")
+                }
+                if let video = block.video {
+                    if !isSafeAssetPath(video) {
+                        issue(
+                            .error,
+                            "\(blockPath).video",
+                            "Use a relative path inside the presentation folder, such as Assets/clip.mp4."
+                        )
+                    } else if block.kind != .image {
+                        issue(.warning, "\(blockPath).video", "Only a picture can play a video; this one is not played.")
+                    } else if !LampPresentationVideo.isPlayable(video) {
+                        issue(
+                            .warning,
+                            "\(blockPath).video",
+                            "Lamp plays .mp4, .mov and .m4v video; this picture is shown still."
+                        )
+                    }
                 }
                 if block.kind == .image {
                     if block.assetPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
@@ -868,10 +911,10 @@ public enum LampPresentationDeckValidator {
         return issues
     }
 
-    /// Validates a deck and additionally checks that every image it names is
-    /// really there, which the pure format check cannot know.
+    /// Validates a deck and additionally checks that every image and video it
+    /// names is really there, which the pure format check cannot know.
     ///
-    /// `assetExists` is asked for each safe `assetPath`, relative to the
+    /// `assetExists` is asked for each safe `assetPath` and `video`, relative to the
     /// presentation folder. A named file that is absent renders as a
     /// placeholder on every platform, so it is reported rather than fatal.
     public static func validate(
@@ -880,18 +923,23 @@ public enum LampPresentationDeckValidator {
     ) -> [LampPresentationDeckIssue] {
         var issues = validate(deck)
         for (slideIndex, slide) in deck.slides.enumerated() {
-            for (blockIndex, block) in slide.blocks.enumerated() {
-                guard block.kind == .image,
-                      let assetPath = block.assetPath,
-                      isSafeAssetPath(assetPath),
-                      !assetExists(assetPath)
-                else { continue }
-                issues.append(.init(
-                    severity: .warning,
-                    path: "slides[\(slideIndex)].blocks[\(blockIndex)].assetPath",
-                    message: "No file at '\(assetPath)'. The slide renders a placeholder "
-                        + "until the image is delivered beside the deck."
-                ))
+            for (blockIndex, block) in slide.blocks.enumerated() where block.kind == .image {
+                if let assetPath = block.assetPath, isSafeAssetPath(assetPath), !assetExists(assetPath) {
+                    issues.append(.init(
+                        severity: .warning,
+                        path: "slides[\(slideIndex)].blocks[\(blockIndex)].assetPath",
+                        message: "No file at '\(assetPath)'. The slide renders a placeholder "
+                            + "until the image is delivered beside the deck."
+                    ))
+                }
+                if let video = block.video, isSafeAssetPath(video), !assetExists(video) {
+                    issues.append(.init(
+                        severity: .warning,
+                        path: "slides[\(slideIndex)].blocks[\(blockIndex)].video",
+                        message: "No file at '\(video)'. The picture is shown still "
+                            + "until the video is delivered beside the deck."
+                    ))
+                }
             }
         }
         return issues
@@ -1542,7 +1590,7 @@ public struct LampPresentationDeckStore: Sendable {
         let referenced = Set(
             deck.slides
                 .flatMap(\.blocks)
-                .compactMap(\.assetPath)
+                .flatMap(\.assetPaths)
                 .filter(LampPresentationDeckValidator.isSafeAssetPath)
         ).sorted()
         guard !referenced.isEmpty else { return ([], []) }

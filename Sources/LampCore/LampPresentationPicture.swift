@@ -186,3 +186,28 @@ public enum LampPresentationImageMotion: String, Codable, CaseIterable, Identifi
     /// How many steps along a drift the words are judged at, past at rest.
     public static let driftSteps = 4
 }
+
+/// A picture that plays as a video while its slide is presented: silent,
+/// looping, drawn just as the picture is, cropped around its focus, in its
+/// tint, drifting if it drifts.
+///
+/// The block's picture is the video's still and stays required: thumbnails,
+/// Slide Studio, PDFs, Reduce Motion, and an older Lamp that does not know
+/// `video` all show it, and the words over it are coloured for it. So the
+/// still should be a frame of the video, which Slide Studio takes for you.
+public enum LampPresentationVideo {
+    /// What Lamp plays, by file extension.
+    public static let extensions: Set<String> = ["mp4", "mov", "m4v"]
+
+    /// The largest video Slide Studio copies into a deck. Every file a deck
+    /// names travels with it to each Mac, iPhone and iPad it syncs to, so a
+    /// background loop is kept to a short clip.
+    public static let largestFileBytes: Int64 = 100_000_000
+
+    /// Whether Lamp plays the video at `path`, judged by its extension.
+    public static func isPlayable(_ path: String) -> Bool {
+        let name = path.split(separator: "/").last.map(String.init) ?? path
+        guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return false }
+        return extensions.contains(name[name.index(after: dot)...].lowercased())
+    }
+}

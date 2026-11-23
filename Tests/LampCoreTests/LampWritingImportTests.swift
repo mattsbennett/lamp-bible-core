@@ -643,6 +643,33 @@ struct LampWritingImportTests {
         #expect(!third.items[1].importsByDefault)
     }
 
+    @Test func aDeckPicturesVideoComesInBesideItsStill() async throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("talks")
+        try write("# Sea\n\nStill.", to: "sea.md", in: folder)
+        var deck = LampPresentationDeck(id: "talks/deck:sea", title: "Sea", slides: [
+            LampPresentationSlide(layout: .image, blocks: [
+                .init(kind: .image, assetPath: "Assets/sea.png", altText: "Sea", video: "Assets/sea.mp4"),
+            ]),
+        ])
+        deck.slides[0].blocks[0].motion = .drift
+        try write(String(decoding: try JSONEncoder().encode(deck), as: UTF8.self), to: "sea.lampdeck", in: folder)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("Assets"), withIntermediateDirectories: true)
+        try onePixelPNG.write(to: folder.appendingPathComponent("Assets/sea.png"))
+        try Data("video bytes".utf8).write(to: folder.appendingPathComponent("Assets/sea.mp4"))
+
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let plan = try await library.planWritingImport(LampWritingImport.files(at: folder))
+        try await library.applyWritingImport(plan, selecting: Set(plan.items.map(\.id)))
+        let store = LampPresentationDeckStore(rootURL: library.rootURL)
+        let block = try #require(try store.deck(id: "talks/deck:sea")?.slides.first?.blocks.first)
+        let video = try #require(block.video)
+        #expect(video.hasPrefix("Assets/") && video.hasSuffix("-sea.mp4"))
+        #expect(try Data(contentsOf: store.decksDirectoryURL.appendingPathComponent(video)) == Data("video bytes".utf8))
+        #expect(block.assetPath?.hasSuffix("-sea.png") == true)
+    }
+
     @Test func linksBetweenFilesOfOneImportOpenTheirWritings() async throws {
         let root = try scratch()
         defer { try? FileManager.default.removeItem(at: root) }

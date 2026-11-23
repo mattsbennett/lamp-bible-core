@@ -177,12 +177,13 @@ public enum LampPresentationDeckPortablePull {
 }
 
 public extension LampPresentationDeck {
-    /// Filenames in the assets directory this deck's image blocks point at.
+    /// Filenames in the assets directory this deck's image blocks point at:
+    /// pictures and their videos.
     var referencedAssetNames: Set<String> {
         Set(
             slides
                 .flatMap(\.blocks)
-                .compactMap(\.assetPath)
+                .flatMap(\.assetPaths)
                 .filter { LampPresentationDeckValidator.isSafeAssetPath($0) }
                 .compactMap { $0.split(separator: "/").last.map(String.init) }
         )

@@ -76,6 +76,8 @@ public struct LampPresentationSlideCanvas: View {
     /// from, so the picture and its softened copy behind the words move as
     /// one even when the copy first appears at a later click.
     @State private var arrivedAt = Date()
+    /// The video playing in this slide's picture while it is presented.
+    @State private var playback: LampPresentationVideoPlayback?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func scaled(_ unit: CGFloat) -> Self {
@@ -216,7 +218,9 @@ public struct LampPresentationSlideCanvas: View {
             ZStack {
                 background
                 if let pictureURL, let picture = backdropPicture(at: pictureURL) {
-                    focusedFill(picture, at: pictureURL, size: geometry.size)
+                    LampPresentationVideoFrame(playback: playback(of: plan.background)) { frame in
+                        focusedFill(frame?.image ?? picture, at: pictureURL, size: geometry.size, pictureSize: frame?.size)
+                    }
                 }
                 words(
                     unit: unit,
@@ -230,6 +234,18 @@ public struct LampPresentationSlideCanvas: View {
             .clipped()
         }
         .background(background)
+        .task(id: playing) {
+            // One video a slide: the picture behind it, else the one framed.
+            guard let playing else { return }
+            let started = LampPresentationVideoPlayback(url: playing.url, tint: playing.tint, theme: style.theme)
+            started.start()
+            playback = started
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3_600))
+            }
+            started.stop()
+            if playback === started { playback = nil }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityDescription)
     }
@@ -362,7 +378,9 @@ public struct LampPresentationSlideCanvas: View {
             if let picture, reach.contains(where: { $0.strength > 0 }) {
                 // Placed exactly as the picture beneath it is, or the blur
                 // would show a second picture slid against the first.
-                focusedFill(picture.image, at: picture.url, size: size)
+                LampPresentationVideoFrame(playback: playback(of: plan.background)) { frame in
+                    focusedFill(frame?.image ?? picture.image, at: picture.url, size: size, pictureSize: frame?.size)
+                }
                     .blur(radius: LampPresentationBackdrop.softening * unit, opaque: true)
                     .mask {
                         LinearGradient(
@@ -1097,8 +1115,8 @@ public struct LampPresentationSlideCanvas: View {
     /// `image` filling `size`, cropped around the picture's focus as the
     /// sampler crops it (`LampPresentationFocus.shown`), so the words are
     /// coloured for the part of the picture they are set over.
-    private func focusedFill(_ image: Image, at url: URL, size: CGSize) -> some View {
-        let picture = LampPresentationAssetImageCache.size(at: url) ?? size
+    private func focusedFill(_ image: Image, at url: URL, size: CGSize, pictureSize: CGSize? = nil) -> some View {
+        let picture = pictureSize ?? LampPresentationAssetImageCache.size(at: url) ?? size
         let shown = LampPresentationFocus.shown(
             in: picture,
             frameRatio: size.height > 0 ? Double(size.width / size.height) : 1,
@@ -1139,6 +1157,31 @@ public struct LampPresentationSlideCanvas: View {
         }
     }
 
+    /// The video to play while this slide is presented, and how: the picture
+    /// behind the slide's, else the framed picture's, as the validator warns
+    /// of any other. Nil where nothing plays, including with Reduce Motion
+    /// on, which shows the still.
+    private var playing: LampPresentationPlayingVideo? {
+        guard isPresenting, !reduceMotion else { return nil }
+        for block in [plan.background, plan.image].compactMap({ $0 }) where block.kind == .image {
+            guard let video = block.video, LampPresentationVideo.isPlayable(video) else { continue }
+            // The resolver reads a block's `assetPath`, so it is asked about
+            // the video as if it were the picture: the same rules, the same
+            // library, the same refusal of a path that climbs out.
+            var asVideo = block
+            asVideo.assetPath = video
+            guard let url = assetURL(asVideo), FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return LampPresentationPlayingVideo(blockID: block.id, url: url, tint: block.tint)
+        }
+        return nil
+    }
+
+    /// The playback drawing `block`'s picture, if it is the one playing.
+    private func playback(of block: LampPresentationBlock?) -> LampPresentationVideoPlayback? {
+        guard let block, let playing, playing.blockID == block.id else { return nil }
+        return playback
+    }
+
     /// `block`'s drift, if it drifts here and now. Drawn as a scale about
     /// `anchor`, inside the picture's own clip, so only its edges go.
     private func drift(of block: LampPresentationBlock?, anchor: UnitPoint) -> LampPresentationDrift {
@@ -1164,6 +1207,16 @@ public struct LampPresentationSlideCanvas: View {
             resolved
                 .resizable()
                 .scaledToFit()
+                // The video fills the still's frame, so nothing beside the
+                // picture moves when the first frame arrives.
+                .overlay {
+                    LampPresentationVideoFrame(playback: playback(of: imageBlock)) { frame in
+                        if let frame {
+                            frame.image.resizable().scaledToFill()
+                        }
+                    }
+                }
+                .clipped()
                 .modifier(drift(of: imageBlock, anchor: .center))
                 .clipShape(RoundedRectangle(cornerRadius: 18 * unit))
                 .accessibilityLabel(imageBlock?.altText ?? "Image")

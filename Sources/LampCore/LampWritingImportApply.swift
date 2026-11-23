@@ -371,7 +371,7 @@ public extension LampWritingImport {
                 deck.source = LampPresentationSource(kind: .writing, id: candidate.writingID)
                 var renamed: [String: String] = [:]
                 var missing: [String] = []
-                for path in Set(deck.slides.flatMap(\.blocks).compactMap(\.assetPath)).sorted() {
+                for path in Set(deck.slides.flatMap(\.blocks).flatMap(\.assetPaths)).sorted() {
                     guard LampPresentationDeckValidator.isSafeAssetPath(path) else { continue }
                     guard let directory = file.assetsDirectory,
                           isFile(directory.appendingPathComponent(path), inside: directory),
@@ -394,6 +394,9 @@ public extension LampWritingImport {
                     for block in deck.slides[slide].blocks.indices {
                         if let path = deck.slides[slide].blocks[block].assetPath, let name = renamed[path] {
                             deck.slides[slide].blocks[block].assetPath = name
+                        }
+                        if let path = deck.slides[slide].blocks[block].video, let name = renamed[path] {
+                            deck.slides[slide].blocks[block].video = name
                         }
                     }
                 }
