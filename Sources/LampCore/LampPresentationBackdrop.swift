@@ -113,6 +113,7 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             self.scrimOpacities = scrimOpacities
             self.contrast = contrast
         }
+
     }
 
     /// What every word on a slide is held to: WCAG's level for body text,
@@ -254,10 +255,19 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
     ///
     /// Each region is covered as much as its own words need, so every block
     /// reaches the target over `coverage` of what lies behind it.
+    ///
+    /// For a picture that moves, `regions` is every block at each of
+    /// `moments`: all the blocks at the first, then all at the next. Each
+    /// block is covered as much as its worst moment needs, and the colours
+    /// are chosen, and an accent kept, only where they read at every moment
+    /// under that cover. `scrimOpacities` then has one entry a block.
     public func treatment(
         for regions: [CGRect],
-        theme: LampPresentationTheme
+        theme: LampPresentationTheme,
+        moments: Int = 1
     ) -> Treatment {
+        let moments = moments > 0 && regions.count % moments == 0 ? moments : 1
+        let blockCount = regions.count / moments
         let foreground = LampPresentationColor(hex: theme.foregroundColor)
             ?? .init(red: 1, green: 1, blue: 1)
         let ground = LampPresentationColor(hex: theme.backgroundColor)
@@ -278,8 +288,26 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             (foreground, theme.foregroundColor, ground, theme.backgroundColor),
             (ground, theme.backgroundColor, foreground, theme.foregroundColor),
         ].map { ink, inkHex, scrim, scrimHex in
-            let opacities = blocks.map { Self.leastScrim(for: ink, over: $0, scrim: scrim) }
-            let contrasts = zip(blocks, opacities).map { cells, opacity in
+            let each = blocks.map { Self.leastScrim(for: ink, over: $0, scrim: scrim) }
+            // A block's cover is laid at every moment, so it must read at
+            // every one: at least the worst moment's own, and raised from
+            // there until all of them do. A cover can lower the contrast of
+            // a detail the words read against without one, as a pale scrim
+            // does a black line under grey words, so the worst moment's
+            // alone is not enough.
+            let opacities = (0..<blockCount).map { block -> Double in
+                let moments = Array(stride(from: block, to: each.count, by: max(blockCount, 1)))
+                var opacity = moments.map { each[$0] }.max() ?? 0
+                guard moments.count > 1 else { return opacity }
+                while opacity < 1, moments.contains(where: {
+                    Self.contrast(of: ink, over: blocks[$0], scrim: scrim, opacity: opacity) < Self.targetContrast
+                }) {
+                    opacity = min(((opacity * 100).rounded() + 1) / 100, 1)
+                }
+                return opacity
+            }
+            let drawn = blocks.indices.map { opacities[$0 % max(blockCount, 1)] }
+            let contrasts = zip(blocks, drawn).map { cells, opacity in
                 Self.contrast(of: ink, over: cells, scrim: scrim, opacity: opacity)
             }
             return Option(
@@ -305,9 +333,10 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
 
         // A colour stays itself only while every block it may be used in
         // still reads in it.
+        let drawn = blocks.indices.map { chosen.opacities[$0 % max(blockCount, 1)] }
         func reading(_ hex: String) -> String {
             guard let color = LampPresentationColor(hex: hex),
-                  zip(blocks, chosen.opacities).contains(where: { cells, opacity in
+                  zip(blocks, drawn).contains(where: { cells, opacity in
                       Self.contrast(of: color, over: cells, scrim: chosen.scrim, opacity: opacity)
                           < Self.accentContrast
                   })

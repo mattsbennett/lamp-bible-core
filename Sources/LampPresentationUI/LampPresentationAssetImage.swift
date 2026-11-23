@@ -139,7 +139,8 @@ enum LampPresentationAssetImageCache {
         over url: URL,
         aspectRatio: LampPresentationAspectRatio,
         theme: LampPresentationTheme,
-        look: BackdropLook
+        look: BackdropLook,
+        moments: Int = 1
     ) -> LampPresentationBackdrop.Treatment? {
         let places = regions.map { region -> String in
             guard !region.isNull, !region.isEmpty, !region.isInfinite else { return "-" }
@@ -156,10 +157,11 @@ enum LampPresentationAssetImageCache {
                 .map { "\($0.key)=\($0.value)" }
                 .joined(separator: ","),
             places.joined(separator: ";"),
+            "\(moments)",
         ].joined(separator: "|") as NSString
         if let cached = treatments.object(forKey: key) { return cached.treatment }
         guard let backdrop = backdrop(at: url, aspectRatio: aspectRatio, look: look) else { return nil }
-        let treatment = backdrop.treatment(for: regions, theme: theme)
+        let treatment = backdrop.treatment(for: regions, theme: theme, moments: moments)
         treatments.setObject(TreatmentBox(treatment), forKey: key)
         return treatment
     }

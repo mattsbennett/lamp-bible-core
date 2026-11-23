@@ -69,4 +69,67 @@ struct LampPresentationPictureTests {
         #expect(!written.contains("focus"))
         #expect(!written.contains("tint"))
     }
+
+    @Test func aDriftStartsStillClosesInSlowlyAndComesBack() {
+        typealias Motion = LampPresentationImageMotion
+        #expect(Motion.driftScale(after: 0) == 1)
+        #expect(Motion.driftScale(after: -5) == 1)
+        #expect(Motion.driftScale(after: .nan) == 1)
+        #expect(abs(Motion.driftScale(after: Motion.driftPeriod / 2) - (1 + Motion.driftReach)) < 1e-9)
+        #expect(abs(Motion.driftScale(after: Motion.driftPeriod) - 1) < 1e-9)
+        // Barely moving on arrival: a second in, well under a thousandth.
+        #expect(Motion.driftScale(after: 1) - 1 < 0.0001)
+        var previous = 1.0
+        for second in stride(from: 1.0, through: Motion.driftPeriod / 2, by: 1) {
+            let scale = Motion.driftScale(after: second)
+            #expect(scale >= previous)
+            previous = scale
+        }
+    }
+
+    @Test func aDriftClosesInOnTheFocusWhereTheCropShowsIt() {
+        typealias Motion = LampPresentationImageMotion
+        let middle = Motion.driftAnchor(in: portrait, frameRatio: widescreen, focus: nil)
+        #expect(abs(middle.x - 0.5) < 1e-9 && abs(middle.y - 0.5) < 1e-9)
+        // A face a fifth of the way down sits mid-frame once cropped around.
+        let face = Motion.driftAnchor(in: portrait, frameRatio: widescreen, focus: .init(x: 0.3, y: 0.2))
+        #expect(abs(face.x - 0.3) < 1e-9)
+        #expect(abs(face.y - 0.5) < 1e-9)
+        // At the very top the crop stops at the edge, and so does the anchor.
+        let top = Motion.driftAnchor(in: portrait, frameRatio: widescreen, focus: .init(x: 0.5, y: 0))
+        #expect(top.y == 0)
+        let invalid = Motion.driftAnchor(in: portrait, frameRatio: widescreen, focus: .init(x: 3, y: 0.2))
+        #expect(abs(invalid.x - 0.5) < 1e-9 && abs(invalid.y - 0.5) < 1e-9)
+    }
+
+    @Test func aDriftingPictureIsReadUnderTheWordsAtEachStep() {
+        typealias Motion = LampPresentationImageMotion
+        let caption = CGRect(x: 0.1, y: 0.8, width: 0.5, height: 0.1)
+        // About a top focus, what lies below the caption rises into it.
+        let views = Motion.driftViews(of: caption, anchor: CGPoint(x: 0.5, y: 0.1))
+        #expect(views.count == Motion.driftSteps + 1)
+        #expect(views.first == caption)
+        #expect(abs(views.last!.minY - (0.1 + 0.7 / 1.03)) < 1e-9)
+        for (earlier, later) in zip(views, views.dropFirst()) {
+            #expect(later.minY < earlier.minY)
+            #expect(earlier.minY - later.minY < 0.0075)
+        }
+        #expect(Motion.driftViews(of: .null, anchor: .zero).count == 1)
+    }
+
+    @Test func motionIsCheckedAndUnknownMotionsOpenStill() throws {
+        let deck = LampPresentationDeck(title: "Deck", slides: [.init(layout: .titleAndBody, blocks: [
+            .init(kind: .title, text: "T"),
+            .init(kind: .body, text: "B", motion: .drift),
+            .init(kind: .image, assetPath: "Assets/a.jpg", altText: "A", placement: .background, motion: .drift),
+        ])])
+        let issues = LampPresentationDeckValidator.validate(deck).filter { $0.path.hasSuffix(".motion") }
+        #expect(issues.map(\.path) == ["slides[0].blocks[1].motion"])
+        #expect(issues.first?.severity == .warning)
+        let json = #"{"id":"b","kind":"image","text":"","motion":"orbit"}"#
+        let decoded = try JSONDecoder().decode(LampPresentationBlock.self, from: Data(json.utf8))
+        #expect(decoded.motion == LampPresentationImageMotion.none)
+        let written = String(decoding: try JSONEncoder().encode(LampPresentationBlock(kind: .body, text: "x")), as: UTF8.self)
+        #expect(!written.contains("motion"))
+    }
 }

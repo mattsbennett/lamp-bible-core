@@ -416,6 +416,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// A picture drawn in the theme's colours; see
     /// `LampPresentationImageTint`. Absent means as it is.
     public var tint: LampPresentationImageTint?
+    /// How a picture moves while its slide is presented; see
+    /// `LampPresentationImageMotion`. Absent means still.
+    public var motion: LampPresentationImageMotion?
     /// A body block's lines drawn as a figure: a timeline, or a passage's
     /// structure; see `LampPresentationFigure`. Absent means drawn as text.
     public var figure: LampPresentationFigure?
@@ -441,6 +444,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         chart: LampPresentationChart? = nil,
         focus: LampPresentationFocus? = nil,
         tint: LampPresentationImageTint? = nil,
+        motion: LampPresentationImageMotion? = nil,
         figure: LampPresentationFigure? = nil,
         zoom: LampPresentationTimelineZoom? = nil,
         map: LampPresentationMapOptions? = nil
@@ -459,6 +463,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.chart = chart
         self.focus = focus
         self.tint = tint
+        self.motion = motion
         self.figure = figure
         self.zoom = zoom
         self.map = map
@@ -766,6 +771,9 @@ public enum LampPresentationDeckValidator {
                 }
                 if let tint = block.tint, tint != .none, block.kind != .image {
                     issue(.warning, "\(blockPath).tint", "Only a picture can be tinted.")
+                }
+                if let motion = block.motion, motion != .none, block.kind != .image {
+                    issue(.warning, "\(blockPath).motion", "Only a picture can drift.")
                 }
                 if block.kind == .image {
                     if block.assetPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {

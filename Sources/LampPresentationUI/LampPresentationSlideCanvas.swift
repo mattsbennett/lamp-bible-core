@@ -67,6 +67,17 @@ public struct LampPresentationSlideCanvas: View {
     /// themselves against the slide's width rather than its prose.
     private var layoutUnit: CGFloat = 1
 
+    /// Whether this is the slide in front of the room, where a picture that
+    /// drifts moves. See `presenting(_:)`.
+    private var isPresenting = false
+    private var presentedSince: Date?
+
+    /// When this slide arrived, which every drifting layer times itself
+    /// from, so the picture and its softened copy behind the words move as
+    /// one even when the copy first appears at a later click.
+    @State private var arrivedAt = Date()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private func scaled(_ unit: CGFloat) -> Self {
         var copy = self
         copy.layoutUnit = unit
@@ -137,6 +148,19 @@ public struct LampPresentationSlideCanvas: View {
         var copy = self
         copy.revealStep = step
         copy.revealPlan = step == nil ? .together : slide.revealPlan
+        return copy
+    }
+
+    /// This slide as it is shown to the room, where a picture set to drift
+    /// (`LampPresentationImageMotion`) does, timed from when the canvas
+    /// appeared, or from `since` where the presenter says when the slide
+    /// arrived. Give each slide its own view identity so each drifts from
+    /// its own arrival. Everywhere else, and with Reduce Motion on, pictures
+    /// are still.
+    public func presenting(_ presenting: Bool = true, since: Date? = nil) -> Self {
+        var copy = self
+        copy.isPresenting = presenting
+        copy.presentedSince = since
         return copy
     }
 
@@ -247,12 +271,15 @@ public struct LampPresentationSlideCanvas: View {
                         // colours chosen hold for the whole reveal; but the
                         // picture is covered only behind words already there.
                         let frames = bounds.map { proxy[$0.anchor] }
+                        let regions = frames.map { Self.fraction($0, of: proxy.size) }
+                        let sampled = sampled(regions, over: backdrop, in: proxy.size)
                         if let treatment = LampPresentationAssetImageCache.treatment(
-                            for: frames.map { Self.fraction($0, of: proxy.size) },
+                            for: sampled,
                             over: backdrop,
                             aspectRatio: style.aspectRatio,
                             theme: style.theme,
-                            look: backdropLook
+                            look: backdropLook,
+                            moments: regions.isEmpty ? 1 : sampled.count / regions.count
                         ) {
                             let _ = reportsBackdrop?(treatment)
                             ZStack(alignment: .topLeading) {
@@ -1078,12 +1105,47 @@ public struct LampPresentationSlideCanvas: View {
             focus: plan.background?.focus
         )
         let scale = shown.width > 0 ? size.width / shown.width : 1
+        let anchor = LampPresentationImageMotion.driftAnchor(
+            in: picture,
+            frameRatio: size.height > 0 ? Double(size.width / size.height) : 1,
+            focus: plan.background?.focus
+        )
         return image
             .resizable()
             .frame(width: picture.width * scale, height: picture.height * scale)
             .offset(x: -shown.minX * scale, y: -shown.minY * scale)
             .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .modifier(drift(of: plan.background, anchor: UnitPoint(x: anchor.x, y: anchor.y)))
             .clipped()
+    }
+
+    /// Where to read the picture behind the slide for words at `regions`:
+    /// the regions themselves, or for a picture that drifts, what is under
+    /// them at each step of the drift, every region at one step and then the
+    /// next (`LampPresentationImageMotion.driftViews`), for the treatment to
+    /// judge as moments. Read so wherever the slide is drawn,
+    /// still or not, so the words keep one colour.
+    private func sampled(_ regions: [CGRect], over url: URL, in size: CGSize) -> [CGRect] {
+        guard plan.background?.motion == .drift,
+              let picture = LampPresentationAssetImageCache.size(at: url) else { return regions }
+        let anchor = LampPresentationImageMotion.driftAnchor(
+            in: picture,
+            frameRatio: size.height > 0 ? Double(size.width / size.height) : 1,
+            focus: plan.background?.focus
+        )
+        let views = regions.map { LampPresentationImageMotion.driftViews(of: $0, anchor: anchor) }
+        return (0...LampPresentationImageMotion.driftSteps).flatMap { step in
+            views.map { $0.indices.contains(step) ? $0[step] : $0[0] }
+        }
+    }
+
+    /// `block`'s drift, if it drifts here and now. Drawn as a scale about
+    /// `anchor`, inside the picture's own clip, so only its edges go.
+    private func drift(of block: LampPresentationBlock?, anchor: UnitPoint) -> LampPresentationDrift {
+        LampPresentationDrift(
+            since: block?.motion == .drift && isPresenting && !reduceMotion ? presentedSince ?? arrivedAt : nil,
+            anchor: anchor
+        )
     }
 
     /// The picture itself when it can be read, and an honest placeholder
@@ -1097,9 +1159,12 @@ public struct LampPresentationSlideCanvas: View {
         if let chart = imageBlock, chart.kind == .chart {
             LampPresentationChartView(block: chart, unit: unit, foreground: foreground, accent: accent)
         } else if let resolved {
+            // Shown whole, with no focus to keep, so a drift closes in on its
+            // middle.
             resolved
                 .resizable()
                 .scaledToFit()
+                .modifier(drift(of: imageBlock, anchor: .center))
                 .clipShape(RoundedRectangle(cornerRadius: 18 * unit))
                 .accessibilityLabel(imageBlock?.altText ?? "Image")
         } else {

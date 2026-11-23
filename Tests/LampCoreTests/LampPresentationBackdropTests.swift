@@ -204,6 +204,63 @@ struct LampPresentationBackdropTests {
         #expect(treatment.contrast >= LampPresentationBackdrop.targetContrast)
     }
 
+    @Test("A block judged at several moments is covered for its worst, at every one")
+    func momentsAreCoveredForTheWorst() {
+        let grey = LampPresentationColor(hex: "#777777")!
+        let columns = 16
+        let rows = 9
+        let cells = (0..<rows).flatMap { row in
+            (0..<columns).map { _ -> LampPresentationBackdrop.Cell in
+                let color = row == rows - 1 ? grey : white
+                return .init(darkest: color, lightest: color)
+            }
+        }
+        let backdrop = LampPresentationBackdrop(columns: columns, rows: rows, cells: cells)
+        let title = CGRect(x: 0, y: 0, width: 1, height: 0.3)
+        let overWhite = CGRect(x: 0.5, y: 0.7, width: 0.3, height: 0.08)
+        let overGrey = CGRect(x: 0.5, y: 0.9, width: 0.3, height: 0.08)
+        let alone = backdrop.treatment(for: [title, overGrey], theme: neutral)
+        let moving = backdrop.treatment(for: [title, overWhite, title, overGrey], theme: neutral, moments: 2)
+        #expect(moving.scrimOpacities.count == 2)
+        #expect(moving.scrimOpacities == alone.scrimOpacities)
+        #expect(moving.text == alone.text)
+        // Moments that do not divide the regions are read as one.
+        #expect(backdrop.treatment(for: [title, overGrey, title], theme: neutral, moments: 2).scrimOpacities.count == 3)
+    }
+
+    @Test("A cover that one moment needs is raised until it reads at every moment")
+    func aCoverReadsAtEveryMoment() {
+        // Grey words on a white theme. At rest the block lies over white with
+        // a few black lines, which the grey reads against as it is; later it
+        // lies over near-white, which wants a white cover. That cover, laid
+        // at rest, greys the black lines toward the words.
+        let theme = LampPresentationTheme(
+            id: "grey-on-white", backgroundColor: "#FFFFFF", foregroundColor: "#757575", accentColor: "#757575"
+        )
+        let nearWhite = LampPresentationColor(hex: "#FAFAFA")!
+        let columns = 50
+        let rows = 2
+        let cells = (0..<rows).flatMap { row in
+            (0..<columns).map { column -> LampPresentationBackdrop.Cell in
+                if row == 1 { return .init(darkest: nearWhite, lightest: nearWhite) }
+                let color = column < 3 ? black : white
+                return .init(darkest: color, lightest: color)
+            }
+        }
+        let backdrop = LampPresentationBackdrop(columns: columns, rows: rows, cells: cells)
+        let atRest = CGRect(x: 0, y: 0, width: 1, height: 0.5)
+        let later = CGRect(x: 0, y: 0.5, width: 1, height: 0.5)
+        let treatment = backdrop.treatment(for: [atRest, later], theme: theme, moments: 2)
+        let ink = LampPresentationColor(hex: treatment.text)!
+        let scrim = LampPresentationColor(hex: treatment.scrim)!
+        let opacity = treatment.scrimOpacities[0]
+        for region in [atRest, later] {
+            #expect(LampPresentationBackdrop.contrast(
+                of: ink, over: backdrop.cells(under: [region]), scrim: scrim, opacity: opacity
+            ) >= LampPresentationBackdrop.targetContrast)
+        }
+    }
+
     @Test("Fine black lines on white paper count as both, not as their grey average")
     func engravingIsReadAsLinesAndPaper() {
         let mixed = LampPresentationBackdrop.Cell(darkest: black, lightest: white)

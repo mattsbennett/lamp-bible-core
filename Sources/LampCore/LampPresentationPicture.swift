@@ -99,3 +99,90 @@ public enum LampPresentationImageTint: String, Codable, CaseIterable, Identifiab
     public static let mutedSaturation = 0.25
     public static let mutedWash = 0.3
 }
+
+/// How a picture moves while its slide is presented. Absent, it is still.
+///
+/// `drift` closes in on the picture so slowly the room should not see it
+/// move, only find the picture a little nearer than it was: `driftReach` in
+/// `driftPeriod / 2`, then as slowly back, for as long as the slide is up.
+/// It closes in on the picture's focus, so the subject stays where it is and
+/// the edges go. Nothing moves in a thumbnail, in Slide Studio, in a PDF, or
+/// with Reduce Motion on; only the slide in front of the room.
+public enum LampPresentationImageMotion: String, Codable, CaseIterable, Identifiable, Sendable {
+    case none
+    case drift
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .none: "Still"
+        case .drift: "Drift"
+        }
+    }
+
+    /// A motion this app does not know is drawn still, so a deck written by
+    /// a newer app still opens rather than failing as a whole.
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .none
+    }
+
+    /// How much nearer a drifting picture comes at most: 3%.
+    public static let driftReach = 0.03
+
+    /// How long a drift takes to close in and come back again.
+    public static let driftPeriod: TimeInterval = 120
+
+    /// A drifting picture's scale `elapsed` seconds after its slide arrived:
+    /// 1 on arrival, gathering and easing as a cosine does, so it never
+    /// starts, stops or turns with a jolt.
+    public static func driftScale(after elapsed: TimeInterval) -> Double {
+        guard elapsed.isFinite, elapsed > 0 else { return 1 }
+        let phase = elapsed.truncatingRemainder(dividingBy: driftPeriod) / driftPeriod
+        return 1 + driftReach * (1 - cos(2 * .pi * phase)) / 2
+    }
+
+    /// Where on a frame of `frameRatio` a `pictureSize` picture that fills
+    /// it (`LampPresentationFocus.shown`) has its `focus`, as fractions of
+    /// the frame: the point a drift closes in on.
+    public static func driftAnchor(
+        in pictureSize: CGSize,
+        frameRatio: Double,
+        focus: LampPresentationFocus?
+    ) -> CGPoint {
+        let focus = focus.flatMap { $0.isValid ? $0 : nil } ?? .centre
+        let shown = LampPresentationFocus.shown(in: pictureSize, frameRatio: frameRatio, focus: focus)
+        guard shown.width > 0, shown.height > 0 else { return CGPoint(x: 0.5, y: 0.5) }
+        let x = (focus.x * Double(pictureSize.width) - Double(shown.minX)) / Double(shown.width)
+        let y = (focus.y * Double(pictureSize.height) - Double(shown.minY)) / Double(shown.height)
+        return CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
+    }
+
+    /// What lies under `region` at points along a drift about `anchor`,
+    /// both as fractions of the frame, from at rest to nearest.
+    ///
+    /// Closed in by a scale `s`, the picture shows at a frame point `p` what
+    /// lay at `anchor + (p - anchor) / s`. The words over a drifting picture
+    /// are coloured for every one of these, each held to reading on its own,
+    /// so they read throughout and never change colour as it moves. Each is
+    /// judged whole: one region spanning the whole path would let a patch
+    /// that fills the words at one moment count for little of the path.
+    /// Steps of a quarter of the reach move a region at most 0.75% of the
+    /// frame, less than a line of the smallest words on a slide.
+    public static func driftViews(of region: CGRect, anchor: CGPoint) -> [CGRect] {
+        guard !region.isNull, !region.isEmpty, !region.isInfinite else { return [region] }
+        return (0...driftSteps).map { step in
+            guard step > 0 else { return region }
+            let scale = 1 + driftReach * Double(step) / Double(driftSteps)
+            return CGRect(
+                x: anchor.x + (region.minX - anchor.x) / scale,
+                y: anchor.y + (region.minY - anchor.y) / scale,
+                width: region.width / scale,
+                height: region.height / scale
+            )
+        }
+    }
+
+    /// How many steps along a drift the words are judged at, past at rest.
+    public static let driftSteps = 4
+}

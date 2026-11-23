@@ -46,3 +46,28 @@ struct LampSlideHeldUntilCovered: ViewModifier, Animatable {
 
     func body(content: Content) -> some View { content }
 }
+
+/// A picture drifting (`LampPresentationImageMotion.drift`) from `since`,
+/// closing in on `anchor`; still when `since` is nil.
+///
+/// Timed from a date rather than animated, so two layers given the same
+/// date are at the same scale on every frame however late either appeared.
+/// Thirty frames a second is plenty for a picture whose edge moves about a
+/// point a second.
+struct LampPresentationDrift: ViewModifier {
+    var since: Date?
+    var anchor: UnitPoint
+
+    func body(content: Content) -> some View {
+        if let since {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                content.scaleEffect(
+                    LampPresentationImageMotion.driftScale(after: context.date.timeIntervalSince(since)),
+                    anchor: anchor
+                )
+            }
+        } else {
+            content
+        }
+    }
+}
