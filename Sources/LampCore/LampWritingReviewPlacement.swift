@@ -9,18 +9,31 @@ import Foundation
 /// indented block's indent takes the line out of the code. The reader then
 /// draws something the writer never wrote.
 ///
-/// Two things answer that, and only the second has to be right. A surface
-/// reads its file **twice**, with its markers and without, and keeps the
-/// markers of a piece only where that piece reads exactly as it does
-/// without them; elsewhere it draws the piece as written, and the changes
-/// stay reachable in its menu. That is what makes it correct, and it is the
-/// caller's to do, because only the caller knows what "reads the same"
-/// means for what it draws.
+/// Three things answer that, and they are not all of a kind.
 ///
-/// What is here is the second thing: moving markers off what is only syntax
-/// before the parse, so the common cases survive that comparison and stay
-/// visible. Nothing here has to be complete. Whatever it misses costs a
-/// passage its highlight, never its record.
+/// **The comparison, which the caller owns.** A surface reads its file
+/// twice, with its markers and without, and keeps a piece's markers only
+/// where that piece reads exactly as it does without them; elsewhere it
+/// draws the piece as written and the changes stay reachable in its menu.
+/// That is what keeps the drawing honest, and it stays with the caller
+/// because only the caller knows what "reads the same" means for what it
+/// draws.
+///
+/// **Settling, which is best effort.** `settlingSyntaxLines` moves markers
+/// off what is only syntax before the parse, so the common cases survive
+/// that comparison and stay visible. Nothing here has to be complete: what
+/// it misses costs a passage its highlight.
+///
+/// **Identity, which has to be right.** `placingEnds` and the pairing are
+/// not visibility. The comparison deliberately ignores markers, so a start
+/// belonging to one passage and an end belonging to another can both
+/// survive it and be drawn as one span across words neither of them
+/// covers. Writing each start's place after its end is what stops that, and
+/// turning a half-kept passage into a point is what answers it when a parse
+/// loses an edge. A record is never at risk either way — the review file is
+/// not written from this — but a false span is worse than a missing
+/// highlight, and settling cannot prevent it. Found by Codex, reviewing
+/// this lift.
 ///
 /// Written by the iOS session, over five rounds of review, and lifted here
 /// when the Mac needed the same work, so there is one copy rather than two.
@@ -258,6 +271,11 @@ public enum LampWritingReviewPlacement {
     ///
     /// Every piece has to be looked at together: a passage's start may be in
     /// one and its end in another.
+    ///
+    /// Hand in each piece's marked text as one string, a table's cells
+    /// joined rather than passed separately. A marker and the place written
+    /// after it are read as a run, so cells handed in one at a time can cut
+    /// a run in half and lose the place it names.
     public static func unpaired(across texts: [String]) -> Unpaired {
         var starts = Set<Int>()
         var ends = Set<Int>()

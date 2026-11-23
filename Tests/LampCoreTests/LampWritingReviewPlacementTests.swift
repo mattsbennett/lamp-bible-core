@@ -93,6 +93,36 @@ struct LampWritingReviewPlacementTests {
 
     /// Edits come back latest first, so applying them in order leaves the
     /// earlier ranges still pointing where they did.
+    /// Applying the edits in the order given is safe when one of them
+    /// shrinks the text, and the ranges are UTF-16 units, so a character
+    /// outside the basic plane counts as two.
+    @Test func shrinkingEditsApplyInTheOrderGiven() {
+        // An end for place 1 whose start was lost, then a start for place 0
+        // whose end was lost, after an emoji that is two UTF-16 units.
+        let kept = "\u{1F600}\(end)\(place1)a\(start)\(place)b"
+        let unpaired = LampWritingReviewPlacement.unpaired(across: [kept])
+        #expect(unpaired.lostStart == [1])
+        #expect(unpaired.lostEnd == [0])
+
+        let edits = LampWritingReviewPlacement.pointingEdits(in: kept, unpaired: unpaired)
+        #expect(edits.map(\.range.location) == [6, 2], "edits were \(edits)")
+        #expect(edits.map(\.range.length) == [1, 3])
+
+        var text = kept as NSString
+        for edit in edits {
+            text = text.replacingCharacters(in: edit.range, with: edit.replacement) as NSString
+        }
+        #expect(text as String == "\u{1F600}a\(point)\(place)b", "\((text as String).debugDescription)")
+    }
+
+    /// A place of more than one digit is read whole.
+    @Test func amultiDigitPlaceIsReadWhole() {
+        // Place 12: digits 1 and 2, then the place's end.
+        let twelve = "\u{E011}\u{E012}\u{E01A}"
+        let unpaired = LampWritingReviewPlacement.unpaired(across: ["a\(start)\(twelve)b"])
+        #expect(unpaired.lostEnd == [12], "read \(unpaired.lostEnd)")
+    }
+
     @Test func editsComeBackLatestFirst() {
         let kept = "\(start)\(place)one \(start)\(place1)two"
         let unpaired = LampWritingReviewPlacement.unpaired(across: [kept])
@@ -109,9 +139,15 @@ struct LampWritingReviewPlacementTests {
         let marked = "\(start)\(place)```\nlet x = 1\n```"
         let settled = LampWritingReviewPlacement.settlingSyntaxLines(marked)
         let lines = settled.components(separatedBy: "\n")
-        #expect(unmarked(lines[0]) == "```", "the fence line kept a marker: \(lines[0])")
-        #expect(lines[1].contains(where: LampWritingReviewMarkdown.isMarker))
-        #expect(unmarked(settled) == unmarked(marked))
+        // Each line exactly, not merely stripped of markers: leaving the
+        // marker where it was and copying another into the code would pass
+        // a test that only asked what the lines read as.
+        #expect(lines[0] == "```", "the fence line kept a marker: \(lines[0].debugDescription)")
+        // Still a start, not a point: the passage carries on past the fence
+        // into the code, and only a marker whose end is moved with it has
+        // both edges in hand to become a point.
+        #expect(lines[1] == "\(start)\(place)let x = 1", "\(lines[1].debugDescription)")
+        #expect(lines[2] == "```")
     }
 
     /// A marker outside a table row's pipes would be a cell of its own.
