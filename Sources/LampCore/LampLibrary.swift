@@ -5073,16 +5073,24 @@ public actor LampLibrary {
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         openDatabases[url.path] = (revision, wordsIdentity, queue)
         touchOpenDatabase(url.path)
-        // Dropping the reference is all this does: a reader already inside
-        // `queue.read` holds its own, and the file closes when the last
-        // holder lets go. What is *not* dropped with it is this module's
-        // versification or its Strong's fingerprint — those describe the
-        // file's contents, which have not changed, and re-deriving them
-        // would be the cost this cache exists to avoid. They are dropped
-        // where they should be: when the file's revision moves.
+        // Dropping the reference is all this does to the connection: a
+        // reader already inside `queue.read` holds its own, and the file
+        // closes when the last holder lets go.
+        //
+        // What goes with it is everything derived from that file. The first
+        // version kept the versifications and the Strong's fingerprints, on
+        // the reasoning that evicting for space is not the same event as the
+        // file changing — and that was wrong, as a Codex review showed: the
+        // *invalidation* of those caches happens here, when a path is found
+        // with a revision that has moved. Evict the connection and that
+        // comparison has nothing to compare, so a translation replaced by
+        // another process after an eviction would be reopened fresh with its
+        // old versification still in hand.
         while openDatabaseOrder.count > openDatabaseLimit, let oldest = openDatabaseOrder.first {
             openDatabaseOrder.removeFirst()
             openDatabases[oldest] = nil
+            versifications.removeAll()
+            strongsFingerprints.removeAll()
         }
         return queue
     }

@@ -48,6 +48,28 @@ Book modules of ~200 KB each:
 
 SHA-256 of a mapped file runs at 2.43 GB/s (Debug or Release — it is CryptoKit).
 
+Taken again after the work, Release, same harness:
+
+| | before | after |
+| --- | --- | --- |
+| `personalArchive(.writing)`, 250 writings, nothing changed | 435 ms | **0.40 ms** |
+| `decks()`, 25 decks, nothing changed | 20 ms | **1 ms** |
+
+And with modules of a realistic size — 50 book modules of about 12.5 MB, 625 MB
+in all — rather than the fixture's 200 KB:
+
+| | 50 modules × 12.5 MB |
+| --- | --- |
+| `installedModules()`, nothing cached | 21 ms |
+| the same, warm | 2.4 ms |
+| open each and read its sections | **1 297 ms** (26 ms a module) |
+| open descriptors held afterwards | **+48** — the bound, doing its job |
+
+So the per-module open cost is what grows with a module's size, 26 ms at
+12.5 MB where it was 0.43 ms at 200 KB, which is the case for reading the
+translation being opened and leaving the rest until something asks (2f). And
+the descriptor count stops at the cache's limit rather than at one per module.
+
 Three caveats the numbers carry. The fixture's prose repeats, so it compresses
 far better than real writing — 760 KB for 4 000 writings — which understates the
 compress and digest terms of an archive while leaving the insert and `VACUUM`
@@ -229,15 +251,39 @@ no change to `Verification/SyncMerge.lean`.
 with its sizes as environment variables. **The gate is passed:** the archive
 compile is the largest term by a wide margin, so 1d stays first.
 
-Still to measure, and each gates something:
+Measured since: `installedModules()` against modules of a realistic size
+(above), and the Mac's own per-pass work, which turned up something the plan
+had the wrong size for. `MacScaleMeasurementTests`, Debug — the work is file
+copies and stats, which Release does not speed up — with each workspace
+holding a draft, five documents, a context file and fifty revisions:
 
-- The Mac's `exportPortableWorkspaces` and `exportDecks` at 1 000 workspaces,
-  which is 2b and 2g.
-- Peak resident size on the iOS writings and deck loads, which is 3a and 3b.
-- Launch with modules of a realistic size — a few hundred MB each rather than
-  the fixture's 200 KB — and the descriptor count at 500 of them, which is 2f
-  and `decisions/0006`.
-- A workspace corpus with revision history, which is 2e.
+| | 50 workspaces | 250 workspaces |
+| --- | --- | --- |
+| export and enumerate, per pass | 711 ms | **3 602 ms** |
+| files staged | 3 002 | 15 002 |
+| the six-second local-work probe | 19 ms | 96 ms |
+
+About **14 ms a workspace**, linear, and **now the largest single thing a pass
+does**: the compile it used to sit behind is 0.40 ms when nothing changed, and
+the hashing is identity-cached. At a thousand writings with workspaces that is
+some fourteen seconds of copying per pass, and a pass runs whenever anything
+personal changes. The probe is about 0.4 ms a workspace, so ~400 ms every six
+seconds at a thousand.
+
+The plan had this as a secondary term (see the weak points, item 6). It is
+not, and the reason it is built that way is good — the published path is not
+the stored path, and the mapping has one home in the exporter, so the gather
+runs the real exporter into a scratch directory rather than reimplementing the
+mapping as path arithmetic. Changing that is a design question, not a
+micro-fix, and it is with Fable rather than guessed at. **This is the next
+item**, ahead of anything else outstanding.
+
+One measurement is still untaken, and it no longer blocks anything: **peak
+memory on the phone's writings and deck loads**. It was there to gate 3a and
+3b. 3a is done, and 3b is the owner's call for other reasons — what a search
+matches, and a reader that would have to fetch by id — so the memory figure is
+worth taking when that decision is made, with `XCTMemoryMetric` over a seeded
+collection, and not before.
 
 ### Phase 1 — core enablers
 

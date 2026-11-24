@@ -9,9 +9,15 @@ import Darwin
 /// `Documentation/decisions/0007`. A `LampFileIdentity` is only as good as the
 /// filesystem behind it:
 ///
-/// - **apfs, hfs** maintain `st_ctime` as the kernel's own and do not reuse
-///   inode numbers — APFS allocates them from a monotonic counter, HFS+
-///   recycles only after 2^32 — so identity equal means bytes equal.
+/// - **apfs** maintains `st_ctime` as the kernel's own, to the nanosecond,
+///   and does not reuse inode numbers — they come from a monotonic counter —
+///   so identity equal means bytes equal.
+/// - **hfs** was on this list and is not any more. It keeps timestamps to
+///   the whole second, so the nanosecond fields this reads are always zero
+///   there: a file rewritten in place at the same size within one second of
+///   the last write has an identity indistinguishable from before, and a
+///   cached digest would miss the change for good. Found by a Codex review
+///   of the first version.
 /// - **exfat, msdos** have no change time in the format at all; the driver
 ///   synthesises one, and inode numbers come from the directory entry's
 ///   position, so a same-name replacement often reuses one. The key degrades
@@ -27,7 +33,11 @@ import Darwin
 /// thought about is read, not trusted.
 public enum LampSyncIdentityTrust {
     /// The filesystems whose identities mean what this code needs them to.
-    public static let trustedFilesystems: Set<String> = ["apfs", "hfs"]
+    ///
+    /// One of them. A filesystem earns a place here by maintaining a change
+    /// time the kernel owns, at a resolution finer than the interval between
+    /// two writes, and by not reusing inode numbers.
+    public static let trustedFilesystems: Set<String> = ["apfs"]
 
     /// What `statfs` calls the filesystem holding `url`, or nil where it
     /// cannot be asked.

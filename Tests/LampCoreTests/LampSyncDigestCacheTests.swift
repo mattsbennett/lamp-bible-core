@@ -142,8 +142,9 @@ struct LampSyncDigestCacheTests {
     @Test func trustsOnlyTheFilesystemsThatMaintainAnIdentity() {
         #expect(LampSyncIdentityTrust.trustsIdentity(filesystemNamed: "apfs"))
         #expect(LampSyncIdentityTrust.trustsIdentity(filesystemNamed: "APFS"))
-        #expect(LampSyncIdentityTrust.trustsIdentity(filesystemNamed: "hfs"))
-        for share in ["smbfs", "nfs", "exfat", "msdos", "ntfs", "webdav", "osxfuse", "lifs"] {
+        // HFS+ keeps timestamps to the whole second, so two writes inside one
+        // second are indistinguishable here. Not trusted.
+        for share in ["hfs", "smbfs", "nfs", "exfat", "msdos", "ntfs", "webdav", "osxfuse", "lifs"] {
             #expect(
                 LampSyncIdentityTrust.trustsIdentity(filesystemNamed: share) == false,
                 "\(share) does not keep an identity this code can trust"

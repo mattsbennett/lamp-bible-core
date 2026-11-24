@@ -31,8 +31,10 @@ the reader is using, and on the phone it is battery and heat.
 
 **And the trust is not uniform across filesystems.** This is the part that
 decides the shape. There is no capability bit for "maintains a change time".
-On APFS and HFS+ it is maintained, and inode numbers are not reused (APFS
-allocates from a monotonic counter; HFS+ recycles only after 2^32). On
+On APFS it is maintained to the nanosecond and inode numbers are not reused,
+coming from a monotonic counter. HFS+ maintains one too and recycles inode
+numbers only after 2^32 — but to the whole second, which turns out to be the
+difference between trusting it and not (see the first condition below). On
 exFAT/FAT there is no change time in the format at all — the driver synthesises
 one — and inode numbers come from the directory entry's position, so a
 same-name replacement often reuses one: the key silently degrades to
