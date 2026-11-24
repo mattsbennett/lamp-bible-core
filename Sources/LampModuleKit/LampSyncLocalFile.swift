@@ -65,23 +65,50 @@ public enum LampSyncLocalFiles {
         public var unreadable: [Unreadable] = []
     }
 
-    /// Digests each candidate, every pass, by reading its file.
+    /// Digests each candidate by reading its file — unless a cache can say
+    /// the file has not changed since it was last read.
     ///
-    /// Deliberately not skipped by comparing size and modification date with
-    /// what was recorded last time. SHA-256 over a whole library costs well
-    /// under a second here, while a file replaced at the same size with its
-    /// date preserved — a restore, `cp -p`, `rsync -t` — would be skipped and
-    /// never uploaded again. A cheap shortcut that loses a file is a bad
-    /// trade, and mtime is not how this project compares content.
+    /// Never by comparing a modification date, which is the shortcut
+    /// `Documentation/decisions/0001` refused and `0007` still refuses: a
+    /// file replaced at the same size with its date preserved — a restore,
+    /// `cp -p`, `rsync -t` — would be skipped and never uploaded again.
+    ///
+    /// What `0007` allows instead is a digest kept against the file's whole
+    /// identity, `st_ctime` and inode included, and only where three things
+    /// hold: the filesystem maintains that identity
+    /// (`LampSyncIdentityTrust` — the caller decides, and passes no cache
+    /// where it does not), the kind is one whose bytes are worth it
+    /// (`keepsDigestAgainstIdentity`), and the cache lives no longer than
+    /// the process. With no cache this reads every file, as it always did.
+    ///
+    /// A digest is still SHA-256 of the bytes at that path, whichever way it
+    /// was obtained; that is what the plan is given and what the model
+    /// assumes.
     public static func describe(
         _ candidates: [Candidate],
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        digests: LampSyncDigestCache? = nil
     ) -> Described {
         var described = Described()
         for candidate in candidates {
-            guard fileManager.fileExists(atPath: candidate.url.path),
-                  let digest = try? LampSyncContentRevision.digest(forFileAt: candidate.url)
-            else {
+            // One stat answers both questions: whether the file is there, and
+            // which file it is.
+            guard let identity = try? LampFileIdentity(url: candidate.url) else {
+                described.unreadable.append(
+                    Unreadable(path: candidate.path, reason: "its file could not be read")
+                )
+                continue
+            }
+            let caching = digests.flatMap {
+                candidate.kind.keepsDigestAgainstIdentity ? $0 : nil
+            }
+            let digest: String
+            if let held = caching?.digest(at: candidate.url, identity: identity) {
+                digest = held
+            } else if let read = try? LampSyncContentRevision.digest(forFileAt: candidate.url) {
+                digest = read
+                caching?.remember(read, at: candidate.url, identity: identity)
+            } else {
                 described.unreadable.append(
                     Unreadable(path: candidate.path, reason: "its file could not be read")
                 )

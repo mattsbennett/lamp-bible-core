@@ -143,3 +143,45 @@ struct LampInstalledModuleIndexTests {
         #expect(await after.installedModuleInspections == 0)
     }
 }
+
+/// `Documentation/decisions/0006`: the open-database cache is bounded,
+/// because each connection holds a file descriptor and an app launched from
+/// the Finder gets 256 of them in all.
+struct LampOpenDatabaseBoundTests {
+    @Test func readingManyModulesDoesNotHoldADescriptorForEachForEver() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-fd-bound-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+
+        // More modules than the cache keeps, each read once.
+        let count = 60
+        for index in 0..<count {
+            let id = "BOUND\(index)"
+            let archive = root.appendingPathComponent("\(id).lamp")
+            _ = try LampModuleCompiler().compile(
+                data: Data("""
+                    {"meta":{"schemaVersion":"1.0","id":"\(id)","type":"book","title":"Book \(index)","language":"en"},
+                     "sections":[{"id":"one","type":"chapter","title":"One",
+                       "content":[{"type":"paragraph","content":{"text":"A lamp."}}]}]}
+                    """.utf8),
+                sourceFilename: "\(id).json",
+                destinationURL: archive
+            )
+            _ = try await library.install(from: archive)
+            try? FileManager.default.removeItem(at: archive)
+        }
+
+        let opened = try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+        for id in (0..<count).map({ "BOUND\($0)" }) {
+            _ = try? await library.bookSections(moduleID: id)
+        }
+        let after = try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+
+        // Reading sixty modules must not leave sixty files open. The bound is
+        // forty-eight, and installs opened some of these already, so the test
+        // is that the count did not grow by one per module.
+        #expect(after - opened < count, "held \(after - opened) descriptors for \(count) modules")
+    }
+}

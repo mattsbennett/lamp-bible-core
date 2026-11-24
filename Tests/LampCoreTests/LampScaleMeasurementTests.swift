@@ -16,7 +16,9 @@ import Testing
 /// The sizes are environment variables so a run can be widened or narrowed
 /// without a rebuild: `LAMP_SCALE_WRITINGS=250,1000,4000`,
 /// `LAMP_SCALE_DECKS=25,100,400`, `LAMP_SCALE_MODULES=50,200`,
-/// `LAMP_SCALE_COLLECTION_ENTRIES=365`.
+/// `LAMP_SCALE_MODULE_SECTIONS=24` (a module's size: 24 sections is about
+/// 200 KB, 2400 about 20 MB — the per-module open cost is what grows with
+/// it), `LAMP_SCALE_COLLECTION_ENTRIES=365`.
 ///
 /// Every line of output begins `SCALE` so a run can be read with grep. Nothing
 /// here asserts a timing: a measurement that fails the build on a busy machine
@@ -265,7 +267,9 @@ struct LampScaleMeasurementTests {
                 let id = "SCALE\(made)"
                 let archive = root.appendingPathComponent("\(id).lamp")
                 _ = try LampModuleCompiler().compile(
-                    data: Data(bookModuleJSON(id: id, sections: 24).utf8),
+                    data: Data(bookModuleJSON(
+                        id: id, sections: count("LAMP_SCALE_MODULE_SECTIONS", 24)
+                    ).utf8),
                     sourceFilename: "\(id).json",
                     destinationURL: archive
                 )
@@ -293,7 +297,8 @@ struct LampScaleMeasurementTests {
 
             #expect(first.value.count >= target)
             report("""
-                modules=\(target) bytes=\(bytes / 1_024)KB \
+                modules=\(target) sections=\(count("LAMP_SCALE_MODULE_SECTIONS", 24)) \
+                bytes=\(bytes / 1_024)KB \
                 installedModules()cold=\(String(format: "%.0f", first.ms))ms \
                 warm=\(String(format: "%.1f", warm))ms \
                 openEachAndRead=\(String(format: "%.0f", opening.ms))ms \

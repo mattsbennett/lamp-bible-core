@@ -21,6 +21,16 @@ public actor LampLibrary {
     private var openDatabases: [String: (
         revision: LampDatabaseFileRevision, words: LampDatabaseFileIdentity?, queue: DatabaseQueue
     )] = [:]
+    /// The open connections, least recently used first, and how many are
+    /// kept. See `Documentation/decisions/0006`: each one holds a file
+    /// descriptor, and an app launched from the Finder gets 256 of those in
+    /// all — measured — so a library of a few hundred modules could exhaust
+    /// them and then fail to open anything at all, a module or a socket
+    /// alike. Forty-eight is well above what any one screen reads from (a
+    /// chapter with its notes and highlights modules, a search across a
+    /// kind) and well below the budget.
+    private var openDatabaseOrder: [String] = []
+    private let openDatabaseLimit = 48
     /// Whether this process has looked at the index on disk yet.
     private var readInstalledModuleIndex = false
     /// How many module databases this library has opened and inspected, so a
@@ -3439,6 +3449,31 @@ public actor LampLibrary {
         }
     }
 
+    /// Every installed collection's notes for one chapter, in one call.
+    ///
+    /// A reader turning a page asked each notes module in turn, and each one
+    /// crossed onto this actor and back: microseconds a hop on a warm
+    /// connection, but one hop per installed module per page turn, and the
+    /// page waits for the last of them. Here they are one crossing, and a
+    /// module that cannot be read is simply absent from the answer, as it was
+    /// when each was asked alone. See Phase 1e of the scalability plan.
+    public func moduleVerseNotes(
+        moduleIDs: [String], bookNumber: Int, chapterNumber: Int
+    ) -> [LampVerseNote] {
+        moduleIDs.flatMap { id in
+            (try? moduleVerseNotes(moduleID: id, bookNumber: bookNumber, chapterNumber: chapterNumber)) ?? []
+        }
+    }
+
+    /// The same for highlights, for the same reason.
+    public func moduleVerseHighlights(
+        moduleIDs: [String], bookNumber: Int, chapterNumber: Int
+    ) -> [LampVerseHighlight] {
+        moduleIDs.flatMap { id in
+            (try? moduleVerseHighlights(moduleID: id, bookNumber: bookNumber, chapterNumber: chapterNumber)) ?? []
+        }
+    }
+
     public func moduleVerseNotes(moduleID: String, reference: Int) throws -> [LampVerseNote] {
         let queue = try openDatabase(moduleID: moduleID)
         return try queue.read { db in
@@ -5016,6 +5051,7 @@ public actor LampLibrary {
         let words = derivedWordListsURL(for: url)
         let wordsIdentity = (try? LampDatabaseFileRevision.identity(of: words)).map(LampDatabaseFileIdentity.init)
         if let existing = openDatabases[url.path], existing.revision == revision, existing.words == wordsIdentity {
+            touchOpenDatabase(url.path)
             return existing.queue
         }
         if let existing = openDatabases[url.path], existing.revision != revision {
@@ -5036,7 +5072,26 @@ public actor LampLibrary {
         }
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         openDatabases[url.path] = (revision, wordsIdentity, queue)
+        touchOpenDatabase(url.path)
+        // Dropping the reference is all this does: a reader already inside
+        // `queue.read` holds its own, and the file closes when the last
+        // holder lets go. What is *not* dropped with it is this module's
+        // versification or its Strong's fingerprint — those describe the
+        // file's contents, which have not changed, and re-deriving them
+        // would be the cost this cache exists to avoid. They are dropped
+        // where they should be: when the file's revision moves.
+        while openDatabaseOrder.count > openDatabaseLimit, let oldest = openDatabaseOrder.first {
+            openDatabaseOrder.removeFirst()
+            openDatabases[oldest] = nil
+        }
         return queue
+    }
+
+    private func touchOpenDatabase(_ path: String) {
+        if let index = openDatabaseOrder.firstIndex(of: path) {
+            openDatabaseOrder.remove(at: index)
+        }
+        openDatabaseOrder.append(path)
     }
 
     /// Where this library lists the words of `database`'s indexes, for a
@@ -5143,6 +5198,7 @@ public actor LampLibrary {
     /// database file underneath one.
     private func forgetOpenDatabases() {
         openDatabases.removeAll()
+        openDatabaseOrder.removeAll()
         versifications.removeAll()
         strongsFingerprints.removeAll()
         installedMetadata.removeAll()

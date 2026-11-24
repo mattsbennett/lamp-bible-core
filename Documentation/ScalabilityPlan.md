@@ -190,9 +190,15 @@ which `0002` cached away; it is now the largest thing a pass does.
 
 0007 is gated rather than general: identity is trusted only where the
 filesystem maintains a change time and does not reuse inodes (`apfs`, `hfs`),
-only for the kinds immutable at a path, and only within one process. On a NAS
-or a USB stick it changes nothing, because there the key would degrade to the
-`(size, mtime)` that 0001 was right to refuse.
+only for the kinds whose bytes are worth it — modules and media — and only
+within one process, so the first pass of a session still reads everything. On a
+NAS or a USB stick it changes nothing, because there the key would degrade to
+the `(size, mtime)` that 0001 was right to refuse.
+
+**Landed** for core and the Mac: `LampSyncDigestCache`,
+`LampSyncIdentityTrust`, `LampSyncFileKind.keepsDigestAgainstIdentity`, and the
+Mac's one cache per library root. The phone still hashes its media and book
+pictures every pass — `LibrarySyncPass` — which is 3e below.
 
 ### Already right
 
@@ -254,11 +260,10 @@ Still to measure, and each gates something:
   (useless) and not the sync ledger (unsound: five writers change rows without
   stamping it). Read the record before touching it; both wrong keys are in
   there with what they broke.
-- **1e. Batched chapter sidecars** `[core, S, optional]`.
-  `moduleVerseNotes(moduleIDs:)` / `moduleVerseHighlights(moduleIDs:)` in one
-  actor hop, so a page turn is one round trip rather than one per installed
-  notes and highlights module. Microseconds each on a warm connection; worth
-  doing for tidiness, not for time.
+- ~~**1e. Batched chapter sidecars**~~ **done**: `moduleVerseNotes(moduleIDs:…)`
+  and `moduleVerseHighlights(moduleIDs:…)`, so a page turn is one crossing onto
+  the library's actor rather than one per installed notes and highlights
+  module.
 
 ### Phase 2 — Mac
 
@@ -268,10 +273,15 @@ Still to measure, and each gates something:
   rather than decode. One shared deck list per library root is still worth
   doing — three loops asking the same question is three times the stats and
   three copies of the answer — but it is tidying, not cost.
-- **2b. Deck sync decodes once** `[S–M]`: read the list once per pass and hand it
-  to `exportDecks`, `applyDeletions` and `removeDecksOfDeletedWritings`; skip
-  `exportDecks` and `copyAssets` on the per-file path, which discards them. The
-  `.backup` archive path must still carry decks and assets.
+- ~~**2b. Deck sync decodes once**~~ **done in the part that counted**: the
+  per-file pass no longer stages decks at all. It was copying every deck and
+  every deck image into a scratch directory on every pass for
+  `workspaceFiles` to skip them — `theWorkspaceStagingDoesNotCarryDecks` holds
+  it. The remaining sweeps (`applyDeletions`,
+  `removeDecksOfDeletedWritings`) still decode the library's decks when a
+  deletion is in play, which is not every pass; they want the bytes for the
+  pull plan, so sharing one read with `exportDecks` means changing what the
+  plan is given. Left, with the reason.
 - ~~**2c. A save reloads one writing**~~ **done**, `decisions/0004`: the copy
   the save reads back is spliced into the list in
   `LampDevotional.libraryOrder`, which core now names. The full reload stays
@@ -285,14 +295,17 @@ Still to measure, and each gates something:
   actor after a 150 ms settle, their answer kept while a newer scan runs. What
   a row shows — title, subtitle, author, series, summary, tags — is still
   matched as you type, so titles match at once and bodies a moment later.
-- **2e. Index the revision folder** `[M]`: hold a decoded list per workspace
-  validated by `historyToken`, so `record` decodes only new files. The on-disk
-  format, the compaction policy and `replacedRevisionIDs` stay as they are.
-- **2f. Launch** `[M, after 1c]`: read `translationBooks` for the translation
-  being opened and the rest lazily; load `devotionals()` and `quizModules()` when
-  their sections first appear — checking what else reads `model.devotionals`
-  (`SlideStudioView:1402`, TodayView). Verify against signposts what actually
-  delays first paint; the splash waits on the first chapter, not on these.
+- ~~**2e. Index the revision folder**~~ **done**: the decoded history is kept
+  per workspace against `historyToken` — a listing, not a read — so a record
+  decodes only what is new. Four workspaces at a time, least recently used
+  first. The on-disk format, the compaction policy and `replacedRevisionIDs`
+  are untouched.
+- ~~**2f. Launch**~~ **done**: `refreshLibrary` reads the modules, the
+  translation being opened and the highlight sets, then publishes; the
+  writings, the quizzes and the other translations' book names follow in
+  `loadTheRestOfTheLibrary`, each published as it arrives. `refreshNow()`
+  waits for all of it, because its caller is a writing arriving from the
+  phone — a test caught that the day the deferral landed.
 - ~~**2g. Skip re-encoding attributed transcripts**~~ **dropped.** Written and
   reverted. The saving is one decode and encode per conversation, and copying
   the file instead changes what a pass publishes from the canonical encoding
@@ -302,20 +315,37 @@ Still to measure, and each gates something:
 
 ### Phase 3 — iOS
 
-- **3a. Deck entries through 1a** `[S]` and stop retaining every deck's bytes on
-  `PresentationDeckEntry`; `revisions(in:)` keeps them for the merge.
-- **3b. A list projection** `[M]`, `decisions/0004`: push the filter into SQL and draw rows without
-  decoding `content` until one is opened.
-- **3c. Reuse the change-keyed export cache in the pass** `[S–M]`: key
-  `exportedBytes` the way `exportDigest(ofCollection:)` already keys itself.
-- **3d. Drop and rebuild FTS around bulk imports** `[S]`, only if Phase 0 says
-  import time matters.
+- ~~**3a. Deck entries through 1a**~~ **done**: `PresentationDeckStorage.entries()`
+  goes through `LampPresentationDeckStore.decks()`, so the phone's listing
+  reads only the deck files that moved — and `linkedWritingIDs()` and
+  `entries(forWriting:)`, which each ask again, inherit it. `revisions(in:)`
+  still reads the bytes, which a merge needs.
+- **3b. A list projection** `[M, and the owner's call]`. Still open, and it
+  splits in two. `DevotionalStorage.getDevotionals` fetches every row and
+  `toDevotional()` parses each one's content JSON — confirmed — so drawing a
+  list of titles decodes every writing. Not done here because the row hands
+  the decoded writing straight to `DevotionalView`, so a projection needs the
+  reader to fetch by id, and that is the phone's main surface: worth seeing
+  drawn before it ships. The other half, pushing the search into SQL, changes
+  what matches — SQLite's `NOCASE` folds ASCII only, where the current filter
+  folds Unicode, so a Greek or Hebrew query would stop matching case. That is
+  the owner's decision, the same one as FTS below.
+- ~~**3c. Reuse the change-keyed export cache in the pass**~~ **done**:
+  `exportedBytes` is kept against the count the database keeps of changes to
+  that collection, and migration v45 extends those triggers from writings to
+  notes and highlights. Held by
+  `testNotesAndHighlightsAreCountedForTheirOwnCollection`.
+- **3d. Drop and rebuild FTS around bulk imports** `[S]`, only if a
+  measurement says import time matters. Not measured yet.
+- ~~**3e. The digest cache on the phone**~~ **done**, `decisions/0007`: the
+  phone's media and book pictures go through the same gate and the same cache.
 
 ### Phase 4 — the descriptor ceiling, and two maybes
 
-- **4a. Bound the open-database cache** `[core, M]`, `decisions/0006`. Measured:
-  one descriptor per module, +201 at 200 modules. This is a ceiling, not a
-  slowdown, so it comes before the rest of Phase 4 once the limit is confirmed.
+- ~~**4a. Bound the open-database cache**~~ **done**, `decisions/0006`. The
+  limit is measured: a GUI-launched app gets **256** open files, so one
+  descriptor per module really was a ceiling. The cache keeps forty-eight
+  connections and the Mac app raises its own soft limit to 8 192.
 - Streaming bundle extraction, and the manifest's size on the wire — only if
   iOS reports low memory, or Phase 0's remaining measurements show a multi-MB
   bundle.

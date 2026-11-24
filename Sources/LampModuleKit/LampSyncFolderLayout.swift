@@ -37,6 +37,26 @@ public enum LampSyncFileKind: Hashable, Sendable {
         }
     }
 
+    /// Whether a pass may keep this kind's digest against the file's
+    /// identity rather than reading it again (`LampSyncDigestCache`,
+    /// `Documentation/decisions/0007`).
+    ///
+    /// The bytes are here: a module file and every kind of media. Media never
+    /// changes at a path at all; a module file is replaced at one, by a
+    /// rename, which moves the inode.
+    ///
+    /// Not the small, mutable things, where there is nothing to save and a
+    /// trust to avoid: a deck is edited in place as somebody types, a review
+    /// mark is a few hundred bytes, and a workspace file is exported into a
+    /// fresh scratch directory on every pass, so it has a new inode every
+    /// time and would never be answered from a cache anyway.
+    public var keepsDigestAgainstIdentity: Bool {
+        switch self {
+        case .module, .devotionalMedia, .noteMedia, .bookMedia, .deckAsset: true
+        case .deck, .writingDocument, .workspaceFile, .writingReview: false
+        }
+    }
+
     /// Whether it is part of a tree taken in together: a workspace's files
     /// are staged by `LampSyncPassLibrary.install` as they arrive and taken
     /// in by `finishInstalling`, which can stop partway. Such a file is

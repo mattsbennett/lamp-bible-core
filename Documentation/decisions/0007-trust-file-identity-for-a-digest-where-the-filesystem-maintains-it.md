@@ -1,7 +1,9 @@
 # 0007. A pass may trust file identity for a digest, where the filesystem maintains one
 
-Status: Proposed. Supersedes `0001`, whose Decision no longer follows from its
-Context — see below. Nothing is implemented yet.
+Status: Accepted for core and the Mac, 2026-11-24, held by
+`LampSyncDigestCacheTests`. Supersedes `0001`, whose Decision no longer follows
+from its Context — see below. The phone still hashes its media and book
+pictures on every pass; that is Phase 3 of the plan.
 
 ## Context
 

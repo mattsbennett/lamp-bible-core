@@ -823,7 +823,17 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
             return (lhs.seriesOrder ?? 0) < (rhs.seriesOrder ?? 0)
         }
         if lhs.date != rhs.date { return (lhs.date ?? "") < (rhs.date ?? "") }
-        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        if lhs.title != rhs.title {
+            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        }
+        // The id last, so the order is total. Without it, writings tied on
+        // everything else — two called "Untitled", which auto-titled drafts
+        // are — come out in whatever order they were given in, and a client
+        // splicing one row into a list it holds would put it somewhere the
+        // library would not. `personal_devotionals` is read with `id` last
+        // for the same reason; this is that rule, where a client can use it.
+        // Found by a Codex review.
+        return lhs.id < rhs.id
     }
 
     public var mediaReferences: [LampDevotionalMediaReference] {

@@ -1,8 +1,9 @@
 # 0006. The open-database cache is bounded
 
-Status: Proposed. The number of descriptors is measured; the limit the apps
-actually run under is not, and that is the one thing to confirm before building
-this.
+Status: Accepted, 2026-11-24, held by `LampOpenDatabaseBoundTests`. The limit
+is measured now and it is the bad case: **256**. A throwaway background app
+bundle, launched with `open` so that launchd gave it its environment, reported
+`soft=256 hard=unlimited`.
 
 ## Context
 
@@ -18,11 +19,11 @@ installed book modules, each opened once, left **+201 open file descriptors**
 (`LampScaleMeasurementTests.measuresModuleListingAndOpening`). One per module,
 and a module whose word lists are attached will take two.
 
-On this Mac `launchctl limit maxfiles` is **256 soft**, unlimited hard. A process
-launched by launchd — the app from the Finder, not from a terminal — inherits
-that soft limit, and neither app raises it: `setrlimit` appears nowhere in either
-repo. The test run itself was fine only because a terminal shell had already
-raised its own limit to 1 048 576.
+On this Mac `launchctl limit maxfiles` is **256 soft**, unlimited hard, and a
+GUI-launched process really does inherit it: a probe app bundle launched with
+`open` reported `soft=256`, against 1 048 576 for a terminal shell. Neither app
+raised it — `setrlimit` appeared nowhere in either repo — so the earlier test
+run was fine only because it ran under the shell's limit.
 
 If that is really the limit the shipped app runs under, then somewhere around two
 hundred-odd modules the app stops being able to open anything at all — not just
@@ -34,18 +35,22 @@ like a library that has gone bad rather than like a limit.
 Bound the cache: keep the most recently used connections up to a limit well
 under the descriptor budget — of the order of 32 — and close the rest.
 
-Two things have to be evicted together with a connection, because they are keyed
-alongside it and describe the file it was opened on: that module's entry in
-`versifications`, and in `strongsFingerprints`.
+Nothing else is evicted with a connection — see the consequences; the first
+draft of this record said the module's versification and Strong's fingerprint
+had to go with it, and that was wrong.
 
-Pin the connections that a reader is never long without: the bundled database,
-and the translation being read.
+Nothing is pinned either. The draft proposed pinning the bundled database and
+the translation being read; with a bound of forty-eight and least-recently-used
+eviction, the translation a reader is reading is the last thing that would be
+evicted, and a pin is a rule to maintain for no gain. If a fan-out across one
+kind ever makes this matter, pin then, with the measurement in hand.
 
-**Before building it**, confirm the limit under which the app actually runs
-(read `RLIMIT_NOFILE` at launch and log it), because the answer decides whether
-this is a ceiling a person can hit or a tidiness exercise. If it is 256, raising
-it with `setrlimit` is a legitimate second half of this decision — but a bound
-cache is the part that does not depend on a limit staying raised.
+Both halves are in. The cache keeps the forty-eight most recently used
+connections; the Mac app raises its own soft limit to 8 192 at launch, which
+the unlimited hard limit allows and which covers everything else a reader opens
+— pictures, workspace files, sockets. The bound is the half that does not
+depend on the limit staying raised, which is why both are here rather than
+either alone.
 
 ## Consequences
 
@@ -57,9 +62,13 @@ cache is the part that does not depend on a limit staying raised.
 - A search that fans out across more modules than the bound will thrash it. That
   is acceptable: a fan-out already reads every module once, and the alternative
   is failing to open the next one.
-- Eviction must not be able to close a connection another call is mid-read on.
-  GRDB's `DatabaseQueue` serialises its own access, so eviction has to drop the
-  reference and let the last reader release it, not close the file.
+- Eviction drops the reference and nothing else: a reader already inside
+  `queue.read` holds its own, and the file closes when the last holder lets go.
+- What is **not** evicted with a connection is that module's versification or
+  its Strong's fingerprint. Those describe the file's contents, which have not
+  changed — evicting for space is not the same event as the file moving, and
+  re-deriving them is the cost the cache exists to avoid. They are still
+  dropped where they should be: when the file's revision moves.
 - `forgetOpenDatabases` stays as it is. It is correctness — a file replaced
   underneath a handle — and not a cache policy.
 

@@ -23,13 +23,13 @@
       "boundary": "Only the library's sync paths are modelled: personal import and the deletion ledger. SQLite and filesystem behaviour are assumed."
     },
     "Sources/LampCore/LampPersonalExportSchema.swift": {
-      "boundary": "Declares the shape each personal kind is written as, apart from what a *compiler* writes. It decides nothing at sync time; it is what both apps' writers are pinned against — LampPersonalExportShapeTests here, and the phone's own pins against the same declarations."
+      "boundary": "Declares the shape each personal kind is written as, apart from what a *compiler* writes. It decides nothing at sync time; it is what both apps' writers are pinned against \u2014 LampPersonalExportShapeTests here, and the phone's own pins against the same declarations."
     },
     "Sources/LampCore/LampPersonalFile.swift": {
-      "boundary": "The container every personal file shares — journal mode, module_format, module_meta, ANALYZE, VACUUM, zlib — and the one spelling of JSON and of search_text. No merge decision, so no rule: what it owns is **bytes**, which the model does not describe and should not. Held instead by digests taken from the old writer before each move and unchanged by it, and by writing the same records twice from libraries that share nothing."
+      "boundary": "The container every personal file shares \u2014 journal mode, module_format, module_meta, ANALYZE, VACUUM, zlib \u2014 and the one spelling of JSON and of search_text. No merge decision, so no rule: what it owns is **bytes**, which the model does not describe and should not. Held instead by digests taken from the old writer before each move and unchanged by it, and by writing the same records twice from libraries that share nothing."
     },
     "Sources/LampCore/LampPersonalHighlightsFile.swift": {
-      "boundary": "Builds the document one highlight set travels as, which the compiler turns into the file. The set's own identity is in it (`meta.setId`); what that identity is used *for* — matching a deletion to a highlight — belongs to the ledger and is modelled there."
+      "boundary": "Builds the document one highlight set travels as, which the compiler turns into the file. The set's own identity is in it (`meta.setId`); what that identity is used *for* \u2014 matching a deletion to a highlight \u2014 belongs to the ledger and is modelled there."
     },
     "Sources/LampCore/LampPersonalMarkdownDocument.swift": {
       "boundary": "The framing shared by the Markdown a person exports and imports by hand. Not what syncs: a sync publishes the SQLite file. No merge decision."
@@ -41,7 +41,7 @@
       "boundary": "Writes it, and the footnote definitions the readers that number them share. No merge decision."
     },
     "Sources/LampCore/LampPersonalNotesFile.swift": {
-      "boundary": "Writes the notes file both apps publish, from records. Carries no merge decision — which note wins is `tombstoneDeletesSecondsCopy` and `decide`. What must hold is that the same records give the same bytes on either app, which is a property of an encoder rather than a rule, and is pinned by digest in LampPersonalNotesFileTests."
+      "boundary": "Writes the notes file both apps publish, from records. Carries no merge decision \u2014 which note wins is `tombstoneDeletesSecondsCopy` and `decide`. What must hold is that the same records give the same bytes on either app, which is a property of an encoder rather than a rule, and is pinned by digest in LampPersonalNotesFileTests."
     },
     "Sources/LampCore/LampPersonalWritingFile.swift": {
       "boundary": "As the notes file, for writings, plus making one ready to travel: unwrapping a plain-text content wrapper and gathering the media its Markdown names. Still no merge decision. Its row type exists so that neither app's model of a writing decides what the file may hold."
@@ -243,7 +243,7 @@
         "reviewMerge",
         "reviewWording"
       ],
-      "boundary": "How two copies of a writing's review marks merge, per mark id: the higher version of a mark both hold, no mark either retired, and the higher version of every clearance either made of a mark still held. The same whichever side merges and in whatever grouping, so a clear on one device is never undone by another's copy, and two devices clearing different parts of one mark leave only what neither cleared. What stood where a mark stands, kept so the writer can have the assistant's change put back, merges by union: it is made once and never changed, and a copy written by a writer that knows nothing of it has none rather than an older one, so whichever copy holds it is right and no tie of versions can strip it. It is offered only while its mark still stands. A restoration — the record of a wording put back, which the assistant is told of — is unioned too, and outlives the mark its own restore retired. The tables hold `merged(with:)` to the model for every pair of clean copies of two marks and a versioned clearance. How a mark is found in the text (its words and their context), what an assistant's change or the writer's edit does to the marks, which copy's pieces win a tie of versions, the words a wording or a restoration holds, which mark's words can be put back exactly, the pruning of old retirements and restorations, and the keeping of only the newest restorations of a merge, are not modelled: they decide what one device writes, not how copies combine."
+      "boundary": "How two copies of a writing's review marks merge, per mark id: the higher version of a mark both hold, no mark either retired, and the higher version of every clearance either made of a mark still held. The same whichever side merges and in whatever grouping, so a clear on one device is never undone by another's copy, and two devices clearing different parts of one mark leave only what neither cleared. What stood where a mark stands, kept so the writer can have the assistant's change put back, merges by union: it is made once and never changed, and a copy written by a writer that knows nothing of it has none rather than an older one, so whichever copy holds it is right and no tie of versions can strip it. It is offered only while its mark still stands. A restoration \u2014 the record of a wording put back, which the assistant is told of \u2014 is unioned too, and outlives the mark its own restore retired. The tables hold `merged(with:)` to the model for every pair of clean copies of two marks and a versioned clearance. How a mark is found in the text (its words and their context), what an assistant's change or the writer's edit does to the marks, which copy's pieces win a tie of versions, the words a wording or a restoration holds, which mark's words can be put back exactly, the pruning of old retirements and restorations, and the keeping of only the newest restorations of a merge, are not modelled: they decide what one device writes, not how copies combine."
     },
     "Sources/LampCore/LampWritingReviewMarkdown.swift": {
       "rules": [
@@ -254,7 +254,7 @@
         "movingAMarkerLeavesTheWritingAlone",
         "movingAMarkerLosesNoPassage"
       ],
-      "boundary": "Where a review marker may be put in a copy of a writing's Markdown. A marker is a letter to a Markdown parser, so where it falls decides whether the copy still reads as the writing: inside a link's address it is part of the address, between the stars of a run it stops the run being one. Each is moved to the nearest place that leaves the parse alone. The rules for that are not modelled — they are about a parser neither app owns, and modelling them would be the same guess written twice. What is modelled is what must hold of every move however it was made: the writing itself untouched, and no passage left without a start or a point for the writer to reach. Which shapes of Markdown need a move, and how a surface then draws what it finds, are outside it."
+      "boundary": "Where a review marker may be put in a copy of a writing's Markdown. A marker is a letter to a Markdown parser, so where it falls decides whether the copy still reads as the writing: inside a link's address it is part of the address, between the stars of a run it stops the run being one. Each is moved to the nearest place that leaves the parse alone. The rules for that are not modelled \u2014 they are about a parser neither app owns, and modelling them would be the same guess written twice. What is modelled is what must hold of every move however it was made: the writing itself untouched, and no passage left without a start or a point for the writer to reach. Which shapes of Markdown need a move, and how a surface then draws what it finds, are outside it."
     },
     "Sources/LampCore/LampWritingReviewStore.swift": {
       "rules": [
@@ -279,7 +279,7 @@
         "reviewRouting",
         "reviewFate"
       ],
-      "boundary": "Where a device keeps its writings' review marks: one file for a writing's own prose, named as it always has been, and one for each document beside it. A copy a pass downloaded is merged only into the record of the very place it arrived — the same writing and the same document — and refused otherwise. The merge itself compares no identity at all, so a file that reached the wrong place would take its marks into another's, and each place's marks are anchored in its own words. Which file a document's record is named is outside the model: that a document's name may be too long to keep, and is then written as a digest of itself with the name carried in the record, is a fact about file names rather than about merging. So is the sweep that takes a deleted writing's documents' records with it. A document's marks follow its body: to the copy that body is kept as when both sides changed it, and out of the library when the document is deleted, each with the deletion of the record left behind so other devices drop it. A rename is a deletion and a new document, as it is everywhere else in sync, so its marks are gone rather than guessed across from the words. What becomes of a document's record is decided here and nowhere else: a record belongs to its document and goes when the document goes, and absence is never taken for deletion — a library naming no document means both that it was deleted and that it has not been published yet."
+      "boundary": "Where a device keeps its writings' review marks: one file for a writing's own prose, named as it always has been, and one for each document beside it. A copy a pass downloaded is merged only into the record of the very place it arrived \u2014 the same writing and the same document \u2014 and refused otherwise. The merge itself compares no identity at all, so a file that reached the wrong place would take its marks into another's, and each place's marks are anchored in its own words. Which file a document's record is named is outside the model: that a document's name may be too long to keep, and is then written as a digest of itself with the name carried in the record, is a fact about file names rather than about merging. So is the sweep that takes a deleted writing's documents' records with it. A document's marks follow its body: to the copy that body is kept as when both sides changed it, and out of the library when the document is deleted, each with the deletion of the record left behind so other devices drop it. A rename is a deletion and a new document, as it is everywhere else in sync, so its marks are gone rather than guessed across from the words. What becomes of a document's record is decided here and nowhere else: a record belongs to its document and goes when the document goes, and absence is never taken for deletion \u2014 a library naming no document means both that it was deleted and that it has not been published yet."
     },
     "Sources/LampModuleKit/LampSharedPreferenceLedger.swift": {
       "rules": [
@@ -506,7 +506,7 @@
         "fetchedAgain",
         "deletionNotCarriedOut"
       ],
-      "boundary": "All a pass can see of a client that holds content without saying so: its own records name a path, and its claims do not. Whether the client really holds it is outside the model — core cannot read another app's database — so this reports and never corrects. A fetch compares revisions by `namesSameRevision`, except for media, whose bytes never change at a path and which nothing lists, so there the record alone is the answer. A deletion is read from the manifest's tombstones, less what this client deleted itself and less the paths no library deletes (`LampSyncLocalDeletion`), and is read before the reap that forgets the record. Both consequences of the unclaimed case, and that what is reported is exactly what the pass leaves undone, are theorems about `filePlanAction`."
+      "boundary": "All a pass can see of a client that holds content without saying so: its own records name a path, and its claims do not. Whether the client really holds it is outside the model \u2014 core cannot read another app's database \u2014 so this reports and never corrects. A fetch compares revisions by `namesSameRevision`, except for media, whose bytes never change at a path and which nothing lists, so there the record alone is the answer. A deletion is read from the manifest's tombstones, less what this client deleted itself and less the paths no library deletes (`LampSyncLocalDeletion`), and is read before the reap that forgets the record. Both consequences of the unclaimed case, and that what is reported is exactly what the pass leaves undone, are theorems about `filePlanAction`."
     },
     "Sources/LampModuleKit/LampSyncFileRecords.swift": {
       "rules": [
@@ -608,7 +608,7 @@
       "boundary": "Revisions compare as tokens here and as numbers in the model; the tables use single-digit revisions, where the two orders agree. Coding, path validation and sorting are Swift's. `recordsAdeletion` separates a deletion the manifest took from one a pass merely asked for: a client whose deletions come from a permanent ledger rather than a consumable queue asks for the same tombstones on every pass, so anything done because one was recorded must read this and not the plan's list."
     },
     "Sources/LampModuleKit/LampSyncLocalFile.swift": {
-      "boundary": "A local file as the plan reads it, and its digest, read every pass. Each app extends `LampSyncLocalFiles` with its own enumeration; nothing here decides anything."
+      "boundary": "A local file as the plan reads it, and its digest. Read from the file every pass, or \u2014 where `decisions/0007` allows it \u2014 taken from a digest kept against the file's whole identity (device, inode, size, mtime, ctime), only on a filesystem that maintains one, only for the kinds whose bytes are worth it, and only within one process. Either way what the plan is given is SHA-256 of the bytes at that path, which is what the model assumes. Each app extends `LampSyncLocalFiles` with its own enumeration; nothing here decides anything."
     },
     "Sources/LampModuleKit/LampSyncMerge.swift": {
       "rules": [
@@ -911,6 +911,12 @@
         "formatFourCopy"
       ],
       "boundary": "Which path each format-3 path becomes, what its manifest entry becomes, and whether the move writes, keeps or replaces what is at a new path are held by tables. Reading and writing the files, comparing their digests, knowing which files this move wrote, rewriting the collection's module ID inside its SQLite, walking format 3's writing folders for files no manifest accounts for, and copying and recording a member that arrives late are Swift's, held by LampSyncFormatFourMoveTests."
+    },
+    "Sources/LampModuleKit/LampSyncDigestCache.swift": {
+      "boundary": "Digests already taken, against the files they were taken from (`decisions/0007`). No merge decision and no state on disk: it answers with a digest a pass would otherwise have read, or with nothing. What bounds it \u2014 the filesystem, the kind, the process lifetime \u2014 is stated in `0007` and applied by its callers."
+    },
+    "Sources/LampModuleKit/LampSyncIdentityTrust.swift": {
+      "boundary": "Whether a file's identity can be trusted to say its bytes have not changed, which is a property of the filesystem rather than of sync: apfs and hfs maintain `st_ctime` and do not reuse inodes, exFAT has no change time at all, and an SMB server may or may not keep one. A list of what is known safe, so an unknown filesystem is read rather than trusted. No merge decision."
     }
   },
   "platformSources": {
@@ -1065,7 +1071,7 @@
       "boundary": "Gathers what the Mac holds as `LampSyncFilePlan.Local`: each installed module placed by core's `LampInstalledModuleFile.syncPath()`, never its storage-key filename, and a digest of the bytes on disk. It decides nothing; the plan does (`filePlanAction`)."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncLocalWork.swift": {
-      "boundary": "When the Mac starts a pass, not what a pass does: the modification times of everything it publishes that no ledger records — modules installed and removed, decks, workspaces and skills — so work done here is published without anyone pressing Sync. It decides nothing. A source left out of it is not lost but late: it waits for the next pass, and what that pass then does to it is `filePlanAction`'s. The kinds are held to core's own by `everyKindOfSyncedFileIsReadFromSomewhere` in the Mac's tests."
+      "boundary": "When the Mac starts a pass, not what a pass does: the modification times of everything it publishes that no ledger records \u2014 modules installed and removed, decks, workspaces and skills \u2014 so work done here is published without anyone pressing Sync. It decides nothing. A source left out of it is not lost but late: it waits for the next pass, and what that pass then does to it is `filePlanAction`'s. The kinds are held to core's own by `everyKindOfSyncedFileIsReadFromSomewhere` in the Mac's tests."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncMacPassLibrary.swift": {
       "boundary": "The Mac's install, merge and removal of single files for its pass, through the same library calls the archive pass made. Merges import by value, and what goes back up is the re-export from the merged library. Record decisions are core's (`decide`, `importOutcome`); the file-level ones are the plan's (`filePlanAction`).",
