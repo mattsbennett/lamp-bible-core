@@ -21,6 +21,11 @@ public actor LampLibrary {
     private var openDatabases: [String: (
         revision: LampDatabaseFileRevision, words: LampDatabaseFileIdentity?, queue: DatabaseQueue
     )] = [:]
+    /// Whether this process has looked at the index on disk yet.
+    private var readInstalledModuleIndex = false
+    /// How many module databases this library has opened and inspected, so a
+    /// test can prove an inspection did not happen.
+    var installedModuleInspections = 0
     private var installedMetadata: [String: (
         revision: LampDatabaseFileRevision, byteCount: Int, module: LampInstalledModule
     )] = [:]
@@ -51,6 +56,12 @@ public actor LampLibrary {
     /// Each published collection's compiled archive, against what it was
     /// built from. See `Documentation/decisions/0002`.
     private var personalArchives: [String: PersonalArchive] = [:]
+    /// Bumped whenever the archives are dropped because the user database is
+    /// not the file this library was reading. A compile runs off the actor, so
+    /// a replacement can land while one is in flight, and bytes built from the
+    /// file before it must not be stored as though they described this one.
+    /// Found by a Codex review.
+    private var personalArchiveGeneration = 0
     /// How many archives this library has actually compiled, for a test that
     /// means to prove one was not compiled again.
     var personalArchiveCompiles = 0
@@ -161,7 +172,35 @@ public actor LampLibrary {
             options: [.skipsHiddenFiles]
         )
         let livePaths = Set(databaseURLs.map(\.path))
+        // What a previous run inspected, read once per process. Inspecting a
+        // module means opening its database and reading its metadata, and a
+        // library of several hundred paid that on every launch for modules
+        // that had not changed since the last one
+        // (`Documentation/decisions/0005`).
+        if !readInstalledModuleIndex {
+            readInstalledModuleIndex = true
+            for (path, entry) in InstalledModuleIndex.read(at: installedModuleIndexURL).entries
+            where livePaths.contains(path) && installedMetadata[path] == nil {
+                installedMetadata[path] = (entry.revision, entry.byteCount, entry.module.module)
+            }
+        }
         installedMetadata = installedMetadata.filter { livePaths.contains($0.key) }
+        let inspectedBefore = installedMetadata
+        defer {
+            // Written only when something was inspected, so a listing that
+            // answered from what it already had writes nothing. The byte count
+            // counts as a change: a `.lamp` file removed or replaced beside an
+            // untouched database re-inspects the module, and an index that did
+            // not record the new count would have every launch re-inspect it
+            // again. Found by a Codex review.
+            let moved = installedMetadata.contains { path, entry in
+                guard let before = inspectedBefore[path] else { return true }
+                return before.revision != entry.revision || before.byteCount != entry.byteCount
+            }
+            if moved || installedMetadata.count != inspectedBefore.count {
+                InstalledModuleIndex(installedMetadata).write(to: installedModuleIndexURL)
+            }
+        }
         return databaseURLs
             .filter { $0.pathExtension.lowercased() == "sqlite" }
             .compactMap { databaseURL in
@@ -176,6 +215,7 @@ public actor LampLibrary {
                    cached.revision == revision, cached.byteCount == (byteCount ?? 0) {
                     module = cached.module
                 } else {
+                    installedModuleInspections += 1
                     guard let inspected = try? inspectDatabase(
                         at: databaseURL, fallbackID: nil,
                         compressedByteCount: byteCount ?? 0, verifyIntegrity: false
@@ -4923,6 +4963,11 @@ public actor LampLibrary {
         rootURL.appendingPathComponent("Databases", isDirectory: true)
     }
 
+    private var installedModuleIndexURL: URL {
+        rootURL.appendingPathComponent("Indexes", isDirectory: true)
+            .appendingPathComponent("InstalledModules.json")
+    }
+
     private var bundledDatabasesURL: URL {
         rootURL.appendingPathComponent("Bundled", isDirectory: true)
     }
@@ -5622,6 +5667,7 @@ public actor LampLibrary {
         // altogether — a restore, or a copy put there from outside — and
         // nothing read from the one before it answers for this one.
         personalArchives.removeAll()
+        personalArchiveGeneration += 1
         try queue.writeWithoutTransaction { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS selected_plans (
@@ -6537,6 +6583,7 @@ public actor LampLibrary {
                 return held.bytes
             }
             let notes = try allPersonalNotes()
+            let generation = personalArchiveGeneration
             personalArchiveCompiles += 1
             // Off the actor: the rows are in hand and the compile touches
             // nothing of this library's. `FileManager.default` rather than
@@ -6545,7 +6592,9 @@ public actor LampLibrary {
             let bytes = try await Task.detached(priority: .utility) {
                 try LampPersonalNotesFile.archive(notes, moduleID: moduleID)
             }.value
-            personalArchives[key] = PersonalArchive(stamp: stamp, media: nil, bytes: bytes)
+            if generation == personalArchiveGeneration {
+                personalArchives[key] = PersonalArchive(stamp: stamp, media: nil, bytes: bytes)
+            }
             return bytes
         case .writing:
             let key = "\(LampPersonalItemKind.devotional.rawValue):\(moduleID)"
@@ -6562,13 +6611,16 @@ public actor LampLibrary {
             // is not on this device.
             let writings = try personalDevotionals()
             let root = rootURL
+            let generation = personalArchiveGeneration
             personalArchiveCompiles += 1
             let bytes = try await Task.detached(priority: .utility) {
                 try LampPersonalWritingFile.archive(
                     writings, moduleID: moduleID, normalizingMediaIn: root
                 )
             }.value
-            personalArchives[key] = PersonalArchive(stamp: stamp, media: media, bytes: bytes)
+            if generation == personalArchiveGeneration {
+                personalArchives[key] = PersonalArchive(stamp: stamp, media: media, bytes: bytes)
+            }
             return bytes
         case .highlights:
             // There is no such file. Notes and writings travel as the whole

@@ -57,14 +57,24 @@ struct LampPresentationDeckListingCacheTests {
         #expect((1...3).allSatisfy { reads(store, "deck-\($0)") == 1 })
     }
 
-    /// A deck this process saved does not have to be read back.
-    @Test func aSavedDeckIsListedWithoutBeingRead() throws {
+    /// A save drops what was held for that file rather than remembering what
+    /// it wrote, so the deck a listing hands out always came from the file as
+    /// it stands. The saving the cache is for is the decks nobody touched.
+    @Test func aSavedDeckIsReadBackOnceAndThenNotAgain() throws {
         let (store, root) = try store()
         defer { try? FileManager.default.removeItem(at: root) }
         _ = try store.save(deck("deck-1", title: "Deck One"))
 
         #expect(try store.decks().map(\.title) == ["Deck One"])
-        #expect(reads(store, "deck-1") == 0)
+        #expect(reads(store, "deck-1") == 1)
+        #expect(try store.decks().map(\.title) == ["Deck One"])
+        #expect(reads(store, "deck-1") == 1)
+
+        // And a save over it is seen, which is the case the seeding risked:
+        // the file's identity would have matched while the cache held the
+        // deck from before.
+        _ = try store.save(deck("deck-1", title: "Deck Two"))
+        #expect(try store.decks().map(\.title) == ["Deck Two"])
     }
 
     /// The case `decisions/0001` refused to trust a modification date for: the

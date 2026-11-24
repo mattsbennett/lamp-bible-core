@@ -1,8 +1,8 @@
 # 0005. What a module is survives a launch
 
-Status: Proposed, and smaller than it looked. See the measurement below: the
-case for it rests on modules of a realistic size, which Phase 0 has not yet
-measured.
+Status: Accepted, 2026-11-24, held by `LampInstalledModuleIndexTests`. Smaller
+than it looked — see the measurement below — but the index is a dozen lines of
+cache and the constant it saves grows with a module's size.
 
 ## Context
 

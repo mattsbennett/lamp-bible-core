@@ -1669,14 +1669,18 @@ public struct LampPresentationDeckStore: Sendable {
         let data = try Self.encoder.encode(deck)
         let destination = deckFileURL(for: deck.id)
         try data.write(to: destination, options: [.atomic])
-        // Written by this process, so the next listing has no reason to read
-        // it back: remembered against the file as it now stands. Taken after
-        // the write, never before — a revision read first would describe the
-        // file the write replaced, and the listing would hand out this deck
-        // for a file that holds something else.
-        if let revision = try? LampDatabaseFileRevision(url: destination) {
-            LampPresentationDeckCache.shared.remember(deck, at: destination, revision: revision)
-        }
+        // What was held for this file is dropped, and the next listing reads
+        // the file.
+        //
+        // Not remembered as written, which is what this did at first: the
+        // revision would have to be taken after the write, and another writer
+        // — an agent through `lamp-mcp`, a sync pass — can replace the file in
+        // between, so the identity would describe their bytes while the cache
+        // held this deck. The listing would then hand out the wrong deck for
+        // as long as the file sat still. Found by a Codex review. One read
+        // after a save is what the cache was never about: the saving is of the
+        // decks nobody touched.
+        LampPresentationDeckCache.shared.forget(at: destination)
         return destination
     }
 

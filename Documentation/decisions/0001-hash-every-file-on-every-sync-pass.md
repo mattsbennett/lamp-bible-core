@@ -1,8 +1,11 @@
 # 0001. A sync pass hashes every file it publishes, every time
 
-Status: Accepted — this is what the code already does
-(`LampModuleKit/LampSyncLocalFile.swift`, `describe`). Recorded 2026-11-24 after
-the shortcut was proposed and rejected.
+Status: Superseded by `0007`, 2026-11-24, the same day it was written. Both of
+its reasons moved within hours: the key it rejects is weaker than the one
+available (`st_ctime` is the kernel's, which `0003` then relied on), and the
+comparison that made hashing look cheap was against a compile that `0002`
+cached away. Left as written — the two rejections at the foot of it still
+stand, and 0007 carries them forward.
 
 ## Context
 

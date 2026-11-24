@@ -175,19 +175,24 @@ Ordered by what it costs the person, worst first.
     freshness on the archive's byte size (`:5130`). The sync manifest holds an
     entry per path ever synced and travels whole on every pass.
 
-### Deliberately left alone
+### Deliberately left alone, then not
 
-See `decisions/0001-hash-every-file-on-every-sync-pass.md`.
+Hashing every candidate file on every pass (`LampSyncLocalFile.swift`,
+`describe`) was `decisions/0001`: linear at 2.43 GB/s, only on change, and the
+shortcut would lose a file restored at the same size with its date preserved.
 
-**Hashing every candidate file on every pass** (`LampSyncLocalFile.swift:76`).
-It is linear at 2.43 GB/s, it runs only when something changed, and the comment's
-argument is sound: a file replaced at the same size with its date preserved — a
-restore, `cp -p`, `rsync -t` — would be skipped for ever by an mtime shortcut. A
-stat-keyed digest cache would also feed a changed input to decisions the Lean
-model covers. iOS already does the cheaper thing where it can: read-only modules
-are listed as `heldWithoutAFile` from a stored hash
-(`LibrarySyncPass.swift:705`). The only safe win is running `describe` in a task
-group.
+`decisions/0007` supersedes it. Both of 0001's reasons moved the same day. The
+key it rejected was a modification date, where `LampDatabaseFileRevision` also
+carries the inode and the kernel's change time — which `0003` then relied on,
+with a test that rewrites a file in place, puts the date back, and watches the
+listing notice. And hashing was cheap *compared with the per-pass compile*,
+which `0002` cached away; it is now the largest thing a pass does.
+
+0007 is gated rather than general: identity is trusted only where the
+filesystem maintains a change time and does not reuse inodes (`apfs`, `hfs`),
+only for the kinds immutable at a path, and only within one process. On a NAS
+or a USB stick it changes nothing, because there the key would degrade to the
+`(size, mtime)` that 0001 was right to refuse.
 
 ### Already right
 
@@ -230,27 +235,30 @@ Still to measure, and each gates something:
 
 ### Phase 1 — core enablers
 
-- ~~**1a. Decoded-deck listing cache**~~ **done**, `decisions/0003` — keyed on `stat` identity including the change time, which is why it needed no loosening of 0001's rule. A cache keyed on the file's
-  size, modification date and resource identifier, holding the decoded **and
-  validated** deck, so `decks()` lists by stat and decodes only what changed.
-  `decode` keeps validating; `save`/`encoded` and the bytes sync merges on are
-  untouched. Test that a rewrite at the same size with a preserved date, and a
-  replacement with a new inode, both invalidate.
-- ~~**1b. Single-item reads**~~ **done**: `devotional(moduleID:id:)`, and the agent tools read one row. Add `devotional(moduleID:id:)`; point
-  `LampAgentLibrary.readDevotional` and `personalDevotionalRevision` at it and at
-  `personalDevotional(id:)`. One line each.
-- **1c. Persist module metadata** `[core, M]`, `decisions/0005`. Write `installedMetadata` to
-  `Indexes/InstalledModules.json` keyed by `LampDatabaseFileRevision` and the
-  `.lamp` byte count, so a cold `installedDatabases` inspects only what is new or
-  changed. A changed revision must always re-inspect.
-- ~~**1d. Cache the personal archives**~~ **done**, `decisions/0002` — keyed per kind, not on the device-wide stamp; see the record for why that mattered. Key the writings and notes
-  archive bytes by `personalChangeStamp()` **and** the media listing
-  `normalizingMediaIn` reads (a missing picture refuses the archive, so media
-  presence is an input), and build off the actor. The bytes must stay identical —
-  the digest tests pin them.
+- ~~**1a. Decoded-deck listing cache**~~ **done**, `decisions/0003`. Keyed on
+  the file's identity as `stat` reports it — device, inode, size, modification
+  time and **change time** — holding the decoded *and validated* deck, so
+  `decks()` lists by stat and reads only what moved. The change time is what
+  makes it sound: nothing in userspace sets it, so a rewrite in place with the
+  date put back still reads as changed.
+- ~~**1b. Single-item reads**~~ **done**. `devotional(moduleID:id:)`, sharing
+  its row mapping with the whole-collection read; the agent tools now read one
+  row rather than the corpus.
+- ~~**1c. Persist module metadata**~~ **done**, `decisions/0005`.
+  `Indexes/InstalledModules.json`, keyed by `LampDatabaseFileRevision` and the
+  `.lamp` byte count, so a launch inspects only what is new or changed. A
+  changed file is inspected again, a vanished one is dropped, and an index that
+  will not read is simply absent.
+- ~~**1d. Cache the personal archives**~~ **done**, `decisions/0002`. Keyed on
+  a revision each table keeps by trigger — not the device-wide change stamp
+  (useless) and not the sync ledger (unsound: five writers change rows without
+  stamping it). Read the record before touching it; both wrong keys are in
+  there with what they broke.
 - **1e. Batched chapter sidecars** `[core, S, optional]`.
   `moduleVerseNotes(moduleIDs:)` / `moduleVerseHighlights(moduleIDs:)` in one
-  actor hop.
+  actor hop, so a page turn is one round trip rather than one per installed
+  notes and highlights module. Microseconds each on a warm connection; worth
+  doing for tidiness, not for time.
 
 ### Phase 2 — Mac
 
