@@ -855,7 +855,7 @@ public enum LampPresentationDeckValidator {
                         )
                     }
                     if block.altText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                        issue(.warning, "\(blockPath).altText", "Describe the image for accessibility.")
+                        issue(.warning, "\(blockPath).altText", "Describe the picture. VoiceOver reads the description while presenting, an untitled slide is listed by it, and an agent working on the deck learns from it what the picture shows.")
                     }
                 } else if block.kind == .chart {
                     // A chart's text is an optional heading over its bars.
