@@ -286,9 +286,17 @@ public enum LampSyncFilePlan {
     /// The listing, with the folders the store listed — a folder it has no
     /// listing for (nil, not empty) is left out — and every listed file,
     /// including one no revision could be found for.
+    /// - Parameter skippingRevisionFor: paths whose revision is not worth
+    ///   asking the server for, because this pass will not act on them. The
+    ///   file is still listed and still found, so pruning sees the whole
+    ///   listing; what is skipped is the extra request below, which on a
+    ///   folder store is a read of the body — and a read that fails would
+    ///   take the pass with it, before it could report why the path was
+    ///   refused (`Documentation/decisions/0013`).
     static func listingAndFolders(
         in store: any LampSyncRemoteStore,
-        manifest: LampSyncLibraryManifest
+        manifest: LampSyncLibraryManifest,
+        skippingRevisionFor isSkipped: (String) -> Bool = { _ in false }
     ) async throws -> (listing: [String: String], folders: Set<String>, found: Set<String>) {
         var listing: [String: String] = [:]
         var folders = Set<String>()
@@ -304,7 +312,7 @@ public enum LampSyncFilePlan {
                 let recorded = entry?.isMember == true ? entry?.revision : nil
                 if let revision = item.revision ?? recorded {
                     listing[path] = revision
-                } else if let revision = try await store.revision(path: path) {
+                } else if !isSkipped(path), let revision = try await store.revision(path: path) {
                     listing[path] = revision
                 }
             }

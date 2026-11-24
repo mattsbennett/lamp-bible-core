@@ -210,6 +210,24 @@ public struct LampSyncBundlePass {
         /// taken at that revision, unchanged since.
         public var heldWithoutAFile: Set<String> = []
 
+        /// Paths this client holds something at and will not sync, by the
+        /// reason to tell the person, which is reported once per pass.
+        ///
+        /// A gather that cannot read a file leaves it out of `local` — and
+        /// without saying so, "no local copy" is what the plan reads, so it
+        /// **downloads the server's copy and installs it over the file**. A
+        /// module whose permissions are wrong, or one symlinked to a disk
+        /// that is not mounted, was replaced by whatever the server had and
+        /// nothing said a word. No hostile process and no race: a person who
+        /// had done an ordinary thing to their own library lost a file.
+        ///
+        /// So a refused path is excluded from the plan exactly as an
+        /// unplanned kind is: neither fetched, published, deleted nor
+        /// recorded, and pruning still sees the whole listing. Nothing is
+        /// lost on the server; the person is told, and the next pass takes
+        /// the file once it can be read.
+        public var refused: [String: String] = [:]
+
         /// When each path's content was last saved here, where the library
         /// knows. A file saved after another device deleted it survives the
         /// deletion and goes back up, so without this a collection edited
@@ -280,8 +298,15 @@ public struct LampSyncBundlePass {
         // to it, so this is what it actually holds.
         let gathered = try await gathering()
 
+        func folded(_ path: String) -> String { path.precomposedStringWithCanonicalMapping.lowercased() }
+        // A refusal has to be known before the listing, which asks the
+        // server for a revision it was not given — on a folder store that is
+        // a read of the body, and a read that fails takes the pass with it,
+        // before the refusal it would have reported.
+        let refusedSpellings = Set(gathered.refused.keys.map(folded))
         let listed = try await LampSyncFilePlan.listingAndFolders(
-            in: store, manifest: opened.bundle.manifest
+            in: store, manifest: opened.bundle.manifest,
+            skippingRevisionFor: { refusedSpellings.contains(folded($0)) }
         )
         var listing = listed.listing
         listing.merge(gathered.extraListing) { _, extra in extra }
@@ -294,7 +319,6 @@ public struct LampSyncBundlePass {
         let manifest = opened.bundle.manifest
         let held = Set(gathered.local.map(\.path)).union(gathered.heldWithoutAFile)
         let known = held.union(manifest.paths)
-        func folded(_ path: String) -> String { path.precomposedStringWithCanonicalMapping.lowercased() }
         let spellings = Dictionary(grouping: known, by: folded)
         let started = now()
         var asked = Set<String>()
@@ -374,6 +398,26 @@ public struct LampSyncBundlePass {
             ))
         }
 
+        // What this pass will act on at all: a kind this client syncs, and not
+        // a path the gather refused.
+        //
+        // Matched folded as well as exactly. A library on a case-insensitive
+        // volume has one file for `easter.lampdeck` and `Easter.lampdeck`, so
+        // refusing the spelling the gather saw while fetching the other
+        // spelling installs over the very file that was refused — the
+        // install removes the destination before it copies. Folding may
+        // refuse a genuinely different file on a case-sensitive volume, and
+        // that is the conservative way round: nothing is lost on the server,
+        // and a pair of paths differing only in case is a thing to tell the
+        // person about rather than to act on (see `0010`).
+        func isPlanned(_ path: String) -> Bool {
+            guard !refusedSpellings.contains(folded(path)) else { return false }
+            return LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false
+        }
+        for (path, reason) in gathered.refused.sorted(by: { $0.key < $1.key }) {
+            outcome.failures.append("\(path): \(reason)")
+        }
+
         let plan = LampSyncFilePlan.plan(
             manifest: opened.bundle.manifest,
             local: locals,
@@ -383,14 +427,14 @@ public struct LampSyncBundlePass {
             deletedRecords: deletedLocally.keys.reduce(into: [:]) { revisions, path in
                 revisions[path] = records.record(path, in: source)?.effectiveRevision
             }
-        ).only { path in LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false }
+        ).only(isPlanned)
         outcome.missing = LampSyncFilePlan.missing(
             manifest: opened.bundle.manifest,
             local: locals,
             deletedLocally: deletedLocally,
             found: listed.found.union(gathered.extraListing.keys),
             listedFolders: listed.folders
-        ).filter { LampSyncFolderLayout.kind(of: $0.key).map(plannedKinds) ?? false }
+        ).filter { isPlanned($0.key) }
 
         // Read before anything is fetched, since fetching is what records the
         // revision that would hide it — and before anything is reaped, which
@@ -404,7 +448,8 @@ public struct LampSyncBundlePass {
             deletedHere: Set(gathered.deletedLocally.keys),
             records: records,
             source: source,
-            planned: plannedKinds
+            planned: plannedKinds,
+            refused: Set(gathered.refused.keys)
         )
 
         // A local copy is acted on — installed over or deleted — only while

@@ -1087,6 +1087,84 @@ struct LampSyncBundlePassTests {
         #expect(!FileManager.default.fileExists(atPath: sentFrom.path))
     }
 
+    /// A local file the gather could not read is **not** downloaded over.
+    ///
+    /// Leaving it out of the plan's locals is what "this client does not hold
+    /// it" looks like, so the plan fetched the server's copy and the install
+    /// wrote it over the file — a module whose permissions were wrong, or one
+    /// symlinked to a disk that was not mounted, replaced by whatever the
+    /// server had, with nothing said. No hostile process and no race.
+    /// `Documentation/decisions/0013`.
+    @Test func aFileTheGatherCouldNotReadIsNotDownloadedOver() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        // A directory where the file should be, rather than a file with its
+        // permissions taken away: mode 000 does not stop root opening it, and
+        // the suite is run as root often enough that the test would then
+        // describe a readable candidate and never reach the pass.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-pass-\(UUID().uuidString).lamp")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("the local copy".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        let described = LampSyncLocalFiles.describe([
+            LampSyncLocalFiles.Candidate(path: path, kind: .deck, url: url),
+        ])
+        #expect(described.files.isEmpty)
+        let refused = try #require(described.unreadable.first)
+
+        let library = StubLibrary()
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: {
+                var result = LampSyncBundlePass.Gathered()
+                result.local = described.files
+                // What an app hands over for what it could not read.
+                result.refused = [refused.path: refused.reason]
+                return result
+            }, records: &records, patience: immediate)
+
+        #expect(library.installed.isEmpty, "the file is left alone")
+        #expect(outcome.installed.isEmpty)
+        #expect(outcome.failures == ["\(path): \(refused.reason)"], "and the person is told")
+        // Nothing is lost on the server, and the record is untouched, so the
+        // next pass takes it once the file can be read again.
+        #expect(store.bodies[path] == Data("remote".utf8))
+        #expect(records.record(path, in: source)?.effectiveRevision == "\"r1\"")
+    }
+
+    /// Refusing a file also refuses the other spellings of its name.
+    ///
+    /// A library on a case-insensitive volume has one file for
+    /// `easter.lampdeck` and `Easter.lampdeck`. Refusing only the spelling the
+    /// gather saw left the pass free to download the other one — and the
+    /// install removes the destination before it copies, so the very file
+    /// that was refused is replaced. `Documentation/decisions/0013`.
+    @Test func refusingAFileRefusesItsOtherSpellings() async throws {
+        let refused = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let variant = try LampSyncFolderLayout.deckPath(deckID: "Easter")
+        #expect(refused != variant)
+        let store = try seeded(path: variant, revision: "\"r1\"")
+        var records = LampSyncFileRecords()
+
+        let library = StubLibrary()
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: {
+                var result = LampSyncBundlePass.Gathered()
+                result.refused = [refused: "its file could not be read"]
+                return result
+            }, records: &records, patience: immediate)
+
+        #expect(library.installed.isEmpty, "the other spelling is not fetched over it")
+        #expect(outcome.installed.isEmpty)
+        #expect(outcome.failures == ["\(refused): its file could not be read"])
+    }
+
     /// A candidate that has become a symbolic link is not published, and
     /// nothing it points at goes up.
     ///
