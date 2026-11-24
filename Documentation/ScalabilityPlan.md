@@ -514,8 +514,18 @@ collection, and not before.
   that collection, and migration v45 extends those triggers from writings to
   notes and highlights. Held by
   `testNotesAndHighlightsAreCountedForTheirOwnCollection`.
-- **3d. Drop and rebuild FTS around bulk imports** `[S]`, only if a
-  measurement says import time matters. Not measured yet.
+- **3d. Drop and rebuild FTS around bulk imports** `[S]`. **Measured, and
+  it matters**: 31 000 verses — a full Bible — into the phone's
+  `translation_verses` and its external-content FTS5 index take **918–936 ms**
+  with the migrations' triggers attached, against **374–390 ms** without them
+  plus a `'rebuild'` that costs **24 ms**. Two and a half times faster, and
+  the rebuild is almost free, because an index built in one pass does not
+  pay a per-row trigger. Held by `SearchIndexImportMeasurementTests` here,
+  where the output can be read, and by `ImportIndexMeasurementTests` on the
+  phone, which asserts the index says the same thing whichever way it was
+  filled. Recommended, with the drop, the insert and the rebuild in one write
+  transaction so that a crash cannot leave an index that silently returns
+  nothing.
 - ~~**3e. The digest cache on the phone**~~ **done**, `decisions/0007`: the
   phone's media and book pictures go through the same gate and the same cache.
 
