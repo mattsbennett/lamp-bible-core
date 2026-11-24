@@ -502,16 +502,45 @@ collection, and not before.
   reads only the deck files that moved — and `linkedWritingIDs()` and
   `entries(forWriting:)`, which each ask again, inherit it. `revisions(in:)`
   still reads the bytes, which a merge needs.
-- **3b. A list projection** `[M, and the owner's call]`. Still open, and it
-  splits in two. `DevotionalStorage.getDevotionals` fetches every row and
-  `toDevotional()` parses each one's content JSON — confirmed — so drawing a
-  list of titles decodes every writing. Not done here because the row hands
-  the decoded writing straight to `DevotionalView`, so a projection needs the
-  reader to fetch by id, and that is the phone's main surface: worth seeing
-  drawn before it ships. The other half, pushing the search into SQL, changes
-  what matches — SQLite's `NOCASE` folds ASCII only, where the current filter
-  folds Unicode, so a Greek or Hebrew query would stop matching case. That is
-  the owner's decision, the same one as FTS below.
+- ~~**3b. A list projection**~~ **done**, and **the owner's call it was
+  waiting for did not exist.** The plan had this blocked on search semantics:
+  pushing the filter into SQL would change what matches, since `NOCASE` folds
+  ASCII only where the current one folds Unicode. But the picker never used
+  the stored-column search — it passes an empty `DevotionalFilterOptions()`,
+  so that branch was dead for the list, and the search a person actually gets
+  is the view's own filter over **title, subtitle and tags**. Bodies are not
+  searched on the phone at all. So nothing about search had to change, and
+  nothing did.
+
+  What the list was paying was `toDevotional()` per row: a full
+  `JSONSerialization` parse of the body purely to decide whether it was the
+  block schema or Markdown, then a second `JSONDecoder` parse of the same
+  bytes, then four more `JSONDecoder` instantiations for key scriptures, the
+  summary, footnotes and media — none of which a row draws. **Every
+  writing's body, parsed twice, to draw a list of titles.**
+
+  `toListDevotional()` parses no body at all for the ordinary case: a JSON
+  document begins with `{` or `[`, so anything else is Markdown with
+  certainty and is handed over as the string it already is. The few that do
+  begin that way — a writing starting with a link, or quoting a JSON example,
+  and the legacy block-schema ones — are sniffed and decoded as before,
+  because a block schema has to be converted before a row can quote an
+  excerpt from it. The four unused decoders are gone either way.
+
+  The row needed one thing the plan did not mention: it draws an **excerpt**
+  of the opening prose, so a titles-only projection would have been a visible
+  loss. It gets the body's text, which is a column read.
+
+  A reader opening a writing fetches it whole by id — the list's copy has no
+  footnotes, media or summary. That lands where the push was already deferred
+  because the writing view's init converts and re-encodes, so it is one row
+  read at the moment of a tap.
+
+  Held by `testTheListCarriesWhatARowDrawsAndNoMore` and
+  `testABlockSchemaWritingStillHasTextForItsRow`. The second one's first
+  version passed with the parse removed — handing the raw column through also
+  "contains" the prose — so it now asserts the row would not quote stored
+  JSON.
 - ~~**3c. Reuse the change-keyed export cache in the pass**~~ **done**:
   `exportedBytes` is kept against the count the database keeps of changes to
   that collection, and migration v45 extends those triggers from writings to
@@ -551,8 +580,27 @@ collection, and not before.
 
   Only the **insert** trigger is dropped: a replacement's deletions have to
   reach the index, or it keeps entries for rows that are gone.
-  `TranslationImportTests` now asserts the imported translation is
-  *findable*, and fails without the indexing step.
+
+  **Implemented, then backed out.** Dropping the insert trigger inside the
+  module import makes `ModuleSyncManager.takeIn` fail afterwards with
+  `NSFileNoSuchFileError` while removing the decompressed temporary
+  database, which breaks `testFailedSQLiteCopyRollsBackInstalledModule` and
+  `testFailedSQLiteMetadataSaveRollsBackCopiedRows`. Reproduced on a clean
+  tree; reverting restores both. Narrowed to the trigger **drop** — a wrapper
+  that only inspects the indexes passes, and so does one that drops nothing —
+  but the mechanism between a dropped trigger and a missing temp file is not
+  explained, so nothing was shipped on a guess.
+
+  What stands: the measurements, the choice of instrument, and the two
+  soundness conditions. What is left is one afternoon's debugging of that
+  interaction, from a known repro.
+
+  `TranslationImportTests` keeps the assertion the attempt earned — that an
+  imported translation's verses are **in the search index** — asked of the
+  index for that translation rather than through a ranked search across the
+  library, since with other Bibles installed "shepherd" fills any limit long
+  before reaching a psalter imported a moment ago. Nothing asserted that
+  before.
 - ~~**3e. The digest cache on the phone**~~ **done**, `decisions/0007`: the
   phone's media and book pictures go through the same gate and the same cache.
 
@@ -570,8 +618,10 @@ collection, and not before.
 
 Four of these are product calls, not engineering ones.
 
-- Routing writing search through FTS (2d's third step, 3b) changes what matches:
-  tokens and prefixes instead of substrings.
+- Routing writing search through FTS (2d's third step) changes what matches:
+  tokens and prefixes instead of substrings. **Not needed for 3b**, which
+  turned out not to depend on it: the phone's writing search is over title,
+  subtitle and tags, and a projection leaves it exactly as it was.
 - Capping revision history, or storing diffs instead of full copies, changes a
   format both Macs read.
 - The deck listing cache (1a) is the first place in this codebase that trusts a
