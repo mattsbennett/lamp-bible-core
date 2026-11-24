@@ -1606,22 +1606,53 @@ public struct LampPresentationDeckStore: Sendable {
         return assetURL(forAssetPath: assetPath)
     }
 
+    /// Every deck this library holds, decoded and checked.
+    ///
+    /// Only the files that moved are read: see
+    /// `Documentation/decisions/0003`. Four surfaces ask for this on a one or
+    /// two second timer — Slide Studio, the writings list, the writing editor,
+    /// the manuscript-notes refresh — and deck sync asks two or three times a
+    /// pass, while decoding and validating 400 decks costs 364 ms against the
+    /// 0.4 ms of stats this now pays when nothing has changed.
+    ///
+    /// A deck the running build cannot decode or cannot validate is left out,
+    /// as it always was, and is not remembered either — so it is reported
+    /// again next time rather than disappearing quietly from one listing and
+    /// not the next.
     public func decks() throws -> [LampPresentationDeck] {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: decksDirectoryURL.path) else { return [] }
-        return try fileManager.contentsOfDirectory(
+        let urls = try fileManager.contentsOfDirectory(
             at: decksDirectoryURL,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
         .filter { $0.pathExtension.lowercased() == "lampdeck" }
-        .compactMap { try? decode(Data(contentsOf: $0)) }
-        .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        let cache = LampPresentationDeckCache.shared
+        cache.keepingOnly(
+            Set(urls.map { $0.standardizedFileURL.path }), under: decksDirectoryURL
+        )
+        return urls
+            .compactMap { url -> LampPresentationDeck? in
+                guard let revision = try? LampDatabaseFileRevision(url: url) else { return nil }
+                if let held = cache.deck(at: url, revision: revision) { return held }
+                guard let decoded = try? decode(Data(contentsOf: url)) else { return nil }
+                cache.remember(decoded, at: url, revision: revision, counting: true)
+                return decoded
+            }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 
     public func deck(id: String) throws -> LampPresentationDeck? {
         let url = deckFileURL(for: id)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let cache = LampPresentationDeckCache.shared
+        if let revision = try? LampDatabaseFileRevision(url: url) {
+            if let held = cache.deck(at: url, revision: revision) { return held }
+            let decoded = try decode(Data(contentsOf: url))
+            cache.remember(decoded, at: url, revision: revision, counting: true)
+            return decoded
+        }
         return try decode(Data(contentsOf: url))
     }
 
@@ -1638,6 +1669,14 @@ public struct LampPresentationDeckStore: Sendable {
         let data = try Self.encoder.encode(deck)
         let destination = deckFileURL(for: deck.id)
         try data.write(to: destination, options: [.atomic])
+        // Written by this process, so the next listing has no reason to read
+        // it back: remembered against the file as it now stands. Taken after
+        // the write, never before — a revision read first would describe the
+        // file the write replaced, and the listing would hand out this deck
+        // for a file that holds something else.
+        if let revision = try? LampDatabaseFileRevision(url: destination) {
+            LampPresentationDeckCache.shared.remember(deck, at: destination, revision: revision)
+        }
         return destination
     }
 
@@ -1788,5 +1827,121 @@ public enum LampPresentationDeckStoreError: LocalizedError, Equatable {
             let details = issues.map { "\($0.path): \($0.message)" }.joined(separator: "\n")
             return "The presentation deck is invalid.\n\(details)"
         }
+    }
+}
+
+/// Decks as this process last decoded them, against the files they came from.
+///
+/// Shared by every `LampPresentationDeckStore`, because the store is a value
+/// made wherever one is wanted — a dozen call sites construct one from a
+/// library root — and a cache held inside it would be a new cache each time.
+///
+/// What a deck is kept against is the file's identity as `stat` gives it:
+/// device, inode, size, modification time *and* change time. That is a
+/// stronger claim than a modification date, which `decisions/0001` refused to
+/// trust for publishing: `st_ctime` is the kernel's own, set on any change to
+/// the inode and settable by nothing in userspace, so a deck rewritten in
+/// place with its date preserved — `cp -p`, a restore, a sync that keeps
+/// dates — still reads as changed here.
+///
+/// Bounded, because a library's decks decoded are tens of megabytes and a
+/// listing is asked for on a timer: the least recently used entry goes when
+/// the limit is reached. The decks handed out are the same values, not
+/// copies, so holding them costs what the caller already holds.
+final class LampPresentationDeckCache: @unchecked Sendable {
+    static let shared = LampPresentationDeckCache()
+
+    private let lock = NSLock()
+    private var entries: [String: (revision: LampDatabaseFileRevision, deck: LampPresentationDeck)] = [:]
+    /// Paths, least recently used first.
+    private var used: [String] = []
+    private let limit = 512
+
+    private func key(_ url: URL) -> String { url.standardizedFileURL.path }
+
+    /// The deck held for this file, if what is held was read from the file as
+    /// it now stands.
+    func deck(at url: URL, revision: LampDatabaseFileRevision) -> LampPresentationDeck? {
+        let path = key(url)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[path], entry.revision == revision else { return nil }
+        touch(path)
+        return entry.deck
+    }
+
+    /// `counting` marks a deck that was read from its file rather than handed
+    /// over by a save, which is what `decodeCount()` reports.
+    func remember(
+        _ deck: LampPresentationDeck,
+        at url: URL,
+        revision: LampDatabaseFileRevision,
+        counting: Bool = false
+    ) {
+        let path = key(url)
+        lock.lock()
+        defer { lock.unlock() }
+        if counting { reads[path, default: 0] += 1 }
+        entries[path] = (revision, deck)
+        touch(path)
+        while used.count > limit, let oldest = used.first {
+            used.removeFirst()
+            entries[oldest] = nil
+        }
+    }
+
+    /// Drops what is held for files that are no longer in a directory just
+    /// listed, so a deleted deck does not sit in memory for the life of the
+    /// process.
+    ///
+    /// Scoped to that directory. A listing knows only its own library's
+    /// files, and pruning everything else would have one library's listing
+    /// empty another's — which is not hypothetical: the phone keeps a synced
+    /// store and an imported one, over two roots, and asks both.
+    func keepingOnly(_ paths: Set<String>, under directory: URL) {
+        let prefix = key(directory) + "/"
+        lock.lock()
+        defer { lock.unlock() }
+        entries = entries.filter { !$0.key.hasPrefix(prefix) || paths.contains($0.key) }
+        used = used.filter { !$0.hasPrefix(prefix) || paths.contains($0) }
+        // The read counts stay: they are for tests, and a file read, deleted
+        // and written again has been read once whatever the listing says now.
+    }
+
+    /// Everything, for a test that means to measure a cold read.
+    func forgetEverything() {
+        lock.lock()
+        defer { lock.unlock() }
+        entries = [:]
+        used = []
+    }
+
+    /// What is held for one file only, for a test working over its own
+    /// library while others run beside it.
+    func forget(at url: URL) {
+        let path = key(url)
+        lock.lock()
+        defer { lock.unlock() }
+        entries[path] = nil
+        used.removeAll { $0 == path }
+    }
+
+    /// How many times each file has been read, so a test can prove one was
+    /// not read again.
+    ///
+    /// Per file rather than one number for the process: tests run beside each
+    /// other, over libraries of their own, and a single counter made each of
+    /// them depend on what the others happened to be reading.
+    private var reads: [String: Int] = [:]
+
+    func readCount(at url: URL) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads[key(url)] ?? 0
+    }
+
+    private func touch(_ path: String) {
+        if let index = used.firstIndex(of: path) { used.remove(at: index) }
+        used.append(path)
     }
 }

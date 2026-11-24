@@ -1,6 +1,8 @@
 # 0003. Listing decks decodes only the files that changed
 
-Status: Proposed. Needs the owner's call on trusting a modification date, below.
+Status: Accepted, 2026-11-24, held by `LampPresentationDeckListingCacheTests`.
+The owner's call the first draft asked for turned out not to be needed — see
+**Decision**: what is trusted is not a modification date.
 
 ## Context
 
@@ -21,27 +23,52 @@ outside the process, and in-process writers already announce themselves through
 
 ## Decision
 
-Keep one cache of decoded, validated decks, keyed on each file's size,
-modification date and resource identifier (inode). A listing stats the directory
-and decodes only the files whose key moved.
+Keep one cache of decoded, validated decks, keyed on the file's identity as
+`stat` reports it — device, inode, size, modification time **and change time**
+— which is what `LampDatabaseFileRevision` already captures for module files. A
+listing stats the directory and decodes only the files whose identity moved.
+
+The change time is why this needed no owner's indulgence. `decisions/0001`
+refused to trust a modification date because a file replaced at the same size
+with its date preserved — `cp -p`, `rsync -t`, a restore — would be skipped for
+ever. `st_ctime` is the kernel's own: it is set on any change to the inode and
+there is no call that sets it to a chosen value. A deck rewritten in place with
+its date put back therefore reads as changed. There is a test that does exactly
+that and watches the listing notice.
 
 `decode` still validates — a deck that reaches the app's memory is still a
-checked deck. `save`, `encoded` and the bytes sync merges on are untouched.
+checked deck. `save`, `encoded` and the bytes sync merges on are untouched. A
+deck the running build cannot decode or validate is left out of the listing, as
+before, and nothing is remembered about it, so it is reported again rather than
+disappearing from one listing and not the next.
+
+A save remembers the deck it just wrote, against the file as it stands
+afterwards, so a listing that follows a save reads nothing.
+
+The cache is one per process, shared by every store, because the store is a
+value that callers make wherever they need one. Pruning a listed directory's
+vanished files is therefore scoped to that directory: a first attempt pruned
+everything else as well, which would have had the phone's two deck stores — a
+synced root and an imported one — empty each other's entries on every listing.
+A test over two libraries caught it.
 
 ## Consequences
 
 - A poll over an unchanged library becomes one directory listing and a stat per
   deck, which is what the cadence was always meant to cost.
-- **This is the first place in the codebase that trusts a modification date for
-  anything.** 0001 rejected exactly that for sync digests. The difference: this
-  decides whether to re-read a file for display, not whether a file has been
-  published, and a listing that misses a change self-corrects on the next write
-  or launch rather than losing data. Writers replace a deck atomically, so the
-  inode moves even when the date and size do not. **The owner should agree to
-  the principle, not just the code.**
-- The cache must be invalidated by: a rewrite at the same size with the date
-  preserved (caught by the inode), a replacement with a new inode, and a removal.
-  All three need a test.
+- Nothing in the codebase trusted a file's metadata to decide whether to re-read
+  it before this. What makes it safe is the change time rather than the
+  modification date, and that distinction is worth keeping in mind elsewhere:
+  it also means `decisions/0001`'s objection to a digest cache for sync was
+  aimed at a weaker key than the one available. Whether that changes 0001 is a
+  separate question, and it is being asked rather than assumed.
+- The cache is bounded at 512 decks, least-recently-used first. A library's
+  decks decoded are tens of megabytes, and the values handed out are the same
+  values the caller holds, so the cost is one copy rather than two.
+- Invalidation is tested three ways: a rewrite in place at the same size with
+  the date put back, a wholesale replacement, and a removal. A file that will
+  not decode is tested too, since the absence of a negative cache is what lets
+  a repaired deck appear.
 - Validation errors must stay attached to the deck they came from, so a deck that
   has gone bad on disk still reports its problems rather than vanishing from a
   listing.

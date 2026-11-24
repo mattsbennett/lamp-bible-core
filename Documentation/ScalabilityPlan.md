@@ -230,7 +230,7 @@ Still to measure, and each gates something:
 
 ### Phase 1 — core enablers
 
-- **1a. Decoded-deck listing cache** `[core, M]`, `decisions/0003`. A cache keyed on the file's
+- ~~**1a. Decoded-deck listing cache**~~ **done**, `decisions/0003` — keyed on `stat` identity including the change time, which is why it needed no loosening of 0001's rule. A cache keyed on the file's
   size, modification date and resource identifier, holding the decoded **and
   validated** deck, so `decks()` lists by stat and decodes only what changed.
   `decode` keeps validating; `save`/`encoded` and the bytes sync merges on are
