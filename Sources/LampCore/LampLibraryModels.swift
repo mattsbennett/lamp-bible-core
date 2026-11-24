@@ -806,6 +806,26 @@ public struct LampDevotional: Identifiable, Equatable, Sendable {
         self.isEditable = isEditable
     }
 
+    /// The order the library gives writings out in: by series, then by the
+    /// place in the series, then by date, then by title.
+    ///
+    /// Named and public so that an app holding the list can put one writing
+    /// back in its place without reading the list again — which is the point
+    /// of `Documentation/decisions/0004`. A client sorting by a rule of its
+    /// own would have a list that changed order the first time it reloaded.
+    public static func libraryOrder(_ lhs: LampDevotional, _ rhs: LampDevotional) -> Bool {
+        let leftSeries = lhs.seriesName ?? ""
+        let rightSeries = rhs.seriesName ?? ""
+        if leftSeries != rightSeries {
+            return leftSeries.localizedStandardCompare(rightSeries) == .orderedAscending
+        }
+        if lhs.seriesOrder != rhs.seriesOrder {
+            return (lhs.seriesOrder ?? 0) < (rhs.seriesOrder ?? 0)
+        }
+        if lhs.date != rhs.date { return (lhs.date ?? "") < (rhs.date ?? "") }
+        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+    }
+
     public var mediaReferences: [LampDevotionalMediaReference] {
         guard let mediaJSON else { return [] }
         return (try? JSONDecoder().decode(

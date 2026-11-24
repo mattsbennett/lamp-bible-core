@@ -254,20 +254,29 @@ Still to measure, and each gates something:
 
 ### Phase 2 — Mac
 
-- **2a. Every deck poller through 1a** `[S after 1a]`: `SlideStudioView:1357`,
-  `DevotionalsAndQuizzesView:105`, `DevotionalEditorView:5278`,
-  `ManuscriptNotesRefreshSupport:86` — ideally one shared deck list per library
-  root rather than three loops. The intervals can stay once a listing is stats.
+- ~~**2a. Every deck poller through 1a**~~ **done by 1a itself**: all four
+  (`SlideStudioView`, `DevotionalsAndQuizzesView`, `DevotionalEditorView`,
+  `ManuscriptNotesRefreshSupport`) call `store.decks()`, so all four now stat
+  rather than decode. One shared deck list per library root is still worth
+  doing — three loops asking the same question is three times the stats and
+  three copies of the answer — but it is tidying, not cost.
 - **2b. Deck sync decodes once** `[S–M]`: read the list once per pass and hand it
   to `exportDecks`, `applyDeletions` and `removeDecksOfDeletedWritings`; skip
   `exportDecks` and `copyAssets` on the per-file path, which discards them. The
   `.backup` archive path must still carry decks and assets.
-- **2c. A save reloads one writing** `[M]`, `decisions/0004`: `LibraryModel:1703, 1714, 1857` fetch
-  `personalDevotional(id:)` and splice. Keep the full reload where a newer copy
-  arrived and after a pass, and keep the error fallback at `:1715`.
-- **2d. The list filter** `[S, then M]`: pass the already-computed count to the
-  header instead of recomputing it, and fold the chip counts into one pass; then
-  compute the filtered array off the main actor on a settle.
+- ~~**2c. A save reloads one writing**~~ **done**, `decisions/0004`: the copy
+  the save reads back is spliced into the list in
+  `LampDevotional.libraryOrder`, which core now names. The full reload stays
+  where the save was refused because a newer copy had arrived, and after a
+  pass. A new writing and a deletion are one row each too. Held by
+  `WritingListSpliceTests`, which checks the list against the library's own
+  after every kind of change.
+- ~~**2d. The list filter**~~ **done**, bar the owner's question below: the
+  header takes the count it is given, the category chips are counted in one
+  walk rather than one filter each, and **bodies** are searched off the main
+  actor after a 150 ms settle, their answer kept while a newer scan runs. What
+  a row shows — title, subtitle, author, series, summary, tags — is still
+  matched as you type, so titles match at once and bodies a moment later.
 - **2e. Index the revision folder** `[M]`: hold a decoded list per workspace
   validated by `historyToken`, so `record` decodes only new files. The on-disk
   format, the compaction policy and `replacedRevisionIDs` stay as they are.
@@ -276,8 +285,12 @@ Still to measure, and each gates something:
   their sections first appear — checking what else reads `model.devotionals`
   (`SlideStudioView:1402`, TodayView). Verify against signposts what actually
   delays first paint; the splash waits on the first chapter, not on these.
-- **2g. Skip re-encoding attributed transcripts** `[S]`: `SyncSupport.swift:349`
-  copies unchanged when the transcript already carries this install's mark.
+- ~~**2g. Skip re-encoding attributed transcripts**~~ **dropped.** Written and
+  reverted. The saving is one decode and encode per conversation, and copying
+  the file instead changes what a pass publishes from the canonical encoding
+  to whatever the file happens to hold — so two Macs on different builds would
+  trade the same conversation back and forth. Not worth that for a term the
+  measurements never show.
 
 ### Phase 3 — iOS
 
