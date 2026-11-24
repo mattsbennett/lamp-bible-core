@@ -96,6 +96,33 @@ Release figure will be lower but it is Foundation, so not by much.
 
 Ordered by what it costs the person, worst first.
 
+0. **A pass asks the server for the revision of every file a folder listing
+   does not reach — one request each, every pass.**
+   `LibrarySyncController.swift`, at the end of the gather: `for member in
+   manifest.members where !(member.kind?.isListed ?? true)` then
+   `store.revision(path:)`. The unlisted kinds are every piece of media, every
+   workspace file and every writing document — so every revision JSON, every
+   context file, every transcript, every writing picture, note picture, book
+   picture and deck image, one at a time, sequentially. At the 250-workspace
+   corpus that is some fourteen thousand requests in a pass, before media.
+   On WebDAV each is a HEAD; on the folder provider each is a coordinated read
+   **and a full SHA-256 of the file**, which puts back precisely the whole-
+   library reading that `decisions/0007` removed, through another door. The
+   phone deliberately asks only for its writing documents.
+
+   Found by Fable while answering about the staging copy, after the rest of
+   this plan had landed, and **unmeasured** — count the calls in one pass
+   before fixing anything. It is network-bound, so no build setting touches
+   it. Three fixes, cheapest first: media revisions are never read by
+   `LampSyncFilePlan.change()` at all (only the missing-picture report uses
+   them), so stop asking per pass; workspace members could be one Depth:1
+   listing per workspace subfolder instead of ~56 HEADs, which changes nothing
+   in core; and taking the manifest's recorded revision instead would be
+   cheaper still but changes `asksRevision` in the Lean model. Writing
+   documents keep being asked, as the phone does.
+
+   This is the next thing to do, ahead of the staging copy below.
+
 1. **Slide Studio re-reads, decodes and validates every deck in the library once
    a second.** `SlideStudioView.swift:421` loop → `refreshDecksFromDisk:1348` →
    `LampPresentationDeckStore.decks()` (`LampPresentationDeck.swift:1609`), whose
@@ -259,9 +286,17 @@ holding a draft, five documents, a context file and fifty revisions:
 
 | | 50 workspaces | 250 workspaces |
 | --- | --- | --- |
-| export and enumerate, per pass | 711 ms | **3 602 ms** |
+| export and enumerate, per pass | 711 → 575 ms | **3 602 → 2 980 ms** |
 | files staged | 3 002 | 15 002 |
-| the six-second local-work probe | 19 ms | 96 ms |
+| the six-second local-work probe | 19 → 8 ms | 96 → **39 ms** |
+
+The second number in each is after one change: `LampFileModification.date(of:)`
+reads one `stat(2)` through `LampFileIdentity` instead of
+`attributesOfItem`, which built a dictionary of every attribute to hand back
+one. Every check of whether something moved goes through it — the probe asks
+it of every file of every workspace — so that is 2.4× off the probe and a
+fifth off the export, for a change that reads the same thing the same number
+of times.
 
 About **14 ms a workspace**, linear, and **now the largest single thing a pass
 does**: the compile it used to sit behind is 0.40 ms when nothing changed, and
@@ -271,12 +306,28 @@ personal changes. The probe is about 0.4 ms a workspace, so ~400 ms every six
 seconds at a thousand.
 
 The plan had this as a secondary term (see the weak points, item 6). It is
-not, and the reason it is built that way is good — the published path is not
-the stored path, and the mapping has one home in the exporter, so the gather
-runs the real exporter into a scratch directory rather than reimplementing the
-mapping as path arithmetic. Changing that is a design question, not a
-micro-fix, and it is with Fable rather than guessed at. **This is the next
-item**, ahead of anything else outstanding.
+not — and asking about it turned up something larger still, which is now item
+0 above.
+
+The shape to fix it, from Fable, and it is a complete design rather than a
+direction. The copy provides three things and only one is load-bearing: the
+path mapping (which is the *loop*, not `copyItem`); the ledger side effects,
+which must keep running every pass — `exportPortableWorkspaces` saves each
+`WorkspaceFileLedger` and records document deletions, so a stat-only dry run
+would silently stop carrying deletions; and a snapshot, which matters for
+exactly one kind. So: give the exporter a **sink** with `place(source:at:)`
+and `write(_:at:)`, keep every path derivation where it is, and let the
+gatherer pass a recording sink that copies nothing. Documents keep being
+copied, inside the exporter under its actor, because a document's recorded
+digest is the `agreedDigest` that a later pass judges "edited here since" by —
+five files a workspace against fifty-odd revisions. Revisions are written once
+and never edited, context files are content-addressed hard links, and
+transcripts are produced into scratch anyway.
+
+Then the kinds flip: `keepsDigestAgainstIdentity` excludes workspace files
+today for a reason that is an artefact of the copy ("a fresh inode every
+pass"). With the copy gone they qualify, and that wants its own record — the
+kind gate was about worth, while the trust is the filesystem's.
 
 One measurement is still untaken, and it no longer blocks anything: **peak
 memory on the phone's writings and deck loads**. It was there to gate 3a and
