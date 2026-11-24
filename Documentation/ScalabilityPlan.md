@@ -489,8 +489,11 @@ collection, and not before.
     Measured honestly, digesting falls **~720 → ~335 ms**. The answer is per file rather than per
     kind, since one kind covers the recorded files and the staged ones, and
     the same mechanism closed `0010`'s ancestor-symlink gap.
-    One gap stays open and is written into `0010`: two published paths
-    differing only in case on the **receiving** Mac.
+    Both gaps `0010` left are now closed: the ancestor one by `0011`, and two
+    published paths differing only in case on the **receiving** Mac by
+    `0013`, which also fixed a silent overwrite nobody had been looking for —
+    a file this client could not read was replaced by the server's copy,
+    because "not in the locals" reads as "not held".
 
 ### Phase 3 — iOS
 

@@ -1138,6 +1138,47 @@ struct LampSyncBundlePassTests {
         #expect(records.record(path, in: source)?.effectiveRevision == "\"r1\"")
     }
 
+    /// Two server files differing only in case are both left, and both named.
+    ///
+    /// Taking both writes one over the other on a receiver whose volume folds
+    /// case, and recording both acknowledges a file this device threw away —
+    /// after which the next pass finds the discarded one missing, takes it
+    /// over the other, and acknowledges that one instead. The two spellings
+    /// trade places for ever, each pass claiming a file it has just lost.
+    /// `Documentation/decisions/0013`.
+    @Test func twoServerFilesDifferingOnlyInCaseAreBothLeftAlone() async throws {
+        let lower = try LampSyncFolderLayout.deckPath(deckID: "guide")
+        let upper = try LampSyncFolderLayout.deckPath(deckID: "Guide")
+        #expect(lower != upper)
+        var manifest = LampSyncLibraryManifest()
+        manifest = try manifest.recordingWrite(lower, revision: "\"r1\"", replacing: nil, at: 1_000)
+        manifest = try manifest.recordingWrite(upper, revision: "\"r2\"", replacing: nil, at: 1_000)
+        var bundle = LampSyncSettingsBundle()
+        bundle.manifest = manifest
+        let store = FakeStore()
+        store.bodies[bundlePath] = try bundle.encoded()
+        store.revisions[bundlePath] = "\"bundle-1\""
+        for (path, revision) in [(lower, "\"r1\""), (upper, "\"r2\"")] {
+            store.bodies[path] = Data("remote".utf8)
+            store.revisions[path] = revision
+        }
+        store.operations.removeAll()
+        var records = LampSyncFileRecords()
+
+        let library = StubLibrary()
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { LampSyncBundlePass.Gathered() }, records: &records, patience: immediate)
+
+        #expect(library.installed.isEmpty, "neither is taken")
+        #expect(outcome.installed.isEmpty)
+        #expect(outcome.failures.count == 2, "and both are named: \(outcome.failures)")
+        #expect(outcome.failures.allSatisfy { $0.contains("differs from it only in case") })
+        // Nothing recorded for either, so nothing to unwind once the person
+        // renames one of them.
+        #expect(records.record(lower, in: source) == nil)
+        #expect(records.record(upper, in: source) == nil)
+    }
+
     /// Refusing a file also refuses the other spellings of its name.
     ///
     /// A library on a case-insensitive volume has one file for

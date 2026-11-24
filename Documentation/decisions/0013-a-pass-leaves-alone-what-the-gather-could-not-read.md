@@ -80,6 +80,22 @@ such list: it skipped a file it could not digest with a bare `continue`, so
 its media and book pictures, which it gathers as **live** URLs rather than as
 copies, had the same hazard; those two sites now record a refusal.
 
+## And the other way round: two server files differing only in case
+
+The same mechanism answers the gap `0010` left on the **receiving** side. A
+case-sensitive library can publish `Guide.md` and `guide.md`; a receiver
+whose volume folds case has one file for them, so taking both writes one over
+the other, and recording both acknowledges a file this device threw away.
+Worse, it does not settle: the next pass finds the discarded spelling
+missing, takes it over the other, and acknowledges *that* one. The two trade
+places for ever, each pass claiming a file it has just lost.
+
+So neither is taken and both are named. Nothing is lost on the server — it is
+the library that published the pair that has to lose one, and only a person
+can say which. Refused on **every** receiver rather than only the ones that
+fold case: core cannot ask the volume what it folds, and a receiver that
+could hold both would publish the ambiguity onward.
+
 ## Consequences
 
 - A file this client cannot read is left alone and reported, and the next
@@ -126,6 +142,9 @@ quietly contradicted.
   cannot make about a file it could not read — and it only works for a path
   that already has a recorded revision, where the hazard is worst for one
   that does not.
+- **Taking one of a colliding pair and recording it.** That is what made it
+  oscillate: the spelling that lost is missing on the next pass, so it is
+  taken over the winner, and the pass acknowledges a file it just discarded.
 - **Building `openat`/`O_NOFOLLOW_ANY` on the back of this.** The ancestor
   race `0012` describes is still race-only, still needs a process writing in
   the library mid-pass, and this mechanism does not make it worth building.

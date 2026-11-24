@@ -116,12 +116,11 @@ is the next decision:
   closes the windows *within* the gather and within the upload — and leaves
   the one between them, for the reason `0012` sets out: the refusal has
   nowhere safe to go.
-- **Two published paths differing only in case, on the receiving Mac.** A
-  case-sensitive library can publish `Guide.md` and `guide.md`; a receiver
-  with case-insensitive scratch storage stages one over the other and the
-  pass still records both as installed, acknowledging a file it discarded.
-  The export side of this is fixed — each staged copy sits in a directory
-  named by its published path's digest — but the install side is not.
+- ~~**Two published paths differing only in case, on the receiving Mac.**~~
+  **Closed by `0013`**: neither is taken and both are named, because taking
+  one made the two spellings trade places on every pass. The export side was
+  already fixed here — each staged copy sits in a directory named by its
+  published path's digest.
 
 Neither is a regression from before `0008`: the first needs a process
 writing inside the library mid-pass, and staging has always been a stat

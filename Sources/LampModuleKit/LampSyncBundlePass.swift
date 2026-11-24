@@ -418,7 +418,7 @@ public struct LampSyncBundlePass {
             outcome.failures.append("\(path): \(reason)")
         }
 
-        let plan = LampSyncFilePlan.plan(
+        var plan = LampSyncFilePlan.plan(
             manifest: opened.bundle.manifest,
             local: locals,
             deletedLocally: deletedLocally,
@@ -428,6 +428,36 @@ public struct LampSyncBundlePass {
                 revisions[path] = records.record(path, in: source)?.effectiveRevision
             }
         ).only(isPlanned)
+
+        // Two paths that differ only in case are two files on the server and
+        // one file on a receiver whose volume folds case — so taking both
+        // writes one over the other, and recording both acknowledges a file
+        // this device threw away. The next pass then finds the one it
+        // discarded missing, takes it over the other, and acknowledges *that*
+        // one: the two spellings trade places for ever, each pass claiming a
+        // file it has just lost.
+        //
+        // So neither is taken, and both are named. Nothing is lost on the
+        // server; it is the library that published the pair that has to lose
+        // one of them, and only a person can say which. Refused on every
+        // receiver rather than only on the ones that fold case: core cannot
+        // ask the volume, and a receiver that *could* hold both would
+        // publish the ambiguity onward. `Documentation/decisions/0013`.
+        var collisions: [String: String] = [:]
+        for (_, spellings) in Dictionary(grouping: plan.downloads, by: folded)
+        where spellings.count > 1 {
+            let named = spellings.sorted().joined(separator: ", ")
+            for path in spellings {
+                collisions[path] = "another file in the library differs from it only in case: \(named)"
+            }
+        }
+        if !collisions.isEmpty {
+            plan = plan.only { collisions[$0] == nil }
+            for (path, reason) in collisions.sorted(by: { $0.key < $1.key }) {
+                outcome.failures.append("\(path): \(reason)")
+            }
+        }
+
         outcome.missing = LampSyncFilePlan.missing(
             manifest: opened.bundle.manifest,
             local: locals,
