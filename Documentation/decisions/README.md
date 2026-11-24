@@ -25,5 +25,5 @@ When a `Proposed` record lands, change its status and add the commit. When a
 decision turns out to be wrong, write the next record and supersede this one
 rather than rewriting it.
 
-Records 0001–0005 come out of the scalability pass of 2026-11-24
+Records 0001–0006 come out of the scalability pass of 2026-11-24
 (`../ScalabilityPlan.md`), which holds the measurements and the sequencing.

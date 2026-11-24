@@ -5,7 +5,7 @@ numbers are from those trees and will drift; the names are the durable part.
 
 This is a plan, not a description of the code. Strike an item when it lands, and
 delete the file when the work is done. The decisions behind it keep their own
-records, which outlive this file: `decisions/0001`–`0005`.
+records, which outlive this file: `decisions/0001`–`0006`.
 
 The question it answers: when someone holds many modules, many writings and many
 decks, what gets slow? The short answer is that several surfaces read a whole
@@ -15,21 +15,60 @@ they ask for something.
 
 ## What was measured
 
-Synthetic corpora on a quiet M-series Mac, in a **Debug** build. Release is
-2–5× faster for Swift-side work and no faster for SQLite, zlib, CryptoKit or
-Foundation's JSON, so these are shape rather than release figures. Phase 0 below
-replaces them with Release numbers.
+Phase 0 ran: `Tests/LampCoreTests/LampScaleMeasurementTests.swift`, Release,
+quiet M-series Mac, synthetic corpora built through the real APIs
+(`savePersonalDevotional`, `LampPersonalWritingFile.archive`,
+`LampModuleCompiler`, `LampPresentationDeckStore.save`). Run it with
+`LAMP_SCALE=1 swift test -c release --filter LampScaleMeasurementTests`.
 
-| Measured | small | medium | large |
+Writings of ~10 KB each, beside an installed 365-entry collection:
+
+| | 250 | 1 000 | 4 000 |
 | --- | --- | --- | --- |
-| `LampPresentationDeckStore.decks()`, 40-slide decks | 25 decks: 114 ms | 100: 490 ms | 400: 1 750 ms |
-| the same files through `decodeUnvalidated` | 8 ms | 32 ms | 109 ms |
-| writings filtered with `localizedCaseInsensitiveContains` over title + body | 250 (2.4 MB): 10 ms | 1 000 (9.9 MB): 37 ms | 4 000 (39 MB): 155 ms |
-| SHA-256 of a mapped file | | | 2.43 GB/s |
+| `devotionals()` — what every save reloads | 19 ms | 54 ms | 125 ms |
+| `personalDevotional(id:)` — one row | 0.2 ms | 0.2 ms | 0.2 ms |
+| `personalArchive(.writing)` — what every pass compiles | **435 ms** | **1 749 ms** | **3 599 ms** |
 
-Two things fall out of that table. Validating a deck costs about sixteen times
-decoding it, and every listing validates every deck. And hashing is not where
-sync time goes.
+Decks of 40 slides:
+
+| | 25 | 100 | 400 |
+| --- | --- | --- | --- |
+| `decks()` | 20 ms | 84 ms | 364 ms |
+| the same files, `decodeUnvalidated` | 6 ms | 26 ms | 111 ms |
+| a stat of each file | 0.0 ms | 0.1 ms | 0.4 ms |
+
+Book modules of ~200 KB each:
+
+| | 50 | 200 |
+| --- | --- | --- |
+| `installedModules()`, nothing cached | 14 ms | 38 ms |
+| the same, warm | 2.7 ms | 10.4 ms |
+| open each and read its sections | 25 ms | 86 ms |
+| open file descriptors held afterwards | +51 | **+201** |
+
+SHA-256 of a mapped file runs at 2.43 GB/s (Debug or Release — it is CryptoKit).
+
+Three caveats the numbers carry. The fixture's prose repeats, so it compresses
+far better than real writing — 760 KB for 4 000 writings — which understates the
+compress and digest terms of an archive while leaving the insert and `VACUUM`
+terms honest. The fixture's modules are 200 KB, so the per-module open cost is
+understated for a real commentary of several hundred MB, where the comment on
+`openReadOnlyDatabase` records roughly 200 ms. And a measurement on a quiet
+machine is a floor, not what a person with a busy Mac sees.
+
+What the numbers say. The archive compile is about **0.9 ms per writing**, and
+about **thirty times** the cost of reading the whole list; at 1 000 writings it
+is 1.7 s of the library actor on every pass, which during a writing session is
+every six to ten seconds. Reading one writing instead of all of them is 0.2 ms
+against 125 ms. Listing decks from stats instead of decoding them is 0.4 ms
+against 364 ms, and validation is about 70% of that 364 ms — the share Debug put
+at 94%. Each module costs one open descriptor, which at a few hundred modules is
+the ceiling to watch rather than the milliseconds.
+
+Filtering writings on the main actor with
+`localizedCaseInsensitiveContains` over title and body, measured separately in a
+Debug build, cost 10 ms at 250 writings, 37 ms at 1 000 and 155 ms at 4 000; the
+Release figure will be lower but it is Foundation, so not by much.
 
 ## The weak points
 
@@ -108,7 +147,10 @@ Ordered by what it costs the person, worst first.
    each hold the actor and a cooperative thread for their whole duration. This is
    the multiplier under (2), (3) and (8).
 
-10. **One SQLite connection per module, never evicted.**
+10. **One SQLite connection per module, never evicted — and one descriptor
+    each.** Measured: +201 descriptors at 200 modules, against a 256 soft limit
+    for a process launched by launchd, which neither app raises. See
+    `decisions/0006`.
     `LampLibrary.openReadOnlyDatabase:4977`. Dropped only on module install
     (`:189`), remove (`:356`) and bundle extraction (`:5205`) — not on ordinary
     writes. Launch opens every translation, devotional and quiz module, so a
@@ -170,24 +212,21 @@ or the Mac's `LampBibleMacSupport/*Sync*.swift` without an entry in
 unaccounted sync source. Caching that changes neither bytes nor decisions needs
 no change to `Verification/SyncMerge.lean`.
 
-### Phase 0 — measure (S–M, no risk)
+### Phase 0 — measure (done for the library; the rest outstanding)
 
-A corpus generator and measurements in core's test target, behind an environment
-gate so an ordinary run skips them, built the way
-`LampLibrarySearchPerformanceTests.swift:37` already builds modules
-(`LampModuleCompiler().compile`). Tests ship with nothing.
+`Tests/LampCoreTests/LampScaleMeasurementTests.swift`, behind `LAMP_SCALE=1`,
+with its sizes as environment variables. **The gate is passed:** the archive
+compile is the largest term by a wide margin, so 1d stays first.
 
-- Corpus: 50 / 200 / 500 synthetic modules at 1–5 MB; 250 / 1 000 / 4 000
-  writings at ~10 KB, a quarter with a workspace of five documents, fifty
-  revisions and three transcripts; 25 / 100 / 400 decks of 40 slides; a thousand
-  small media files.
-- Measure in Release: `installedModules()` cold, `translationBooks` across every
-  translation, `devotionals()`, `personalArchive(.writing)`,
-  `LampPresentationDeckStore.decks()`, the Mac's `exportPortableWorkspaces` and
-  `exportDecks`, peak resident size on the iOS deck and writing loads, and the
-  open descriptor count at 500 modules.
-- **Gate:** if the archive compile is not the largest term of a pass at 1 000
-  writings, 1d drops down the order.
+Still to measure, and each gates something:
+
+- The Mac's `exportPortableWorkspaces` and `exportDecks` at 1 000 workspaces,
+  which is 2b and 2g.
+- Peak resident size on the iOS writings and deck loads, which is 3a and 3b.
+- Launch with modules of a realistic size — a few hundred MB each rather than
+  the fixture's 200 KB — and the descriptor count at 500 of them, which is 2f
+  and `decisions/0006`.
+- A workspace corpus with revision history, which is 2e.
 
 ### Phase 1 — core enablers
 
@@ -251,11 +290,14 @@ gate so an ordinary run skips them, built the way
 - **3d. Drop and rebuild FTS around bulk imports** `[S]`, only if Phase 0 says
   import time matters.
 
-### Phase 4 — only if Phase 0 says so
+### Phase 4 — the descriptor ceiling, and two maybes
 
-An LRU bound on `openDatabases` (evicting `versifications` and
-`strongsFingerprints` with it), streaming bundle extraction, and the manifest's
-size on the wire.
+- **4a. Bound the open-database cache** `[core, M]`, `decisions/0006`. Measured:
+  one descriptor per module, +201 at 200 modules. This is a ceiling, not a
+  slowdown, so it comes before the rest of Phase 4 once the limit is confirmed.
+- Streaming bundle extraction, and the manifest's size on the wire — only if
+  iOS reports low memory, or Phase 0's remaining measurements show a multi-MB
+  bundle.
 
 ## Owner decisions
 

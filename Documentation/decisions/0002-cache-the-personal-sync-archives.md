@@ -1,7 +1,7 @@
 # 0002. The personal collections are compiled once per change, not once per pass
 
-Status: Proposed. Waiting on the Phase 0 measurement in `../ScalabilityPlan.md`
-and on the owner's view of the cache key below.
+Status: Proposed. The Phase 0 measurement is in and it carries this decision;
+what remains is the owner's view of the cache key below.
 
 ## Context
 
@@ -18,6 +18,12 @@ change and starts a pass, so during a writing session the whole corpus is
 recompiled every six to ten seconds — on the `LampLibrary` actor, which means
 the reader's next chapter waits behind it. The work is SQLite and zlib, so it is
 already C: a Release build does not help.
+
+Measured in Release on a quiet M-series Mac, with writings of about 10 KB:
+compiling the writings archive takes 435 ms at 250 writings, 1 749 ms at 1 000
+and 3 599 ms at 4 000 — roughly 0.9 ms a writing, and about thirty times what
+reading the whole list costs (19 / 54 / 125 ms). Hashing the result is immaterial
+beside it.
 
 The archive's bytes are deterministic and pinned by digest tests, so a cached
 archive is indistinguishable from a fresh one to everything downstream.

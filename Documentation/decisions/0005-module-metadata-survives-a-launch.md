@@ -1,6 +1,8 @@
 # 0005. What a module is survives a launch
 
-Status: Proposed.
+Status: Proposed, and smaller than it looked. See the measurement below: the
+case for it rests on modules of a realistic size, which Phase 0 has not yet
+measured.
 
 ## Context
 
@@ -19,6 +21,14 @@ the header and parses the schema.
 
 So launch is proportional to the number of modules installed, and the constant is
 a database open.
+
+Measured in Release with 200 book modules of about 200 KB each: a cold
+`installedModules()` is 38 ms against 10.4 ms warm, and opening every module and
+reading from it is 86 ms. That is far less than this record first assumed. The
+constant is what matters and the fixture understates it — a real commentary is
+hundreds of megabytes, where the comment on `openReadOnlyDatabase` records
+roughly 200 ms an open. Phase 0 has still to measure that, and the same run found
+the sharper problem: one open descriptor per module (see 0006).
 
 ## Decision
 

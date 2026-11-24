@@ -5,10 +5,11 @@ Status: Proposed. Needs the owner's call on trusting a modification date, below.
 ## Context
 
 `LampPresentationDeckStore.decks()` reads, decodes and fully validates every
-`.lampdeck` file in the library. Validation is the bulk of it: measured in a
-Debug build, 400 forty-slide decks take 1 750 ms through `decks()` and 109 ms
-through `decodeUnvalidated` — about sixteen times the cost of decoding, because
-every slide is replanned, re-crowded and contrast-checked.
+`.lampdeck` file in the library. Validation is the bulk of it: measured in
+Release, 400 forty-slide decks take 364 ms through `decks()` against 111 ms
+through `decodeUnvalidated`, because every slide is replanned, re-crowded and
+contrast-checked. A stat of each of those files takes 0.4 ms — three orders of
+magnitude under the listing, which is what this decision is buying.
 
 Four surfaces call it on a timer: Slide Studio once a second, the writings list
 and the writing editor every two seconds each (for "which decks came from this
