@@ -1,7 +1,8 @@
 # 0002. The personal collections are compiled once per change, not once per pass
 
 Status: Accepted, 2026-11-24, held by `LampPersonalArchiveCacheTests`. The key
-is not the one this record first proposed — see **Decision**.
+took two goes to get right and neither is the one this record first proposed —
+see **Decision**, which carries both wrong answers, since each was plausible.
 
 ## Context
 
@@ -32,15 +33,40 @@ archive is indistinguishable from a fresh one to everything downstream.
 
 Cache the compiled bytes and rebuild only when that collection changed.
 
-**Not keyed on `personalChangeStamp()`**, which this record first proposed and
-which would not have worked. That stamp is the maximum over every kind of
-personal item, and a pass runs *because* something personal changed — so one
-writing's autosave would have moved the key for the notes archive and every
-highlight set as well, and the cache would have missed on every pass it was
-meant to spare. The ledger's primary key is `(kind, item_key)`, so a per-kind
-stamp costs an index-prefix read: `personalItemStamp(.devotional)` for the
-writings, `.note` for the notes. A writing session now leaves everything but the
-writings alone.
+The key is a **revision each personal table keeps itself**, by trigger:
+`personal_revisions`, one row per kind, bumped on every insert, update and
+delete of `personal_devotionals` and `personal_notes`
+(`personalRevisionsSchema`). Per kind, not per library, because a pass runs
+*because* something personal changed: keyed on one number for the library, the
+cache would miss on every pass it was meant to spare, and one writing's
+autosave would still recompile the notes.
+
+Two keys were tried first and both were wrong.
+
+**`personalChangeStamp()`**, which this record originally proposed, is the
+maximum over *every* kind, so a writing's autosave moved the key for the notes
+and every highlight set too. Useless rather than unsound.
+
+**A per-kind maximum of the sync ledger** replaced it, and that one was unsound
+— caught by a review the day it landed, before it had reached a build anyone
+runs. The ledger is not a record of change: `present_since` means "this device
+saved this item", and a copy carried in by sync deliberately does not stamp it,
+so that an arriving copy cannot outrank a deletion recorded in between. Five
+writers change rows without stamping: the two sync-import paths, conflict
+resolution, the ledger-driven deletions, and the notes merge. Since a pass
+installs the other device's rows *after* gathering and *before* re-exporting
+the merged file, the Mac would have republished its own pre-merge bytes over
+the copy just merged in — deterministically, in the ordinary two-device case —
+and a resolved writing conflict would never have been published at all. The
+ledger's values are also clock readings from whichever device wrote them, so a
+device whose clock ran fast would have held the maximum still for as long as it
+was ahead.
+
+A trigger-kept revision answers all of it: no writer has to remember, nothing
+is a clock, `INSERT OR REPLACE` and `ON CONFLICT DO UPDATE` both land on a
+counted statement, and because the count lives in the file, a write from
+`lamp-mcp` — another process on the same library — is seen, which an in-memory
+counter would miss.
 
 **Together with** a fingerprint of the writing media — every file under
 `Media/Devotionals`, by path and modification time. Media presence is an input,
@@ -67,10 +93,12 @@ one.
 
 - A pass during a writing session stops recompiling writings that did not
   change, and the actor stops being held for the duration.
-- The cache keys on the same ledger `LocalWork` already trusts to decide whether
-  a pass is worth running at all, read one kind at a time. If those stamps can
-  be stale, sync is already wrong in a larger way; this does not add an
-  assumption, it leans on an existing one.
+- The cache depends on nothing but the database's own count of changes to the
+  rows it compiles. It does not lean on the ledger, which answers a different
+  question, nor on any clock.
+- A `UserData.sqlite` replaced underneath the library — a restore, a copy put
+  there from outside — drops the cached archives, since what was read from the
+  file before it answers for nothing in the new one.
 - The pinned-digest tests must keep passing untouched, and a new test should
   assert that a cached build is byte-identical to a fresh one and that an edit
   changes both the stamp and the bytes.
@@ -83,6 +111,14 @@ one.
   highlights-wide. Left for its own change.
 - `personalArchiveCompiles` counts compiles, so a test can prove one did *not*
   happen. A cache with no such counter is a cache nothing can hold to its claim.
+  Three of the tests are about the key rather than the cache: a writing carried
+  in by sync, a resolved conflict, and notes carried in by sync must each be in
+  the next archive. All three pass now and would have failed on the key this
+  record first landed with.
+- The writing media fingerprint includes hidden names. A picture stored from a
+  source called `.photo.png` is kept as `.photo-xxxxxxxx.png`, which the
+  archive requires like any other, so skipping hidden files would have served
+  bytes for a collection that is in fact refused.
 
 ## Rejected
 

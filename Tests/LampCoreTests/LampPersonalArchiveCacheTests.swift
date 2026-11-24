@@ -132,4 +132,95 @@ struct LampPersonalArchiveCacheTests {
 
         #expect(try await !library.personalArchive(.writing, moduleID: moduleID).isEmpty)
     }
+
+    /// The case the first version of this cache got wrong, and the reason the
+    /// key is a revision the database keeps rather than the sync ledger's
+    /// stamp: a copy carried in by sync writes rows **without** stamping the
+    /// ledger, deliberately, so that an arriving copy cannot outrank a
+    /// deletion recorded in between. Keyed on the ledger, the next export was
+    /// this device's pre-merge bytes — published over the copy that had just
+    /// been merged in.
+    @Test func aWritingCarriedInBySyncIsInTheNextArchive() async throws {
+        let (library, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try await library.savePersonalDevotional(writing(1))
+        let before = try await library.personalArchive(.writing, moduleID: moduleID)
+        let compiles = await library.personalArchiveCompiles
+
+        // What a pass installs: another device's collection, by value.
+        let incoming = try LampPersonalWritingFile.archive(
+            [writing(1), writing(2, content: "From the other device.")],
+            moduleID: moduleID
+        )
+        let file = root.appendingPathComponent("incoming.lamp")
+        try incoming.write(to: file)
+        _ = try await library.importPersonalDevotional(from: file, forSync: true)
+
+        let after = try await library.personalArchive(.writing, moduleID: moduleID)
+        #expect(await library.personalArchiveCompiles == compiles + 1)
+        #expect(after != before)
+        #expect(try await library.personalDevotionals().count == 2)
+    }
+
+    /// And a conflict the reader resolved: the kept version is saved with the
+    /// time it already had, so nothing in the ledger moves. Unpublished, the
+    /// promise that the kept version wins everywhere is not kept at all.
+    @Test func aResolvedConflictIsInTheNextArchive() async throws {
+        let (library, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Two devices, one writing, the same moment, different words: the
+        // disagreement no merge rule can settle.
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        func entry(_ content: String) -> LampDevotional {
+            LampDevotional(
+                id: "w",
+                moduleID: LampPersonalModule.writing.id,
+                moduleName: LampPersonalModule.writing.name,
+                title: "Shared",
+                content: content,
+                created: moment,
+                lastModified: moment,
+                isEditable: true
+            )
+        }
+        _ = try await library.savePersonalDevotional(
+            entry("Written here"), preserveLastModified: true
+        )
+        let file = root.appendingPathComponent("theirs.lamp")
+        try LampPersonalWritingFile.archive(
+            [entry("Written there")], moduleID: moduleID
+        ).write(to: file)
+        _ = try await library.importPersonalDevotional(from: file, forSync: true)
+        let conflicts = try await library.pendingSyncConflicts()
+        try #require(conflicts.count == 1)
+
+        let before = try await library.personalArchive(.writing, moduleID: moduleID)
+        let compiles = await library.personalArchiveCompiles
+        _ = try await library.resolveSyncConflict(id: conflicts[0].id, keeping: .otherDevice)
+
+        #expect(try await library.personalArchive(.writing, moduleID: moduleID) != before)
+        #expect(await library.personalArchiveCompiles == compiles + 1)
+        #expect(try await library.personalDevotionals().map(\.content) == ["Written there"])
+    }
+
+    /// The notes twin: a pass merges another device's notes without stamping
+    /// the ledger either.
+    @Test func notesCarriedInBySyncAreInTheNextArchive() async throws {
+        let (library, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try await library.setPersonalVerseNote(reference: 1_001_001, content: "Mine.")
+        let before = try await library.personalArchive(.notes, moduleID: "notes")
+        let compiles = await library.personalArchiveCompiles
+
+        // Another device's collection, built the way that device would.
+        let other = LampLibrary(rootURL: root.appendingPathComponent("Other"))
+        _ = try await other.setPersonalVerseNote(reference: 1_001_002, content: "Theirs.")
+        let file = root.appendingPathComponent("notes.lamp")
+        try await other.personalArchive(.notes, moduleID: "notes").write(to: file)
+        _ = try await library.importPersonalStudyData(from: file, forSync: true)
+
+        #expect(try await library.personalArchive(.notes, moduleID: "notes") != before)
+        #expect(await library.personalArchiveCompiles == compiles + 1)
+        #expect(try await library.verseNotes(reference: 1_001_002).count == 1)
+    }
 }

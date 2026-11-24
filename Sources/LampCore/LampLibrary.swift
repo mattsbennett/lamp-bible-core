@@ -4916,16 +4916,7 @@ public actor LampLibrary {
     }
 
     private func devotionalSort(_ lhs: LampDevotional, _ rhs: LampDevotional) -> Bool {
-        let leftSeries = lhs.seriesName ?? ""
-        let rightSeries = rhs.seriesName ?? ""
-        if leftSeries != rightSeries {
-            return leftSeries.localizedStandardCompare(rightSeries) == .orderedAscending
-        }
-        if lhs.seriesOrder != rhs.seriesOrder {
-            return (lhs.seriesOrder ?? 0) < (rhs.seriesOrder ?? 0)
-        }
-        if lhs.date != rhs.date { return (lhs.date ?? "") < (rhs.date ?? "") }
-        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        LampDevotional.libraryOrder(lhs, rhs)
     }
 
     private var databasesURL: URL {
@@ -5627,6 +5618,10 @@ public actor LampLibrary {
         {
             return queue
         }
+        // Not the file this library last prepared, so it may hold other rows
+        // altogether — a restore, or a copy put there from outside — and
+        // nothing read from the one before it answers for this one.
+        personalArchives.removeAll()
         try queue.writeWithoutTransaction { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS selected_plans (
@@ -5723,6 +5718,7 @@ public actor LampLibrary {
                     PRIMARY KEY (set_id, color, style)
                 );
                 """)
+            try db.execute(sql: Self.personalRevisionsSchema)
             let personalNoteColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(personal_notes)")
                 .compactMap { $0["name"] as String? }
             if !personalNoteColumns.contains("footnotes_json") {
@@ -5767,6 +5763,65 @@ public actor LampLibrary {
             .map { ($0.device, $0.inode, schema) }
         return queue
     }
+
+    /// A number each personal table bumps whenever a row of it changes, kept
+    /// by the database rather than by whoever writes.
+    ///
+    /// For caching a published collection (`Documentation/decisions/0002`),
+    /// and it has to be the database's own count, because neither of the two
+    /// obvious alternatives works.
+    ///
+    /// The sync ledger is not a record of change. `present_since` means "this
+    /// device saved this item", and a copy carried in by sync deliberately
+    /// does not stamp it — `writePersonalDevotional` skips it under
+    /// `preserveLastModified` so that an arriving copy cannot outrank a
+    /// deletion recorded in between. So a sync install, a resolved conflict
+    /// and a deletion applied from another device's ledger all change rows
+    /// and move no stamp. A cache keyed on the ledger therefore republished
+    /// this device's pre-merge bytes over the copy that had just been merged
+    /// in, and never published a resolved conflict at all. Its values are
+    /// clock readings as well, taken from whichever device wrote them, so a
+    /// device whose clock ran fast would hold the maximum still for as long
+    /// as it was ahead.
+    ///
+    /// A counter in this process would miss `lamp-mcp`, which opens the same
+    /// library in another one.
+    ///
+    /// Triggers, so that no writer has to remember: insert, update and delete
+    /// each count, and `INSERT OR REPLACE` and `ON CONFLICT DO UPDATE` land
+    /// on one of those.
+    private static let personalRevisionsSchema = """
+        CREATE TABLE IF NOT EXISTS personal_revisions (
+            kind TEXT PRIMARY KEY,
+            revision INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO personal_revisions (kind, revision) VALUES ('devotional', 0);
+        INSERT OR IGNORE INTO personal_revisions (kind, revision) VALUES ('note', 0);
+        CREATE TRIGGER IF NOT EXISTS personal_devotionals_inserted
+        AFTER INSERT ON personal_devotionals BEGIN
+            UPDATE personal_revisions SET revision = revision + 1 WHERE kind = 'devotional';
+        END;
+        CREATE TRIGGER IF NOT EXISTS personal_devotionals_updated
+        AFTER UPDATE ON personal_devotionals BEGIN
+            UPDATE personal_revisions SET revision = revision + 1 WHERE kind = 'devotional';
+        END;
+        CREATE TRIGGER IF NOT EXISTS personal_devotionals_deleted
+        AFTER DELETE ON personal_devotionals BEGIN
+            UPDATE personal_revisions SET revision = revision + 1 WHERE kind = 'devotional';
+        END;
+        CREATE TRIGGER IF NOT EXISTS personal_notes_inserted
+        AFTER INSERT ON personal_notes BEGIN
+            UPDATE personal_revisions SET revision = revision + 1 WHERE kind = 'note';
+        END;
+        CREATE TRIGGER IF NOT EXISTS personal_notes_updated
+        AFTER UPDATE ON personal_notes BEGIN
+            UPDATE personal_revisions SET revision = revision + 1 WHERE kind = 'note';
+        END;
+        CREATE TRIGGER IF NOT EXISTS personal_notes_deleted
+        AFTER DELETE ON personal_notes BEGIN
+            UPDATE personal_revisions SET revision = revision + 1 WHERE kind = 'note';
+        END;
+        """
 
     /// Narrow on purpose: everything that tells two versions apart lives in the
     /// payload, so a new kind of conflicted record needs no column of its own.
@@ -6395,24 +6450,21 @@ public actor LampLibrary {
         let bytes: Data
     }
 
-    /// When anything of one kind was last written or deleted on this device.
+    /// How many times rows of one kind have changed in this library, as the
+    /// database counts them (`personalRevisionsSchema`).
     ///
-    /// Deliberately not `personalChangeStamp()`, which is every kind at once.
-    /// A pass runs *because* something personal changed, so a cache keyed on
-    /// the device-wide stamp would miss on every pass it was meant to spare:
-    /// one writing's autosave would have the notes archive and every
-    /// highlight set recompiled too. Per kind, a writing session leaves
-    /// everything but the writings alone.
-    ///
-    /// The ledger's primary key is `(kind, item_key)`, so this reads an index
-    /// prefix rather than the table.
-    func personalItemStamp(_ kind: LampPersonalItemKind) throws -> Int64 {
+    /// Per kind rather than one number for the library, because a pass runs
+    /// *because* something personal changed: keyed on a library-wide count a
+    /// cache would miss on every pass it was meant to spare, and one
+    /// writing's autosave would still recompile the notes.
+    func personalTableRevision(_ kind: LampPersonalItemKind) throws -> Int64 {
         let queue = try openUserDatabase()
         return try queue.read { db in
-            try Int64.fetchOne(db, sql: """
-                SELECT COALESCE(MAX(MAX(COALESCE(present_since, 0), COALESCE(deleted_at, 0))), 0)
-                FROM personal_sync_ledger WHERE kind = ?
-                """, arguments: [kind.rawValue]) ?? 0
+            try Int64.fetchOne(
+                db,
+                sql: "SELECT revision FROM personal_revisions WHERE kind = ?",
+                arguments: [kind.rawValue]
+            ) ?? 0
         }
     }
 
@@ -6432,10 +6484,14 @@ public actor LampLibrary {
         let directory = rootURL
             .appendingPathComponent("Media", isDirectory: true)
             .appendingPathComponent(LampMediaScope.devotional.folder, isDirectory: true)
+        // Hidden names included, because the archive requires them like any
+        // other: a picture stored from a source called `.photo.png` is kept
+        // as `.photo-xxxxxxxx.png`, and a fingerprint that skipped it would
+        // serve bytes for a collection that is in fact refused.
         guard let walker = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return "none" }
         var lines: [String] = []
         for case let url as URL in walker {
@@ -6476,7 +6532,7 @@ public actor LampLibrary {
         switch module {
         case .notes:
             let key = "\(LampPersonalItemKind.note.rawValue):\(moduleID)"
-            let stamp = try personalItemStamp(.note)
+            let stamp = try personalTableRevision(.note)
             if let held = personalArchives[key], held.stamp == stamp, held.media == nil {
                 return held.bytes
             }
@@ -6486,14 +6542,14 @@ public actor LampLibrary {
             // nothing of this library's. `FileManager.default` rather than
             // this library's, which no caller has ever supplied and which
             // Foundation will not let cross an isolation boundary.
-            let bytes = try await Task.detached(priority: .userInitiated) {
+            let bytes = try await Task.detached(priority: .utility) {
                 try LampPersonalNotesFile.archive(notes, moduleID: moduleID)
             }.value
             personalArchives[key] = PersonalArchive(stamp: stamp, media: nil, bytes: bytes)
             return bytes
         case .writing:
             let key = "\(LampPersonalItemKind.devotional.rawValue):\(moduleID)"
-            let stamp = try personalItemStamp(.devotional)
+            let stamp = try personalTableRevision(.devotional)
             let media = devotionalMediaFingerprint()
             if let held = personalArchives[key], held.stamp == stamp, held.media == media {
                 return held.bytes
@@ -6507,7 +6563,7 @@ public actor LampLibrary {
             let writings = try personalDevotionals()
             let root = rootURL
             personalArchiveCompiles += 1
-            let bytes = try await Task.detached(priority: .userInitiated) {
+            let bytes = try await Task.detached(priority: .utility) {
                 try LampPersonalWritingFile.archive(
                     writings, moduleID: moduleID, normalizingMediaIn: root
                 )
