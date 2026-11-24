@@ -5,7 +5,7 @@ numbers are from those trees and will drift; the names are the durable part.
 
 This is a plan, not a description of the code. Strike an item when it lands, and
 delete the file when the work is done. The decisions behind it keep their own
-records, which outlive this file: `decisions/0001`–`0006`.
+records, which outlive this file: `decisions/0001`–`0007`.
 
 The question it answers: when someone holds many modules, many writings and many
 decks, what gets slow? The short answer is that several surfaces read a whole
