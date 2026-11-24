@@ -174,8 +174,14 @@ struct LampScaleMeasurementTests {
             let archive = try await timed {
                 try await library.personalArchive(.writing, moduleID: LampPersonalModule.writing.id)
             }
+            // The same call again, which `decisions/0002` makes a cache hit:
+            // what a pass costs when this collection did not change.
+            let cached = try await timed {
+                try await library.personalArchive(.writing, moduleID: LampPersonalModule.writing.id)
+            }
             let bytes = archive.value
             let digest = await best { LampSyncContentRevision.digest(for: bytes) }
+            #expect(cached.value == bytes)
 
             #expect(listed.value.count >= target)
             #expect(one.value != nil)
@@ -185,6 +191,7 @@ struct LampScaleMeasurementTests {
                 ids()=\(String(format: "%.0f", ids.ms))ms \
                 one()=\(String(format: "%.1f", one.ms))ms \
                 archive=\(String(format: "%.0f", archive.ms))ms \
+                archiveCached=\(String(format: "%.2f", cached.ms))ms \
                 archiveBytes=\(bytes.count / 1_024)KB \
                 digestOfArchive=\(String(format: "%.0f", digest))ms \
                 rows=\(listed.value.count)

@@ -1,7 +1,7 @@
 # 0002. The personal collections are compiled once per change, not once per pass
 
-Status: Proposed. The Phase 0 measurement is in and it carries this decision;
-what remains is the owner's view of the cache key below.
+Status: Accepted, 2026-11-24, held by `LampPersonalArchiveCacheTests`. The key
+is not the one this record first proposed — see **Decision**.
 
 ## Context
 
@@ -30,30 +30,59 @@ archive is indistinguishable from a fresh one to everything downstream.
 
 ## Decision
 
-Cache the compiled bytes and rebuild only when the collection changed.
+Cache the compiled bytes and rebuild only when that collection changed.
 
-The key is `personalChangeStamp()` **together with** the listing of the media
-folder that `normalizingMediaIn` reads. Media presence is an input, not
-incidental: the archive is refused outright when a picture a writing names is
-missing from this device, so a picture arriving or leaving has to invalidate the
-cache even though no row changed.
+**Not keyed on `personalChangeStamp()`**, which this record first proposed and
+which would not have worked. That stamp is the maximum over every kind of
+personal item, and a pass runs *because* something personal changed — so one
+writing's autosave would have moved the key for the notes archive and every
+highlight set as well, and the cache would have missed on every pass it was
+meant to spare. The ledger's primary key is `(kind, item_key)`, so a per-kind
+stamp costs an index-prefix read: `personalItemStamp(.devotional)` for the
+writings, `.note` for the notes. A writing session now leaves everything but the
+writings alone.
 
-Build the archive off the actor: fetch the rows on it, compile outside it.
+**Together with** a fingerprint of the writing media — every file under
+`Media/Devotionals`, by path and modification time. Media presence is an input,
+not incidental: the archive is refused outright when a picture a writing names
+is missing from this device, and a picture can arrive or go with no row moving,
+since a media file and the row naming it travel as separate sync files. Without
+it, a picture deleted outside Lamp would be followed by a pass publishing bytes
+built while it was there. The archive embeds no picture's bytes, so a file
+rewritten at its path changes nothing and does not need to invalidate anything —
+but it does, harmlessly, because the fingerprint includes the date.
+
+The stamp is read **before** the rows. A write landing between the two then
+leaves the cache keyed on a stamp older than its bytes, which costs one needless
+compile on the next pass; keyed on a stamp taken *after* the rows, the same
+write would be cached as though it were already in the file, and would never be
+published at all.
+
+The compile runs off the actor — rows fetched on it, compiled outside — using
+`FileManager.default` rather than the library's own, since Foundation will not
+let a `FileManager` cross an isolation boundary and no caller has ever supplied
+one.
 
 ## Consequences
 
 - A pass during a writing session stops recompiling writings that did not
   change, and the actor stops being held for the duration.
-- The cache key is the same signal `LocalWork` already trusts to decide whether
-  a pass is worth running at all. If the stamp can be stale, sync is already
-  wrong in a larger way; this does not add a new assumption, it leans on an
-  existing one. **That is the part for the owner to agree to.**
+- The cache keys on the same ledger `LocalWork` already trusts to decide whether
+  a pass is worth running at all, read one kind at a time. If those stamps can
+  be stale, sync is already wrong in a larger way; this does not add an
+  assumption, it leans on an existing one.
 - The pinned-digest tests must keep passing untouched, and a new test should
   assert that a cached build is byte-identical to a fresh one and that an edit
   changes both the stamp and the bytes.
 - No change to `Verification/SyncMerge.lean`: no decision moves, only when the
   same bytes are produced.
-- Highlights compile per set, so a library with many sets gains the most.
+- Highlights are still compiled per set on every pass. They are built on the
+  Mac's side of the pass (`exportHighlights`), not by `personalArchive`, and the
+  ledger has no per-set stamp — `highlight`, `highlightSet` and `highlightTheme`
+  are keyed by item, not by set — so the most a cache could key on there is
+  highlights-wide. Left for its own change.
+- `personalArchiveCompiles` counts compiles, so a test can prove one did *not*
+  happen. A cache with no such counter is a cache nothing can hold to its claim.
 
 ## Rejected
 

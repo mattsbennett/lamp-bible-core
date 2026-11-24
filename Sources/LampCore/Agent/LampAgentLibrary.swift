@@ -467,8 +467,9 @@ public actor LampAgentLibrary {
                 throw LampAgentError.moduleNotAllowed(moduleID)
             }
         }
-        guard let devotional = try await library.devotionals(moduleIDs: [moduleID])
-            .first(where: { $0.id == devotionalID }) else {
+        guard let devotional = try await library.devotional(
+            moduleID: moduleID, id: devotionalID
+        ) else {
             throw LampAgentError.itemNotFound(devotionalID)
         }
         return LampAgentDevotional(devotional, content: limitedText(devotional.content))
@@ -488,8 +489,8 @@ public actor LampAgentLibrary {
     /// filed text often arrives that way; hashed as stored, it would refuse a
     /// write and blame the writer's own editing for it.
     public func personalDevotionalRevision(_ devotionalID: String) async throws -> String? {
-        guard let devotional = try await library.personalDevotionals()
-            .first(where: { $0.id == devotionalID }) else { return nil }
+        guard let devotional = try await library.personalDevotional(id: devotionalID)
+        else { return nil }
         return SHA256.hash(data: Data(devotional.content.precomposedStringWithCanonicalMapping.utf8))
             .map { String(format: "%02x", $0) }
             .joined()

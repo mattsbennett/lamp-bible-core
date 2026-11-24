@@ -1,6 +1,9 @@
 # 0004. A list reads a projection; a save updates one row
 
-Status: Proposed.
+Status: Proposed. One piece of it landed early on 2026-11-24:
+`LampLibrary.devotional(moduleID:id:)`, the single-entry read the agent tools
+needed, held by `LampSingleDevotionalReadTests`. The projection and the save
+path are still to do.
 
 ## Context
 

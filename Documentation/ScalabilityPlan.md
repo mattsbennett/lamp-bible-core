@@ -236,14 +236,14 @@ Still to measure, and each gates something:
   `decode` keeps validating; `save`/`encoded` and the bytes sync merges on are
   untouched. Test that a rewrite at the same size with a preserved date, and a
   replacement with a new inode, both invalidate.
-- **1b. Single-item reads** `[core, S]`. Add `devotional(moduleID:id:)`; point
+- ~~**1b. Single-item reads**~~ **done**: `devotional(moduleID:id:)`, and the agent tools read one row. Add `devotional(moduleID:id:)`; point
   `LampAgentLibrary.readDevotional` and `personalDevotionalRevision` at it and at
   `personalDevotional(id:)`. One line each.
 - **1c. Persist module metadata** `[core, M]`, `decisions/0005`. Write `installedMetadata` to
   `Indexes/InstalledModules.json` keyed by `LampDatabaseFileRevision` and the
   `.lamp` byte count, so a cold `installedDatabases` inspects only what is new or
   changed. A changed revision must always re-inspect.
-- **1d. Cache the personal archives** `[core, M]`, `decisions/0002`. Key the writings and notes
+- ~~**1d. Cache the personal archives**~~ **done**, `decisions/0002` — keyed per kind, not on the device-wide stamp; see the record for why that mattered. Key the writings and notes
   archive bytes by `personalChangeStamp()` **and** the media listing
   `normalizingMediaIn` reads (a missing picture refuses the archive, so media
   presence is an input), and build off the actor. The bytes must stay identical —

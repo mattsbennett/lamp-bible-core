@@ -21,7 +21,9 @@ why this and not that.
   it is not documentation of current behaviour, which is the one exception to
   "docs describe current code only".
 
-When a `Proposed` record lands, change its status and add the commit. When a
+When a `Proposed` record lands, change its status and name what landed it — an
+earlier commit, or the tests that hold it, since a commit cannot cite its own
+hash. When a
 decision turns out to be wrong, write the next record and supersede this one
 rather than rewriting it.
 

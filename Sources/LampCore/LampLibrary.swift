@@ -48,6 +48,12 @@ public actor LampLibrary {
     /// Each translation's fingerprint as last read, until a module is written.
     private var strongsFingerprints: [String: (revision: LampDatabaseFileRevision, value: String)] = [:]
     private var strongsIndexesBuilding: Set<String> = []
+    /// Each published collection's compiled archive, against what it was
+    /// built from. See `Documentation/decisions/0002`.
+    private var personalArchives: [String: PersonalArchive] = [:]
+    /// How many archives this library has actually compiled, for a test that
+    /// means to prove one was not compiled again.
+    var personalArchiveCompiles = 0
 
     public init(
         rootURL: URL? = nil,
@@ -1862,49 +1868,42 @@ public actor LampLibrary {
                     \(whereClause)
                     ORDER BY COALESCE(series_name, ''), COALESCE(series_order, 0),
                              COALESCE(date, ''), title
-                    """, arguments: arguments).map { row in
-                        let contentJSON: String = row["content_json"]
-                        let summaryJSON: String? = row["summary_json"]
-                        let footnotesJSON: String? = row["footnotes_json"]
-                        let scripturesJSON: String? = row["key_scriptures_json"]
-                        let createdTimestamp: Int? = row["created"]
-                        let modifiedTimestamp: Int? = row["last_modified"]
-                        let tags: String? = row["tags"]
-                        return LampDevotional(
-                            id: row["id"],
-                            moduleID: module.id,
-                            moduleName: module.name,
-                            title: row["title"],
-                            subtitle: row["subtitle"],
-                            author: row["author"],
-                            date: row["date"],
-                            tags: tags?.split(separator: ",").map {
-                                String($0).trimmingCharacters(in: .whitespaces)
-                            } ?? [],
-                            category: row["category"],
-                            seriesName: row["series_name"],
-                            seriesOrder: row["series_order"],
-                            keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
-                            summary: plainText(fromJSONString: summaryJSON),
-                            content: LampPortableDevotionalContent.plainText(from: contentJSON)
-                                ?? contentJSON,
-                            // Only blocks are a structured representation. A
-                            // client that flattens on the way out sends the
-                            // body back in this column, and claiming it as
-                            // blocks rewrites the local row — at an unchanged
-                            // change time — into something no other device has.
-                            contentJSON: LampPortableDevotionalContent.isStructured(contentJSON)
-                                ? contentJSON : nil,
-                            footnotes: plainText(fromJSONString: footnotesJSON),
-                            mediaJSON: columns.contains("media_json") ? row["media_json"] : nil,
-                            created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                            lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
-                        )
-                    }
+                    """, arguments: arguments)
+                    .map { makeModuleDevotional($0, module: module, columns: columns) }
             }
             results.append(contentsOf: entries)
         }
         return results.sorted(by: devotionalSort)
+    }
+
+    /// One entry of one collection, without reading the collection.
+    ///
+    /// `devotionals(moduleIDs:)` reads every row of every module asked for,
+    /// which is a great deal of reading — and JSON decoding, for an installed
+    /// collection — to answer about one entry. The agent tools asked that way
+    /// for a single writing on every call (`Documentation/decisions/0004`).
+    public func devotional(moduleID: String, id: String) throws -> LampDevotional? {
+        if moduleID == LampPersonalModule.writing.id {
+            return try personalDevotional(id: id)
+        }
+        guard let module = try installedModules().first(where: {
+            $0.kind == .devotional && $0.id == moduleID
+        }) else { return nil }
+        let queue = try openDatabase(moduleID: moduleID)
+        return try queue.read { db -> LampDevotional? in
+            guard try tableNames(in: db).contains("devotional_entries") else { return nil }
+            let columns = try columnNames(in: db, table: "devotional_entries")
+            var conditions = ["id = ?"]
+            var arguments = StatementArguments([id])
+            if columns.contains("module_id") {
+                conditions.append("module_id = ?")
+                arguments += [moduleID]
+            }
+            return try Row.fetchOne(db, sql: """
+                SELECT * FROM devotional_entries WHERE \(conditions.joined(separator: " AND "))
+                """, arguments: arguments)
+                .map { makeModuleDevotional($0, module: module, columns: columns) }
+        }
     }
 
     /// Just the identifiers of the writings this library holds.
@@ -5801,6 +5800,51 @@ public actor LampLibrary {
         )
     }
 
+    /// One row of an installed collection, as the library gives it out.
+    ///
+    /// Named rather than inline so that reading a single entry
+    /// (`devotional(moduleID:id:)`) cannot drift from reading them all.
+    private func makeModuleDevotional(
+        _ row: Row, module: LampInstalledModule, columns: Set<String>
+    ) -> LampDevotional {
+        let contentJSON: String = row["content_json"]
+        let summaryJSON: String? = row["summary_json"]
+        let footnotesJSON: String? = row["footnotes_json"]
+        let scripturesJSON: String? = row["key_scriptures_json"]
+        let createdTimestamp: Int? = row["created"]
+        let modifiedTimestamp: Int? = row["last_modified"]
+        let tags: String? = row["tags"]
+        return LampDevotional(
+            id: row["id"],
+            moduleID: module.id,
+            moduleName: module.name,
+            title: row["title"],
+            subtitle: row["subtitle"],
+            author: row["author"],
+            date: row["date"],
+            tags: tags?.split(separator: ",").map {
+                String($0).trimmingCharacters(in: .whitespaces)
+            } ?? [],
+            category: row["category"],
+            seriesName: row["series_name"],
+            seriesOrder: row["series_order"],
+            keyScriptures: devotionalScriptureLinks(from: scripturesJSON),
+            summary: plainText(fromJSONString: summaryJSON),
+            content: LampPortableDevotionalContent.plainText(from: contentJSON)
+                ?? contentJSON,
+            // Only blocks are a structured representation. A client that
+            // flattens on the way out sends the body back in this column, and
+            // claiming it as blocks rewrites the local row — at an unchanged
+            // change time — into something no other device has.
+            contentJSON: LampPortableDevotionalContent.isStructured(contentJSON)
+                ? contentJSON : nil,
+            footnotes: plainText(fromJSONString: footnotesJSON),
+            mediaJSON: columns.contains("media_json") ? row["media_json"] : nil,
+            created: createdTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+            lastModified: modifiedTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        )
+    }
+
     private func makePersonalDevotional(_ row: Row) -> LampDevotional {
         let tagsJSON: String = row["tags_json"]
         let tags = tagsJSON.data(using: .utf8).flatMap {
@@ -6342,27 +6386,134 @@ public actor LampLibrary {
     /// the start it is one pass, and it is something the phone can produce
     /// too — the rewrite was this app's own step, so no other writer could
     /// ever have matched it.
+    /// One collection's archive, and what it was built from.
+    private struct PersonalArchive {
+        let stamp: Int64
+        /// The media fingerprint the writings archive was built against; nil
+        /// for a collection that names no files.
+        let media: String?
+        let bytes: Data
+    }
+
+    /// When anything of one kind was last written or deleted on this device.
+    ///
+    /// Deliberately not `personalChangeStamp()`, which is every kind at once.
+    /// A pass runs *because* something personal changed, so a cache keyed on
+    /// the device-wide stamp would miss on every pass it was meant to spare:
+    /// one writing's autosave would have the notes archive and every
+    /// highlight set recompiled too. Per kind, a writing session leaves
+    /// everything but the writings alone.
+    ///
+    /// The ledger's primary key is `(kind, item_key)`, so this reads an index
+    /// prefix rather than the table.
+    func personalItemStamp(_ kind: LampPersonalItemKind) throws -> Int64 {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            try Int64.fetchOne(db, sql: """
+                SELECT COALESCE(MAX(MAX(COALESCE(present_since, 0), COALESCE(deleted_at, 0))), 0)
+                FROM personal_sync_ledger WHERE kind = ?
+                """, arguments: [kind.rawValue]) ?? 0
+        }
+    }
+
+    /// The writing media this device holds, by path and modification time.
+    ///
+    /// The archive carries no picture's bytes, so this is not about content:
+    /// it is that the archive **refuses the whole collection** when a picture
+    /// a writing names is missing here, and that refusal has to survive
+    /// caching. A picture arriving or going changes this fingerprint even
+    /// when no row moved — which is exactly the case the row stamp cannot
+    /// see, since a picture can arrive by sync on its own.
+    ///
+    /// A walk of the media folder's metadata, not its bytes: proportional to
+    /// how many pictures there are, against a compile proportional to how
+    /// much has been written.
+    private func devotionalMediaFingerprint() -> String {
+        let directory = rootURL
+            .appendingPathComponent("Media", isDirectory: true)
+            .appendingPathComponent(LampMediaScope.devotional.folder, isDirectory: true)
+        guard let walker = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return "none" }
+        var lines: [String] = []
+        for case let url as URL in walker {
+            guard let values = try? url.resourceValues(forKeys: [
+                .contentModificationDateKey, .isRegularFileKey,
+            ]), values.isRegularFile == true else { continue }
+            let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+            lines.append("\(url.path):\(Int64(modified * 1_000))")
+        }
+        return LampSyncContentRevision.digest(
+            for: Data(lines.sorted().joined(separator: "\n").utf8)
+        )
+    }
+
+    /// Compiled once per change rather than once per pass, which is what a
+    /// pass used to ask for: `Documentation/decisions/0002`.
+    ///
+    /// Compiling means a temp database, every row inserted, `ANALYZE`,
+    /// `VACUUM`, zlib and a verify — 1.7 s at a thousand writings, measured,
+    /// and thirty times what reading the same rows costs. A pass runs
+    /// whenever anything personal changed, so an autosave while someone
+    /// writes had every collection recompiled every six to ten seconds, this
+    /// actor held for all of it and the reader's next chapter behind it.
+    ///
+    /// The bytes are deterministic, so a cached archive is the archive. What
+    /// the cache is keyed on is the whole question — see `personalItemStamp`
+    /// for why the key is one kind's stamp rather than this device's, and
+    /// `devotionalMediaFingerprint` for the other input.
+    ///
+    /// The stamp is read **before** the rows, never after: a write landing
+    /// between the two then leaves the cache keyed on a stamp older than its
+    /// bytes, which costs one needless compile next pass. Keyed on a stamp
+    /// taken afterwards, the same write would be cached as though it were
+    /// already in the file and never published at all.
     public func personalArchive(
         _ module: LampPersonalModule, moduleID: String
-    ) throws -> Data {
+    ) async throws -> Data {
         switch module {
         case .notes:
-            try LampPersonalNotesFile.archive(
-                try allPersonalNotes(), moduleID: moduleID, fileManager: fileManager
-            )
+            let key = "\(LampPersonalItemKind.note.rawValue):\(moduleID)"
+            let stamp = try personalItemStamp(.note)
+            if let held = personalArchives[key], held.stamp == stamp, held.media == nil {
+                return held.bytes
+            }
+            let notes = try allPersonalNotes()
+            personalArchiveCompiles += 1
+            // Off the actor: the rows are in hand and the compile touches
+            // nothing of this library's. `FileManager.default` rather than
+            // this library's, which no caller has ever supplied and which
+            // Foundation will not let cross an isolation boundary.
+            let bytes = try await Task.detached(priority: .userInitiated) {
+                try LampPersonalNotesFile.archive(notes, moduleID: moduleID)
+            }.value
+            personalArchives[key] = PersonalArchive(stamp: stamp, media: nil, bytes: bytes)
+            return bytes
         case .writing:
+            let key = "\(LampPersonalItemKind.devotional.rawValue):\(moduleID)"
+            let stamp = try personalItemStamp(.devotional)
+            let media = devotionalMediaFingerprint()
+            if let held = personalArchives[key], held.stamp == stamp, held.media == media {
+                return held.bytes
+            }
             // Normalised as it goes out, which the old route did afterwards
             // by rewriting the published file: a plain-text wrapper
             // unwrapped to the Markdown the other app reads, the media that
             // Markdown names gathered beside what the writing already
             // listed, and the whole file refused if a picture it refers to
             // is not on this device.
-            try LampPersonalWritingFile.archive(
-                try personalDevotionals(),
-                moduleID: moduleID,
-                normalizingMediaIn: rootURL,
-                fileManager: fileManager
-            )
+            let writings = try personalDevotionals()
+            let root = rootURL
+            personalArchiveCompiles += 1
+            let bytes = try await Task.detached(priority: .userInitiated) {
+                try LampPersonalWritingFile.archive(
+                    writings, moduleID: moduleID, normalizingMediaIn: root
+                )
+            }.value
+            personalArchives[key] = PersonalArchive(stamp: stamp, media: media, bytes: bytes)
+            return bytes
         case .highlights:
             // There is no such file. Notes and writings travel as the whole
             // collection in one archive; highlights travel as **one file
