@@ -63,6 +63,8 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
         case block(String)
         case listItem(block: String, index: Int)
         case view(block: String, index: Int)
+        /// Where a picture's clip, set to start on a click, plays.
+        case play(String)
     }
 
     /// The parts in the order they arrive; each inner list arrives together.
@@ -74,6 +76,9 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
     private let arrival: [Part: Int]
     /// The blocks whose items arrive at more than one step.
     private let itemised: Set<String>
+    /// Whether a clip plays on a step of its own, which is the slide's last:
+    /// after its emphasis lights, where that has a step too.
+    private let playsLast: Bool
 
     public init(units: [[Part]], emphasisStep: Bool) {
         self.units = units
@@ -90,6 +95,7 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
             if case .listItem(let block, _) = part { steps[block, default: []].insert(step) }
         }
         self.itemised = Set(steps.filter { $0.value.count > 1 }.keys)
+        self.playsLast = units.last.map { $0.contains { if case .play = $0 { true } else { false } } } ?? false
     }
 
     public static let together = LampPresentationRevealPlan(units: [], emphasisStep: false)
@@ -126,11 +132,22 @@ public struct LampPresentationRevealPlan: Equatable, Sendable {
         } ?? 0
     }
 
+    /// Whether a picture's clip plays at `step`: from the slide's start for
+    /// one that starts on arrival, from its own step for one that waits for a
+    /// click. Never for the whole slide, a step of nil, which is a slide no
+    /// one is presenting.
+    public func isPlaying(_ block: LampPresentationBlock, atStep step: Int?) -> Bool {
+        guard let step, let clip = block.clip else { return false }
+        if clip.starts == .arrival { return true }
+        guard arrival[.play(block.id)] != nil else { return false }
+        return step >= stepCount
+    }
+
     /// Whether emphasised words are drawn in their colour at `step`. Before
     /// their step they keep their weight, so nothing moves when they light.
     public func isEmphasisLit(atStep step: Int?) -> Bool {
         guard emphasisStep, let step else { return true }
-        return step >= stepCount
+        return step >= stepCount - (playsLast ? 1 : 0)
     }
 }
 
@@ -192,10 +209,26 @@ extension LampPresentationSlide {
                 && (block.kind != .caption || captionDrawn)
                 && block.drawnMarkedRuns(on: layout).contains { $0.mark != nil }
         }
+        // A clip that waits for a click plays on a step of its own, once
+        // everything else has arrived.
+        if let player = playedClip, player.clip?.starts != .arrival {
+            if units.isEmpty { units.append([]) }
+            units.append([.play(player.id)])
+        }
         return LampPresentationRevealPlan(
             units: units.count > 1 ? units : [],
             emphasisStep: revealsEmphasis == true && hasEmphasis
         )
+    }
+
+    /// The picture whose clip this slide plays, if any: the one behind the
+    /// slide where that has a clip Lamp can play, else the framed one. The
+    /// renderer and the validator choose the same way.
+    public var playedClip: LampPresentationBlock? {
+        let plan = self.plan
+        return [plan.background, plan.image].compactMap { $0 }.first { block in
+            block.kind == .image && block.clip.map { $0.origin != .unplayable } == true
+        }
     }
 
     /// A passage arrives a block at a time, a list an item at a time, and its

@@ -71,6 +71,17 @@ public struct LampPresentationSlideCanvas: View {
     /// drifts moves. See `presenting(_:)`.
     private var isPresenting = false
     private var presentedSince: Date?
+    /// Whether the presenter has paused the slide's clip.
+    private var clipPaused = false
+    /// Whether this copy lays the page out only to find where its words
+    /// fall: it draws nothing seen, and must start nothing heard.
+    private var isMeasuring = false
+
+    private func measuring() -> Self {
+        var copy = self
+        copy.isMeasuring = true
+        return copy
+    }
 
     /// When this slide arrived, which every drifting layer times itself
     /// from, so the picture and its softened copy behind the words move as
@@ -78,6 +89,12 @@ public struct LampPresentationSlideCanvas: View {
     @State private var arrivedAt = Date()
     /// The video playing in this slide's picture while it is presented.
     @State private var playback: LampPresentationVideoPlayback?
+    /// The clip this slide plays from a file, prepared on arrival.
+    @State private var clipPlayback: LampPresentationVideoPlayback?
+    /// Whether the clip should be running now: its step reached and not
+    /// paused. Kept as state, so a clip that finishes preparing reads where
+    /// the presenter is then, not where they were when it began.
+    @State private var clipRuns = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func scaled(_ unit: CGFloat) -> Self {
@@ -159,10 +176,15 @@ public struct LampPresentationSlideCanvas: View {
     /// arrived. Give each slide its own view identity so each drifts from
     /// its own arrival. Everywhere else, and with Reduce Motion on, pictures
     /// are still.
-    public func presenting(_ presenting: Bool = true, since: Date? = nil) -> Self {
+    ///
+    /// A slide's clip (`LampPresentationClip`) plays here too, when its step
+    /// is reached (`revealed(atStep:)`), and holds where it is while
+    /// `clipPaused`.
+    public func presenting(_ presenting: Bool = true, since: Date? = nil, clipPaused: Bool = false) -> Self {
         var copy = self
         copy.isPresenting = presenting
         copy.presentedSince = since
+        copy.clipPaused = clipPaused
         return copy
     }
 
@@ -221,7 +243,16 @@ public struct LampPresentationSlideCanvas: View {
                     LampPresentationVideoFrame(playback: playback(of: plan.background)) { frame in
                         focusedFill(frame?.image ?? picture, at: pictureURL, size: geometry.size, pictureSize: frame?.size)
                     }
+                } else if plan.background != nil {
+                    // No still to show, but a clip to play still plays.
+                    LampPresentationVideoFrame(playback: playback(of: plan.background)) { frame in
+                        if let frame {
+                            frame.image.resizable().scaledToFill()
+                                .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                        }
+                    }
                 }
+                streamed(plan.background)
                 words(
                     unit: unit,
                     over: pictureURL.flatMap { url in
@@ -234,6 +265,32 @@ public struct LampPresentationSlideCanvas: View {
             .clipped()
         }
         .background(background)
+        .task(id: clipToPlay) {
+            // A clip from a file, made ready as the slide arrives so it
+            // starts on the click without a wait.
+            guard let clip = clipToPlay, case .file(let url) = clip.origin else { return }
+            guard let prepared = await LampPresentationVideoPlayback.preparedClip(
+                url: url, start: clip.start, end: clip.end, tint: clip.tint, theme: style.theme
+            ), !Task.isCancelled else { return }
+            clipPlayback = prepared
+            if clipRuns { prepared.start() }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3_600))
+            }
+            prepared.stop()
+            if clipPlayback === prepared { clipPlayback = nil }
+        }
+        .onChange(of: clipReached, initial: true) { _, reached in
+            clipRuns = reached && !clipPaused
+            // Forward to the clip's step plays it; back from it, to the start
+            // again, with the still in view.
+            if reached { if !clipPaused { clipPlayback?.start() } } else { clipPlayback?.rewind() }
+        }
+        .onChange(of: clipPaused, initial: true) { _, paused in
+            clipRuns = clipReached && !paused
+            guard clipReached else { return }
+            if paused { clipPlayback?.pause() } else { clipPlayback?.start() }
+        }
         .task(id: playing) {
             // One video a slide: the picture behind it, else the one framed.
             guard let playing else { return }
@@ -281,7 +338,7 @@ public struct LampPresentationSlideCanvas: View {
     @ViewBuilder
     private func words(unit: CGFloat, over backdrop: URL?) -> some View {
         if let backdrop {
-            page(unit: unit)
+            measuring().page(unit: unit)
                 .hidden()
                 .overlayPreferenceValue(LampSlideTextBounds.self) { bounds in
                     GeometryReader { proxy in
@@ -300,7 +357,7 @@ public struct LampPresentationSlideCanvas: View {
                             moments: regions.isEmpty ? 1 : sampled.count / regions.count,
                             // A video's frames are not known ahead, so the
                             // words are set to read over anything one shows.
-                            overAnything: plan.background?.video != nil
+                            overAnything: plan.background?.video != nil || plan.background?.clip != nil
                         ) {
                             let _ = reportsBackdrop?(treatment)
                             ZStack(alignment: .topLeading) {
@@ -310,7 +367,7 @@ public struct LampPresentationSlideCanvas: View {
                                     shown: bounds.map(\.isShown),
                                     in: proxy.size,
                                     unit: unit,
-                                    softening: backdropPicture(at: backdrop).map { ($0, backdrop) }
+                                    softening: backgroundStreams ? nil : backdropPicture(at: backdrop).map { ($0, backdrop) }
                                 )
                                 inked(treatment).page(unit: unit)
                             }
@@ -1168,7 +1225,8 @@ public struct LampPresentationSlideCanvas: View {
     /// on, which shows the still.
     private var playing: LampPresentationPlayingVideo? {
         guard isPresenting, !reduceMotion else { return nil }
-        for block in [plan.background, plan.image].compactMap({ $0 }) where block.kind == .image {
+        // A picture with a clip plays its clip instead.
+        for block in [plan.background, plan.image].compactMap({ $0 }) where block.kind == .image && block.clip == nil {
             guard let video = block.video, LampPresentationVideo.isPlayable(video) else { continue }
             // The resolver reads a block's `assetPath`, so it is asked about
             // the video as if it were the picture: the same rules, the same
@@ -1181,10 +1239,61 @@ public struct LampPresentationSlideCanvas: View {
         return nil
     }
 
-    /// The playback drawing `block`'s picture, if it is the one playing.
+    /// The clip this slide plays while presented, and from where; nil where
+    /// it has none, or it is a file that is not here.
+    private var clipToPlay: LampPresentationPlayingClip? {
+        guard isPresenting, let block = slide.playedClip, let clip = block.clip else { return nil }
+        let origin: LampPresentationPlayingClip.Origin
+        switch clip.origin {
+        case .file(let path):
+            var asClip = block
+            asClip.assetPath = path
+            guard let url = assetURL(asClip), FileManager.default.fileExists(atPath: url.path) else { return nil }
+            origin = .file(url)
+        case .youtube, .vimeo:
+            origin = .streamed(clip.origin)
+        case .unplayable:
+            return nil
+        }
+        return LampPresentationPlayingClip(
+            blockID: block.id, origin: origin, start: clip.start, end: clip.end, tint: block.tint
+        )
+    }
+
+    /// Whether the presenter has reached the slide's clip.
+    private var clipReached: Bool {
+        guard clipToPlay != nil, let block = slide.playedClip else { return false }
+        return slide.revealPlan.isPlaying(block, atStep: revealStep)
+    }
+
+    /// The playback drawing `block`'s picture, if it is the one playing: its
+    /// clip from a file, else its looping video.
     private func playback(of block: LampPresentationBlock?) -> LampPresentationVideoPlayback? {
-        guard let block, let playing, playing.blockID == block.id else { return nil }
+        guard let block else { return nil }
+        if let clip = clipToPlay, clip.blockID == block.id {
+            return clipReached ? clipPlayback : nil
+        }
+        guard let playing, playing.blockID == block.id else { return nil }
         return playback
+    }
+
+    /// `block`'s clip from YouTube or Vimeo, over its picture, if it has one
+    /// and the slide is presented.
+    @ViewBuilder
+    private func streamed(_ block: LampPresentationBlock?) -> some View {
+        if !isMeasuring, let block, let clip = clipToPlay, clip.blockID == block.id, case .streamed(let origin) = clip.origin {
+            LampPresentationStreamedClip(
+                origin: origin, start: clip.start, end: clip.end, reached: clipReached, paused: clipPaused
+            )
+        }
+    }
+
+    /// Whether the picture behind the slide streams a clip, which no blur of
+    /// Lamp's can soften behind the words.
+    private var backgroundStreams: Bool {
+        guard let clip = clipToPlay, clip.blockID == plan.background?.id else { return false }
+        if case .streamed = clip.origin { return true }
+        return false
     }
 
     /// `block`'s drift, if it drifts here and now. Drawn as a scale about
@@ -1221,6 +1330,7 @@ public struct LampPresentationSlideCanvas: View {
                         }
                     }
                 }
+                .overlay { streamed(imageBlock) }
                 .clipped()
                 .modifier(drift(of: imageBlock, anchor: .center))
                 .clipShape(RoundedRectangle(cornerRadius: 18 * unit))
@@ -1238,6 +1348,16 @@ public struct LampPresentationSlideCanvas: View {
                     }
                     .foregroundStyle(foreground.opacity(0.7))
                 }
+                // A clip with no still to stand in for it still plays.
+                .overlay {
+                    LampPresentationVideoFrame(playback: playback(of: imageBlock)) { frame in
+                        if let frame {
+                            frame.image.resizable().scaledToFit()
+                        }
+                    }
+                }
+                .overlay { streamed(imageBlock) }
+                .clipShape(RoundedRectangle(cornerRadius: 18 * unit))
         }
     }
 

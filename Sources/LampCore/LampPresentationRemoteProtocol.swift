@@ -132,6 +132,8 @@ public struct LampPresentationRemoteCommand: Codable, Equatable, Sendable {
         case showBlackout = "show-blackout"
         case hideBlackout = "hide-blackout"
         case toggleNotes = "toggle-notes"
+        /// Plays or pauses the clip on the slide shown, without moving.
+        case toggleClip = "toggle-clip"
     }
 
     public var action: Action
@@ -173,6 +175,9 @@ public struct LampPresentationRemoteState: Codable, Equatable, Sendable {
     /// the room sees (`LampPresentationSlideCanvas.revealed(atStep:)`). Nil
     /// from a presenter that does not reveal, which shows the whole slide.
     public var currentRevealStep: Int?
+    /// Whether the presenter has paused the current slide's clip; nil from a
+    /// presenter that does not play clips.
+    public var isClipPaused: Bool?
 
     public init(
         deckID: String,
@@ -188,7 +193,8 @@ public struct LampPresentationRemoteState: Codable, Equatable, Sendable {
         isBlackout: Bool,
         canGoPrevious: Bool,
         canGoNext: Bool,
-        currentRevealStep: Int? = nil
+        currentRevealStep: Int? = nil,
+        isClipPaused: Bool? = nil
     ) {
         self.deckID = deckID
         self.deckTitle = deckTitle
@@ -204,6 +210,7 @@ public struct LampPresentationRemoteState: Codable, Equatable, Sendable {
         self.canGoPrevious = canGoPrevious
         self.canGoNext = canGoNext
         self.currentRevealStep = currentRevealStep
+        self.isClipPaused = isClipPaused
     }
 }
 

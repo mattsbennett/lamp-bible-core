@@ -424,6 +424,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// `LampPresentationVideo`. The picture at `assetPath` is its still,
     /// shown everywhere else and by anything that cannot play it.
     public var video: String?
+    /// A video the talk stops to watch, with its sound, played once; see
+    /// `LampPresentationClip`. The picture at `assetPath` is its still.
+    public var clip: LampPresentationClip?
     /// A body block's lines drawn as a figure: a timeline, or a passage's
     /// structure; see `LampPresentationFigure`. Absent means drawn as text.
     public var figure: LampPresentationFigure?
@@ -451,6 +454,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         tint: LampPresentationImageTint? = nil,
         motion: LampPresentationImageMotion? = nil,
         video: String? = nil,
+        clip: LampPresentationClip? = nil,
         figure: LampPresentationFigure? = nil,
         zoom: LampPresentationTimelineZoom? = nil,
         map: LampPresentationMapOptions? = nil
@@ -471,6 +475,7 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
         self.tint = tint
         self.motion = motion
         self.video = video
+        self.clip = clip
         self.figure = figure
         self.zoom = zoom
         self.map = map
@@ -479,8 +484,9 @@ public struct LampPresentationBlock: Codable, Equatable, Identifiable, Sendable 
     /// An image that fills the slide behind everything else.
     public var isBackground: Bool { kind == .image && placement == .background }
 
-    /// Every file this block names: its picture, and its video.
-    public var assetPaths: [String] { [assetPath, video].compactMap { $0 } }
+    /// Every file this block names: its picture, its video, and its clip
+    /// where that is a file.
+    public var assetPaths: [String] { [assetPath, video, clip?.assetPath].compactMap { $0 } }
 }
 
 public struct LampPresentationDeckIssue: Codable, Equatable, Identifiable, Sendable {
@@ -755,6 +761,19 @@ public enum LampPresentationDeckValidator {
                 )
             }
 
+            // One clip plays on a slide, chosen as its video is.
+            let clips = slide.blocks.indices.filter {
+                slide.blocks[$0].kind == .image && slide.blocks[$0].clip.map { $0.origin != .unplayable } == true
+            }
+            let playedClip = clips.first { slide.blocks[$0].isBackground } ?? clips.first
+            for index in clips where index != playedClip {
+                issue(
+                    .warning,
+                    "\(slidePath).blocks[\(index)].clip",
+                    "A slide plays one clip, the picture behind it's or else the first; this picture is shown still."
+                )
+            }
+
             let blockIDs = slide.blocks.map(\.id)
             for duplicate in duplicates(in: blockIDs) {
                 issue(.error, "\(slidePath).blocks", "Block ID '\(duplicate)' is duplicated.")
@@ -800,6 +819,9 @@ public enum LampPresentationDeckValidator {
                 }
                 if let motion = block.motion, motion != .none, block.kind != .image {
                     issue(.warning, "\(blockPath).motion", "Only a picture can drift.")
+                }
+                if let clip = block.clip {
+                    clipIssues(clip, block: block).forEach { issue($0.0, "\(blockPath).clip", $0.1) }
                 }
                 if let video = block.video {
                     if !isSafeAssetPath(video) {
@@ -932,6 +954,14 @@ public enum LampPresentationDeckValidator {
                             + "until the image is delivered beside the deck."
                     ))
                 }
+                if let path = block.clip?.assetPath, !assetExists(path) {
+                    issues.append(.init(
+                        severity: .warning,
+                        path: "slides[\(slideIndex)].blocks[\(blockIndex)].clip",
+                        message: "No file at '\(path)'. The picture is shown still "
+                            + "until the clip is delivered beside the deck."
+                    ))
+                }
                 if let video = block.video, isSafeAssetPath(video), !assetExists(video) {
                     issues.append(.init(
                         severity: .warning,
@@ -941,6 +971,44 @@ public enum LampPresentationDeckValidator {
                     ))
                 }
             }
+        }
+        return issues
+    }
+
+    /// What is wrong with a clip, as severity and message.
+    private static func clipIssues(
+        _ clip: LampPresentationClip,
+        block: LampPresentationBlock
+    ) -> [(LampPresentationDeckIssue.Severity, String)] {
+        var issues: [(LampPresentationDeckIssue.Severity, String)] = []
+        let text = clip.source.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            issues.append((.error, "A clip needs a source: a file such as Assets/clip.mp4, or a YouTube or Vimeo address."))
+        } else if clip.origin == .unplayable {
+            let looksLikeAddress = text.contains("://")
+            if !looksLikeAddress && !isSafeAssetPath(text) {
+                issues.append((.error, "Use a relative path inside the presentation folder, such as Assets/clip.mp4."))
+            } else {
+                issues.append((
+                    .warning,
+                    "Lamp plays clips from .mp4, .mov and .m4v files in the deck, and from YouTube and Vimeo; "
+                        + "this picture is shown still."
+                ))
+            }
+        }
+        if let start = clip.start, !(start.isFinite && start >= 0) {
+            issues.append((.error, "A clip's start is seconds from its beginning, 0 or more."))
+        }
+        if let end = clip.end, !(end.isFinite && end > 0) {
+            issues.append((.error, "A clip's end is seconds from its beginning, more than 0."))
+        }
+        if let start = clip.start, let end = clip.end, start.isFinite, end.isFinite, end <= start {
+            issues.append((.error, "A clip's end comes after its start."))
+        }
+        if block.kind != .image {
+            issues.append((.warning, "Only a picture can carry a clip; this one is not played."))
+        } else if block.video != nil {
+            issues.append((.warning, "A picture with a clip plays the clip, not its looping video."))
         }
         return issues
     }

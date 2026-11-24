@@ -74,6 +74,38 @@ final class LampPresentationVideoPlayback {
         )
     }
 
+    /// A playback of a clip (`LampPresentationClip`): the file at `url` with
+    /// its sound, from `start` to `end`, once, holding its last frame. Nil
+    /// where it has no pictures Lamp can play.
+    static func preparedClip(
+        url: URL,
+        start: Double?,
+        end: Double?,
+        tint: LampPresentationImageTint?,
+        theme: LampPresentationTheme
+    ) async -> LampPresentationVideoPlayback? {
+        let asset = AVURLAsset(url: url)
+        var transform: CGAffineTransform?
+        for candidate in (try? await asset.loadTracks(withMediaType: .video)) ?? [] {
+            guard (try? await candidate.load(.isEnabled)) == true,
+                  (try? await candidate.load(.isPlayable)) == true,
+                  let range = try? await candidate.load(.timeRange),
+                  range.duration.seconds.isFinite, range.duration.seconds > 0
+            else { continue }
+            transform = try? await candidate.load(.preferredTransform)
+            break
+        }
+        guard let transform else { return nil }
+        let item = AVPlayerItem(asset: asset)
+        let from = start.flatMap { $0.isFinite && $0 > 0 ? CMTime(seconds: $0, preferredTimescale: 600) : nil }
+        if let end, end.isFinite, end > (start ?? 0) {
+            item.forwardPlaybackEndTime = CMTime(seconds: end, preferredTimescale: 600)
+        }
+        return LampPresentationVideoPlayback(
+            clip: item, from: from ?? .zero, orientation: transform, tint: tint, theme: theme
+        )
+    }
+
     private init(
         item: AVPlayerItem,
         orientation: CGAffineTransform,
@@ -87,6 +119,41 @@ final class LampPresentationVideoPlayback {
         player.isMuted = true
         player.actionAtItemEnd = .advance
         looper = AVPlayerLooper(player: player, templateItem: item)
+    }
+
+    private init(
+        clip item: AVPlayerItem,
+        from start: CMTime,
+        orientation: CGAffineTransform,
+        tint: LampPresentationImageTint?,
+        theme: LampPresentationTheme
+    ) {
+        self.tint = tint
+        self.theme = theme
+        self.orientation = orientation
+        self.clipStart = start
+        soundTracks = item.asset.tracks.filter { $0.mediaType == .audio }.count
+        player.actionAtItemEnd = .pause
+        player.insert(item, after: nil)
+        item.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: nil)
+    }
+
+    /// Where a clip starts; nil for a picture's looping video.
+    @ObservationIgnored private var clipStart: CMTime?
+
+    /// Pauses a clip where it is, keeping its frame.
+    func pause() {
+        player.pause()
+    }
+
+    /// Takes a clip back to its start, showing the still again, ready to
+    /// play from the beginning.
+    func rewind() {
+        stop()
+        frame = nil
+        if let clipStart {
+            player.currentItem?.seek(to: clipStart, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: nil)
+        }
     }
 
     /// `frame` turned as a track's `preferredTransform` says it is shown.
@@ -151,6 +218,21 @@ final class LampPresentationVideoPlayback {
         let image = Self.upright(CIImage(cvPixelBuffer: buffer), transform: orientation)
         frame = LampPresentationTint.rendered(image, tint, theme: theme)
     }
+}
+
+/// A clip a presented slide plays, from where, and between which times:
+/// what a clip's playback is prepared for.
+struct LampPresentationPlayingClip: Equatable {
+    enum Origin: Equatable {
+        case file(URL)
+        case streamed(LampPresentationClip.Origin)
+    }
+
+    var blockID: String
+    var origin: Origin
+    var start: Double?
+    var end: Double?
+    var tint: LampPresentationImageTint?
 }
 
 /// Which video a presented slide plays, and in what tint: what a new
