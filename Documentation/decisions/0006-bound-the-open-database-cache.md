@@ -1,125 +1,87 @@
-# 0007. A pass may trust file identity for a digest, where the filesystem maintains one
+# 0006. The open-database cache is bounded
 
-Status: Accepted for core and the Mac, 2026-11-24, held by
-`LampSyncDigestCacheTests`. Supersedes `0001`, whose Decision no longer follows
-from its Context — see below. The phone still hashes its media and book
-pictures on every pass; that is Phase 3 of the plan.
+Status: Accepted, 2026-11-24, held by `LampOpenDatabaseBoundTests`. The limit
+the apps run under is now measured, and it was the low number: see the
+Context.
 
 ## Context
 
-`0001` decided that a sync pass hashes every candidate file on every pass, and
-rejected a cache keyed on the file's metadata. Both of its reasons have moved.
+`LampLibrary.openReadOnlyDatabase` keeps a connection per module database for
+the life of the process, so that a library answering many small queries does
+not pay the open each time — measured in its own comment at roughly 200 ms
+for a database of a few hundred megabytes. Nothing evicted a connection;
+`forgetOpenDatabases` drops them all at once, and only on module install,
+module removal and bundle extraction.
 
-**The key it rejected was weaker than the one available.** 0001 argued from a
-modification date: a file replaced at the same size with its date preserved —
-`cp -p`, `rsync -t`, a restore — would be skipped for ever. True of a date.
-`LampDatabaseFileRevision` captures device, inode, size, modification time
-**and change time**, and `st_ctime` on a local Darwin filesystem is the
-kernel's own: it is set on any change to the inode and there is no call that
-sets it to a chosen value. Every case 0001 names moves it or moves the inode.
-`0003` already relies on this for listing decks, with a test that rewrites a
-file in place, puts the date back, and watches the listing notice.
+Phase 0 measured what that costs in descriptors rather than in milliseconds:
+200 installed book modules, each opened once, left **+201 open file
+descriptors** (`LampScaleMeasurementTests.measuresModuleListingAndOpening`).
+One per module, and a module whose word lists are attached will take two.
 
-**Hashing was cheap compared to something that is no longer there.** 0001
-measured hashing against the per-pass compile of the collections: 2.43 GB/s
-against 0.9 ms a writing. `0002` cached that compile away, so hashing is now
-the largest thing a pass does on a big library — the Mac's own comment says a
-second and a half of it — and a pass runs every six to ten seconds while
-someone writes. The cost that matters is not the CPU in a detached task; it is
-that the whole library goes through the page cache every pass, evicting what
-the reader is using, and on the phone it is battery and heat.
+On this Mac `launchctl limit maxfiles` is 256 soft, unlimited hard, and a
+process launched by launchd — the app from the Finder, not from a terminal —
+inherits that soft limit. The test run itself was fine only because a
+terminal shell had already raised its own limit to 1 048 576.
 
-**And the trust is not uniform across filesystems.** This is the part that
-decides the shape. There is no capability bit for "maintains a change time".
-On APFS and HFS+ it is maintained, and inode numbers are not reused (APFS
-allocates from a monotonic counter; HFS+ recycles only after 2^32). On
-exFAT/FAT there is no change time in the format at all — the driver synthesises
-one — and inode numbers come from the directory entry's position, so a
-same-name replacement often reuses one: the key silently degrades to
-`(size, mtime)`, which is exactly what 0001 refused. On SMB the client maps the
-server's `ChangeTime`, which a Windows or Samba-on-ext4 server maintains, a
-share backed by exFAT cannot, and some servers simply mirror the write time —
-and the client cannot tell which. NFS and SMB also cache attributes for
-seconds, so a stat can report the state before another machine's write.
-
-A library can live on any of those. It can live on a NAS.
+**That was the open question of the first version of this record, and the
+answer is that the limit is real.** A throwaway `Probe.app`, launched the way
+the Finder launches an app, read `RLIMIT_NOFILE` and reported **soft 256**.
+So somewhere around two hundred-odd modules the app would stop being able to
+open anything at all — not just a module, but a file, a socket, a WebDAV
+connection — and the failure would look like a library that had gone bad
+rather than like a limit.
 
 ## Decision
 
-A pass may take a candidate's digest from a cache keyed on
-`LampDatabaseFileRevision`, under three conditions, and must hash otherwise:
+Bound the cache: keep the most recently used connections, **forty-eight** of
+them, and drop the rest. Forty-eight is comfortably above how many modules
+one screen reads from and comfortably below the budget.
 
-1. **Only where the filesystem maintains the key.** The library root's
-   `statfs(2).f_fstypename` is `apfs`. Everything else — `smbfs`, `nfs`,
-   `exfat`, `msdos`, `ntfs`, `webdav`, a FUSE mount — hashes every file every
-   pass, exactly as 0001 required. On a NAS this decision changes nothing,
-   which is the point: it is correct there by construction rather than by
-   argument.
+Everything derived from a dropped file goes with it: that module's entry in
+`versifications` and in `strongsFingerprints`.
 
-   **`hfs` was on that list in the first version and should not have been.**
-   HFS+ keeps timestamps to the whole second, so the nanosecond fields this
-   reads are always zero there, and a file rewritten in place at the same size
-   within a second of the previous write has an identity indistinguishable
-   from before — the cached digest would then be wrong for good. Caught by a
-   Codex review the same day. What a filesystem has to offer to earn a place
-   on the list is now written down beside it: a kernel-owned change time at a
-   resolution finer than the interval between two writes, and no inode reuse.
-2. **Only for the kinds that are immutable at a path**: a module file, a book
-   picture, a deck image, a writing's media, a note's media. Those are the
-   bytes, and the codebase already states that immutability where it publishes
-   them. Everything else keeps hashing: workspace files are exported fresh into
-   scratch every pass and so have new inodes anyway, review marks and the
-   compiled collections are small, and decks are mutable.
-3. **Only within one process lifetime.** The cache is in memory, so the first
-   pass after launch hashes everything. Persisting it would buy almost nothing
-   — the first pass already runs off the main thread, and a device number
-   changes on every remount of an external volume, so entries would miss after
-   a reboot where it would matter most — and it would add state to the one
-   subsystem with a model, with a format to version.
-
-What the plan receives is unchanged: `LampSyncFilePlan.Local.digest` is still
-SHA-256 of the bytes at that path. `LampSyncFileRecords` keeps digests, not
-identities. `Verification/SyncMerge.lean` is untouched.
+The Mac also raises its own soft limit to 8 192 at launch
+(`LampBibleMacApp.raiseTheOpenFileLimit`), which is the second half of the
+decision and not a substitute for the first: a reader opens pictures,
+workspace files and network connections too. The hard limit is unlimited for
+this process, so raising the soft one asks nobody's permission, and a failure
+is ignored because the bound cache is what keeps the app working either way.
 
 ## Consequences
 
-- A pass over an unchanged library on APFS becomes a stat per file instead of a
-  read of every byte. On a 10 GB library that is seconds of I/O and the page
-  cache left alone, every six to ten seconds while someone writes.
-- The assumption moves from "a digest is always read from the file" to "a
-  digest is of the bytes at that path, obtained by reading them or from an
-  identity that cannot have changed without the bytes changing". That sentence
-  has to be written where the old one is: the boundary prose in
-  `Verification/coverage.json` for `LampSyncLocalFile.swift`, and the comment on
-  `describe`. `SyncVerificationCoverageTests` checks that a sync source has an
-  entry, not that the prose is true, so this is for readers — and it is the one
-  place the trust is written down.
-- `LampDatabaseFileRevision` has to be reachable from `LampModuleKit`, which
-  cannot import `LampCore`. It moves there; `LampCore` imports `LampModuleKit`
-  already.
-- A file that has vanished or cannot be read is still reported as `Unreadable`
-  from a stat, never served from the cache.
+- A library of any size holds a bounded number of handles, and the cost of a
+  miss is one open — which is what the cache was there to avoid, so the
+  limit matters: a chapter with notes and highlights from several modules, or
+  a search across a kind, must fit inside it.
+- A search that fans out across more modules than the bound will thrash it.
+  Acceptable: a fan-out already reads every module once, and the alternative
+  is failing to open the next one.
+- Eviction drops the reference and lets the last reader release the file;
+  GRDB's `DatabaseQueue` serialises its own access, so nothing is closed
+  under a call mid-read.
+- `forgetOpenDatabases` stays as it is. It is correctness — a file replaced
+  underneath a handle — not a cache policy.
 
 ## What it must not break
 
-- **A file replaced at the same size with its date preserved is still
-  noticed** — by the change time or the inode where the key is trusted, and by
-  hashing everywhere else. Tested both ways, including with the filesystem type
-  forced to `smbfs` and `exfat` to prove every file is hashed there.
-- A replacement with *identical* bytes still yields the same digest and no
-  upload.
-- Never a modification date alone. Never the server's ETag as a local digest.
-  Both rejections carry forward from 0001.
+- **A module replaced while its connection is not cached is still noticed.**
+  The first version of this evicted the connection and *kept* the
+  versification and the Strong's fingerprint, on the reasoning that evicting
+  for space is not the same event as the file changing. That was wrong, and a
+  Codex review showed why: the invalidation of those caches is exactly the
+  revision comparison that happens when a path is opened again. Evict the
+  connection and that comparison has nothing to compare, so a translation
+  replaced by another process after an eviction would be reopened fresh with
+  its old versification still in hand. They are dropped together now.
 
 ## Rejected
 
-- **Trusting identity on every filesystem.** Correct on APFS, wrong on a USB
-  stick and possibly wrong on a NAS, and nothing in the API distinguishes them.
-- **Persisting the cache.** See condition 3; and across launches the inode's
-  namespace (`st_dev`) is the part that moves.
-- **A size threshold instead of a kind list.** A stat costs the same either
-  way, and "immutable at a path" is a property the code already states, where
-  "large" is a guess.
-- **Hashing on a schedule** (daily, or every tenth pass). It makes the window
-  in which a device is wrong a tunable rather than zero, which is what 0001 was
-  right to refuse.
+- **Raising the limit alone.** It moves the ceiling without bounding
+  anything, and a limit raised at launch is one `setrlimit` away from being
+  wrong again on a system whose soft limit is lower.
+- **Closing connections on a timer.** The cost of an open is proportional to
+  the database's size; evicting by age would close the expensive ones as
+  readily as the cheap ones.
+- **One connection with every module ATTACHed.** SQLite's attach limit is
+  small, and it would make every query's name resolution depend on what else
+  is installed.

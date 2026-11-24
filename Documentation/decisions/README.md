@@ -30,7 +30,11 @@ A record is also where a *wrong* answer belongs, not only the right one. Three
 of these carry the keys and conditions that were tried first and failed, and
 why: a reader deciding whether to revisit one needs to know what has already
 been ruled out by something other than taste. 0002's first two keys were
-useless and then unsound; 0007 trusted a filesystem it should not have.
+useless and then unsound; 0007 trusted a filesystem it should not have; 0008
+removed a snapshot without noticing what had depended on it; 0009 is the
+answer, with three alternatives measured and rejected, and 0010 is the second
+thing that snapshot had been doing silently. 0008 also carries a measurement
+that measured the wrong thing, and what it cost to believe it.
 
-Records 0001–0007 come out of the scalability pass of 2026-11-24
+Records 0001–0010 come out of the scalability pass of 2026-11-24
 (`../ScalabilityPlan.md`), which holds the measurements and the sequencing.

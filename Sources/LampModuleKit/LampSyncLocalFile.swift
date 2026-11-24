@@ -93,6 +93,14 @@ public enum LampSyncLocalFiles {
         for candidate in candidates {
             // One stat answers both questions: whether the file is there, and
             // which file it is.
+            //
+            // A candidate that is a symbolic link is *not* refused here, and
+            // that is deliberate. Refusing one leaves the path out of the
+            // plan's locals, which reads as "this client does not hold it" —
+            // so the plan schedules a download and the install rewrites the
+            // very file the refusal meant to leave alone. Where a pass will
+            // not publish a link is at the upload, on its own copy, which is
+            // the only place the check can be sound (`decisions/0010`).
             guard let identity = try? LampFileIdentity(url: candidate.url) else {
                 described.unreadable.append(
                     Unreadable(path: candidate.path, reason: "its file could not be read")

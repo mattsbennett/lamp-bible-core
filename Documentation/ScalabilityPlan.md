@@ -294,11 +294,22 @@ holding a draft, five documents, a context file and fifty revisions:
 
 | | 50 workspaces | 250 workspaces |
 | --- | --- | --- |
-| export and enumerate, per pass | 711 → 575 ms | **3 602 → 2 980 ms** |
-| files staged | 3 002 | 15 002 |
+| export and enumerate, per pass | 711 → 575 → **213 ms** | 3 602 → 2 980 → **1 096 ms** |
+| files staged (regular files) | — | 14 000 → **1 250** |
 | the six-second local-work probe | 19 → 8 ms | 96 → **39 ms** |
 
-The second number in each is after one change: `LampFileModification.date(of:)`
+And what the gather hands on, measured since: digesting every candidate is
+**706–735 ms** at 250 workspaces, against **174–178 ms** if an identity cache
+answered all of them — of which about **470 ms** is reachable, since a staged
+file gets a new scratch path every pass and could never be answered from one.
+The old copying export, run beside the new one in the same test so the files
+are counted alike, is **2 413 ms** for the copy on its own — not the old
+gather, which also walked the tree it had copied. Preparing the library — migrate and compact
+every workspace — is **1 930 ms** with a backlog, **520 ms** on a settled
+history, **104 ms** once merged.
+
+The second number in each is after one change, the third after the sink
+(`decisions/0008`), below. First: `LampFileModification.date(of:)`
 reads one `stat(2)` through `LampFileIdentity` instead of
 `attributesOfItem`, which built a dictionary of every attribute to hand back
 one. Every check of whether something moved goes through it — the probe asks
@@ -317,8 +328,8 @@ The plan had this as a secondary term (see the weak points, item 6). It is
 not — and asking about it turned up something larger still, which is now item
 0 above.
 
-The shape to fix it, from Fable, and it is a complete design rather than a
-direction. The copy provides three things and only one is load-bearing: the
+**Landed**, `decisions/0008`. The shape, from Fable, and it was a complete
+design rather than a direction. The copy provides three things and only one is load-bearing: the
 path mapping (which is the *loop*, not `copyItem`); the ledger side effects,
 which must keep running every pass — `exportPortableWorkspaces` saves each
 `WorkspaceFileLedger` and records document deletions, so a stat-only dry run
@@ -329,13 +340,43 @@ gatherer pass a recording sink that copies nothing. Documents keep being
 copied, inside the exporter under its actor, because a document's recorded
 digest is the `agreedDigest` that a later pass judges "edited here since" by —
 five files a workspace against fifty-odd revisions. Revisions are written once
-and never edited, context files are content-addressed hard links, and
+and never edited **at their path** — compaction deletes one and writes a
+replacement, which is the distinction `0009` turns on and this paragraph
+originally blurred — context files are content-addressed hard links, and
 transcripts are produced into scratch anyway.
 
 Then the kinds flip: `keepsDigestAgainstIdentity` excludes workspace files
 today for a reason that is an artefact of the copy ("a fresh inode every
 pass"). With the copy gone they qualify, and that wants its own record — the
-kind gate was about worth, while the trust is the filesystem's.
+kind gate was about worth, while the trust is the filesystem's. **Still open**,
+and the one thing left of this item.
+
+**What the measurement caught that the review did not** — one of two things
+the reviews and the measurements between them caught, the other being the
+snapshot that `0009` answers. The first sink was
+*slower than the copying*: 7 150 ms against 2 980 ms. The record replaced a
+path placed twice with `files.removeAll { $0.path == path }` — fifteen
+thousand files of linear string comparison, ninety-eight million of them,
+where copying fifteen thousand files was three seconds. An index of where each
+path sits makes it 1 044 ms. Both the design review and the code review passed
+over it; re-measuring after the change found it in one run. That is the
+argument for measuring on both sides of a change and not only before it.
+
+**Tried and reverted: hard-linking instead of copying.** The write-once kinds
+— revisions, context, skills — could be linked into the staging directory
+rather than copied, one syscall and no bytes, with documents still copied for
+the snapshot. Measured at 250 workspaces it was **slower**: 4 786 ms and
+4 840 ms against 2 980 ms copying, repeatably. The reason is informative.
+`FileManager.copyItem` on APFS clones, which is already a metadata operation
+rather than a read and a write, so there were no bytes to save; `linkItem`
+only added work.
+
+Which reframes the item: **the staging cost is per file, not per byte** —
+five or so syscalls each for the directory, the existence check, the removal,
+the clone and the modification date, fifteen thousand times. So the fix is
+*fewer file operations*, not cheaper ones, and that is exactly what the sink
+does for the write-once kinds: it records a path and touches the filesystem
+not at all. Worth knowing before anyone tries the obvious thing again.
 
 One measurement is still untaken, and it no longer blocks anything: **peak
 memory on the phone's writings and deck loads**. It was there to gate 3a and
@@ -417,6 +458,37 @@ collection, and not before.
   to whatever the file happens to hold — so two Macs on different builds would
   trade the same conversation back and forth. Not worth that for a term the
   measurements never show.
+
+- ~~**2h. A pass records what it would place, rather than copying it**~~
+  **done**, `decisions/0008` and `0009`. Found by measuring rather than
+  reading: the plan had this as a secondary term and it was the largest one.
+  2 980 → 1 044 ms at 250 workspaces, 15 002 → 1 752 files staged. It took
+  two rounds of review and a second design pass to be right, and both are
+  recorded:
+  - A Codex review found that removing the staging copy had removed a
+    *snapshot* three things depended on. Two were fixed in the exporter —
+    the skill catalogue and the enabled-skills selection are rewritten in
+    place, so they are staged like documents, and a symlinked selection
+    could have had a pass publish a file from outside the library.
+  - The third could not be: compaction rewrites revision history *inside*
+    the pass, and again on a background queue when a workspace is opened. So
+    `0009` has the upload digest the bytes it is about to send, which is what
+    the Lean model's `act` already specifies. Moving the pass's preparation
+    earlier was measured and rejected — see the record; it does not close the
+    hole, and on a settled history it costs 520 ms a pass.
+  - A pass now publishes only an ordinary file (`0010`), after two reviews
+    found that removing the staging copy had also removed a symlink check
+    nobody had decided on. Two gaps stay open and are written into that
+    record: a symbolic link among a recorded path's *ancestors*, and two
+    published paths differing only in case on the **receiving** Mac.
+  - Extending `keepsDigestAgainstIdentity` to the recorded kinds is **open**,
+    and the one thing left of this item. Closed first on a measurement that
+    measured a warm re-read rather than a cache hit — `describe` skips the
+    cache for these kinds, so timing a second run over them says nothing.
+    Measured properly it is **710 → 177 ms**, of which about 470 ms is
+    reachable — a staged file cannot be cached — against a 1.8 s pass.
+    The obstacle is that `.workspaceFile` covers both the kinds whose bytes
+    are fixed at a path and the ones snapshotted into scratch every pass.
 
 ### Phase 3 — iOS
 

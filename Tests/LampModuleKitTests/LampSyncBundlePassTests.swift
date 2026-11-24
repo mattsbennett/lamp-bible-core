@@ -1012,6 +1012,158 @@ struct LampSyncBundlePassTests {
         #expect(library.installed.isEmpty)
     }
 
+    /// A local file rewritten after the pass gathered it is published as it
+    /// now stands, and recorded under *that* digest.
+    ///
+    /// The pass used to reuse the digest from the gather for any path whose
+    /// URL it had been handed, while sending whatever the file held by then.
+    /// That records one thing and sends another, and a later revert to the
+    /// recorded bytes then reads as already synced and is never published.
+    /// `Documentation/decisions/0009`.
+    @Test func aFileRewrittenBeforeTheUploadIsRecordedAsItWasSent() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        let url = try makeFile("as gathered")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        let library = StubLibrary()
+        // Where the Mac compacts: after the plan, before the publish.
+        library.onFinish = { try? Data("as sent".utf8).write(to: url) }
+
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { gathered([local(path, url, "as gathered")]) },
+                 records: &records, patience: immediate)
+
+        #expect(outcome.uploaded == [path])
+        #expect(outcome.failures.isEmpty)
+        #expect(store.bodies[path] == Data("as sent".utf8), "the bytes that went up")
+        #expect(
+            records.record(path, in: source)?.uploadedDigest
+                == LampSyncContentRevision.digest(for: Data("as sent".utf8)),
+            "recorded as what was sent, not as what was gathered"
+        )
+    }
+
+    /// An upload is sent from a copy of the file, not from the file.
+    ///
+    /// Hashing the live path and then letting the store open it again leaves
+    /// the two reads free to see different bytes: a file that went A, B, A
+    /// across the hash, the PUT and the read-back confirmation would send A
+    /// and record B. One copy, hashed and sent and confirmed, is the only
+    /// way the recorded digest is a statement about what went up.
+    /// `Documentation/decisions/0009`.
+    @Test func anUploadIsSentFromACopyOfTheFile() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        let url = try makeFile("the local copy")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+
+        let outcome = try await LampSyncBundlePass(store: store, library: StubLibrary(), source: source)
+            .run(gathering: { gathered([local(path, url, "the local copy")]) },
+                 records: &records, patience: immediate)
+
+        #expect(outcome.uploaded == [path])
+        let sentFrom = try #require(store.sentFrom[path])
+        #expect(sentFrom != url, "sent from a copy, not from the candidate's own path")
+        #expect(
+            sentFrom.lastPathComponent.hasPrefix(LampSyncScratchFile.prefix),
+            "and the copy is a scratch file"
+        )
+        #expect(store.bodies[path] == Data("the local copy".utf8))
+        // The copy does not outlive the upload.
+        #expect(!FileManager.default.fileExists(atPath: sentFrom.path))
+    }
+
+    /// A candidate that has become a symbolic link is not published, and
+    /// nothing it points at goes up.
+    ///
+    /// A candidate may name a live file in the library rather than a copy, so
+    /// a path can be a regular file when it is offered and a link by the time
+    /// it is sent. `copyItem` copies the link, not the bytes, so the copy has
+    /// to be checked — and checking the copy rather than the source is what
+    /// makes it unraceable. `Documentation/decisions/0011`.
+    @Test func aCandidateThatBecameASymlinkIsNotPublished() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        let url = try makeFile("the local copy")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let outside = try makeFile("not for the server")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        let library = StubLibrary()
+        // After the plan, before the publish.
+        library.onFinish = {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.createSymbolicLink(at: url, withDestinationURL: outside)
+        }
+
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { gathered([local(path, url, "the local copy")]) },
+                 records: &records, patience: immediate)
+
+        #expect(outcome.uploaded.isEmpty)
+        #expect(outcome.failures.count == 1)
+        #expect(store.bodies[path] == Data("remote".utf8), "the server is untouched")
+        for (_, sent) in store.sentFrom {
+            #expect((try? Data(contentsOf: sent)) != Data("not for the server".utf8))
+        }
+    }
+
+    /// A local file gone by the time the pass would publish it is not a
+    /// failure: nothing is sent and nothing recorded, and the next pass
+    /// publishes whatever replaced it.
+    ///
+    /// Compaction does exactly this — it writes a merged revision and
+    /// deletes the two it replaces — so a pass that reported a failure here
+    /// would report one on any pass that imported a workspace.
+    @Test func aFileDeletedBeforeTheUploadIsNotAFailure() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        let url = try makeFile("as gathered")
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        let library = StubLibrary()
+        library.onFinish = { try? FileManager.default.removeItem(at: url) }
+
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: { gathered([local(path, url, "as gathered")]) },
+                 records: &records, patience: immediate)
+
+        #expect(outcome.changedDuringPass == [path])
+        #expect(outcome.failures.isEmpty)
+        #expect(outcome.uploaded.isEmpty)
+        #expect(store.bodies[path] == Data("remote".utf8), "the server is untouched")
+        #expect(
+            records.record(path, in: source)?.uploadedDigest
+                == LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            "and nothing new is recorded against it"
+        )
+    }
+
     /// A copy the person edits after the pass planned to delete it is not
     /// deleted: the edit came after the deletion, which the next pass, given
     /// its save time, keeps.
@@ -2110,7 +2262,14 @@ final class StubLibrary: LampSyncPassLibrary, @unchecked Sendable {
     var finishFails = false
     struct FinishFailed: Error {}
 
+    /// Called where the Mac takes in a workspace tree — which is also where
+    /// it compacts revision history, rewriting and deleting local files
+    /// after the pass planned and before it publishes. A test stands in for
+    /// that here.
+    var onFinish: (() -> Void)?
+
     func finishInstalling() async throws {
+        onFinish?()
         if finishFails { throw FinishFailed() }
     }
 }
@@ -2170,6 +2329,21 @@ private final class FakeStore: LampSyncRemoteStore, @unchecked Sendable {
             return lag.revision
         }
         return revisions[path]
+    }
+
+    /// The file each upload was sent from, so a test can show that it was
+    /// not the candidate's own path.
+    var sentFrom: [String: URL] = [:]
+
+    func write(
+        fileAt url: URL,
+        to path: String,
+        condition: LampSyncWriteCondition
+    ) async throws -> String? {
+        sentFrom[path] = url
+        return try await write(
+            Data(contentsOf: url, options: .alwaysMapped), to: path, condition: condition
+        )
     }
 
     func write(

@@ -156,7 +156,10 @@ struct LampOpenDatabaseBoundTests {
         let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
 
         // More modules than the cache keeps, each read once.
-        let count = 60
+        // Comfortably more than the forty-eight the cache keeps, so that
+        // holding one per module is plainly distinguishable from holding the
+        // bound.
+        let count = 120
         for index in 0..<count {
             let id = "BOUND\(index)"
             let archive = root.appendingPathComponent("\(id).lamp")
@@ -182,6 +185,28 @@ struct LampOpenDatabaseBoundTests {
         // Reading sixty modules must not leave sixty files open. The bound is
         // forty-eight, and installs opened some of these already, so the test
         // is that the count did not grow by one per module.
-        #expect(after - opened < count, "held \(after - opened) descriptors for \(count) modules")
+        //
+        // `/dev/fd` is the whole process, and the suite runs in parallel, so
+        // a few descriptors of somebody else's can land between the two
+        // counts — which is exactly what made this fail once in a full run
+        // and pass every time on its own. The margin absorbs that and is
+        // nowhere near the failure it is here to catch: unbounded means one
+        // per module, sixty, against a bound of forty-eight.
+        // Against the bound, not against the module count: holding exactly
+        // forty-eight is the cache working, and the first version of this
+        // asked only that the number be under sixty — which forty-eight
+        // satisfies either way, so it would have passed with the bound
+        // removed had the limit been anything above sixty.
+        //
+        // The margin is for `/dev/fd` being the whole process: the suite
+        // runs in parallel, so a few descriptors of somebody else's can land
+        // between the two counts, which is what made this fail once in a
+        // full run and pass every time on its own.
+        let bound = 48
+        let noise = 16
+        #expect(
+            after - opened <= bound + noise,
+            "held \(after - opened) descriptors for \(count) modules, bound \(bound)"
+        )
     }
 }

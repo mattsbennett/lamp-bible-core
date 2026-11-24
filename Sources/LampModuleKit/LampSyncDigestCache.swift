@@ -14,7 +14,7 @@ import Foundation
 ///    means what it looks like.
 /// 2. **The kind.** Only the kinds that are immutable at a path — a module
 ///    file, a book picture, a deck image, a writing's or a note's media.
-///    `LampSyncFileKind.isImmutableAtItsPath` says which.
+///    `LampSyncFileKind.keepsDigestAgainstIdentity` says which.
 /// 3. **The process.** In memory, so the first pass after launch reads
 ///    everything. Nothing is written down, because across launches the
 ///    inode's namespace (`st_dev`) moves on every remount of an external

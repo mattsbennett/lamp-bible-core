@@ -117,8 +117,9 @@ public struct LampSyncBundlePass {
         /// this client already held: fetched, compared, and left alone.
         public var alreadyInStep: [String] = []
         /// Files changed here while the pass ran, after it planned to take
-        /// the other side's copy or delete this one. Left alone: the next
-        /// pass sees the edit and merges it, or keeps the copy. Not a failure.
+        /// the other side's copy, delete this one, or publish it. Left
+        /// alone: the next pass sees the edit and merges it, keeps the copy,
+        /// or publishes what replaced it. Not a failure.
         public var changedDuringPass: [String] = []
         /// A file the server would not take, or one whose work failed. The
         /// pass carries on and reports, rather than abandoning the rest.
@@ -247,6 +248,24 @@ public struct LampSyncBundlePass {
     /// sees the whole listing, so a tombstone waiting for its file to be
     /// reaped is kept whoever plans what.
     ///
+    /// Whether an error from reading a file says the file is not there, as
+    /// against there and unreadable.
+    ///
+    /// The two belong in different places — an absent copy is the model's
+    /// `copy = none`, which sends nothing and is no failure, while a file
+    /// that cannot be read is a failure to report — and
+    /// `fileExists(atPath:)` cannot tell them apart: it answers false for a
+    /// file inside a directory that has stopped being searchable.
+    private static func namesAMissingFile(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain, error.code == NSFileNoSuchFileError { return true }
+        if error.domain == NSPOSIXErrorDomain, error.code == Int(ENOENT) { return true }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? Error {
+            return namesAMissingFile(underlying)
+        }
+        return false
+    }
+
     /// `confirmByReading` says which uploads that come back without a
     /// revision are confirmed by reading the body back; the rest are asked
     /// for their revision only, so a translation is not downloaded again to
@@ -514,11 +533,74 @@ public struct LampSyncBundlePass {
                 ? (republish[path] ?? filesByPath[path]?.url)
                 : republish[path]
             else { continue }
-            let digest = url == filesByPath[path]?.url
-                ? filesByPath[path]?.digest
-                : (try? LampSyncContentRevision.digest(forFileAt: url))
-            guard let digest else {
-                outcome.failures.append("\(path): its file could not be read")
+            // One copy of the file, taken here, hashed here and sent from
+            // here — because a candidate may name a **live** file rather
+            // than a copy of it (`LampWorkspaceSync.WorkspaceExportRecord`,
+            // `Documentation/decisions/0008`), and a live file can be
+            // rewritten or deleted between the plan and this line: the Mac's
+            // own import compacts revision history, and opening a workspace
+            // compacts it on a background queue.
+            //
+            // The digest has to be of the bytes that went up. Taking it from
+            // the plan sends one thing and records another, and a later
+            // revert to the recorded bytes then reads as already synced and
+            // is never published. Taking it from the live file instead is not
+            // enough either: the PUT opens the path again, and so does the
+            // read-back confirmation, so a file that went A, B, A across
+            // those reads would send A and record B. Found by a Codex
+            // review of the first version of this, which did exactly that.
+            //
+            // A copy is affordable here where it was not in the gather,
+            // which is the whole of `0008`: this runs for the handful of
+            // files a pass actually uploads, not for every candidate it
+            // considered, and `copyItem` on APFS clones.
+            //
+            // Sending what is held now is what the model says: `act`'s
+            // upload arm sends `(w.device who).copy` — the copy at act time
+            // — and `send` records `encode who content` of what it sent.
+            // `planned` gates `download` and `deleteLocally` there, never
+            // `upload` (`Verification/SyncMerge.lean`).
+            let sending = LampSyncScratchFile.url()
+            defer { try? FileManager.default.removeItem(at: sending) }
+            let digest: String
+            // A pass publishes an ordinary file and nothing else — not a
+            // symbolic link, whose target is any file this app can read, and
+            // not a directory. A hard link is ordinary and passes, which the
+            // workspace context store relies on
+            // (`Documentation/decisions/0010`).
+            //
+            // Asked of the source first, so a path that has become a
+            // directory is refused rather than copied tree and all; then of
+            // the copy, because `copyItem` on a symbolic link copies the
+            // **link**, and a check of the source alone is a check of a path
+            // the copy need not have followed to the same place.
+            // A source that is *gone* falls through to the copy below, which
+            // fails and is reported as changed rather than failed.
+            if LampFileIdentity.whatIs(at: url) == .somethingElse {
+                outcome.failures.append("\(path): it is not an ordinary file")
+                continue
+            }
+            do {
+                try FileManager.default.copyItem(at: url, to: sending)
+                guard LampFileIdentity.isOrdinaryFile(at: sending) else {
+                    outcome.failures.append("\(path): it is not an ordinary file")
+                    continue
+                }
+                digest = try LampSyncContentRevision.digest(forFileAt: sending)
+            } catch {
+                // A source gone since the plan: the model holds no copy to
+                // send and records nothing, and the next pass publishes
+                // whatever replaced it. Anything else is a failure to report,
+                // as it always was — a file there but unreadable, a
+                // directory that has stopped being searchable, or a scratch
+                // directory that went away under the pass, which `copyItem`
+                // also reports as a missing file. So the source is asked
+                // about directly rather than the error being read for it.
+                if (try? LampFileIdentity(url: url)) == nil, Self.namesAMissingFile(error) {
+                    outcome.changedDuringPass.append(path)
+                } else {
+                    outcome.failures.append("\(path): its file could not be read")
+                }
                 continue
             }
             // A PUT that answers without an ETag leaves this client with no
@@ -538,7 +620,7 @@ public struct LampSyncBundlePass {
             let kind = LampSyncFolderLayout.kind(of: path)
             do {
                 switch try await LampSyncConditionalWrite.write(
-                    fileAt: url, to: path, in: store, condition: condition, patience: patience,
+                    fileAt: sending, to: path, in: store, condition: condition, patience: patience,
                     confirm: kind.map(confirmByReading) == true ? .reading : .revision
                 ) {
                 case .written(let revision):

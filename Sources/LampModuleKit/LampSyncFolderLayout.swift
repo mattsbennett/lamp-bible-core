@@ -46,10 +46,26 @@ public enum LampSyncFileKind: Hashable, Sendable {
     /// rename, which moves the inode.
     ///
     /// Not the small, mutable things, where there is nothing to save and a
-    /// trust to avoid: a deck is edited in place as somebody types, a review
-    /// mark is a few hundred bytes, and a workspace file is exported into a
-    /// fresh scratch directory on every pass, so it has a new inode every
-    /// time and would never be answered from a cache anyway.
+    /// trust to avoid: a deck is edited in place as somebody types, and a
+    /// review mark is a few hundred bytes.
+    ///
+    /// Nor a workspace file, though the reason changed with
+    /// `decisions/0008`: a pass no longer copies most of them into a fresh
+    /// scratch directory, so they no longer have a new inode every time.
+    /// What rules them out now is that one kind covers files rewritten in
+    /// place (a custom skill, the enabled-skills selection) and files
+    /// deleted and replaced (a revision, by compaction) alongside ones that
+    /// are fixed at their path — and separating them would mean splitting a
+    /// kind that `isTakenInTogether`, `isListed` and the server layout all
+    /// key on, or moving the trust off the kind and onto the candidate.
+    ///
+    /// Worth doing: measured at 250 workspaces, answering every digest from
+    /// the cache takes the digesting from about 710 ms to 177 ms, and some
+    /// 470 ms of that is reachable — the staged files get a new scratch path
+    /// every pass, so only the recorded ones could ever hit. Against a 1.8 s
+    /// pass. See
+    /// `Documentation/decisions/0008`, whose first figure for this was wrong
+    /// by a factor of three and a half.
     public var keepsDigestAgainstIdentity: Bool {
         switch self {
         case .module, .devotionalMedia, .noteMedia, .bookMedia, .deckAsset: true
