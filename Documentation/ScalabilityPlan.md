@@ -528,7 +528,31 @@ collection, and not before.
   phone, which asserts the index says the same thing whichever way it was
   filled. Recommended, with the drop, the insert and the rebuild in one write
   transaction so that a crash cannot leave an index that silently returns
-  nothing.
+  nothing. **Done**, on the phone, in
+  `ExternalContentSearchIndex.acrossABulkImport`, wrapped around the
+  replacement and the row copy in `ModuleSyncManager`'s existing
+  `BEGIN IMMEDIATE`.
+
+  Two things the first answer had wrong, both measured:
+
+  - **`'rebuild'` is the wrong instrument.** It reindexes the whole content
+    table, so it costs 23 ms with nothing installed and **280 ms with six
+    translations** — it grows with the library. Indexing only what the import
+    added, in one statement, is **26–58 ms whatever is installed**. So the
+    saving stays two and a half times however large the library gets, where
+    with `'rebuild'` the trade would have inverted somewhere past a dozen
+    translations.
+  - **"Rows added since a high-water mark" is unsound.** A content table
+    without `AUTOINCREMENT` can reuse a rowid the replacement's delete just
+    freed, and such a row lands *below* the mark and would never be indexed —
+    search would miss it for good, silently. What is asked for instead is
+    every row the index has no entry for, read from its own `_docsize`
+    shadow table.
+
+  Only the **insert** trigger is dropped: a replacement's deletions have to
+  reach the index, or it keeps entries for rows that are gone.
+  `TranslationImportTests` now asserts the imported translation is
+  *findable*, and fails without the indexing step.
 - ~~**3e. The digest cache on the phone**~~ **done**, `decisions/0007`: the
   phone's media and book pictures go through the same gate and the same cache.
 

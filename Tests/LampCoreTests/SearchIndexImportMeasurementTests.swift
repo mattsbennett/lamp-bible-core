@@ -112,6 +112,82 @@ struct SearchIndexImportMeasurementTests {
         return try body(queue)
     }
 
+    /// The rebuild is over the **whole content table**, not over the import,
+    /// so what it costs depends on how much is installed already. Measured
+    /// with a library of other translations in place, which is the case that
+    /// decides whether the trade holds.
+    @Test(.enabled(if: enabled()))
+    func measuresTheRebuildAgainstAnAlreadyFullLibrary() throws {
+        let importing = 31_000
+        let rows = verses(importing)
+        for installed in [0, 1, 3, 6] {
+            try withDatabase { queue in
+                try makeSchema(queue, triggers: false)
+                // What is already there, indexed, before this import starts.
+                for _ in 0..<installed { try insert(rows, into: queue) }
+                try queue.write { db in
+                    try db.execute(sql: """
+                        INSERT INTO translation_verses_fts(translation_verses_fts)
+                        VALUES ('rebuild')
+                        """)
+                }
+                let inserting = try timed { try insert(rows, into: queue) }
+                let rebuilding = try timed {
+                    try queue.write { db in
+                        try db.execute(sql: """
+                            INSERT INTO translation_verses_fts(translation_verses_fts)
+                            VALUES ('rebuild')
+                            """)
+                    }
+                }
+                // Every translation's verses are still findable, which is the
+                // property an index rebuilt wholesale has to hold.
+                let all = try matches(queue)
+                #expect(all == (installed + 1) * 24_260)
+
+                // And a third way: index only the rows this import added, in
+                // one statement. That is O(the import) rather than O(the
+                // table), and it is not the per-row work the triggers do.
+                let onlyTheNewRows = try withDatabase { second -> Double in
+                    try makeSchema(second, triggers: false)
+                    for _ in 0..<installed { try insert(rows, into: second) }
+                    try second.write { db in
+                        try db.execute(sql: """
+                            INSERT INTO translation_verses_fts(translation_verses_fts)
+                            VALUES ('rebuild')
+                            """)
+                    }
+                    let mark = try second.read {
+                        try Int.fetchOne(
+                            $0, sql: "SELECT COALESCE(max(id), 0) FROM translation_verses"
+                        ) ?? 0
+                    }
+                    try insert(rows, into: second)
+                    // Not `id > mark`: a table without AUTOINCREMENT can
+                    // reuse a rowid freed by the replacement's delete, and
+                    // such a row would land below the mark and never be
+                    // indexed. What is unindexed is the thing to ask for, and
+                    // the index's own shadow table says it.
+                    let ms = try timed {
+                        try second.write { db in
+                            try db.execute(sql: """
+                                INSERT INTO translation_verses_fts(rowid, text)
+                                SELECT id, text FROM translation_verses
+                                WHERE id NOT IN (SELECT rowid FROM translation_verses_fts_docsize)
+                                """)
+                        }
+                    }
+                    #expect(mark >= 0)
+                    #expect(try matches(second) == all)
+                    return ms
+                }
+                print("""
+                    SCALE installedAlready=\(installed) importing=\(importing)                     insertWithoutTriggers=\(String(format: "%.0f", inserting))ms                     rebuildAfterwards=\(String(format: "%.0f", rebuilding))ms                     indexOnlyTheNewRows=\(String(format: "%.0f", onlyTheNewRows))ms totalWithRebuild=\(String(format: "%.0f", inserting + rebuilding))ms totalWithNewRowsOnly=\(String(format: "%.0f", inserting + onlyTheNewRows))ms
+                    """)
+            }
+        }
+    }
+
     @Test(.enabled(if: enabled()))
     func measuresWhatTheSearchIndexCostsABulkImport() throws {
         let sizes = ProcessInfo.processInfo.environment["LAMP_SCALE_VERSES"]
