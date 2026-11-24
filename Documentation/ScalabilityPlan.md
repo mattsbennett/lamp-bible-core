@@ -96,8 +96,8 @@ Release figure will be lower but it is Foundation, so not by much.
 
 Ordered by what it costs the person, worst first.
 
-0. **A pass asks the server for the revision of every file a folder listing
-   does not reach — one request each, every pass.**
+0. ~~**A pass asks the server for the revision of every file a folder listing
+   does not reach — one request each, every pass.**~~ **Fixed.**
    `LibrarySyncController.swift`, at the end of the gather: `for member in
    manifest.members where !(member.kind?.isListed ?? true)` then
    `store.revision(path:)`. The unlisted kinds are every piece of media, every
@@ -111,17 +111,25 @@ Ordered by what it costs the person, worst first.
    phone deliberately asks only for its writing documents.
 
    Found by Fable while answering about the staging copy, after the rest of
-   this plan had landed, and **unmeasured** — count the calls in one pass
-   before fixing anything. It is network-bound, so no build setting touches
-   it. Three fixes, cheapest first: media revisions are never read by
-   `LampSyncFilePlan.change()` at all (only the missing-picture report uses
-   them), so stop asking per pass; workspace members could be one Depth:1
-   listing per workspace subfolder instead of ~56 HEADs, which changes nothing
-   in core; and taking the manifest's recorded revision instead would be
-   cheaper still but changes `asksRevision` in the Lean model. Writing
-   documents keep being asked, as the phone does.
+   this plan had landed.
 
-   This is the next thing to do, ahead of the staging copy below.
+   **Fixed**: their folders are listed instead — one request a folder rather
+   than one a file (`LampSyncLocalFiles.revisionsOfUnlistedMembers`). On
+   WebDAV a listing carries the same ETag a request for the file would have
+   returned, so what the plan is given does not change at all; where a
+   listing carries no revision, as the folder provider's does not, the file
+   is asked after as before, but only when the listing shows it is there — a
+   member that is absent used to cost a request that came back with nothing.
+   A folder that cannot be listed falls back to asking after each of its
+   members, so a server that refuses a listing behaves as it did.
+   `UnlistedMemberRevisionsTests` holds the revisions *and* the counts: a
+   thousand files across twenty folders is twenty requests.
+
+   What is left here, and deliberately not done: taking the manifest's
+   recorded revision instead of asking at all would be cheaper still, and it
+   changes `asksRevision` in the Lean model and widens the window in which
+   another Mac's half-finished pass is noticed. That wants a record of its
+   own before anybody writes it.
 
 1. **Slide Studio re-reads, decodes and validates every deck in the library once
    a second.** `SlideStudioView.swift:421` loop → `refreshDecksFromDisk:1348` →
