@@ -23,9 +23,14 @@ why this and not that.
 
 When a `Proposed` record lands, change its status and name what landed it — an
 earlier commit, or the tests that hold it, since a commit cannot cite its own
-hash. When a
-decision turns out to be wrong, write the next record and supersede this one
-rather than rewriting it.
+hash. When a decision turns out to be wrong, write the next record and
+supersede this one rather than rewriting it.
+
+A record is also where a *wrong* answer belongs, not only the right one. Three
+of these carry the keys and conditions that were tried first and failed, and
+why: a reader deciding whether to revisit one needs to know what has already
+been ruled out by something other than taste. 0002's first two keys were
+useless and then unsound; 0007 trusted a filesystem it should not have.
 
 Records 0001–0007 come out of the scalability pass of 2026-11-24
 (`../ScalabilityPlan.md`), which holds the measurements and the sequencing.
