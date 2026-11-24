@@ -255,6 +255,8 @@ struct LampPresentationEmbeddedPlayer: LampPlatformViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var loaded: String?
+        /// For a test: called when the page has loaded.
+        var onReady: (() -> Void)?
         /// The page has loaded, so a command reaches it, not the blank page
         /// before it.
         var pageReady = false
@@ -278,6 +280,7 @@ struct LampPresentationEmbeddedPlayer: LampPlatformViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             pageReady = true
+            onReady?()
             send(webView)
         }
 
@@ -286,15 +289,26 @@ struct LampPresentationEmbeddedPlayer: LampPlatformViewRepresentable {
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
-            navigationAction.targetFrame?.isMainFrame == false || navigationAction.request.url?.scheme == "about"
-                || navigationAction.request.url == LampPresentationStreamedClip.embedOrigin
+            Self.allows(navigationAction.request.url, inMainFrame: navigationAction.targetFrame?.isMainFrame ?? true)
                 ? .allow : .cancel
+        }
+
+        /// The page itself (which WebKit names with a trailing slash, so a
+        /// comparison of whole addresses turned it away and nothing ever
+        /// played) and anything in the player's own frame; nothing else in
+        /// the main frame, so a click in the player cannot take it elsewhere.
+        static func allows(_ url: URL?, inMainFrame: Bool) -> Bool {
+            guard inMainFrame else { return true }
+            guard let url else { return false }
+            if url.scheme == "about" { return true }
+            let origin = LampPresentationStreamedClip.embedOrigin
+            return url.scheme == origin.scheme && url.host == origin.host && (url.path.isEmpty || url.path == "/")
         }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    private func makeWebView(_ coordinator: Coordinator) -> WKWebView {
+    func makeWebView(_ coordinator: Coordinator) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.mediaTypesRequiringUserActionForPlayback = []
@@ -312,7 +326,7 @@ struct LampPresentationEmbeddedPlayer: LampPlatformViewRepresentable {
         return view
     }
 
-    private func update(_ view: WKWebView, _ coordinator: Coordinator) {
+    func update(_ view: WKWebView, _ coordinator: Coordinator) {
         guard let page = LampPresentationStreamedClip.page(for: origin, start: start, end: end) else { return }
         if coordinator.loaded != page {
             coordinator.loaded = page
