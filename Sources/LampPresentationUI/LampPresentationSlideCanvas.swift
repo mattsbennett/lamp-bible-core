@@ -237,7 +237,9 @@ public struct LampPresentationSlideCanvas: View {
         .task(id: playing) {
             // One video a slide: the picture behind it, else the one framed.
             guard let playing else { return }
-            let started = LampPresentationVideoPlayback(url: playing.url, tint: playing.tint, theme: style.theme)
+            guard let started = await LampPresentationVideoPlayback.prepared(
+                url: playing.url, tint: playing.tint, theme: style.theme
+            ), !Task.isCancelled else { return }
             started.start()
             playback = started
             while !Task.isCancelled {
@@ -295,7 +297,10 @@ public struct LampPresentationSlideCanvas: View {
                             aspectRatio: style.aspectRatio,
                             theme: style.theme,
                             look: backdropLook,
-                            moments: regions.isEmpty ? 1 : sampled.count / regions.count
+                            moments: regions.isEmpty ? 1 : sampled.count / regions.count,
+                            // A video's frames are not known ahead, so the
+                            // words are set to read over anything one shows.
+                            overAnything: plan.background?.video != nil
                         ) {
                             let _ = reportsBackdrop?(treatment)
                             ZStack(alignment: .topLeading) {

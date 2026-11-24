@@ -27,27 +27,66 @@ final class LampPresentationVideoPlayback {
     @ObservationIgnored private var orientation: CGAffineTransform = .identity
     @ObservationIgnored private let tint: LampPresentationImageTint?
     @ObservationIgnored private let theme: LampPresentationTheme
+    /// The sound tracks the played item carries, which is none.
+    @ObservationIgnored private(set) var soundTracks = 0
 
     /// Frames are asked for this often. A slow background loop needs no more,
     /// and every frame is a conversion the presenter's machine pays for.
     static let framesPerSecond = 30.0
 
-    init(url: URL, tint: LampPresentationImageTint?, theme: LampPresentationTheme) {
+    /// A playback of the video at `url`, or nil where it has no pictures to
+    /// play, or none that last: the still stands in, rather than the looper
+    /// refusing an empty clip by bringing the presenter down.
+    ///
+    /// Played from its pictures alone. A silent picture needs no sound, and
+    /// a muted player still holding a soundtrack can take the device's audio
+    /// and stop the music someone was listening to.
+    static func prepared(
+        url: URL,
+        tint: LampPresentationImageTint?,
+        theme: LampPresentationTheme
+    ) async -> LampPresentationVideoPlayback? {
+        let asset = AVURLAsset(url: url)
+        // The picture track the file shows and Lamp can play: a file may
+        // carry another, hidden or in a form this device cannot decode.
+        var shown: (track: AVAssetTrack, range: CMTimeRange)?
+        for candidate in (try? await asset.loadTracks(withMediaType: .video)) ?? [] {
+            guard (try? await candidate.load(.isEnabled)) == true,
+                  (try? await candidate.load(.isPlayable)) == true,
+                  let range = try? await candidate.load(.timeRange),
+                  range.duration.seconds.isFinite, range.duration.seconds > 0
+            else { continue }
+            shown = (candidate, range)
+            break
+        }
+        guard let (track, range) = shown,
+              // A phone films upright by recording sideways and saying so;
+              // the frames arrive as recorded.
+              let transform = try? await track.load(.preferredTransform)
+        else { return nil }
+        let composition = AVMutableComposition()
+        guard let pictures = composition.addMutableTrack(
+            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
+        ), (try? pictures.insertTimeRange(range, of: track, at: .zero)) != nil
+        else { return nil }
+        return LampPresentationVideoPlayback(
+            item: AVPlayerItem(asset: composition), orientation: transform, tint: tint, theme: theme
+        )
+    }
+
+    private init(
+        item: AVPlayerItem,
+        orientation: CGAffineTransform,
+        tint: LampPresentationImageTint?,
+        theme: LampPresentationTheme
+    ) {
         self.tint = tint
         self.theme = theme
-        let asset = AVURLAsset(url: url)
-        let template = AVPlayerItem(asset: asset)
+        self.orientation = orientation
+        soundTracks = item.asset.tracks.filter { $0.mediaType == .audio }.count
         player.isMuted = true
         player.actionAtItemEnd = .advance
-        looper = AVPlayerLooper(player: player, templateItem: template)
-        Task { [weak self] in
-            // A phone films upright by recording sideways and saying so; the
-            // frames arrive as recorded.
-            guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-                  let transform = try? await track.load(.preferredTransform)
-            else { return }
-            self?.orientation = transform
-        }
+        looper = AVPlayerLooper(player: player, templateItem: item)
     }
 
     /// `frame` turned as a track's `preferredTransform` says it is shown.

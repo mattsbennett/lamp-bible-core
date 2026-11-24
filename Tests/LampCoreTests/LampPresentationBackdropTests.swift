@@ -261,6 +261,39 @@ struct LampPresentationBackdropTests {
         }
     }
 
+    @Test("Words over a video read over anything a frame could show")
+    func wordsOverAVideoReadOverAnything() {
+        // A still that is all dark: alone, white words need no cover at all.
+        let dark = LampPresentationBackdrop.uniform(LampPresentationColor(hex: "#101010")!)
+        let still = dark.treatment(for: wholeSlide, theme: .lampDark)
+        #expect(still.scrimOpacities == [0])
+        let video = dark.treatment(for: wholeSlide, theme: .lampDark, overAnything: true)
+        #expect(video.scrimOpacities.count == 1)
+        let ink = LampPresentationColor(hex: video.text)!
+        let scrim = LampPresentationColor(hex: video.scrim)!
+        for frame in (0...100).map({ LampPresentationColor(red: Double($0) / 100, green: Double($0) / 100, blue: Double($0) / 100) }) {
+            #expect(LampPresentationBackdrop.contrast(
+                of: ink, over: [.init(darkest: frame, lightest: frame)], scrim: scrim, opacity: video.scrimOpacities[0]
+            ) >= LampPresentationBackdrop.targetContrast)
+        }
+    }
+
+    @Test("Grey words over a video are covered for grey frames too")
+    func greyWordsOverAVideoAreCoveredForGreyFrames() {
+        let theme = LampPresentationTheme(
+            id: "grey-on-white", backgroundColor: "#FFFFFF", foregroundColor: "#757575", accentColor: "#757575"
+        )
+        let white = LampPresentationBackdrop.uniform(LampPresentationColor(red: 1, green: 1, blue: 1))
+        let video = white.treatment(for: wholeSlide, theme: theme, overAnything: true)
+        let ink = LampPresentationColor(hex: video.text)!
+        let scrim = LampPresentationColor(hex: video.scrim)!
+        // The words' own grey is the frame that would hide them.
+        let same = LampPresentationColor(hex: "#757575")!
+        #expect(LampPresentationBackdrop.contrast(
+            of: ink, over: [.init(darkest: same, lightest: same)], scrim: scrim, opacity: video.scrimOpacities[0]
+        ) >= LampPresentationBackdrop.targetContrast - 0.1)
+    }
+
     @Test("Fine black lines on white paper count as both, not as their grey average")
     func engravingIsReadAsLinesAndPaper() {
         let mixed = LampPresentationBackdrop.Cell(darkest: black, lightest: white)

@@ -261,10 +261,17 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
     /// block is covered as much as its worst moment needs, and the colours
     /// are chosen, and an accent kept, only where they read at every moment
     /// under that cover. `scrimOpacities` then has one entry a block.
+    ///
+    /// `overAnything` is for a picture whose later look is not known, a
+    /// video: each block is also judged over a moment where anything at all
+    /// lies behind it, every grey from black to white in steps fine enough
+    /// that none between is far from one judged, so the words read whatever
+    /// a frame shows and never change colour as it plays.
     public func treatment(
         for regions: [CGRect],
         theme: LampPresentationTheme,
-        moments: Int = 1
+        moments: Int = 1,
+        overAnything: Bool = false
     ) -> Treatment {
         let moments = moments > 0 && regions.count % moments == 0 ? moments : 1
         let blockCount = regions.count / moments
@@ -272,7 +279,17 @@ public struct LampPresentationBackdrop: Equatable, Sendable {
             ?? .init(red: 1, green: 1, blue: 1)
         let ground = LampPresentationColor(hex: theme.backgroundColor)
             ?? .init(red: 0, green: 0, blue: 0)
-        let blocks = regions.map { cells(under: [$0]) }
+        var blocks = regions.map { cells(under: [$0]) }
+        if overAnything, blockCount > 0 {
+            // Nineteen, so the share of a block the target forgives
+            // (`coverage`) forgives none of them.
+            let anything = (0...18).map { step in
+                let grey = Double(step) / 18
+                let color = LampPresentationColor(red: grey, green: grey, blue: grey)
+                return Cell(darkest: color, lightest: color)
+            }
+            blocks += Array(repeating: anything, count: blockCount)
+        }
 
         struct Option {
             var ink: LampPresentationColor
