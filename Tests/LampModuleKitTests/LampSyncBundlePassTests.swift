@@ -1128,6 +1128,153 @@ struct LampSyncBundlePassTests {
         }
     }
 
+    /// A revision compaction removes mid-pass is reported as changed, not as
+    /// a failure, even though it said it was fixed at its path.
+    ///
+    /// Compaction writes a merged revision and deletes the ones it replaces,
+    /// and it runs inside the pass. The first version of the identity check
+    /// ran before the copy and read a failed `stat` as "a different file",
+    /// so ordinary compaction turned into a sync error the writer would see.
+    /// `Documentation/decisions/0011`.
+    @Test func aFixedFileCompactionRemovedIsChangedAndNotAFailure() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        let url = try makeFile("the gathered revision")
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        let library = StubLibrary()
+        library.onFinish = { try? FileManager.default.removeItem(at: url) }
+
+        let gathered = LampSyncLocalFiles.describe([
+            LampSyncLocalFiles.Candidate(
+                path: path, kind: .workspaceFile, url: url, isFixedAtItsPath: true
+            ),
+        ])
+        #expect(gathered.files.first?.isFixedAtItsPath == true)
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: {
+                var result = LampSyncBundlePass.Gathered()
+                result.local = gathered.files
+                return result
+            }, records: &records, patience: immediate)
+
+        #expect(outcome.changedDuringPass == [path])
+        #expect(outcome.failures.isEmpty)
+        #expect(outcome.uploaded.isEmpty)
+    }
+
+    /// A fixed file relinked to a new inode with the same bytes is still
+    /// published.
+    ///
+    /// This is what a pass does to its own context files: consolidating the
+    /// shared object store links the object over the workspace path, so the
+    /// inode moves and the bytes do not. Comparing the file's identity
+    /// refused those uploads and reported a failure the pass had caused
+    /// itself; comparing the bytes is the question actually being asked.
+    @Test func aFixedFileRelinkedWithTheSameBytesIsStillPublished() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        let url = try makeFile("as gathered")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        let library = StubLibrary()
+        // Relinked: a new inode at the same path, holding the same bytes, as
+        // consolidation does.
+        library.onFinish = {
+            let shared = url.deletingLastPathComponent()
+                .appendingPathComponent("object-\(UUID().uuidString)")
+            try? Data("as gathered".utf8).write(to: shared)
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.linkItem(at: shared, to: url)
+        }
+
+        let gathered = LampSyncLocalFiles.describe([
+            LampSyncLocalFiles.Candidate(
+                path: path, kind: .workspaceFile, url: url, isFixedAtItsPath: true
+            ),
+        ])
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: {
+                var result = LampSyncBundlePass.Gathered()
+                result.local = gathered.files
+                return result
+            }, records: &records, patience: immediate)
+
+        #expect(outcome.failures.isEmpty)
+        #expect(outcome.uploaded == [path])
+        #expect(store.bodies[path] == Data("as gathered".utf8))
+    }
+
+    /// A file whose *directory* was replaced by a link after the gather is
+    /// not published, where the app said that file was fixed at its path.
+    ///
+    /// The leaf check cannot see this: `copyItem` resolves the directories on
+    /// the way, so the copy is an ordinary file holding bytes from outside
+    /// the library. What catches it is that the identity moved — a different
+    /// inode on the way to a different file — which a pass may only insist
+    /// on for a file the app said nothing rewrites where it sits.
+    /// `Documentation/decisions/0011`.
+    @Test func aPathWhoseDirectoryBecameALinkIsNotPublished() async throws {
+        let path = try LampSyncFolderLayout.deckPath(deckID: "easter")
+        let store = try seeded(path: path, revision: "\"r1\"")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-pass-\(UUID().uuidString)")
+        let inside = root.appendingPathComponent("context", isDirectory: true)
+        let elsewhere = root.appendingPathComponent("elsewhere", isDirectory: true)
+        for directory in [inside, elsewhere] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = inside.appendingPathComponent("passage.md")
+        try Data("the gathered bytes".utf8).write(to: url)
+        try Data("not for the server".utf8)
+            .write(to: elsewhere.appendingPathComponent("passage.md"))
+
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: LampSyncContentRevision.digest(for: Data("remote".utf8)),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        let library = StubLibrary()
+        // After the plan, before the publish: the directory, not the file.
+        library.onFinish = {
+            try? FileManager.default.removeItem(at: inside)
+            try? FileManager.default.createSymbolicLink(at: inside, withDestinationURL: elsewhere)
+        }
+
+        let gathered = LampSyncLocalFiles.describe([
+            LampSyncLocalFiles.Candidate(
+                path: path, kind: .workspaceFile, url: url, isFixedAtItsPath: true
+            ),
+        ])
+        let outcome = try await LampSyncBundlePass(store: store, library: library, source: source)
+            .run(gathering: {
+                var result = LampSyncBundlePass.Gathered()
+                result.local = gathered.files
+                return result
+            }, records: &records, patience: immediate)
+
+        #expect(outcome.uploaded.isEmpty)
+        #expect(outcome.failures.count == 1)
+        #expect(store.bodies[path] == Data("remote".utf8), "the server is untouched")
+        for (_, sent) in store.sentFrom {
+            #expect((try? Data(contentsOf: sent)) != Data("not for the server".utf8))
+        }
+    }
+
     /// A local file gone by the time the pass would publish it is not a
     /// failure: nothing is sent and nothing recorded, and the next pass
     /// publishes whatever replaced it.

@@ -12,9 +12,13 @@ import Foundation
 ///
 /// 1. **The filesystem.** Only where `LampSyncIdentityTrust` says an identity
 ///    means what it looks like.
-/// 2. **The kind.** Only the kinds that are immutable at a path — a module
-///    file, a book picture, a deck image, a writing's or a note's media.
-///    `LampSyncFileKind.keepsDigestAgainstIdentity` says which.
+/// 2. **The file being fixed at its path.** The kinds that always are — a
+///    module file, a book picture, a deck image, a writing's or a note's
+///    media — by `LampSyncFileKind.keepsDigestAgainstIdentity`; and, file by
+///    file, the candidates an app says are, by
+///    `LampSyncLocalFiles.Candidate.isFixedAtItsPath`, where one kind covers
+///    both sorts and only the app can tell them apart
+///    (`Documentation/decisions/0011`).
 /// 3. **The process.** In memory, so the first pass after launch reads
 ///    everything. Nothing is written down, because across launches the
 ///    inode's namespace (`st_dev`) moves on every remount of an external
@@ -30,8 +34,33 @@ public final class LampSyncDigestCache: @unchecked Sendable {
     private var answered = 0
     /// How many files were read.
     private var read = 0
+    /// The device whose files this cache will answer for, where its maker
+    /// named one.
+    ///
+    /// The trust in `0007` is a property of a **filesystem**, and a caller
+    /// decides it by asking what the library root sits on. A library can
+    /// have another volume mounted inside it, and the files under that mount
+    /// are on a filesystem nobody vouched for — so a cache made for an APFS
+    /// library would otherwise answer for a file on an exFAT stick beneath
+    /// it, where a replacement can keep the identity it reported. Caught by
+    /// a Codex review of `0011`, which is what made a workspace file
+    /// eligible at all.
+    private let trustedDevice: Int64?
 
-    public init() {}
+    /// - Parameter trustedDevice: the `st_dev` the caller checked. Files on
+    ///   any other device are read rather than answered. Nil answers for
+    ///   any device, which is for a caller with nothing mounted inside what
+    ///   it is caching — a test, or the phone's own library.
+    public init(trustedDevice: Int64? = nil) {
+        self.trustedDevice = trustedDevice
+    }
+
+    /// Whether this cache will keep anything about a file with this
+    /// identity. False for a file on a device its maker did not vouch for,
+    /// so a caller can skip the work of offering one.
+    public func keeps(_ identity: LampFileIdentity) -> Bool {
+        trustedDevice == nil || identity.device == trustedDevice
+    }
 
     /// The digest held for this file, if what is held was taken from the file
     /// as it now stands.
@@ -39,6 +68,7 @@ public final class LampSyncDigestCache: @unchecked Sendable {
         let path = url.standardizedFileURL.path
         lock.lock()
         defer { lock.unlock() }
+        guard trustedDevice == nil || identity.device == trustedDevice else { return nil }
         guard let held = digests[path], held.identity == identity else { return nil }
         answered += 1
         return held.digest
@@ -49,6 +79,7 @@ public final class LampSyncDigestCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         read += 1
+        guard trustedDevice == nil || identity.device == trustedDevice else { return }
         digests[path] = (identity, digest)
     }
 

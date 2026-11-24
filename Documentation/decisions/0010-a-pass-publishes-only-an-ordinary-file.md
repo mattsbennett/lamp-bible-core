@@ -99,15 +99,23 @@ Two gaps that this does not close, both found by review, both wanting the
 same mechanism — a candidate that carries what the app knows about it, which
 is the next decision:
 
-- **A symbolic link among a recorded path's *ancestors*.** `copyItem`
-  resolves the directories on the way to the file, so replacing a
-  workspace's `context` directory with a link after the export, but before
-  the upload, yields a copy that is an ordinary file holding bytes from
-  outside the library. The leaf is checked; the path to it is not. Closing it
-  means the exporter recording the identity it saw and the upload refusing a
-  file whose identity has moved — which is only sound for a candidate the app
-  says is fixed at its path, since `0009` deliberately publishes the *new*
-  bytes of anything else.
+- **A symbolic link among a recorded path's *ancestors*.** Half closed by
+  `0011`, and the other half is not — the distinction matters, and an
+  earlier version of this record claimed the whole thing was done.
+  `copyItem` resolves the directories on the way to a file, so replacing a
+  workspace's `context` directory with a link gives an ordinary copy holding
+  bytes from outside the library.
+  - Replaced **after** the gather: caught. A fixed candidate's copy must
+    hash to what the gather hashed, and the outside file does not.
+  - Replaced **before** `describe` hashes it: not caught. The gathered
+    digest is then the outside file's digest too, so the two agree and the
+    comparison is satisfied.
+
+  Both halves want the same thing, which neither has: the path resolved
+  **once**, and the bytes hashed and sent through that one open file rather
+  than through three separate opens of a path. That is a change to how core
+  reads a file at all, so it is its own decision rather than a fourth patch
+  to this one.
 - **Two published paths differing only in case, on the receiving Mac.** A
   case-sensitive library can publish `Guide.md` and `guide.md`; a receiver
   with case-insensitive scratch storage stages one over the other and the
@@ -115,10 +123,11 @@ is the next decision:
   The export side of this is fixed — each staged copy sits in a directory
   named by its published path's digest — but the install side is not.
 
-Neither is a regression from before `0008`: the first needs a process writing
-inside the library mid-pass, and the second is how the install path has
-always behaved. They are written down here so that the next change finds them
-rather than rediscovering them.
+Neither is a regression from before `0008`: the first needs a process
+writing inside the library mid-pass, and staging has always been a stat
+followed by a copy of a path; the second is how the install path has always
+behaved. Writing them down here is what got half of the first one fixed one
+decision later.
 
 ## A claim this record used to make, and should not have
 

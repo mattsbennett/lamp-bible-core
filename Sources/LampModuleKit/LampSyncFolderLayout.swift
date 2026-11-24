@@ -49,23 +49,17 @@ public enum LampSyncFileKind: Hashable, Sendable {
     /// trust to avoid: a deck is edited in place as somebody types, and a
     /// review mark is a few hundred bytes.
     ///
-    /// Nor a workspace file, though the reason changed with
-    /// `decisions/0008`: a pass no longer copies most of them into a fresh
-    /// scratch directory, so they no longer have a new inode every time.
-    /// What rules them out now is that one kind covers files rewritten in
-    /// place (a custom skill, the enabled-skills selection) and files
-    /// deleted and replaced (a revision, by compaction) alongside ones that
-    /// are fixed at their path — and separating them would mean splitting a
-    /// kind that `isTakenInTogether`, `isListed` and the server layout all
-    /// key on, or moving the trust off the kind and onto the candidate.
-    ///
-    /// Worth doing: measured at 250 workspaces, answering every digest from
-    /// the cache takes the digesting from about 710 ms to 177 ms, and some
-    /// 470 ms of that is reachable — the staged files get a new scratch path
-    /// every pass, so only the recorded ones could ever hit. Against a 1.8 s
-    /// pass. See
-    /// `Documentation/decisions/0008`, whose first figure for this was wrong
-    /// by a factor of three and a half.
+    /// Nor a workspace file — but **the kind is no longer the whole
+    /// answer** for one. One kind covers a revision, which is only ever
+    /// replaced, and a document staged into a scratch directory named per
+    /// pass, which has a new inode every time; caching the second would
+    /// never hit and would leave a dead entry behind. Splitting the kind
+    /// would put the exporter's folder layout in here, which
+    /// `decisions/0008` refused, and freeze a choice the exporter makes per
+    /// file. So the per-file answer is the candidate's:
+    /// `LampSyncLocalFiles.Candidate.isFixedAtItsPath`, and `describe`
+    /// consults the cache on either (`decisions/0011`). Worth some 400 ms of
+    /// a 1.8 s pass at 250 workspaces.
     public var keepsDigestAgainstIdentity: Bool {
         switch self {
         case .module, .devotionalMedia, .noteMedia, .bookMedia, .deckAsset: true

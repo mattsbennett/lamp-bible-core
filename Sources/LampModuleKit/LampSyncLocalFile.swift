@@ -12,17 +12,22 @@ public struct LampSyncLocalFile: Equatable, Sendable {
     public let kind: LampSyncFileKind
     public let url: URL
     public let digest: String
+    /// The app's word that nothing rewrites this file where it sits — see
+    /// `LampSyncLocalFiles.Candidate.isFixedAtItsPath`.
+    public let isFixedAtItsPath: Bool
 
     public init(
         path: String,
         kind: LampSyncFileKind,
         url: URL,
-        digest: String
+        digest: String,
+        isFixedAtItsPath: Bool = false
     ) {
         self.path = path
         self.kind = kind
         self.url = url
         self.digest = digest
+        self.isFixedAtItsPath = isFixedAtItsPath
     }
 }
 
@@ -40,11 +45,35 @@ public enum LampSyncLocalFiles {
         public let path: String
         public let kind: LampSyncFileKind
         public let url: URL
+        /// The app's word that nothing rewrites this file where it sits:
+        /// what changes at this path arrives as a different file, or as
+        /// nothing.
+        ///
+        /// Not "the bytes will not change" — a revision is deleted and
+        /// replaced by compaction, which is the whole of `0009` — but "they
+        /// will not change *under a reader*". A file like that may have its
+        /// digest kept against its identity even where its kind says
+        /// otherwise, and a pass refuses to publish it if the identity has
+        /// moved since the gather. `Documentation/decisions/0011`.
+        ///
+        /// The kind cannot answer this for a workspace file, because one
+        /// kind covers a revision, which is fixed, and a document staged
+        /// into a fresh scratch directory every pass, which is not. The
+        /// exporter chooses per file and so is the only thing that knows.
+        /// False unless an app says otherwise; iOS writes a copy of
+        /// everything it publishes and never says so.
+        public let isFixedAtItsPath: Bool
 
-        public init(path: String, kind: LampSyncFileKind, url: URL) {
+        public init(
+            path: String,
+            kind: LampSyncFileKind,
+            url: URL,
+            isFixedAtItsPath: Bool = false
+        ) {
             self.path = path
             self.kind = kind
             self.url = url
+            self.isFixedAtItsPath = isFixedAtItsPath
         }
     }
 
@@ -108,14 +137,27 @@ public enum LampSyncLocalFiles {
                 continue
             }
             let caching = digests.flatMap {
-                candidate.kind.keepsDigestAgainstIdentity ? $0 : nil
+                (candidate.kind.keepsDigestAgainstIdentity || candidate.isFixedAtItsPath)
+                    && $0.keeps(identity) ? $0 : nil
             }
             let digest: String
             if let held = caching?.digest(at: candidate.url, identity: identity) {
                 digest = held
             } else if let read = try? LampSyncContentRevision.digest(forFileAt: candidate.url) {
                 digest = read
-                caching?.remember(read, at: candidate.url, identity: identity)
+                // Only under an identity the file still has, and only
+                // where there is a cache to keep it in — an SMB library
+                // passes none, and a stat per file for nothing is what it
+                // is trying to avoid.
+                //
+                // The stat above and the read just now are two opens, so a
+                // path whose directories changed in between would have its
+                // replacement's digest saved under the original's identity,
+                // and restoring the original would be answered wrongly for
+                // the rest of the process.
+                if let caching, (try? LampFileIdentity(url: candidate.url)) == identity {
+                    caching.remember(read, at: candidate.url, identity: identity)
+                }
             } else {
                 described.unreadable.append(
                     Unreadable(path: candidate.path, reason: "its file could not be read")
@@ -126,7 +168,8 @@ public enum LampSyncLocalFiles {
                 path: candidate.path,
                 kind: candidate.kind,
                 url: candidate.url,
-                digest: digest
+                digest: digest,
+                isFixedAtItsPath: candidate.isFixedAtItsPath
             ))
         }
         return described

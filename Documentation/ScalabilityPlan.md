@@ -299,9 +299,10 @@ holding a draft, five documents, a context file and fifty revisions:
 | the six-second local-work probe | 19 → 8 ms | 96 → **39 ms** |
 
 And what the gather hands on, measured since: digesting every candidate is
-**706–735 ms** at 250 workspaces, against **174–178 ms** if an identity cache
-answered all of them — of which about **470 ms** is reachable, since a staged
-file gets a new scratch path every pass and could never be answered from one.
+**714–788 ms** at 250 workspaces, and **328–341 ms** on the pass after, with
+the cache `0011` opened to it — the 12 750 files recorded in place are
+answered, and the 1 250 staged ones are read cold at their new paths, since a
+staged file gets a new scratch path every pass.
 The old copying export, run beside the new one in the same test so the files
 are counted alike, is **2 413 ms** for the copy on its own — not the old
 gather, which also walked the tree it had copied. Preparing the library — migrate and compact
@@ -478,17 +479,18 @@ collection, and not before.
     hole, and on a settled history it costs 520 ms a pass.
   - A pass now publishes only an ordinary file (`0010`), after two reviews
     found that removing the staging copy had also removed a symlink check
-    nobody had decided on. Two gaps stay open and are written into that
-    record: a symbolic link among a recorded path's *ancestors*, and two
-    published paths differing only in case on the **receiving** Mac.
-  - Extending `keepsDigestAgainstIdentity` to the recorded kinds is **open**,
-    and the one thing left of this item. Closed first on a measurement that
-    measured a warm re-read rather than a cache hit — `describe` skips the
-    cache for these kinds, so timing a second run over them says nothing.
-    Measured properly it is **710 → 177 ms**, of which about 470 ms is
-    reachable — a staged file cannot be cached — against a 1.8 s pass.
-    The obstacle is that `.workspaceFile` covers both the kinds whose bytes
-    are fixed at a path and the ones snapshotted into scratch every pass.
+    nobody had decided on.
+  - ~~Extending the digest cache to the recorded kinds~~ **done**, `0011`,
+    and it was the thing this item nearly lost. It was closed first on a
+    measurement that timed a warm re-read rather than a cache hit, because
+    `describe` skips the cache for exactly the kinds being measured; a Codex
+    review of the benchmark caught it. Two further corrections followed, both
+    the same shape: the figure counted files the cache can never answer for.
+    Measured honestly, digesting falls **~720 → ~335 ms**. The answer is per file rather than per
+    kind, since one kind covers the recorded files and the staged ones, and
+    the same mechanism closed `0010`'s ancestor-symlink gap.
+    One gap stays open and is written into `0010`: two published paths
+    differing only in case on the **receiving** Mac.
 
 ### Phase 3 — iOS
 

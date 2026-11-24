@@ -71,4 +71,35 @@ public enum LampSyncIdentityTrust {
         guard let name else { return false }
         return trustedFilesystems.contains(name.lowercased())
     }
+
+    /// The device number of the volume under `url`, where that volume's
+    /// identities can be trusted, and nil otherwise.
+    ///
+    /// Both answers come from **one open directory**, which is the point.
+    /// Asking `trustsIdentity(ofVolumeAt:)` and then reading the device is
+    /// two resolutions of a path, and a remount in between pairs one
+    /// volume's trust with another volume's device number — a cache then
+    /// answers for files on a filesystem nobody vouched for, for the rest of
+    /// the session. Caught by a Codex review of `0011`, which is what gave
+    /// the device number a job.
+    public static func trustedDevice(ofVolumeAt url: URL) -> Int64? {
+        #if canImport(Darwin)
+        let descriptor = url.withUnsafeFileSystemRepresentation { path in
+            path.map { open($0, O_RDONLY | O_DIRECTORY) } ?? -1
+        }
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        var volume = statfs()
+        guard fstatfs(descriptor, &volume) == 0 else { return nil }
+        let name = withUnsafeBytes(of: &volume.f_fstypename) { bytes in
+            String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self).lowercased()
+        }
+        guard trustsIdentity(filesystemNamed: name) else { return nil }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { return nil }
+        return Int64(info.st_dev)
+        #else
+        return nil
+        #endif
+    }
 }

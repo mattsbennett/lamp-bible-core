@@ -132,13 +132,12 @@ file's bytes if the guard is removed.
   time and could never be answered from a cache. The recorded files —
   revisions and context — are some 12 750 of the 14 000.
 
-  What stands in the way is that `.workspaceFile` covers both the recorded
-  kinds, whose bytes are fixed at a path, and the snapshotted ones, which get
-  a fresh inode every pass and would fill the cache with entries that can
-  never hit. Separating them means splitting a kind that `isTakenInTogether`,
-  `isListed` and the server layout all key on, or moving the trust off the
-  kind and onto the candidate. That is a shape question and it has its own
-  record.
+  **Done in `0011`**, by moving the per-file answer off the kind and onto
+  the candidate: `.workspaceFile` covers both the recorded files, which are
+  fixed at their path, and the staged ones, which get a fresh scratch path
+  every pass, and only the exporter knows which is which. Measured honestly
+  — which took three attempts, each smaller than the last — digesting falls
+  from about 720 ms to about 335 ms.
 
 ## What it must not break
 

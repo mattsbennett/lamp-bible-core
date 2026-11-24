@@ -529,10 +529,16 @@ public struct LampSyncBundlePass {
             // A merged file is only ever the merge's own output: falling back
             // to the pre-merge copy would publish the other side's changes
             // straight back out of the library.
-            guard let url = plan.merge[path] == nil
-                ? (republish[path] ?? filesByPath[path]?.url)
-                : republish[path]
+            let transacted = republish[path]
+            guard let url = transacted
+                ?? (plan.merge[path] == nil ? filesByPath[path]?.url : nil)
             else { continue }
+            // Whether these bytes are the ones the gather described, or the
+            // transaction's own output. `reconcile` may replace a file
+            // atomically and hand back the same URL, which is within what a
+            // fixed candidate promises — so the URL cannot be read as
+            // standing for the gathered file.
+            let cameFromTheGather = transacted == nil
             // One copy of the file, taken here, hashed here and sent from
             // here — because a candidate may name a **live** file rather
             // than a copy of it (`LampWorkspaceSync.WorkspaceExportRecord`,
@@ -580,6 +586,7 @@ public struct LampSyncBundlePass {
                 outcome.failures.append("\(path): it is not an ordinary file")
                 continue
             }
+
             do {
                 try FileManager.default.copyItem(at: url, to: sending)
                 guard LampFileIdentity.isOrdinaryFile(at: sending) else {
@@ -587,6 +594,42 @@ public struct LampSyncBundlePass {
                     continue
                 }
                 digest = try LampSyncContentRevision.digest(forFileAt: sending)
+                // A file the app said was fixed at its path must hash to
+                // what the gather hashed. Nothing rewrites such a file where
+                // it sits, so if the bytes about to go up are not the bytes
+                // that were read, this is not that file.
+                //
+                // Which is what catches a path whose *directories* changed:
+                // the leaf being an ordinary file says nothing about the way
+                // to it, and `copyItem` resolves the way, so replacing a
+                // workspace's `context` directory with a link gives an
+                // ordinary copy holding bytes from outside the library. The
+                // comparison is of the copy, taken after it was made, so no
+                // amount of swapping a path about during the copy gets
+                // different bytes published under a digest that was not
+                // theirs.
+                //
+                // Compared by the **bytes** and not by the file's identity,
+                // which was the first version of this and refused good
+                // uploads. A context file is a hard link into a shared
+                // store, and consolidating that store links the object over
+                // the path and sets permissions on the inode — so the inode
+                // moves, and `st_ctime` with it, while the file is
+                // byte-for-byte what it was. That happens on an ordinary
+                // pass, caused by the pass's own import.
+                //
+                // Only for a file that made the claim: for anything else a
+                // change between the plan and here is ordinary, and `0009`
+                // says to publish what is held now. And a file that has
+                // *gone* never reaches here — the copy above fails, and the
+                // handler below reports it as changed rather than failed,
+                // because compaction removing a revision mid-pass is no
+                // error.
+                if cameFromTheGather, let local = filesByPath[path], local.isFixedAtItsPath,
+                   digest != local.digest {
+                    outcome.failures.append("\(path): its file is not the one that was read")
+                    continue
+                }
             } catch {
                 // A source gone since the plan: the model holds no copy to
                 // send and records nothing, and the next pass publishes

@@ -18,8 +18,13 @@ struct LampSyncDigestCacheTests {
         return root
     }
 
-    private func candidate(_ url: URL, kind: LampSyncFileKind) -> LampSyncLocalFiles.Candidate {
-        LampSyncLocalFiles.Candidate(path: "Translations/x.lamp", kind: kind, url: url)
+    private func candidate(
+        _ url: URL, kind: LampSyncFileKind, fixedAtItsPath: Bool = false
+    ) -> LampSyncLocalFiles.Candidate {
+        LampSyncLocalFiles.Candidate(
+            path: "Translations/x.lamp", kind: kind, url: url,
+            isFixedAtItsPath: fixedAtItsPath
+        )
     }
 
     private func write(_ text: String, to url: URL) throws {
@@ -123,6 +128,101 @@ struct LampSyncDigestCacheTests {
         #expect(LampSyncFileKind.deck.keepsDigestAgainstIdentity == false)
         #expect(LampSyncFileKind.module(.translations).keepsDigestAgainstIdentity)
         #expect(LampSyncFileKind.bookMedia.keepsDigestAgainstIdentity)
+    }
+
+    /// A kind the cache does not answer for is answered anyway once the app
+    /// says the file is fixed where it sits.
+    ///
+    /// `.workspaceFile` is one kind over two sorts of file — a revision,
+    /// which is only ever replaced, and a document staged into a fresh
+    /// scratch directory every pass — so the kind cannot answer this and the
+    /// exporter can. `Documentation/decisions/0011`.
+    @Test func aFileTheAppSaysIsFixedAtItsPathIsKept() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let revision = root.appendingPathComponent("1700000000-abc.json")
+        try write("{}", to: revision)
+        let cache = LampSyncDigestCache()
+
+        let fixed = [candidate(revision, kind: .workspaceFile, fixedAtItsPath: true)]
+        _ = LampSyncLocalFiles.describe(fixed, digests: cache)
+        _ = LampSyncLocalFiles.describe(fixed, digests: cache)
+        #expect(cache.counts() == (read: 1, answered: 1))
+
+        // And the same kind without the claim is read every time, as before.
+        let staged = LampSyncDigestCache()
+        let unclaimed = [candidate(revision, kind: .workspaceFile)]
+        _ = LampSyncLocalFiles.describe(unclaimed, digests: staged)
+        _ = LampSyncLocalFiles.describe(unclaimed, digests: staged)
+        #expect(staged.counts() == (read: 0, answered: 0))
+    }
+
+    /// The claim is about nothing rewriting the file where it sits, and it
+    /// does not ask the cache to believe anything beyond the identity: a
+    /// file rewritten in place with its date put back is still noticed.
+    @Test func aFixedFileRewrittenInPlaceIsStillNoticed() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("1700000000-abc.json")
+        try write("{\"a\":1}", to: file)
+        let cache = LampSyncDigestCache()
+        let one = [candidate(file, kind: .workspaceFile, fixedAtItsPath: true)]
+        let before = LampSyncLocalFiles.describe(one, digests: cache).files[0].digest
+        let was = try #require(
+            try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        )
+
+        try write("{\"a\":2}", to: file)
+        try FileManager.default.setAttributes([.modificationDate: was], ofItemAtPath: file.path)
+
+        let after = LampSyncLocalFiles.describe(one, digests: cache).files[0].digest
+        #expect(after != before)
+        #expect(cache.counts().read == 2)
+    }
+
+    /// A described file carries the claim, so a pass can tell whether its
+    /// bytes being different by the time it publishes is a problem.
+    @Test func aDescribedFileCarriesTheClaim() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("1700000000-abc.json")
+        try write("{}", to: file)
+
+        let described = LampSyncLocalFiles.describe([
+            candidate(file, kind: .workspaceFile, fixedAtItsPath: true),
+        ]).files[0]
+
+        #expect(described.isFixedAtItsPath)
+        #expect(LampSyncLocalFiles.describe([candidate(file, kind: .workspaceFile)])
+            .files[0].isFixedAtItsPath == false)
+    }
+
+    /// A cache made for one volume does not answer for a file on another.
+    ///
+    /// The trust in 0007 belongs to a filesystem, and the caller decides it
+    /// by asking what the library root sits on — but a library can have
+    /// another volume mounted inside it, and `0011` made the files under such
+    /// a mount eligible for the first time. A cache scoped to the volume that
+    /// was checked reads them instead.
+    @Test func aCacheDoesNotAnswerForAFileOnAnotherVolume() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("1700000000-abc.json")
+        try write("{}", to: file)
+        let one = [candidate(file, kind: .workspaceFile, fixedAtItsPath: true)]
+        let device = try LampFileIdentity(url: file).device
+
+        // Scoped to the volume the file is on: answered, as before.
+        let same = LampSyncDigestCache(trustedDevice: device)
+        _ = LampSyncLocalFiles.describe(one, digests: same)
+        _ = LampSyncLocalFiles.describe(one, digests: same)
+        #expect(same.counts() == (read: 1, answered: 1))
+
+        // Scoped to a volume it is not on: read every time, and nothing kept.
+        let other = LampSyncDigestCache(trustedDevice: device == 1 ? 2 : 1)
+        _ = LampSyncLocalFiles.describe(one, digests: other)
+        _ = LampSyncLocalFiles.describe(one, digests: other)
+        #expect(other.counts().answered == 0)
     }
 
     /// No cache is the behaviour 0001 required, and it is what a pass gets on
