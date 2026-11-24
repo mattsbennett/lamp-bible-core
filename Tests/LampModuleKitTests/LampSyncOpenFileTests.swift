@@ -1,0 +1,203 @@
+import Foundation
+import Testing
+@testable import LampModuleKit
+
+/// `Documentation/decisions/0012`: a pass holds a file open and asks it
+/// everything, rather than resolving a path once per question.
+struct LampSyncOpenFileTests {
+    private func fixture() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-open-file-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    @Test func answersTheSameAsAskingThePathWould() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("module.lamp")
+        let body = Data(String(repeating: "A lamp unto my feet. ", count: 50_000).utf8)
+        try body.write(to: file)
+
+        let byPath = try LampFileIdentity(url: file)
+        let digestByPath = try LampSyncContentRevision.digest(forFileAt: file)
+        try LampSyncOpenFile.with(file) { open in
+            #expect(open.isOrdinaryFile)
+            let identity = try open.identity()
+            let first = try open.digest()
+            // Asked twice, because each answer seeks back to the start.
+            let second = try open.digest()
+            #expect(identity == byPath)
+            #expect(first == digestByPath)
+            #expect(second == LampSyncContentRevision.digest(for: body))
+        }
+    }
+
+    /// Bigger than the read buffer, so the chunked read is exercised rather
+    /// than a single read that happens to take everything.
+    @Test func hashesAFileBiggerThanOneRead() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("big.lamp")
+        var body = Data()
+        for index in 0..<40 {
+            body.append(Data(String(repeating: "\(index)", count: 32 * 1024).utf8))
+        }
+        try body.write(to: file)
+        #expect(body.count > 1 << 18)
+
+        let want = LampSyncContentRevision.digest(for: body)
+        try LampSyncOpenFile.with(file) { open in
+            let got = try open.digest()
+            #expect(got == want)
+        }
+    }
+
+    /// A symbolic link is refused at the open, so nothing it points at is
+    /// ever read — which is the whole of `0010` done one layer lower.
+    @Test func refusesASymbolicLink() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.appendingPathComponent("not-for-the-server.txt")
+        try Data("the contents of another file".utf8).write(to: outside)
+        let link = root.appendingPathComponent("link.lamp")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+
+        let failure = #expect(throws: LampSyncOpenFile.Failure.self) {
+            try LampSyncOpenFile.with(link) { try $0.digest() }
+        }
+        #expect(failure?.namesALink == true)
+        #expect(failure?.namesAMissingFile == false)
+    }
+
+    @Test func tellsAMissingFileFromADirectory() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let gone = #expect(throws: LampSyncOpenFile.Failure.self) {
+            try LampSyncOpenFile.with(root.appendingPathComponent("nothing.lamp")) {
+                try $0.digest()
+            }
+        }
+        #expect(gone?.namesAMissingFile == true)
+        #expect(gone?.namesALink == false)
+
+        // A directory opens, and says what it is.
+        try LampSyncOpenFile.with(root) { #expect(!$0.isOrdinaryFile) }
+    }
+
+    /// A hard link is an ordinary file. The context store publishes nothing
+    /// else, so refusing one would stop most of a workspace syncing.
+    @Test func aHardLinkIsOrdinary() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let object = root.appendingPathComponent("object")
+        try Data("shared bytes".utf8).write(to: object)
+        let link = root.appendingPathComponent("context.md")
+        try FileManager.default.linkItem(at: object, to: link)
+
+        let want = LampSyncContentRevision.digest(for: Data("shared bytes".utf8))
+        try LampSyncOpenFile.with(link) { open in
+            #expect(open.isOrdinaryFile)
+            let got = try open.digest()
+            #expect(got == want)
+        }
+    }
+
+    /// A named pipe with nobody writing to it does not stop the pass.
+    ///
+    /// An ordinary `open` of one waits until somebody writes, which for a
+    /// pass that expected a file is for ever. `O_NONBLOCK` makes opening
+    /// answer, and what is at the path is then reported like anything else
+    /// that will not be published.
+    @Test(.timeLimit(.minutes(1)))
+    func doesNotWaitOnAPipeNobodyIsWriting() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pipe = root.appendingPathComponent("waiting.lamp")
+        #expect(pipe.withUnsafeFileSystemRepresentation { mkfifo($0!, 0o600) } == 0)
+
+        try LampSyncOpenFile.with(pipe) { open in
+            #expect(!open.isOrdinaryFile)
+            #expect(throws: LampSyncOpenFile.Failure.notAnOrdinaryFile) { try open.digest() }
+        }
+    }
+
+    /// A character device is not read to the end of itself, because it has
+    /// none. `/dev/zero` would be read until the disk filled.
+    @Test(.timeLimit(.minutes(1)))
+    func refusesToReadADeviceThatNeverEnds() throws {
+        let device = URL(fileURLWithPath: "/dev/zero")
+        try LampSyncOpenFile.with(device) { open in
+            #expect(!open.isOrdinaryFile)
+            #expect(throws: LampSyncOpenFile.Failure.notAnOrdinaryFile) { try open.digest() }
+        }
+        // And the gather reports it rather than hanging, where one is
+        // somehow offered as a candidate.
+        let described = LampSyncLocalFiles.describe([
+            LampSyncLocalFiles.Candidate(path: "Translations/x.lamp", kind: .module(.translations), url: device),
+        ])
+        #expect(described.files.isEmpty)
+        #expect(described.unreadable.count == 1)
+    }
+
+    @Test func copiesTheBytesItWasOpenedOn() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("module.lamp")
+        let body = Data(String(repeating: "Thy word is a lamp. ", count: 40_000).utf8)
+        try body.write(to: file)
+        let copy = root.appendingPathComponent("copy.lamp")
+
+        try LampSyncOpenFile.with(file) { try $0.copy(into: copy) }
+
+        let copied = try Data(contentsOf: copy)
+        #expect(copied == body)
+        // A separate file, not a second name for the same one: a clone shares
+        // its bytes until one side is written, but it is its own inode.
+        let copyPlace = try LampFileIdentity(url: copy).place
+        let filePlace = try LampFileIdentity(url: file).place
+        #expect(copyPlace != filePlace)
+    }
+
+    /// The read-and-write fallback, for a destination a clone cannot reach —
+    /// another volume, or a filesystem without clones. Forced here by
+    /// copying twice over: the second finds the destination already there,
+    /// which the clone refuses, and must not fall back into appending.
+    @Test func copyRefusesADestinationThatExists() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("module.lamp")
+        try Data("the body".utf8).write(to: file)
+        let copy = root.appendingPathComponent("copy.lamp")
+        try LampSyncOpenFile.with(file) { try $0.copy(into: copy) }
+
+        #expect(throws: LampSyncOpenFile.Failure.self) {
+            try LampSyncOpenFile.with(file) { try $0.copy(into: copy) }
+        }
+        let kept = try Data(contentsOf: copy)
+        #expect(kept == Data("the body".utf8))
+    }
+
+    /// Replacing the file at the path after it is open changes nothing: the
+    /// descriptor holds the file, not the name.
+    @Test func keepsTheFileItOpenedWhenThePathIsReplaced() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("module.lamp")
+        try Data("as opened".utf8).write(to: file)
+        let copy = root.appendingPathComponent("copy.lamp")
+
+        let asOpened = LampSyncContentRevision.digest(for: Data("as opened".utf8))
+        try LampSyncOpenFile.with(file) { open in
+            try FileManager.default.removeItem(at: file)
+            try Data("put there afterwards".utf8).write(to: file)
+
+            let got = try open.digest()
+            #expect(got == asOpened)
+            try open.copy(into: copy)
+        }
+        let copied = try Data(contentsOf: copy)
+        #expect(copied == Data("as opened".utf8))
+    }
+}

@@ -120,49 +120,70 @@ public enum LampSyncLocalFiles {
     ) -> Described {
         var described = Described()
         for candidate in candidates {
-            // One stat answers both questions: whether the file is there, and
-            // which file it is.
+            // One open, and the identity, the bytes and the digest all come
+            // from that descriptor. It used to be a stat, then an open and a
+            // mapping for the digest, then another stat — three walks of the
+            // same directories, which three review rounds found three ways
+            // of disagreeing (`Documentation/decisions/0012`).
             //
-            // A candidate that is a symbolic link is *not* refused here, and
-            // that is deliberate. Refusing one leaves the path out of the
-            // plan's locals, which reads as "this client does not hold it" —
-            // so the plan schedules a download and the install rewrites the
-            // very file the refusal meant to leave alone. Where a pass will
-            // not publish a link is at the upload, on its own copy, which is
-            // the only place the check can be sound (`decisions/0010`).
-            guard let identity = try? LampFileIdentity(url: candidate.url) else {
-                described.unreadable.append(
-                    Unreadable(path: candidate.path, reason: "its file could not be read")
-                )
-                continue
-            }
-            let caching = digests.flatMap {
-                (candidate.kind.keepsDigestAgainstIdentity || candidate.isFixedAtItsPath)
-                    && $0.keeps(identity) ? $0 : nil
-            }
+            // Following a symbolic link, deliberately: a gather that refused
+            // one would leave the path out of the plan's locals, and the
+            // install would then write the server's bytes through the link.
+            // `0010` rejects that; the upload is where a refusal is safe.
+            // A digest already held is answered from a stat, without opening
+            // the file. That is sound where opening would be pointless: an
+            // identity *is* an identification — device and inode name the
+            // file, and the size and the two times say it has not been
+            // touched — so a digest recorded against it is of that file's
+            // bytes however the path was resolved to find it. Nothing is
+            // read here, so there is nothing for a second resolution to
+            // disagree with.
+            //
+            // It also matters: an open where a stat would do cost 200 ms of
+            // a 540 ms pass over fourteen thousand candidates, most of them
+            // already known.
             let digest: String
-            if let held = caching?.digest(at: candidate.url, identity: identity) {
+            if let digests, candidate.kind.keepsDigestAgainstIdentity || candidate.isFixedAtItsPath,
+               let identity = try? LampFileIdentity(url: candidate.url),
+               digests.keeps(identity),
+               let held = digests.digest(at: candidate.url, identity: identity) {
                 digest = held
-            } else if let read = try? LampSyncContentRevision.digest(forFileAt: candidate.url) {
-                digest = read
-                // Only under an identity the file still has, and only
-                // where there is a cache to keep it in — an SMB library
-                // passes none, and a stat per file for nothing is what it
-                // is trying to avoid.
-                //
-                // The stat above and the read just now are two opens, so a
-                // path whose directories changed in between would have its
-                // replacement's digest saved under the original's identity,
-                // and restoring the original would be answered wrongly for
-                // the rest of the process.
-                if let caching, (try? LampFileIdentity(url: candidate.url)) == identity {
-                    caching.remember(read, at: candidate.url, identity: identity)
-                }
             } else {
-                described.unreadable.append(
-                    Unreadable(path: candidate.path, reason: "its file could not be read")
-                )
-                continue
+                // Anything that has to be read is read through **one** open,
+                // and the identity it is remembered under comes from that
+                // same descriptor. It used to be a stat, then an open and a
+                // mapping, then another stat — three walks of the same
+                // directories, which three review rounds found three ways of
+                // disagreeing (`Documentation/decisions/0012`).
+                //
+                // Following a symbolic link, deliberately: a gather that
+                // refused one would leave the path out of the plan's locals,
+                // and the install would then write the server's bytes
+                // through the link. `0010` rejects that; the upload is where
+                // a refusal is safe.
+                do {
+                    digest = try LampSyncOpenFile.with(candidate.url, followingLinks: true) { file in
+                        let identity = try file.identity()
+                        let read = try file.digest()
+                        // The same descriptor throughout, so this cannot be a
+                        // different file — but it can be the same file written
+                        // while it was being read, which would be a digest of
+                        // a torn body. Remembered only where nothing moved.
+                        let caching = digests.flatMap {
+                            (candidate.kind.keepsDigestAgainstIdentity
+                                || candidate.isFixedAtItsPath) && $0.keeps(identity) ? $0 : nil
+                        }
+                        if let caching, try file.identity() == identity {
+                            caching.remember(read, at: candidate.url, identity: identity)
+                        }
+                        return read
+                    }
+                } catch {
+                    described.unreadable.append(
+                        Unreadable(path: candidate.path, reason: "its file could not be read")
+                    )
+                    continue
+                }
             }
             described.files.append(LampSyncLocalFile(
                 path: candidate.path,

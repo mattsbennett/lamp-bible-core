@@ -248,24 +248,6 @@ public struct LampSyncBundlePass {
     /// sees the whole listing, so a tombstone waiting for its file to be
     /// reaped is kept whoever plans what.
     ///
-    /// Whether an error from reading a file says the file is not there, as
-    /// against there and unreadable.
-    ///
-    /// The two belong in different places — an absent copy is the model's
-    /// `copy = none`, which sends nothing and is no failure, while a file
-    /// that cannot be read is a failure to report — and
-    /// `fileExists(atPath:)` cannot tell them apart: it answers false for a
-    /// file inside a directory that has stopped being searchable.
-    private static func namesAMissingFile(_ error: Error) -> Bool {
-        let error = error as NSError
-        if error.domain == NSCocoaErrorDomain, error.code == NSFileNoSuchFileError { return true }
-        if error.domain == NSPOSIXErrorDomain, error.code == Int(ENOENT) { return true }
-        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? Error {
-            return namesAMissingFile(underlying)
-        }
-        return false
-    }
-
     /// `confirmByReading` says which uploads that come back without a
     /// revision are confirmed by reading the body back; the rest are asked
     /// for their revision only, so a translation is not downloaded again to
@@ -568,82 +550,76 @@ public struct LampSyncBundlePass {
             // `upload` (`Verification/SyncMerge.lean`).
             let sending = LampSyncScratchFile.url()
             defer { try? FileManager.default.removeItem(at: sending) }
-            let digest: String
-            // A pass publishes an ordinary file and nothing else — not a
-            // symbolic link, whose target is any file this app can read, and
-            // not a directory. A hard link is ordinary and passes, which the
-            // workspace context store relies on
-            // (`Documentation/decisions/0010`).
+            // One copy of the file, taken through one open of it, hashed
+            // from that copy and sent from it.
             //
-            // Asked of the source first, so a path that has become a
-            // directory is refused rather than copied tree and all; then of
-            // the copy, because `copyItem` on a symbolic link copies the
-            // **link**, and a check of the source alone is a check of a path
-            // the copy need not have followed to the same place.
-            // A source that is *gone* falls through to the copy below, which
-            // fails and is reported as changed rather than failed.
-            if LampFileIdentity.whatIs(at: url) == .somethingElse {
-                outcome.failures.append("\(path): it is not an ordinary file")
-                continue
-            }
-
+            // `0009`: the digest has to be of the bytes that went up, or a
+            // pass sends one thing and records another and a later revert to
+            // the recorded bytes reads as already synced. `0010`: only an
+            // ordinary file is published, a symbolic link's target being any
+            // file this app can read. `0012`: both answered from a single
+            // descriptor, because a path asked twice can answer differently
+            // — and a clone of an open regular file cannot come out as
+            // anything but a regular file, where `copyItem` on a link
+            // copied the link.
+            //
+            // A copy is affordable here where it was not in the gather,
+            // which is the whole of `0008`: this runs for the handful of
+            // files a pass actually uploads, and on APFS the clone moves no
+            // bytes.
+            // The source, and the copy of it, in two steps — because what a
+            // failure means depends on which one failed. A source that has
+            // gone is a file that changed under the pass; a *copy* that has
+            // gone is something wrong with the scratch directory, and
+            // reporting it as a changed library file would be a lie about
+            // the library.
             do {
-                try FileManager.default.copyItem(at: url, to: sending)
-                guard LampFileIdentity.isOrdinaryFile(at: sending) else {
-                    outcome.failures.append("\(path): it is not an ordinary file")
-                    continue
+                try LampSyncOpenFile.with(url) { file in
+                    guard file.isOrdinaryFile else { throw LampSyncOpenFile.Failure.notAnOrdinaryFile }
+                    try file.copy(into: sending)
                 }
-                digest = try LampSyncContentRevision.digest(forFileAt: sending)
-                // A file the app said was fixed at its path must hash to
-                // what the gather hashed. Nothing rewrites such a file where
-                // it sits, so if the bytes about to go up are not the bytes
-                // that were read, this is not that file.
-                //
-                // Which is what catches a path whose *directories* changed:
-                // the leaf being an ordinary file says nothing about the way
-                // to it, and `copyItem` resolves the way, so replacing a
-                // workspace's `context` directory with a link gives an
-                // ordinary copy holding bytes from outside the library. The
-                // comparison is of the copy, taken after it was made, so no
-                // amount of swapping a path about during the copy gets
-                // different bytes published under a digest that was not
-                // theirs.
-                //
-                // Compared by the **bytes** and not by the file's identity,
-                // which was the first version of this and refused good
-                // uploads. A context file is a hard link into a shared
-                // store, and consolidating that store links the object over
-                // the path and sets permissions on the inode — so the inode
-                // moves, and `st_ctime` with it, while the file is
-                // byte-for-byte what it was. That happens on an ordinary
-                // pass, caused by the pass's own import.
-                //
-                // Only for a file that made the claim: for anything else a
-                // change between the plan and here is ordinary, and `0009`
-                // says to publish what is held now. And a file that has
-                // *gone* never reaches here — the copy above fails, and the
-                // handler below reports it as changed rather than failed,
-                // because compaction removing a revision mid-pass is no
-                // error.
-                if cameFromTheGather, let local = filesByPath[path], local.isFixedAtItsPath,
-                   digest != local.digest {
-                    outcome.failures.append("\(path): its file is not the one that was read")
-                    continue
-                }
-            } catch {
-                // A source gone since the plan: the model holds no copy to
-                // send and records nothing, and the next pass publishes
-                // whatever replaced it. Anything else is a failure to report,
-                // as it always was — a file there but unreadable, a
-                // directory that has stopped being searchable, or a scratch
-                // directory that went away under the pass, which `copyItem`
-                // also reports as a missing file. So the source is asked
-                // about directly rather than the error being read for it.
-                if (try? LampFileIdentity(url: url)) == nil, Self.namesAMissingFile(error) {
+            } catch let failure as LampSyncOpenFile.Failure {
+                // Gone since the plan: the model holds no copy to send and
+                // records nothing, and the next pass publishes whatever
+                // replaced it. Something that is not an ordinary file is a
+                // failure, reported with its path. Anything else — a file
+                // there but unreadable, a scratch directory that went away
+                // under the pass — is a failure too, as it always was.
+                if failure.namesAMissingFile {
                     outcome.changedDuringPass.append(path)
+                } else if failure.namesSomethingUnpublishable {
+                    outcome.failures.append("\(path): it is not an ordinary file")
                 } else {
                     outcome.failures.append("\(path): its file could not be read")
                 }
+                continue
+            }
+            let digest: String
+            do {
+                digest = try LampSyncOpenFile.with(sending) { try $0.digest() }
+            } catch {
+                outcome.failures.append("\(path): the copy of it to send could not be read")
+                continue
+            }
+            // A file the app said was fixed at its path must hash to what the
+            // gather hashed. Nothing rewrites such a file where it sits, so
+            // bytes that are not the bytes that were read mean this is not
+            // that file — which is what catches a *directory* on the way to
+            // it having been replaced by a link after the gather.
+            //
+            // Compared by the bytes and not by the file's identity, which
+            // was the first version and refused good uploads: consolidating
+            // the context store links the shared object over the path and
+            // sets its permissions, so the inode moves and `st_ctime` with
+            // it while the file is byte-for-byte what it was — on an
+            // ordinary pass, caused by the pass's own import.
+            //
+            // Only where the bytes came from the gather: `reconcile` may
+            // replace a file atomically and hand back the same URL, which is
+            // within what a fixed candidate promises.
+            if cameFromTheGather, let local = filesByPath[path], local.isFixedAtItsPath,
+               digest != local.digest {
+                outcome.failures.append("\(path): its file is not the one that was read")
                 continue
             }
             // A PUT that answers without an ETag leaves this client with no

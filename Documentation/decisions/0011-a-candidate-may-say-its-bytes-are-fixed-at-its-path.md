@@ -61,47 +61,48 @@ writes a replacement, which is the whole of `0009`. It is "they will not
 change *under a reader*": what changes at this path arrives as a different
 file, or as nothing.
 
-That makes a second thing possible, and it closes a gap `0010` had to leave
-open. `LampSyncLocalFile` carries the claim and the identity it was read at,
-and a pass **refuses to publish a file that claimed to be fixed and is no
-longer where it was** when the gather read it. This catches what a check of
-the leaf cannot: `copyItem` resolves the directories on the way to a file, so
-replacing a workspace's `context` directory with a symbolic link after the
-export yields an ordinary copy holding bytes from outside the library — and a
-different inode on the way to a different file.
+That makes a second thing possible, and it closes half of a gap `0010` had
+to leave open. `LampSyncLocalFile` carries the claim, and a pass **refuses to
+publish a file that claimed to be fixed and whose copy does not hash to what
+the gather hashed**. This catches what a check of the leaf cannot:
+`copyItem` resolves the directories on the way to a file, so replacing a
+workspace's `context` directory with a symbolic link after the export yields
+an ordinary copy holding bytes from outside the library — other bytes, and so
+another digest.
 
 Three details of that check, each of them a review finding:
 
-- **Where the file is, not its whole state.** The comparison is device and
-  inode (`LampFileIdentity.place`). A context file is a hard link into a
-  shared store, and consolidating that store sets permissions on the inode,
-  which moves `st_ctime` for every path linking it while the file itself is
-  untouched; comparing whole identities refused those uploads and reported a
-  sync error. Bytes rewritten under the same inode are no concern here,
-  because this sends what it has just hashed. The *cache* still keys on the
-  whole identity — that is where `st_ctime` earns its place.
-- **After the copy, not before.** The copy is what resolved the path, so a
-  check before it is a check of a walk the copy need not repeat.
-- **Only while the file is still there.** A `stat` that fails is a file that
-  has gone, which `0009` reports as changed rather than failed — and
-  compaction removing a revision mid-pass is exactly that. The first version
-  read a failed `stat` as "a different file" and turned ordinary compaction
-  into an error the writer would see.
+- **The bytes, not the file's identity.** Comparing device and inode was the
+  first version, and it refused good uploads: a context file is a hard link
+  into a shared store, and consolidating that store links the object over the
+  path and sets permissions on the inode, so the inode moves and `st_ctime`
+  with it while the file is byte-for-byte what it was — on an ordinary pass,
+  caused by the pass's own import. The *cache* still keys on the whole
+  identity; that is where `st_ctime` earns its place.
+- **After the copy, not before.** The copy is what resolved the path, so no
+  amount of swapping a path about during the copy gets other bytes published
+  under a digest that was not theirs.
+- **Only where the bytes came from the gather.** `reconcile` may replace a
+  file atomically and hand back the same URL, which is within what a fixed
+  candidate promises, so the URL cannot stand for "the gathered file".
+- **Only while the file is still there.** A file that has gone never reaches
+  the comparison: the copy fails first, and that is reported as changed
+  rather than failed, because compaction removing a revision mid-pass is no
+  error. The first version read a failed `stat` as "a different file" and
+  turned ordinary compaction into an error the writer would see.
 
-Only for a file that made the claim, and only where the bytes came from the
-gather rather than from `reconcile` — which may replace a file atomically and
-hand back the same URL, so the URL cannot stand for "the gathered file". For
-anything else a change between the plan and the upload is ordinary, and
-`0009` says to publish what is held now.
+For anything that made no claim, a change between the plan and the upload is
+ordinary, and `0009` says to publish what is held now.
 
 **What this does not close.** If the directories on the way to a candidate
 are replaced *before* `describe` hashes it, the gathered digest is the
 outside file's digest as well, the two agree, and the bytes are published.
 The comparison catches a substitution after the gather, not one before it.
-Closing that means resolving the path once and reading the bytes and the
-identity through the same open file, which is a change to how core reads a
-file; three review rounds asked for it in three different places, so it is
-its own decision rather than a fourth patch here. `0010` carries the gap.
+Resolving the path once and reading the bytes and the identity through the
+same open file is `0012`, which three review rounds asked for in three
+different places. It closes the windows inside the gather and inside the
+upload; the one between them stays, and `0012` says why it is not safe to
+close yet.
 
 On the Mac the exporter's record carries it: a file left where it lives is
 recorded with the claim, and everything staged into the scratch directory is
@@ -136,10 +137,9 @@ a transcript and the portable ledger.
   where the cache would keep it at all. The stat and the read are two opens,
   so a path whose directories changed in between would otherwise have its
   replacement's digest saved under the original's identity — and restoring
-  the original would be answered wrongly for the rest of the process. This
-  narrows that window rather than closing it, for the same reason as above:
-  two stats around a read can both see the original file while the read saw
-  another.
+  the original would be answered wrongly for the rest of the process. `0012`
+  closed that properly: the identity and the bytes now come from one
+  descriptor, so there is no second resolution to disagree.
 - `Verification/coverage.json`'s boundary prose for `LampSyncLocalFile.swift`
   has to name the new condition, since that sentence is where this trust is
   written down.
@@ -154,10 +154,10 @@ a transcript and the portable ledger.
 - A file that has gone by the time the pass publishes is still
   `changedDuringPass` and not a failure, claim or no claim. Held by
   `aFixedFileCompactionRemovedIsChangedAndNotAFailure`.
-- **A context file whose shared inode had its permissions set is still
-  published.** Held by `aFixedFileRewrittenUnderTheSameInodeIsStillPublished`,
-  which fails if the comparison is widened from the place to the whole
-  identity.
+- **A context file relinked to the shared object, with the same bytes, is
+  still published.** Held by
+  `aFixedFileRelinkedWithTheSameBytesIsStillPublished`, which fails if the
+  comparison is of the file rather than of its bytes.
 - A file on a volume mounted inside a trusted library is still read every
   pass: `aCacheDoesNotAnswerForAFileOnAnotherVolume`.
 - The phone is unchanged: it never sets the flag.

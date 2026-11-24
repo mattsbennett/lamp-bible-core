@@ -42,6 +42,13 @@ public struct LampFileIdentity: Codable, Equatable, Sendable {
                 userInfo: [NSFilePathErrorKey: url.path]
             )
         }
+        self.init(info)
+    }
+
+    /// From a `stat` a caller already has — one taken from a descriptor it is
+    /// holding, rather than from a path it would have to resolve again
+    /// (`LampSyncOpenFile`, `Documentation/decisions/0012`).
+    init(_ info: stat) {
         device = Int64(info.st_dev)
         inode = UInt64(info.st_ino)
         size = Int64(info.st_size)
@@ -60,43 +67,4 @@ public struct LampFileIdentity: Codable, Equatable, Sendable {
 
     /// Where a file is, by device and inode, whatever it holds.
     public var place: (device: Int64, inode: UInt64) { (device, inode) }
-
-    /// Whether `url` is an ordinary file — not a symbolic link, a directory,
-    /// a socket or a device — without following a link to ask.
-    ///
-    /// Deliberately not a property of an identity. An identity is a cache
-    /// token that can be written down, and this is a fact about a path at a
-    /// moment that cannot be: an identity decoded from somewhere could only
-    /// guess at it, and guessing either way would be wrong. Ask it of the
-    /// file in front of you, which is what
-    /// `Documentation/decisions/0010` does.
-    ///
-    /// A hard link **is** ordinary: a workspace's context files are links
-    /// into a per-library store of content-addressed objects, so a published
-    /// file with a link count above one is normal.
-    public static func isOrdinaryFile(at url: URL) -> Bool {
-        whatIs(at: url) == .ordinaryFile
-    }
-
-    /// What is at a path: an ordinary file, something else, or nothing.
-    ///
-    /// Three answers rather than two, because the two that are not an
-    /// ordinary file mean opposite things to a pass. Nothing there is a file
-    /// that has gone since the plan, which is no failure; something else is
-    /// a file that will not be published, which is one.
-    public static func whatIs(at url: URL) -> WhatIsAtAPath {
-        var info = stat()
-        let result = url.withUnsafeFileSystemRepresentation { path in
-            path.map { fstatat(AT_FDCWD, $0, &info, AT_SYMLINK_NOFOLLOW) } ?? -1
-        }
-        guard result == 0 else { return .nothing }
-        return (info.st_mode & S_IFMT) == S_IFREG ? .ordinaryFile : .somethingElse
-    }
-
-    public enum WhatIsAtAPath: Sendable, Equatable {
-        case ordinaryFile
-        /// A symbolic link, a directory, a socket, a device.
-        case somethingElse
-        case nothing
-    }
 }

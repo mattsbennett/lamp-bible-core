@@ -69,14 +69,22 @@ The step's own comment had been promising this all along — "publishes the
 file the transaction produced, never the one digested before it ran" — but
 the code honoured it only for a path the merge had rewritten.
 
-**The phone had already reached the same conclusion and paid for it by
-copying.** Every candidate `LibrarySyncPass` gathers is written into a
-per-pass scratch file first, with the reason in its own comments: "Sent from
-a copy, read under the file's lock: a clear landing while the pass runs can't
-leave the bytes sent unlike the digest taken of them." So the precaution is
-not new; what is new is that the engine takes it, once, instead of each app
-buying it with a copy of everything it holds. Nothing changes for iOS but one
-hash per uploaded file, over bytes it had already written.
+**The phone had already reached the same conclusion for the files it
+edits, and paid for it by copying.** Its collections, review marks and
+writing documents are each written into a per-pass scratch file before being
+gathered, with the reason in its own comments: "Sent from a copy, read under
+the file's lock: a clear landing while the pass runs can't leave the bytes
+sent unlike the digest taken of them." So the precaution is not new; what is
+new is that the engine takes it, once, rather than each app buying it with a
+copy.
+
+Its **media and book pictures are gathered as live URLs** under the app's
+Documents directory, so for those this is the same change it is on the Mac —
+an earlier version of this record said the phone copied everything it
+published, which is not true. Nothing else changes for iOS: one hash per
+uploaded file, over bytes it had already written. What makes the live case
+quiet there is the app container, which no other process of the same user can
+write into — not a precaution of sync's.
 
 ## Consequences
 

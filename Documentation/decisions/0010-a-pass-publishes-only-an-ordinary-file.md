@@ -111,11 +111,11 @@ is the next decision:
     digest is then the outside file's digest too, so the two agree and the
     comparison is satisfied.
 
-  Both halves want the same thing, which neither has: the path resolved
-  **once**, and the bytes hashed and sent through that one open file rather
-  than through three separate opens of a path. That is a change to how core
-  reads a file at all, so it is its own decision rather than a fourth patch
-  to this one.
+  Both halves wanted the same thing: the path resolved **once**, and the
+  bytes hashed and sent through that one open file. `0012` does that, which
+  closes the windows *within* the gather and within the upload — and leaves
+  the one between them, for the reason `0012` sets out: the refusal has
+  nowhere safe to go.
 - **Two published paths differing only in case, on the receiving Mac.** A
   case-sensitive library can publish `Guide.md` and `guide.md`; a receiver
   with case-insensitive scratch storage stages one over the other and the
