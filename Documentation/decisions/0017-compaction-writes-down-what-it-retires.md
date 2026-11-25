@@ -121,8 +121,11 @@ defect the record was written to fix.
 
 **What that costs**, written plainly: where this Mac compacted an untagged
 merge before every original of it had arrived, that merge may keep a turn's
-changes under no turn's name. Never a version of the text, which the merge
-carries whole — and `removingReplaced` still prefers the originals whenever
+changes under no turn's name — and, where the merge spans two changes, the
+state between them becomes unreachable on this Mac while another Mac can
+still restore to it. See "the second reachable case" below for the trace;
+an earlier draft of this record claimed no version of the text was ever lost,
+and that was wrong. `removingReplaced` still prefers the originals whenever
 all of them are present. If anyone proposes bringing the exception back, the
 bar is to name the input it needs and show it is on disk.
 
@@ -261,12 +264,15 @@ nothing the store keeps**. `RetirementKeepsWhatItClaimsTests` states that
 over generated runs of edits, and it bites: reversing the strict-subset rule
 in `removingReplaced` fails it on hundreds of draws.
 
-**The property holds given a precondition: no untagged merge covers a change
-that knows its turn.** Under it, demotion can never fire, `removingReplaced`
-is strict-subset removal with a deterministic tie-break, and a returned file
-is still a subset of whatever replaced it. That precondition is what this
-build's writer guarantees — `canMerge` refuses to cross turns and refuses to
-mix kinds — so only an older build can write the shape that breaks it.
+**The property holds given a precondition: no untagged record covers a change
+that a tagged record also covers.** Under it, demotion can never fire,
+`removingReplaced` is strict-subset removal with a deterministic tie-break,
+and a returned file is still a subset of whatever replaced it.
+
+An earlier version of this record said the precondition was what the current
+build guarantees, since `canMerge` refuses to cross turns and to mix kinds,
+so only an older build could break it. **That was wrong**, and the second
+reachable case below is why.
 
 The counterexample, which a reviewer found and which the first version of
 this property missed because its generator drew fresh ids for every merge's
@@ -279,17 +285,70 @@ DROPPED: [A, AB]
 returning AB -> kept becomes [AC, AB]
 ```
 
-Where an older build's untagged merge covers tagged changes, the kept set
-depends on which files are present, and so on arrival order; the retired list
-freezes one such outcome, in either direction. Accepted: no local rule can do
-better — which is the same reason the demotion exception was removed — and
-this build never writes that shape. Outside the precondition the test asserts
+Where an untagged merge covers tagged changes, the kept set depends on which
+files are present, and so on arrival order; the retired list freezes one such
+outcome, in either direction. For *this* shape — two overlapping untagged
+legacy merges — accepted, because no local rule can do better: it needs a
+file that is not here, which is the same reason the demotion exception was
+removed. Outside the precondition the test asserts
 only what the code promises itself, and compares the two reductions with each
 other rather than with `compact`'s output: `compact` reduces and *then*
 merges, so a merge it forms can subsume something it kept, and a further
 reduction drops that. Benign, settled by the next compaction, and worth
 writing down because it makes `compact`'s output a poor baseline for any
 such assertion.
+
+## The second reachable case, and what it really costs
+
+`replace(_ latest:with turnID:)` writes a tagged record whose
+`replacedRevisionIDs` is `latest.coveredRevisionIDs ∪ {latest.id}`. That is a
+tagged record covering a change an untagged record also covers — the shape
+the precondition rules out — and **this build writes it**, which is what the
+earlier wording got wrong.
+
+The path, traced: Mac X holds untagged `A` and `B`, merges them into untagged
+`M`, and deletes and retires both. Mac Y holds the tagged replacements `RA`
+and `RB`. On Y, `M` arrives and is demoted — `A` is held by `RA`, `B` by
+`RB`, both tagged — so Y keeps `[RA, RB]`. On X, `RA` and `RB` arrive as
+strict subsets of `M` and are dropped, and `M` cannot be demoted because `A`
+is retired and therefore claimed, so it never comes back. X keeps `[M]`.
+
+A merge keeps the earlier side's `before` and the later side's `after`, so
+what each Mac can restore to is:
+
+```
+Y: before_A, after_A, after_B
+X: before_A,          after_B
+```
+
+**`after_A` is a version of the document that Y can restore to and X cannot.**
+An earlier version of this record said the cost here was never a version of
+the text. That was wrong too. The cost is the turn's name on X, one
+intermediate version unreachable on X, and two Macs whose histories do not
+converge. Nothing is destroyed: `A` is on the server and on Y.
+
+How narrow: it needs two Macs; two panes on the writing Mac, one opened
+mid-run without the turn; a pass publishing the untagged record inside the
+seconds-wide window before its tagged replacement, twice over for two
+consecutive changes (one leak alone is settled by the equal-coverage
+tie-break, which prefers the tagged record); and the receiving Mac compacting
+both before the tagged ones arrive. There is one Mac today.
+
+## What this makes possible, and is not done here
+
+**Reactive un-retirement.** Unlike the overlapping-legacy-merge case, this one
+is locally decidable, because the trigger is an *arrival*: a tagged record
+about to be dropped under an untagged merge that would be demotable if its
+retired originals were present — every replaced id either held by a
+non-candidate or named in the retired list, and one holder tagged. Removing
+those originals from the list brings them back next pass, the demotion fires,
+and X converges to Y. If one is not on the server, nothing fetches and
+nothing loops.
+
+That is not the demotion exception returning. The exception guessed, at
+retirement time, about a file whose existence it could not know; this acts at
+arrival time on a file the list itself proves was published. **To be done
+before a second Mac is ever installed.**
 
 ## The case still accepted
 
@@ -300,4 +359,5 @@ subset of another's, tags or not, and keeping that one fetchable is what lets
 the demotion eventually happen. What stays unrecoverable is narrower: where
 the originals were merged before either was ever uploaded, so the server holds
 the merge and not its parts. What is lost there is per-turn granularity on
-legacy agent history, never a version of the text.
+legacy agent history. A version of the text can become unreachable on one
+Mac in the `replace` path below, which is recorded there with its remedy.
