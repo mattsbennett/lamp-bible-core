@@ -51,7 +51,27 @@ wrong shape rather than a run of defects.
   this is local state by construction: no tombstone, nothing the phone sees,
   no synced format change, nothing in `SyncMerge.lean` or `coverage.json`.
   `0015` is untouched.
-- **One id a line, appended, never rewritten.** This is on the autosave path,
+- **One entry a line: the published name, and the id.** The *name* is what a
+  claim matches, because a manifest member has no other identity and the
+  store calls a revision file anything ending `.json` — it writes
+  `<millis>-<uuid>.json` and also accepts `<uuid>.json`, which sync's own
+  tests publish. A first version derived the id by parsing the name, and so
+  could never match the second shape: those members were fetched and deleted
+  on every pass, the exact loop this record exists to stop, let back in
+  through an inference about a convention the code does not enforce on read.
+  Names are compared folded (NFC then lower case, the same expression the
+  pass folds paths with), which is safe because `0013` makes the pass refuse
+  two server members differing only in case.
+
+  The *id* is kept beside it, against the planner's advice to carry the name
+  alone. A retirement has to be reconsidered when a legacy untagged merge
+  turns up later and `removingReplaced` wants an original back — and that
+  merge names the ids it covers, while the original it wants has no file
+  here. Only this line can map that id to the name it was published under,
+  so name-alone makes the case unimplementable. Both are written from one
+  `entry` in the same statement, so the objection to carrying two keys —
+  two things to keep true — does not bite.
+- **Appended, never rewritten.** This is on the autosave path,
   and a decode-sort-rewrite of the whole list under the store's lock was
   measured at 44 ms against 3 ms once fifteen thousand ids had accumulated —
   latency growing for ever with the file. A torn append leaves one
