@@ -668,30 +668,41 @@ above, and three of the four turned out not to need a decision at all.
   at-rest figure. It is a pass-side defect, not a format one — none of the
   three sub-options would fix it — so `0015` stands either way.
 
-  **Fixed**: the gather claims a writing workspace's revision member with no
-  file at its path — bar the ids an untagged merge still needs, which a
-  demotion cannot do without — and core keeps the claim only where its own
-  records name an install there. All 43 stop being fetched on this library,
-  since every untagged merge here is a user's and a demotion can never want
-  one. Three review rounds shaped the exceptions, and `0016` carries them
-  with the one case left as it is. The first fix proposed — claim what a local `replacedRevisionIDs`
-  covers — was measured before it was written and reached 10 of the 43,
-  because a merge unions its sides' *covered* ids and so never names an
-  intermediate merge; `0016` carries that and the rest of what was rejected.
+  **Fixed, and confirmed live.** `decisions/0017`: compaction writes the ids
+  it removes to `.lamp/retired-revisions.json` — local state, beside
+  `draft-sync.json`, which the export does not carry — and the gather claims
+  a missing member whose id is on that list.
 
-  Two things went in first. `heldWithoutAFile` is checked against
-  `coverage.json` and needs nothing there: a client claim is outside the
-  model, and core's own guard on it is the enforcement. And the Mac's two
-  `LampSyncUnclaimedInstalls` reports — the only warning this class of fault
-  gives — were printed to stdout, which an app launched from Finder has
-  nowhere to put: two days of the unified log held none of them while this
-  was happening. They go through the logger now.
+  The two-pass check the owner asked for, on their own library. The installed
+  build from before the fix, over two consecutive passes with no editing:
+  **45 revision members fetched again, every one of them on both passes**, and
+  the revisions folder byte-identical at the end — fetched, written by the
+  merge, deleted again by the compaction on the next line, net zero, for ever.
+  The fixed build over two passes: **none**. 124 revision files before and
+  after, the same files.
 
-  Open: two passes over the owner's store with no editing, reading the log
-  for "Fetched again" — 43 paths on both before, none after. And the at-rest
-  copy on the server and the phone, which this does not touch: both hold
-  every revision ever uploaded, and bounding that needs the tombstone `0015`
-  rejected.
+  `0017` supersedes `0016`, which claimed on absence alone. That inference
+  cost three review rounds — matching `replacedRevisionIDs` reached 10 of 43
+  because a merge of a merge never names the intermediate; a demotion needs
+  every id its merge replaced; and "some local history exists" was satisfied
+  by one new edit in an emptied folder, while finding the ids at all decoded
+  the library's whole history every pass under the owner the editor queues
+  behind. A sync record says *installed here once*; what the claim needs is
+  *removed here deliberately*, and only the deleter can say that.
+
+  **And the detector was blind.** The Mac's two `LampSyncUnclaimedInstalls`
+  reports — the only warning this class of fault gives — were printed to
+  stdout, which an app launched from Finder has nowhere to put. Two days of
+  the unified log held none of them while 45 members were being refetched
+  every pass. Through the logger now, counts and layout folders public and
+  paths private. Its first real run surfaced two faults nobody knew about:
+  **five `WritingMedia` members fetched again every pass, and three
+  `Translations` deletions never carried out here.** Open, and not the same
+  bug: revisions are not involved.
+
+  Still not addressed: the server and the phone hold every revision ever
+  uploaded, uncompacted, and nothing deletes one. This stops the traffic, not
+  the accumulation.
 
   `measuresWhatRevisionHistoryCostsAtRest` should drop its `gzipRatio` or use
   prose-shaped bodies, and should write through `record` so its "at rest" is

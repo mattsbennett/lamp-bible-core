@@ -1,11 +1,10 @@
 # 0016. A compacted revision is claimed as held, not fetched again
 
-Status: Accepted for the Mac, 2026-11-24, held by `RevisionMembersHeldTests`.
-Found by Fable while being asked whether `0015`'s three sub-options were
-settled; its first fix was measured and failed, and the one here is its
-second. No live pass has been watched doing it — that needs the owner's
-store, and what the fix stops is now observable because of the Logger change
-that went in first.
+Status: **Superseded by 0017**, 2026-11-24. The defect and its measurements
+stand, and the live confirmation below is the evidence for both records; what
+0017 replaces is how the claim decides a member was superseded. This one
+inferred it from absence, and three review rounds each found a different hole
+in that inference. Left as written, per the README: a record is history.
 
 ## Context
 
