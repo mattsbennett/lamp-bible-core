@@ -697,12 +697,67 @@ above, and three of the four turned out not to need a decision at all.
   every pass. Through the logger now, counts and layout folders public and
   paths private. Its first real run surfaced two faults nobody knew about:
   **five `WritingMedia` members fetched again every pass, and three
-  `Translations` deletions never carried out here.** Open, and not the same
-  bug: revisions are not involved.
+  `Translations` deletions never carried out here.** Both now diagnosed, and
+  neither involves revisions — the detector was simply audible for the first
+  time.
+
+  **The five `WritingMedia` members** all belong to writing `DAE17410-…`,
+  which the library does not hold and which the personal deletion ledger
+  records *neither as present nor as deleted*. Its five pictures are on disk,
+  at `Media/Devotionals/DAE17410-…/`. The gather builds media candidates from
+  the writings it holds — each writing's own attachments, through
+  `LampSyncLocalFiles.devotionalMedia(for:)` — so nothing claims a file whose
+  writing is absent, and `change`'s media branch downloads any media member
+  with no local copy *unconditionally*, because nothing lists media. So they
+  come down, are written where they already are, and come down again.
+
+  The fix is to claim them, not to sweep them: nothing says the owner deleted
+  that writing, so its pictures may still be referenced by a writing another
+  device holds. A media file on disk at the path the member names is held, and
+  saying so is true.
+
+  **The three `Translations` deletions** are `ABPs`, `ESVs` and `NETs` —
+  exactly the `s`-suffixed spellings of the translation ID rename. `ABP`,
+  `ESV`, `NASB`, `NET`, `NIV` and `NKJV` are all installed under their
+  `sha256(id)` names; those three are not, and the server has tombstoned
+  them. A tombstone for a path this client recorded an install at but holds
+  nothing at cannot be carried out, so it is reported every pass, for ever:
+  the rename left the records behind.
+
+  The fix is to forget the record. `LampSyncUnclaimedInstalls` deliberately
+  reports and never corrects, because a record with no claim may mean a client
+  holding the file without saying so — but for a **tombstoned** path that
+  reasoning does not apply: the server says it is gone, nothing will fetch it
+  again, and there is nothing to lose by forgetting. That changes a documented
+  boundary, so the model and `coverage.json` move with it, and it is shared
+  with the phone.
 
   Still not addressed: the server and the phone hold every revision ever
   uploaded, uncompacted, and nothing deletes one. This stops the traffic, not
   the accumulation.
+
+  **And one thing is unexplained.** On the installed build the 45 orphaned
+  `Revisions/` members are neither fetched nor claimed, and no retirement list
+  exists — compaction runs on every pass but returns early when it deletes
+  nothing, and the list is written only on a deletion. So the new mechanism is
+  *inert* on this library, and for these members the installed build is
+  behaviourally identical to the one that fetched all 45 twice over a few
+  hours earlier. Something else stopped it, and it is not identified.
+
+  Ruled out: a reap through this client, because a deletion carried out
+  forgets the record and the records still name 169 against 124 on disk; and
+  the unclaimed-deletion case, because `deletionsNotCarriedOut` named only the
+  three `Translations` paths on those passes, not these. What remains is
+  either a member the server no longer lists, or a path no longer in the
+  manifest at all — both of which reach `.none` without a download.
+
+  The test, when someone wants it: one pass of a build that logs, for each
+  recorded `Revisions/` path with no local file, whether the manifest names
+  it, whether it is tombstoned, and whether the listing reached it. That
+  splits the two without anyone opening the store. Until then this plan does
+  **not** claim the live loop was stopped by the retired list — only that the
+  loop existed, that it is gone, and that each link of the new mechanism is
+  tested on its own.
 
   `measuresWhatRevisionHistoryCostsAtRest` should drop its `gzipRatio` or use
   prose-shaped bodies, and should write through `record` so its "at rest" is
