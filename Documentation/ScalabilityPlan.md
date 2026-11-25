@@ -774,10 +774,25 @@ above, and three of the four turned out not to need a decision at all.
   | everything else (modules, media, decks, ledgers) | 111 | — |
   | **published total** | | **364.0** |
 
-  Of 383.1 MB of workspace bytes on disk, **364.0 MB are behind recorded
-  members and only 19.1 MB are local-only** — so the earlier figure was not
-  misleading by much, but it was asserted without being checked, which is
-  the part worth not repeating.
+  Of **396.8 MB** of unique workspace bytes on disk, **363.9 MB (91.7%) are
+  behind recorded members and 33.0 MB (8.3%) never sync**. So the earlier
+  figure was not misleading by much — but it was asserted without being
+  checked, which is the part worth not repeating.
+
+  **Count a workspace's bytes by inode.** A context file is a *hard link*
+  into the content-addressed object store, so 1,127 of the 1,967 names share
+  an inode with another: summing file sizes by name gives 751.9 MB for a tree
+  that holds 396.8 MB, and `du` gives yet another answer. Two of the figures
+  in this section's history came from that mistake.
+
+  What stays local is machine-written rather than authored: the `.claude` and
+  `.agents` skill trees, a deck's build output (`presentation-preview/`,
+  `deck/`, `Assets/` — 27.7 MB of the 33.0), the agent chat state and sync
+  bookkeeping under `.lamp/`, and the generated top-level files
+  (`draft.md`, `AGENTS.md`, `CLAUDE.md`, `DEVOTIONAL_CONTEXT.md`,
+  `opencode.json`). A writing's prose does **not** travel as a workspace
+  document — it syncs as the personal writing collection, and `draft.md` is a
+  working copy of it.
 
   Revision history is **2.5% of what this library pushes**, and that holds the
   conclusion. It also reframes the item: if server bytes ever matter here, the
