@@ -599,3 +599,45 @@ All needs it on. The way out today is to put the folder back where it was.
 Naming a folder independently of its path is a change to how sync identifies a
 folder at all, since every record is keyed the same way, and belongs with that
 rather than in this feature.
+
+## Round eleven
+
+**Core: a fifth round with no serious finding.** Its two were about the list
+of attributes safe to lose, and the first was a lapse in the list itself. Two
+names had been added from memory beside the measured ones, under a comment
+saying the list was measured — and `com.apple.TextEncoding`, one of the two,
+can be the only record of how a legacy text file's bytes decode. Both came
+out, so the comment is true. `com.apple.FinderInfo` is now judged by its
+value: flags may be lost, a colour label set in an older Finder with no tag
+beside it may not. Both FinderInfo values on the owner's sources carry flags
+and no label.
+
+**Quarantine is carried, not lost.** A downloaded source carries the mark macOS
+uses to treat a file as having come from outside; no store keeps it, so it
+came back from the server without it. For a document that changes nothing;
+for a script attached as a source, which an agent might run, it would. Keeping
+every downloaded PDF on disk instead would have gutted the feature, so the
+mark's value is kept in the same save as the offload note and put back when
+the source arrives — after consolidation, since that may swap the download for
+a link to an existing read-only object, with the owner's write bit lifted for
+the one call because macOS will not otherwise write the attribute. The first
+version put it back too late to take; the review saw it in the working tree.
+
+Also: a pass never saves a fresh ledger over one it could not read — it works
+from a fresh one in memory and leaves the file, so the lock reads it as unknown
+and holds; a confirmed folder is checked on the workspace's owner immediately
+before it is removed, and one with no identity taken is refused; a folder's
+removals are queued before its acts are cleared, as a single source's are;
+the follow-up passes for a source still uploading are spent once per pass,
+not once per source; and offloads asked for before a layout move get a pass
+of their own after it.
+
+**Tried and reverted: keeping an in-flight download out of a Remove.** The
+fix refused any incoming source whose path was queued for removal. That also
+refused a genuine re-add from another Mac — remove a source here, attach it
+again there, and it would never come back — which the deletion's date rule
+exists to let through, and which `aContextFileAddedAgainAfterRemovalStays`
+caught the moment it ran. The finding stays open: a download already planned
+when the reader removes a source can still land, if its file is dated after
+the removal. Closing it needs the import to tell a download of the removed
+copy from a new one, which a queued path alone cannot.

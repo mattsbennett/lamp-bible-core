@@ -120,9 +120,32 @@ struct LampSyncOpenFile {
         var buffer = [CChar](repeating: 0, count: size)
         guard flistxattr(descriptor, &buffer, size, 0) == size else { return nil }
         let names = buffer.split(separator: 0).map { String(decoding: $0.map(UInt8.init), as: UTF8.self) }
-        return names.contains { !LampVerifiedFileRead.isSafeToLose(attributeNamed: $0) }
+        for name in names {
+            if name == LampVerifiedFileRead.finderInfoName {
+                guard let value = attributeValue(name),
+                      LampVerifiedFileRead.finderInfoIsSafeToLose(value)
+                else { return true }
+                continue
+            }
+            if !LampVerifiedFileRead.isSafeToLose(attributeNamed: name) { return true }
+        }
+        return false
         #else
         return false
+        #endif
+    }
+
+    /// The bytes of the extended attribute `name`, or nil where they could
+    /// not be read.
+    private func attributeValue(_ name: String) -> [UInt8]? {
+        #if canImport(Darwin)
+        let size = fgetxattr(descriptor, name, nil, 0, 0, 0)
+        guard size >= 0 else { return nil }
+        var value = [UInt8](repeating: 0, count: size)
+        guard size == 0 || fgetxattr(descriptor, name, &value, size, 0, 0) == size else { return nil }
+        return value
+        #else
+        return nil
         #endif
     }
 
@@ -347,18 +370,19 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
     /// sources on 2026-11-25, and every one of those sources carried
     /// `com.apple.provenance` — so a list that missed it would have kept the
     /// whole library from ever being offloaded, with every test still green.
+    ///
+    /// Only what was measured. Two names were first added from memory beside
+    /// these, and one of them was wrong: `com.apple.TextEncoding` can be the
+    /// only record of how a legacy text file's bytes decode.
+    ///
+    /// `com.apple.quarantine` is here because the Mac keeps its value and puts
+    /// it back when the source is downloaded; it is not lost, only carried.
     static let attributesSafeToLose: Set<String> = [
         "com.apple.provenance",
         "com.apple.quarantine",
         "com.apple.macl",
         "com.apple.metadata:kMDItemWhereFroms",
-        "com.apple.metadata:kMDItemDownloadedDate",
         "com.apple.lastuseddate#PS",
-        // Type and creator codes and Finder flags. A colour label set in a
-        // current Finder is written as a tag as well, which is not on this
-        // list, so a labelled file still stays.
-        "com.apple.FinderInfo",
-        "com.apple.TextEncoding",
         "INFileURLIsMarkedForDeletionOnDeallocation",
         "com.apple.iwork.documentUUID#PS",
         "com.apple.metadata:kMDItemIsScreenCapture",
@@ -368,6 +392,18 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
 
     /// Spotlight's own labels, named by a generated suffix.
     static let attributePrefixesSafeToLose = ["com.apple.metadata:kMDLabel_"]
+
+    static let finderInfoName = "com.apple.FinderInfo"
+
+    /// Whether a file's Finder info can be lost: type and creator codes and
+    /// Finder flags can, but a colour label cannot. A label set in an older
+    /// Finder lives only here, with no tag beside it, and is the reader's.
+    /// Both FinderInfo values on the owner's sources carry flags and no label.
+    public static func finderInfoIsSafeToLose(_ value: [UInt8]) -> Bool {
+        // fdFlags is bytes 8–9, big-endian; the label is bits 1–3.
+        guard value.count >= 10 else { return true }
+        return (value[9] >> 1) & 0x07 == 0
+    }
 
     public static func isSafeToLose(attributeNamed name: String) -> Bool {
         attributesSafeToLose.contains(name)

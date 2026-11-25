@@ -436,12 +436,38 @@ struct LampSyncOpenFileTests {
         let measured = [
             "com.apple.provenance", "com.apple.quarantine", "com.apple.macl",
             "com.apple.metadata:kMDItemWhereFroms", "com.apple.lastuseddate#PS",
-            "com.apple.FinderInfo", "INFileURLIsMarkedForDeletionOnDeallocation",
+            "INFileURLIsMarkedForDeletionOnDeallocation",
             "com.apple.metadata:kMDLabel_dyr2yz6jm3xjpazd4gusqm2v5y",
             "com.apple.metadata:kMDItemScreenCaptureType",
             "com.apple.metadata:kMDItemScreenCaptureGlobalRect",
             "com.apple.metadata:kMDItemIsScreenCapture", "com.apple.iwork.documentUUID#PS",
         ]
         #expect(measured.filter { !LampVerifiedFileRead.isSafeToLose(attributeNamed: $0) } == [])
+
+        // The two Finder info values found, read byte for byte: flags, no label.
+        func bytes(_ hex: String) -> [UInt8] {
+            stride(from: 0, to: hex.count, by: 2).map {
+                let start = hex.index(hex.startIndex, offsetBy: $0)
+                return UInt8(hex[start..<hex.index(start, offsetBy: 2)], radix: 16)!
+            }
+        }
+        #expect(LampVerifiedFileRead.finderInfoIsSafeToLose(bytes(
+            "0000000000000000001000000000000000000000000000000000000000000000"
+        )))
+        #expect(LampVerifiedFileRead.finderInfoIsSafeToLose(bytes(
+            "2020202020202020401000000000000000000000000000000000000000000000"
+        )))
+    }
+
+    /// What can be lost is what the system writes for itself — not what tells
+    /// a reader how to read a file, or how they marked it.
+    @Test func whatTellsAreaderSomethingIsNotSafeToLose() {
+        #expect(
+            !LampVerifiedFileRead.isSafeToLose(attributeNamed: "com.apple.TextEncoding"),
+            "for legacy text, the only record of how its bytes decode"
+        )
+        var labelled = [UInt8](repeating: 0, count: 32)
+        labelled[9] = 0x0C  // label 6, set in an older Finder with no tag beside it
+        #expect(!LampVerifiedFileRead.finderInfoIsSafeToLose(labelled))
     }
 }
