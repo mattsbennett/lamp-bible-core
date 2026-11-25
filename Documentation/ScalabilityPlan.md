@@ -592,22 +592,29 @@ above, and three of the four turned out not to need a decision at all.
   turned out not to depend on it — the phone's writing search is over title,
   subtitle and tags, and a projection leaves it exactly as it was. Nothing
   is asking for FTS here.
-- **Capping revision history, or storing diffs instead of full copies.**
-  The one still open, and the recommendation is to **leave it**: a count cap
+- ~~**Capping revision history, or storing diffs instead of full copies.**~~
+  **decided, `decisions/0015`**: leave the policy and the format. A count cap
   cannot converge, because revision folders merge by union and only a file
   that names what it replaced stays dropped — so a capped revision comes
-  back from the other Mac on the next pass, for ever. A cap would need its
-  own tombstones, which is the format change it was meant to avoid, for the
-  worst outcome of the three (a version seen yesterday silently gone).
-  Diffs are rejected for now: no `apply` exists, and a chain breaks when a
-  predecessor is compacted away on one Mac while the other holds its child,
-  where today every revision is self-contained and a restore is a copy.
+  back, and from two directions rather than one: another Mac still holding
+  the original, and the server, which never compacts and which no tombstone
+  covers (`decisions/0016`). A cap would need its own tombstones for revision
+  files, which is the format change it was meant to avoid, and tiered
+  compaction is already a convergent cap by time. Diffs are rejected: no
+  `apply` exists, and a chain breaks when a predecessor is compacted away on
+  one Mac while the other holds its child, where today every revision is
+  self-contained and a restore is a copy.
   **Two of the three figures are now measured**, on fixtures shaped like the
   real thing — a revision carrying the whole document on both sides, which
   is what the store writes. At 250 writings of fifty revisions each:
   **122.5 MB of history against 7.2 MB of documents, seventeen times**, and
-  all of it crosses sync. The first attempt at this measurement said 1.6×,
-  because the fixture kept only 400 characters a side; the correction is
+  all of it crosses sync — crosses it *repeatedly*, it turns out, which is
+  `decisions/0016` and the thing this item was really about. The fixture is
+  also pre-compaction history the store never leaves at rest: it writes 50
+  contiguous singles an hour apart and reads them straight back, where the
+  standard policy would merge them on first open. The first attempt at this
+  measurement said 1.6×, because the fixture kept only 400 characters a
+  side; the correction is
   more than tenfold and it is the difference between "no case to answer" and
   "the largest thing in the library".
 
@@ -631,26 +638,44 @@ above, and three of the four turned out not to need a decision at all.
   1% of the workspace bytes** — and the whole of the saving is dwarfed by a
   single context PDF.
 
-  So the recommendation is now **leave the policy and the format exactly as
-  they are, and do not compress either.** The cap stays rejected on
-  mechanics. Diffs stay rejected on the correctness surface. And compression
-  — which this plan previously held as the cheap fallback — is not worth its
-  one real cost: `storedRevisions` decodes with `compactMap` and `try?`, so a
-  Mac running an older build does not fail on a revision it cannot read, it
-  **silently leaves it out of the history the pane shows**. Compaction is
-  careful about exactly this ("history this version cannot read is not
-  history it is entitled to discard") — the file survives, but during a
-  version skew the user sees versions disappear from a feature whose whole
-  job is that they do not. Paying that for 5.5 MB, against 401 MB of context
-  the owner put there deliberately, is the wrong trade.
+  So the recommendation is **leave the policy and the format**, and it is now
+  a record: `decisions/0015`. The cap is rejected on mechanics, the diffs on
+  the missing `apply` and the breakable chain, and **compression on its
+  saving** — 5.5 MB, about 1.4% of what the workspaces already weigh, less
+  than one context PDF.
 
-  The third figure — revision uploads per day of actual writing — is still
-  not measurable: the workspaces hold history from four sittings, not a
-  daily rhythm, and the owner's writing corpus mostly lives outside Lamp. If
-  that changes, it is the figure to take, because it measures sync traffic
-  rather than bytes at rest, and traffic is the part 0 and 2a cared about.
-  `measuresWhatRevisionHistoryCostsAtRest` keeps the fixture figures for
-  comparison.
+  An earlier version of this entry (core `99f5d5a`) rejected compression for
+  a different reason: that a Mac on an older build omits, silently, history
+  it cannot decode. The behaviour is real, but the reasoning was not — this
+  plan had already described it and counted it a virtue, and as a veto it
+  would reject almost any format change to a synced file. What survives is
+  one sequencing rule: **a breaking change to a synced write-once format
+  ships its reader a release ahead of its writer.** No version marker; a
+  marker only helps a reader that already knows it.
+
+  **The third figure was the wrong frame, and the right one is a defect.**
+  "Uploads per day of writing" could not be taken — the history is four
+  sittings, not a daily rhythm. But asking the sync code why turned up
+  `decisions/0016`: compaction is Mac-local, nothing tombstones a revision,
+  and `LampSyncFilePlan.change` sends a member with a server listing and no
+  local copy to `.download`. So a revision this Mac compacted away is
+  downloaded, written by `mergeTree` and deleted again by the `compact` on
+  the next line — every pass, for ever. On the owner's library, 168 recorded
+  revision members against 125 on disk: **43 orphans, about 2.9 MB a pass**,
+  as a lower bound.
+
+  That is the term items 0 and 2a care about, and it was hiding behind an
+  at-rest figure. It is a pass-side defect, not a format one — none of the
+  three sub-options would fix it — so `0015` stands either way. Open: a live
+  two-pass confirmation against the owner's store, and the fix (claiming
+  revisions covered by a local `replacedRevisionIDs` through
+  `heldWithoutAFile`, checked against this source's `coverage.json`
+  boundary first).
+
+  `measuresWhatRevisionHistoryCostsAtRest` should drop its `gzipRatio` or use
+  prose-shaped bodies, and should write through `record` so its "at rest" is
+  what the store leaves at rest.
+
 - ~~The deck listing cache (1a) trusting a modification date~~ **decided,
   `decisions/0003`**: it keys on the whole file identity, `st_ctime` and
   inode included, not a date. An earlier version of this line said `0007`

@@ -36,5 +36,5 @@ answer, with three alternatives measured and rejected, and 0010 is the second
 thing that snapshot had been doing silently. 0008 also carries a measurement
 that measured the wrong thing, and what it cost to believe it.
 
-Records 0001–0014 come out of the scalability pass of 2026-11-24
+Records 0001–0016 come out of the scalability pass of 2026-11-24
 (`../ScalabilityPlan.md`), which holds the measurements and the sequencing.
