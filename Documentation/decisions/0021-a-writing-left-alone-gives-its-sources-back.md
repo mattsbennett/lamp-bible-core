@@ -408,12 +408,43 @@ itself), and the per-unlink recheck of the observation.
 - *An offload is not tied to the server that holds it.* Offload to one server,
   switch to another, and the source is stranded on the first: the new server
   never had it, Download cannot reach it, and Remove would queue a path-only
-  deletion against the new server. This is not a defect to patch but a
-  question of what switching servers should do with sources that live only on
-  the old one — bring them back first, refuse the switch, or keep them listed
-  against the server that holds them. Left for the owner.
+  deletion against the new server. Not a defect to patch but a question of
+  what switching should do with sources that live only on the old server —
+  so it went to the owner. Decided below.
 - *A download already in flight can undo a Remove.* If a pass has planned the
   download when the reader removes a source that is on its way, the file can
   land after the deletion and be accepted as newer. Closing it means checking
   the queued removal where the import commits a download, which is core's
   sync path rather than this feature's.
+
+## Switching servers while sources are offloaded
+
+**The owner's decision, 2026-11-25: refuse until they are downloaded.** Of the
+three offered — refuse, download them and then switch, or keep them listed
+against the old server — this is the one that cannot strand anything, and if
+a server is being left for good, downloading first is what has to happen
+anyway.
+
+The lock holds while any source is only on the server: let go, *or asked back
+and not yet arrived*, since one on its way still exists only on the old
+server. It is precise rather than a freeze. Sync may always be turned **off**
+— that changes no server — and may be pointed at any server this Mac has
+confirmed holding every one of those sources, which is what lets it be turned
+off and on again: the same server comes back, and it holds them. What is
+refused is a provider, address or folder that would not, and forgetting the
+sync details, which would forget the way to the only copies.
+
+The Sync settings say so above the controls, with **Download All**, and
+disable the address field, the folder chooser and Forget while it holds; the
+controller refuses the change as well, with the reason, so nothing reaches it
+by another way. Download All asks for every offloaded source and starts a
+pass; the lock lifts once they have arrived.
+
+Because the destination cannot change while anything is offloaded, an offload
+never needs to record which server holds it — the server it was made against
+is still the one sync talks to. That is why this did not become a field on the
+act.
+
+Held by tests: the rule (`syncCannotLeaveAserverHoldingTheOnlyCopy`) and the
+way out (`downloadAllAsksForEverySourceAndTheLockHoldsUntilTheyArrive`). The
+controller's refusals at each setter are held by reading.
