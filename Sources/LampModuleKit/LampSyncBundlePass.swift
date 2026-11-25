@@ -208,6 +208,16 @@ public struct LampSyncBundlePass {
         /// so without saying so this client fetches and installs the same
         /// file on every pass, for ever. Saying so is the truth about it:
         /// taken at that revision, unchanged since.
+        ///
+        /// A writing's revision history is the second case, and it arrives at
+        /// the same place from the other direction: the file was real, and
+        /// compaction replaced it with one that covers it, so the history is
+        /// held by that replacement rather than by a file at this path
+        /// (`Documentation/decisions/0016`).
+        ///
+        /// A claim is kept only where this client's own records name an
+        /// install at the path, below. A claim about a path it has never held
+        /// says nothing true, and is dropped rather than believed.
         public var heldWithoutAFile: Set<String> = []
 
         /// Paths this client holds something at and will not sync, by the

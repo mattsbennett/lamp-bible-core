@@ -666,11 +666,28 @@ above, and three of the four turned out not to need a decision at all.
 
   That is the term items 0 and 2a care about, and it was hiding behind an
   at-rest figure. It is a pass-side defect, not a format one — none of the
-  three sub-options would fix it — so `0015` stands either way. Open: a live
-  two-pass confirmation against the owner's store, and the fix (claiming
-  revisions covered by a local `replacedRevisionIDs` through
-  `heldWithoutAFile`, checked against this source's `coverage.json`
-  boundary first).
+  three sub-options would fix it — so `0015` stands either way.
+
+  **Fixed**: the gather claims every revision member with no file at its
+  path, and core keeps the claim only where its own records name an install
+  there. The first fix proposed — claim what a local `replacedRevisionIDs`
+  covers — was measured before it was written and reached 10 of the 43,
+  because a merge unions its sides' *covered* ids and so never names an
+  intermediate merge; `0016` carries that and the rest of what was rejected.
+
+  Two things went in first. `heldWithoutAFile` is checked against
+  `coverage.json` and needs nothing there: a client claim is outside the
+  model, and core's own guard on it is the enforcement. And the Mac's two
+  `LampSyncUnclaimedInstalls` reports — the only warning this class of fault
+  gives — were printed to stdout, which an app launched from Finder has
+  nowhere to put: two days of the unified log held none of them while this
+  was happening. They go through the logger now.
+
+  Open: two passes over the owner's store with no editing, reading the log
+  for "Fetched again" — 43 paths on both before, none after. And the at-rest
+  copy on the server and the phone, which this does not touch: both hold
+  every revision ever uploaded, and bounding that needs the tombstone `0015`
+  rejected.
 
   `measuresWhatRevisionHistoryCostsAtRest` should drop its `gzipRatio` or use
   prose-shaped bodies, and should write through `record` so its "at rest" is
