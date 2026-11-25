@@ -1006,9 +1006,17 @@ struct SyncModelConformanceTests {
             ],
             "workspaceFile": [
                 "Workspaces/a.md",
-                "Workspaces/Writing/w-1/Context/a.md",
                 "Workspaces/Writing/w-1/Documents/draft.md",
                 "Workspaces/Writing/w-1/DeletedFiles.json",
+                "Workspaces/Writing/w-1/Conversations/claude.json",
+                // A custom skill's own `Context` tree is the skill's, not a
+                // reader's source.
+                "Workspaces/Skills/my-skill/Context/index.json",
+            ],
+            "contextFile": [
+                "Workspaces/Writing/w-1/Context/a.md",
+                "Workspaces/Writing/w-1/Context/sources/deep/book.pdf",
+                "Workspaces/Writing/w-1/Context/Ro\u{0308}mer.pdf",
             ],
             "writingReview": [try LampSyncFolderLayout.writingReviewPath(writingID: "w-1")],
             "writingDocument": [
@@ -1030,6 +1038,10 @@ struct SyncModelConformanceTests {
             case .writingDocument(let folder, let name):
                 let document = LampWritingWorkspaceLayout.document(ofPath: path)
                 return document?.folder == folder && document?.name == name ? "writingDocument" : "writingDocument:other"
+            case .contextFile(let folder, let relativePath):
+                let source = LampWritingWorkspaceLayout.contextFile(ofPath: path)
+                return source?.folder == folder && source?.relativePath == relativePath
+                    ? "contextFile" : "contextFile:other"
             case .collection: return "collection"
             case .unsupported: return "unsupported"
             }

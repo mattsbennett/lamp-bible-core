@@ -3703,11 +3703,12 @@ highlight set: one file per set, so deleting a set deletes it everywhere. -/
 
 inductive LocalKind where
   | module | collection | deck | deckAsset | media | workspaceFile | writingReview | writingDocument
-  | outside
+  | contextFile | outside
   deriving DecidableEq, Repr
 
 inductive LocalDeletion where
-  | module (id : Nat) | deck | deckAsset | writingReview | writingDocument | collection | unsupported
+  | module (id : Nat) | deck | deckAsset | writingReview | writingDocument | contextFile
+  | collection | unsupported
   deriving DecidableEq, Repr
 
 def deleteTarget : LocalKind → Option Nat → LocalDeletion
@@ -3718,10 +3719,12 @@ def deleteTarget : LocalKind → Option Nat → LocalDeletion
   | .deckAsset, _ => .deckAsset
   | .writingReview, _ => .writingReview
   | .writingDocument, _ => .writingDocument
+  | .contextFile, _ => .contextFile
   | .media, _ | .workspaceFile, _ | .outside, _ => .unsupported
 
 def deleteAllowed : LocalDeletion → Bool
-  | .module _ | .deck | .deckAsset | .writingReview | .writingDocument => true
+  | .module _ | .deck | .deckAsset | .writingReview | .writingDocument
+  | .contextFile => true
   | .collection | .unsupported => false
 
 -- A writing's review marks go with the writing, everywhere: a file removed
@@ -3736,6 +3739,22 @@ theorem aWritingsReviewIsDeletedEverywhere (id : Option Nat) :
 theorem aWritingsDocumentIsDeletedEverywhere (id : Option Nat) :
     deleteAllowed (deleteTarget .writingDocument id) = true := rfl
 
+/-- And so does one of a writing's **sources**.
+
+Its sources are most of what a library publishes — 355 MB against 8.9 MB of
+revision history on the one measured — and nothing could remove one from the
+server: a workspace file was never deleted as a file, so a reader who removed
+an 86 MB PDF still paid for it for ever.
+
+Only safe alongside the rule that an absent source is *not* a deletion
+(`decisions/0018`). A workspace runs agents in it, and while the ledger
+inferred a deletion from absence, making a source deletable would have let any
+tidy-up remove a reader's sources everywhere. -/
+theorem areadersSourceIsDeletedEverywhere (id : Option Nat) :
+    deleteAllowed (deleteTarget .contextFile id) = true := rfl
+
+/-- Every *other* file in a Mac workspace still travels with its tree and is
+never deleted as a file: a conversation, a skill, the ledger itself. -/
 theorem anyOtherWorkspaceFileIsNotDeletedAsAFile (id : Option Nat) :
     deleteAllowed (deleteTarget .workspaceFile id) = false := rfl
 
@@ -5941,17 +5960,19 @@ def manifestEntries : List ManifestEntry :=
 def localKindName : LocalKind → String
   | .module => "module" | .collection => "collection" | .deck => "deck"
   | .deckAsset => "deckAsset" | .media => "media" | .workspaceFile => "workspaceFile"
-  | .writingReview => "writingReview" | .writingDocument => "writingDocument" | .outside => "outside"
+  | .writingReview => "writingReview" | .writingDocument => "writingDocument"
+  | .contextFile => "contextFile" | .outside => "outside"
 
 -- A module removal is checked to name the path's own ID, 7 here.
 def localDeletionName : LocalDeletion → String
   | .module id => if id == 7 then "module:own" else "module:other"
   | .deck => "deck" | .deckAsset => "deckAsset" | .writingReview => "writingReview"
-  | .writingDocument => "writingDocument" | .collection => "collection" | .unsupported => "unsupported"
+  | .writingDocument => "writingDocument" | .contextFile => "contextFile"
+  | .collection => "collection" | .unsupported => "unsupported"
 
 #eval show IO Unit from do
   for kind in [LocalKind.module, .collection, .deck, .deckAsset, .media, .workspaceFile,
-               .writingReview, .writingDocument, .outside] do
+               .writingReview, .writingDocument, .contextFile, .outside] do
     IO.println <| conformanceLine "deleteTarget"
       [localKindName kind, localDeletionName (deleteTarget kind (some 7)),
        toString (mayRecordRemoval kind (some 7))]

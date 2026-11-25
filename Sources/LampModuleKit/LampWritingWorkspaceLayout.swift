@@ -100,6 +100,45 @@ public enum LampWritingWorkspaceLayout {
         return (folder, name)
     }
 
+    /// The folder a writing's sources are published under.
+    public static let contextFolder = "Context"
+
+    /// Where one of a writing's sources is published:
+    /// `Workspaces/Writing/<folder>/Context/<relativePath>`.
+    public static func contextPath(folder: String, relativePath: String) throws -> String {
+        let path = [
+            LampSyncFolderLayout.writingWorkspacesDirectory, folder, contextFolder, relativePath,
+        ].joined(separator: "/")
+        guard contextFile(ofPath: path) != nil else {
+            throw LampSyncFolderLayout.PathError.unsafe(relativePath)
+        }
+        return path
+    }
+
+    /// One of a writing's **sources**, by its workspace folder and its
+    /// relative path inside `Context/`.
+    ///
+    /// Nested names are allowed, unlike a document's: a reader's sources come
+    /// in folders. In NFC for the same reason document names are — two
+    /// devices spell the same filename differently and must agree it is one
+    /// file.
+    public static func contextFile(ofPath path: String) -> (folder: String, relativePath: String)? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let writing = LampSyncFolderLayout.writingWorkspacesDirectory.split(separator: "/").map(String.init)
+        guard components.count >= writing.count + 3,
+              Array(components.prefix(writing.count)) == writing,
+              components[writing.count + 1] == contextFolder
+        else { return nil }
+        let folder = components[writing.count]
+        let rest = Array(components[(writing.count + 2)...])
+        guard !folder.isEmpty, folder.unicodeScalars.first != ".",
+              !folder.contains("\\"), !folder.contains("\u{0}"),
+              !rest.isEmpty,
+              !rest.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+        else { return nil }
+        return (folder, rest.joined(separator: "/").precomposedStringWithCanonicalMapping)
+    }
+
     // MARK: Kept copies
 
     /// The name this device's edits are kept under when another device
