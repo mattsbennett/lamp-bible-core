@@ -286,4 +286,49 @@ struct LampSyncOpenFileTests {
         #expect(before.inode == after.inode, "the same file, written over")
         #expect(before != after)
     }
+
+    /// The read says whether its identity can be trusted, from the volume the
+    /// file was read on. The test volume is the build machine's APFS one.
+    @Test func aVerifiedReadSaysWhetherItsIdentityCanBeTrusted() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("source.pdf")
+        try Data("x".utf8).write(to: file)
+
+        let read = try LampVerifiedFileRead.read(file)
+        #expect(
+            read.identityIsTrusted
+                == LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: root),
+            "the same answer the gather's own digest cache gets for that volume"
+        )
+    }
+
+    /// A socket is not an ordinary file, though it refuses to open with an
+    /// errno that says nothing of the kind.
+    @Test func aVerifiedReadCallsASocketNotAfile() throws {
+        // A short path: a socket's address has room for 104 bytes.
+        let root = URL(fileURLWithPath: "/tmp/lamp-sock-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("s").path
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        #expect(fd >= 0)
+        defer { close(fd) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+            path.withCString { strncpy(UnsafeMutableRawPointer(pointer).assumingMemoryBound(to: CChar.self), $0, 103) }
+        }
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        #expect(bound == 0)
+
+        #expect(throws: LampVerifiedFileRead.Failure.notAnOrdinaryFile) {
+            try LampVerifiedFileRead.read(URL(fileURLWithPath: path))
+        }
+    }
 }

@@ -91,6 +91,21 @@ struct LampSyncOpenFile {
         return LampFileIdentity(info)
     }
 
+    /// What `fstatfs` calls the filesystem this file is on — from the
+    /// descriptor, so it is the volume the bytes were read from, not whatever
+    /// is mounted at the path by the time anyone asks.
+    func filesystemName() -> String? {
+        #if canImport(Darwin)
+        var info = statfs()
+        guard fstatfs(descriptor, &info) == 0 else { return nil }
+        return withUnsafeBytes(of: &info.f_fstypename) { bytes in
+            String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self).lowercased()
+        }
+        #else
+        return nil
+        #endif
+    }
+
     /// Whether this is an ordinary file — not a directory, a socket or a
     /// device. A symbolic link never gets this far: `O_NOFOLLOW` refuses one
     /// at `open`.
@@ -247,6 +262,15 @@ struct LampSyncOpenFile {
 public struct LampVerifiedFileRead: Equatable, Sendable {
     public let identity: LampFileIdentity
     public let digest: String
+    /// Whether this file's identity can be trusted to say its bytes have not
+    /// changed since — `LampSyncIdentityTrust`, `decisions/0007`.
+    ///
+    /// A caller that will act on the identity alone later, as the Mac's
+    /// offload does when it deletes a source it read earlier, must not where
+    /// this is false. On exFAT there is no change time in the format, and a
+    /// share can mirror the write time into it, so a file rewritten at the
+    /// same size with its date put back keeps an identity that matches.
+    public let identityIsTrusted: Bool
 
     public enum Failure: Error, Equatable {
         /// Not an ordinary file, or a symbolic link, or not there.
@@ -274,19 +298,26 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
                 // replaced at the same size with its date put back is noticed
                 // by the change time, and nothing else will notice it.
                 guard before == after else { throw Failure.changedWhileRead }
-                return LampVerifiedFileRead(identity: before, digest: digest)
+                return LampVerifiedFileRead(
+                    identity: before,
+                    digest: digest,
+                    identityIsTrusted: LampSyncIdentityTrust.trustsIdentity(
+                        filesystemNamed: file.filesystemName()
+                    )
+                )
             }
         } catch let failure as Failure {
             throw failure
         } catch LampSyncOpenFile.Failure.notAnOrdinaryFile {
             throw Failure.notAnOrdinaryFile
-        } catch LampSyncOpenFile.Failure.cannotBeOpened(let code) {
-            // Nothing there, a link (`O_NOFOLLOW` answers `ELOOP`), or a path
-            // through something that is not a folder: no ordinary file. Any
-            // other refusal — no permission, no descriptors left — is a file
-            // that could not be read, which a caller must not mistake for one
-            // that is not there.
-            throw [ENOENT, ELOOP, ENOTDIR].contains(code)
+        } catch LampSyncOpenFile.Failure.cannotBeOpened {
+            // Asked of the path, without following a link, rather than read
+            // from the errno: a socket refuses to open with `EOPNOTSUPP`, a
+            // link with `ELOOP`, and the list of errnos that mean "not a
+            // file" is not one to keep by hand. A regular file that would not
+            // open — no permission, no descriptors left — is unreadable, which
+            // a caller must not mistake for one that is not there.
+            throw (try? LampFileIdentity(regularFileAt: url)) == nil
                 ? Failure.notAnOrdinaryFile : Failure.unreadable
         } catch {
             throw Failure.unreadable

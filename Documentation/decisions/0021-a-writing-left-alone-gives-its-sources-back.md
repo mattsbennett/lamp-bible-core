@@ -372,3 +372,48 @@ of sync:
 Three of those live in the controller and are held by reading rather than by a
 test: the refused-sync guard, the closing manifest, and the per-unlink check of
 the server. The others each have a test that fails when the fix is reverted.
+
+## Round six
+
+Ten findings across both repositories. Fixed:
+
+- **Identity is trusted only where `0007` trusts it.** The verified read now
+  says whether the volume it read from keeps an identity that notices a
+  change — taken from the open descriptor, so it is the volume the bytes came
+  from. Off APFS nothing is offloaded: on exFAT, or a share that mirrors the
+  write time into the change time, a file rewritten at the same size with its
+  date put back keeps a matching identity, and the last check before the
+  unlink is of identity alone.
+- **The closing manifest must still count a source** before the listing may
+  vouch for it: another device can remove and reap it after the gather looked.
+- **The unlink re-checks that the file still resolves inside the context
+  directory.** `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` guard only the last
+  component (`0012` says so), so a folder on the way moved out and replaced by
+  a link would have led the unlink to the same file in its new place.
+- **A confirmed Remove spares a different file** attached under the same name
+  while the confirmation was open. A file here is the source being removed
+  only if its bytes are the ones this Mac uploaded.
+- **The button and the sweep both ask, just before each unlink, whether the
+  look they began with is still the current one** — same server, no newer pass.
+- A link at an offloaded path no longer hides the row that offers it back; the
+  first pass after an upgrade stamps arrival, so nothing is offloaded for the
+  first week; and a socket is reported as not a file rather than unreadable.
+
+Held by reading rather than a test: the refusal off APFS (the test machine's
+volume is APFS, so the guard never fires there; core tests the trust decision
+itself), and the per-unlink recheck of the observation.
+
+**Not fixed, and why.**
+
+- *An offload is not tied to the server that holds it.* Offload to one server,
+  switch to another, and the source is stranded on the first: the new server
+  never had it, Download cannot reach it, and Remove would queue a path-only
+  deletion against the new server. This is not a defect to patch but a
+  question of what switching servers should do with sources that live only on
+  the old one — bring them back first, refuse the switch, or keep them listed
+  against the server that holds them. Left for the owner.
+- *A download already in flight can undo a Remove.* If a pass has planned the
+  download when the reader removes a source that is on its way, the file can
+  land after the deletion and be accepted as newer. Closing it means checking
+  the queued removal where the import commits a download, which is core's
+  sync path rather than this feature's.
