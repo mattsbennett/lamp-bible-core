@@ -258,11 +258,38 @@ running, each round shipping a test that encoded the version it came with.
 The claim a retirement makes is *this Mac holds that history in merged form*,
 and that is exactly true when **a retired file coming back would change
 nothing the store keeps**. `RetirementKeepsWhatItClaimsTests` states that
-over generated runs of edits: compact a set, take what was dropped, put
-subsets of it back, and `removingReplaced` must keep the same ids. It catches
-a compactor regression directly — reversing the strict-superset rule in
-`removingReplaced` fails it on several seeds — and if it ever fails, the fault
-is in `compact` or `removingReplaced` rather than in anything beside them.
+over generated runs of edits, and it bites: reversing the strict-subset rule
+in `removingReplaced` fails it on hundreds of draws.
+
+**The property holds given a precondition: no untagged merge covers a change
+that knows its turn.** Under it, demotion can never fire, `removingReplaced`
+is strict-subset removal with a deterministic tie-break, and a returned file
+is still a subset of whatever replaced it. That precondition is what this
+build's writer guarantees — `canMerge` refuses to cross turns and refuses to
+mix kinds — so only an older build can write the shape that breaks it.
+
+The counterexample, which a reviewer found and which the first version of
+this property missed because its generator drew fresh ids for every merge's
+coverage: tagged single `A`, untagged single `B`, and two untagged legacy
+merges `AB` and `AC` with `C` never present.
+
+```
+KEPT:    [AC, B]
+DROPPED: [A, AB]
+returning AB -> kept becomes [AC, AB]
+```
+
+Where an older build's untagged merge covers tagged changes, the kept set
+depends on which files are present, and so on arrival order; the retired list
+freezes one such outcome, in either direction. Accepted: no local rule can do
+better — which is the same reason the demotion exception was removed — and
+this build never writes that shape. Outside the precondition the test asserts
+only what the code promises itself, and compares the two reductions with each
+other rather than with `compact`'s output: `compact` reduces and *then*
+merges, so a merge it forms can subsume something it kept, and a further
+reduction drops that. Benign, settled by the next compaction, and worth
+writing down because it makes `compact`'s output a poor baseline for any
+such assertion.
 
 ## The case still accepted
 
