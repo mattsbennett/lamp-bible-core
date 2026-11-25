@@ -1970,6 +1970,27 @@ public actor LampLibrary {
         }
     }
 
+    /// When each writing was last saved, by id.
+    ///
+    /// Two columns rather than every column, for `personalDevotionalIDs()`'s
+    /// reason: the Mac's source-offload sweep asks this after each sync pass,
+    /// and `personalDevotionals()` would read every writing's whole body —
+    /// content, content JSON and media JSON — to take a date off.
+    public func personalDevotionalModificationDates() throws -> [String: Date] {
+        let queue = try openUserDatabase()
+        return try queue.read { db in
+            var dates: [String: Date] = [:]
+            for row in try Row.fetchAll(
+                db, sql: "SELECT id, last_modified FROM personal_devotionals"
+            ) {
+                guard let id: String = row["id"] else { continue }
+                let seconds: Int64 = row["last_modified"] ?? 0
+                dates[id] = Date(timeIntervalSince1970: TimeInterval(seconds))
+            }
+            return dates
+        }
+    }
+
     /// The writings of these ids, as `personalDevotionals()` reads them.
     private func personalDevotionals(ids: [String]) throws -> [LampDevotional] {
         guard !ids.isEmpty else { return [] }

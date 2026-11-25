@@ -36,6 +36,45 @@ struct LampLibraryTests {
         #expect(try await library.personalDevotionalIDs() == whole.subtracting([gone]))
     }
 
+    /// The dates the Mac's source-offload sweep runs on, asked for without
+    /// reading every writing's body.
+    @Test func thecheapDateQueryAgreesWithTheWritingsThemselves() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-dates-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+
+        #expect(try await library.personalDevotionalModificationDates().isEmpty)
+
+        for title in ["First", "Second"] {
+            _ = try await library.savePersonalDevotional(
+                LampDevotional(
+                    id: "", moduleID: "personal-devotionals", moduleName: "My Writing",
+                    title: title, content: "Something written.", isEditable: true
+                )
+            )
+        }
+
+        let dates = try await library.personalDevotionalModificationDates()
+        let writings = try await library.personalDevotionals()
+        #expect(dates.count == writings.count)
+        for writing in writings {
+            #expect(
+                dates[writing.id] == writing.lastModified,
+                """
+                The sweep decides whether to delete this Mac's only copy of a \
+                source by this date, so it has to be the same date the writing \
+                itself carries — to the second, which is all the column keeps.
+                """
+            )
+        }
+
+        let gone = try #require(writings.first?.id)
+        try await library.deletePersonalDevotional(id: gone)
+        #expect(try await library.personalDevotionalModificationDates()[gone] == nil)
+    }
+
     @Test func commentarySeriesUsesItsOwnNameInsteadOfTheFirstBookTitle() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-series-metadata-\(UUID().uuidString)", isDirectory: true)
