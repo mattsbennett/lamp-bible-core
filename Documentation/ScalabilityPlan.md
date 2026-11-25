@@ -671,8 +671,10 @@ above, and three of the four turned out not to need a decision at all.
   **Fixed**: the gather claims a writing workspace's revision member with no
   file at its path — bar the ids an untagged merge still needs, which a
   demotion cannot do without — and core keeps the claim only where its own
-  records name an install there. 34 of the 43 stop being fetched; both
-  exceptions came from review, and `0016` carries them. The first fix proposed — claim what a local `replacedRevisionIDs`
+  records name an install there. All 43 stop being fetched on this library,
+  since every untagged merge here is a user's and a demotion can never want
+  one. Three review rounds shaped the exceptions, and `0016` carries them
+  with the one case left as it is. The first fix proposed — claim what a local `replacedRevisionIDs`
   covers — was measured before it was written and reached 10 of the 43,
   because a merge unions its sides' *covered* ids and so never names an
   intermediate merge; `0016` carries that and the rest of what was rejected.

@@ -70,9 +70,23 @@ than the code around it:
   demotion — and if its file is also claimed, it never arrives, so the merge
   keeps a turn's changes under no turn's name for good. Those ids are left
   unclaimed and go on being fetched until one of them settles the demotion,
-  after which the merge no longer names them. On the owner's library that is
-  9 members of the 43, so 34 stop being fetched rather than all 43. Not
-  hypothetical: 70 of the 125 local revisions are untagged merges.
+  after which the merge no longer names them.
+
+  **Only an agent's merge.** A demotion needs a holder that knows a turn,
+  nothing the person typed carries one, and `canMerge` refuses two revisions
+  of different kinds — so a `.userEdit` merge covers user edits and nothing
+  else, none of which can ever name a turn. Keeping those fetchable would
+  download and discard a revision on every pass to settle a demotion that
+  cannot happen, which is the loop this record exists to stop. Every untagged
+  merge on the owner's library is a user edit (70 of 125 local revisions),
+  so this is the difference between claiming 34 of the 43 and all of them.
+
+- **A workspace with no history left claims nothing.** The claim says a
+  missing revision was superseded by one that is here; where none is here —
+  a folder restored without its `.lamp`, a directory deleted by hand —
+  nothing superseded anything, the history is lost rather than compacted, and
+  the server's copies are the only way back. Claiming them would be worse
+  than fetching them.
 
 Why the claim is true rather than convenient: a revision file is written once
 and never edited, and the only thing that removes one is compaction, which
@@ -157,8 +171,13 @@ not restate it.
 - **The log says how many, not which.** A member's path carries names the
   reader chose — a context file is titled whatever the book is called — and
   the unified log is what a sysdiagnose collects and a person sends on. The
-  count and the two-component folder are public; the paths are private. The
-  count is what the two-pass check needs.
+  count is public and the paths are private, and the folder is public only as
+  far as the layout's own names go: a second component is kept for
+  `Workspaces/Writing` and its siblings and dropped everywhere else, because
+  a book's picture lives under its module id and a module id carries words
+  from the title. Two review rounds were needed to get that line safe — the
+  first version named the reader's document, the second named their books.
+  The count is what the two-pass check needs.
 - **Still to do:** two passes over the owner's store with no editing, reading
   the unified log for "Fetched again". Before the fix it should report 43
   under `Workspaces/Writing` on both passes; after it, 9.
