@@ -14,8 +14,10 @@ Status: Accepted for the Mac, 2026-11-25, held by
 `asourceHiddenByAfolderIsDrawnBesideIt`,
 `aworkspaceFolderLampMayNotSearchIsUnknown`,
 `amemberTheServerDoesNotListIsNotOffloaded`,
-`membersWhoseNamesFoldTogetherAreNotOffloaded` and
-`theReadBackAsksForNoMoreThanTheLocalCopy`.
+`membersWhoseNamesFoldTogetherAreNotOffloaded`,
+`downloadAllLeavesOutAsourceAfolderHides`,
+`afailedReadCostsNothingFromTheAllowance`,
+`asharedObjectIsNotMarkedForOneSource` and `afolderLockFollowsItsFolder`.
 Replaces the safety rule of `0021` and its review rounds five to fourteen.
 Planned by Fable after the fourteenth round; the owner chose the rebuild, the
 Remove cut and keeping the quarantine mark.
@@ -153,8 +155,28 @@ no workspaces and the lock could lift. The list now treats only "no such
 file" as empty, and throws otherwise.
 
 And three lesser ones: two members whose paths differ only in case are not
-offloaded, since the pass refuses to fetch such a pair back; the read-back asks
-for the local copy's size and one byte more — the Mac's WebDAV client did not
-forward the ranged read, so it is now forwarded — so a server copy replaced by
-something far larger costs no more than that to tell apart; and the pane draws
-a source hidden by a folder under its own row identity.
+offloaded, since the pass refuses to fetch such a pair back; the read-back was bounded to the local copy's size
+and one byte by a ranged read (reverted in the third review); and the pane
+draws a source hidden by a folder under its own row identity.
+
+## Third review of the rebuild
+
+The one serious finding was the second review's own fix. **A ranged read is
+not the whole file.** A server answering a ranged request with a part that
+matched the local bytes would have vouched for a file that is longer. The
+read-back is the whole body again, streamed to disk — exactly what Download
+does. The bandwidth bound goes with it: a server copy replaced by something
+larger in the seconds between a pass and its offloads is read in full once.
+That is accepted; the bound on what a run *plans* to read stands, and a read
+is charged to it only when it completes, so one the server refuses every time
+does not hold back the sources behind it. (The Mac's WebDAV client still
+forwards the ranged read; that is simply correct.)
+
+And: Download All leaves out a source a folder stands at, whose failure would
+have stopped the whole workspace's import; a lock on a sync folder carries the
+folder's device and inode and follows it when Finder renames or moves it —
+`0021`'s open item — rather than refusing the folder holding the copies; the
+sweep stops if the inactivity setting changes while a read is in flight; and a
+returning source linked to a stored object other sources share is not marked
+where they carry another mark or none, since the mark would be theirs too — it
+is said instead.
