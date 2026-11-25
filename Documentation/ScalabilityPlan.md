@@ -734,7 +734,13 @@ above, and three of the four turned out not to need a decision at all.
 
   Still not addressed: the server and the phone hold every revision ever
   uploaded, uncompacted, and nothing deletes one. This stops the traffic, not
-  the accumulation.
+  the accumulation — bounding that needs the tombstone `0015` rejected, and
+  it is the one thing this item leaves for someone else.
+
+  `0017`'s two-Mac case is **closed** as of 2026-11-25: compaction un-retires
+  the originals an untagged merge covers when a record that knows its turn is
+  dropped under it, so the demotion gets its chance and the two Macs converge
+  rather than one keeping a version the other cannot reach.
 
   **Explained, and it was this plan's own doing.** A probe over one pass
   logged, for every recorded `Revisions/` path, whether the manifest named

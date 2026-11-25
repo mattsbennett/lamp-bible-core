@@ -347,8 +347,17 @@ nothing loops.
 
 That is not the demotion exception returning. The exception guessed, at
 retirement time, about a file whose existence it could not know; this acts at
-arrival time on a file the list itself proves was published. **To be done
-before a second Mac is ever installed.**
+arrival time on a file the list itself proves was published.
+
+**Done**, 2026-11-25, held by
+`putsBackWhatAdemotionWouldNeedWhenAtaggedRecordIsDropped`. Compaction
+un-retires the ids an untagged merge covers whenever a record that knows its
+turn is being dropped under that merge: the next pass fetches them, and
+`removingReplaced` gets its chance to prefer the originals. The failure mode
+is benign — if the server no longer has one, nothing is listed and nothing is
+fetched, so there is no loop, at worst one download that settles it. Removal
+is the one operation on this file that rewrites it rather than appending,
+which is rare enough to leave the autosave path alone.
 
 ## The case still accepted
 
