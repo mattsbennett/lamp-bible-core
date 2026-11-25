@@ -5819,6 +5819,14 @@ public actor LampLibrary {
                 );
                 CREATE INDEX IF NOT EXISTS idx_personal_devotionals_date
                     ON personal_devotionals(devotional_date, last_modified);
+                -- Covering, so `personalDevotionalModificationDates()` reads
+                -- dates without walking the writings' bodies. `last_modified`
+                -- is the table's final column, so a scan of the table itself
+                -- traverses every row's overflow pages to reach it: measured
+                -- at 402 page-cache accesses against 2, for 100 writings of
+                -- 15 KB each.
+                CREATE INDEX IF NOT EXISTS idx_personal_devotionals_modified
+                    ON personal_devotionals(id, last_modified);
                 CREATE TABLE IF NOT EXISTS highlight_sets (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,

@@ -75,6 +75,47 @@ struct LampLibraryTests {
         #expect(try await library.personalDevotionalModificationDates()[gone] == nil)
     }
 
+    /// The date query reads dates, not bodies.
+    ///
+    /// `last_modified` is the table's final column, so a scan of the table
+    /// itself traverses every writing's content, content JSON and media JSON
+    /// in their overflow pages to reach it — which is the cost
+    /// `personalDevotionalModificationDates()` exists to avoid, and it would
+    /// pay it silently while holding this actor. Measured at 402 SQLite
+    /// page-cache accesses against 2, for 100 writings of 15 KB each.
+    @Test func thewritingDateQueryNeverReadsAwritingsBody() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-date-plan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let root = fixtureURL.appendingPathComponent("Library")
+        let library = LampLibrary(rootURL: root)
+        _ = try await library.savePersonalDevotional(
+            LampDevotional(
+                id: "", moduleID: "personal-devotionals", moduleName: "My Writing",
+                title: "Something", content: String(repeating: "x", count: 15_000),
+                isEditable: true
+            )
+        )
+
+        let queue = try DatabaseQueue(
+            path: root.appendingPathComponent("UserData.sqlite").path
+        )
+        let plan = try await queue.read { db in
+            try String.fetchAll(db, sql: """
+                EXPLAIN QUERY PLAN SELECT id, last_modified FROM personal_devotionals
+                """, adapter: ColumnMapping(["0": "detail"]))
+        }.joined(separator: " / ")
+        #expect(
+            plan.contains("COVERING INDEX"),
+            """
+            The plan is “\(plan)”. Without a covering index this is a scan of \
+            the table, which walks each writing's body to reach the date at the \
+            end of its row.
+            """
+        )
+    }
+
     @Test func commentarySeriesUsesItsOwnNameInsteadOfTheFirstBookTitle() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-series-metadata-\(UUID().uuidString)", isDirectory: true)
