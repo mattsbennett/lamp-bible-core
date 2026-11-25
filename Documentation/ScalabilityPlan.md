@@ -546,26 +546,20 @@ collection, and not before.
   that collection, and migration v45 extends those triggers from writings to
   notes and highlights. Held by
   `testNotesAndHighlightsAreCountedForTheirOwnCollection`.
-- **3d. Drop and rebuild FTS around bulk imports** `[S]`. **Measured, and it
-  matters**: a full Bible's 31 000 verses are **918–936 ms** with the index's
-  per-row triggers attached against about **380 ms** without them. **It does
-  not land** — `decisions/0014` carries the mechanism, the three attempts and
-  what would finish it.
+- ~~**3d. Drop and rebuild FTS around bulk imports**~~ **done**,
+  `decisions/0014`. A full Bible's 31 000 verses are **918–936 ms** with the
+  index's per-row triggers attached against about **380 ms** without them,
+  plus a rebuild of 23–280 ms depending on what is installed. All three
+  triggers drop, not just the insert one — leaving the update trigger live
+  tells FTS5 to delete an entry it never had, which corrupts the index — and
+  the rebuild is scoped per module kind, where a kind with no indexed rows of
+  its own rebuilds nothing.
 
-  The short of it: dropping only the insert trigger corrupts the index,
-  because the still-installed update trigger tells FTS5 to delete an entry it
-  never had ("database disk image is malformed"). Dropping all three and
-  rebuilding is right about that and still breaks two module-import rollback
-  tests for a reason nobody has explained. And `'rebuild'` costs 23 ms with
-  nothing installed but 280 ms with six translations, where indexing only the
-  additions is flat — which is why the first attempt chose the latter, and
-  why that choice was wrong: it is only sound when the import deletes and
-  updates nothing, and a replacement does both.
-
-  Kept from the attempt: the measurement, an `'integrity-check'` over every
-  external-content index, and an assertion that an imported translation's
-  verses are findable — none of which existed before, and the last of which
-  is what would have caught the corruption on the success path.
+  Two wrong answers on the way, both recorded: the corruption above, and a
+  scoping that rebuilt every index for an unmapped kind on the reasoning that
+  it was "slow rather than wrong", which it was not — it failed the
+  module-landing tests outright, and for an afternoon looked like proof the
+  whole item was unshippable.
 
 - ~~**3e. The digest cache on the phone**~~ **done**, `decisions/0007`: the
   phone's media and book pictures go through the same gate and the same cache.
