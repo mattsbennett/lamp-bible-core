@@ -148,6 +148,65 @@ public enum LampSyncDevotionalMedia {
             .appendingPathComponent(filename)
     }
 
+    /// Every media file one scope actually has on disk, whatever owns it.
+    ///
+    /// `outgoingFileURLs` asks the *owners* what files they refer to, which
+    /// is right for publishing and wrong for saying what the library holds:
+    /// a picture whose writing this library does not have is still a file at
+    /// the member's path, and nothing else claims it. Nothing lists media,
+    /// so a media member with no local copy is downloaded on **every pass,
+    /// unconditionally** (`LampSyncFilePlan.change`'s media branch) — then
+    /// written where it already was. Five such files were doing that on the
+    /// owner's library, for a writing the deletion ledger records neither as
+    /// present nor as deleted.
+    ///
+    /// Claiming them rather than sweeping them is the deliberate choice: the
+    /// ledger does not say that writing was deleted, so its pictures may
+    /// still belong to a writing another device holds, and a sweep would
+    /// destroy them. A file on disk at the path the member names *is* held,
+    /// and saying so is true.
+    ///
+    /// Only regular files directly inside `Media/<folder>/<owner>/`. A link
+    /// is skipped, as `outgoingFileURLs` skips one, and for the reason
+    /// `decisions/0010` gives: a pass publishes only an ordinary file.
+    public static func filesOnDisk(
+        scope: LampMediaScope,
+        moduleID: String,
+        in libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) -> [OutgoingFile] {
+        let root = libraryRootURL
+            .appendingPathComponent("Media", isDirectory: true)
+            .appendingPathComponent(scope.folder, isDirectory: true)
+        guard let owners = try? fileManager.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var files: [OutgoingFile] = []
+        for owner in owners.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            guard (try? owner.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+                  let contents = try? fileManager.contentsOfDirectory(
+                    at: owner, includingPropertiesForKeys:
+                        [.isRegularFileKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]
+                  )
+            else { continue }
+            let ownerID = owner.lastPathComponent
+            for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                guard let values = try? url.resourceValues(
+                        forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+                      ),
+                      values.isRegularFile == true, values.isSymbolicLink != true,
+                      let remotePath = try? LampPortableDevotionalMedia.remotePath(
+                        scope: scope, moduleID: moduleID,
+                        ownerID: ownerID, filename: url.lastPathComponent
+                      )
+                else { continue }
+                files.append(OutgoingFile(remotePath: remotePath, localURL: url))
+            }
+        }
+        return files
+    }
+
     public static func downloadToLibrary(
         for devotionals: [LampDevotional],
         from moduleID: String,
