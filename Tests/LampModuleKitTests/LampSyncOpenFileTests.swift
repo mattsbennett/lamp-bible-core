@@ -245,6 +245,10 @@ struct LampSyncOpenFileTests {
     @Test func afileRewrittenWithItsDatePutBackIsNotTheSameFile() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
+        // The claim is about a volume whose change time the kernel keeps;
+        // elsewhere it may not hold, which is why identity is not trusted
+        // there (`0007`).
+        try #require(LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: root))
         let file = root.appendingPathComponent("source.pdf")
         try Data("first".utf8).write(to: file)
         let before = try LampFileIdentity(url: file)
@@ -337,7 +341,8 @@ struct LampSyncOpenFileTests {
     /// With a folder on the way that denies traversal, both the open and the
     /// type check fail with `EACCES` — and calling that "not an ordinary
     /// file" would let a caller treat a source that is plainly there as gone.
-    @Test func afileBehindAfolderThatDeniesAccessIsUnreadableNotGone() throws {
+    @Test(.enabled(if: geteuid() != 0, "root is not refused by permission bits"))
+    func afileBehindAfolderThatDeniesAccessIsUnreadableNotGone() throws {
         let root = try fixture()
         let locked = root.appendingPathComponent("locked", isDirectory: true)
         try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
@@ -355,5 +360,29 @@ struct LampSyncOpenFileTests {
         #expect(throws: LampVerifiedFileRead.Failure.notAnOrdinaryFile) {
             try LampVerifiedFileRead.read(root.appendingPathComponent("not there.pdf"))
         }
+    }
+
+    /// A file with a resource fork says so. Neither the digest nor any store
+    /// carries the fork, so a caller deleting on the digest's strength must
+    /// not: the fork would be gone, and no download could bring it back.
+    @Test func aVerifiedReadSaysWhenThereIsAresourceFork() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let plain = root.appendingPathComponent("plain.pdf")
+        let forked = root.appendingPathComponent("forked.pdf")
+        try Data("data".utf8).write(to: plain)
+        try Data("data".utf8).write(to: forked)
+        let fork = Data("the resource fork".utf8)
+        let set = fork.withUnsafeBytes { bytes in
+            setxattr(forked.path, XATTR_RESOURCEFORK_NAME, bytes.baseAddress, bytes.count, 0, 0)
+        }
+        #expect(set == 0)
+
+        #expect(try LampVerifiedFileRead.read(plain).hasResourceFork == false)
+        #expect(try LampVerifiedFileRead.read(forked).hasResourceFork)
+        #expect(
+            try LampVerifiedFileRead.read(plain).digest == LampVerifiedFileRead.read(forked).digest,
+            "the digest cannot tell them apart, which is the point"
+        )
     }
 }

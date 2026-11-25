@@ -91,6 +91,30 @@ struct LampSyncOpenFile {
         return LampFileIdentity(info)
     }
 
+    /// Whether this file carries a resource fork with anything in it.
+    ///
+    /// The digest is of the data fork, and the stores write the data fork:
+    /// a resource fork is neither hashed nor uploaded. A caller deleting the
+    /// file on the strength of the digest would delete the fork with it, and
+    /// a download could never put it back.
+    func hasResourceFork() -> Bool {
+        #if canImport(Darwin)
+        let size = fgetxattr(descriptor, XATTR_RESOURCEFORK_NAME, nil, 0, 0, 0)
+        return size > 0
+        #else
+        return false
+        #endif
+    }
+
+    /// The file's type from the descriptor, or nil where `fstat` itself
+    /// failed — which is a file that could not be read, not one that is not
+    /// a file.
+    func fileType() -> mode_t? {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { return nil }
+        return info.st_mode & S_IFMT
+    }
+
     /// What `fstatfs` calls the filesystem this file is on — from the
     /// descriptor, so it is the volume the bytes were read from, not whatever
     /// is mounted at the path by the time anyone asks.
@@ -271,6 +295,11 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
     /// share can mirror the write time into it, so a file rewritten at the
     /// same size with its date put back keeps an identity that matches.
     public let identityIsTrusted: Bool
+    /// Whether the file has a resource fork with anything in it. Neither the
+    /// digest nor any store carries one, so a caller deleting on the strength
+    /// of the digest must not where this is true: the fork would be gone, and
+    /// no download could bring it back.
+    public let hasResourceFork: Bool
 
     public enum Failure: Error, Equatable {
         /// Not an ordinary file, or a symbolic link, or not there.
@@ -311,7 +340,10 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
     public static func read(_ url: URL) throws -> LampVerifiedFileRead {
         do {
             return try LampSyncOpenFile.with(url, followingLinks: false) { file in
-                guard file.isOrdinaryFile else { throw Failure.notAnOrdinaryFile }
+                // A failed `fstat` is a file that could not be read, not one
+                // that is not a file.
+                guard let type = file.fileType() else { throw Failure.unreadable }
+                guard type == S_IFREG else { throw Failure.notAnOrdinaryFile }
                 let before = try file.identity()
                 let digest = try file.digest()
                 let after = try file.identity()
@@ -324,7 +356,8 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
                     digest: digest,
                     identityIsTrusted: LampSyncIdentityTrust.trustsIdentity(
                         filesystemNamed: file.filesystemName()
-                    )
+                    ),
+                    hasResourceFork: file.hasResourceFork()
                 )
             }
         } catch let failure as Failure {

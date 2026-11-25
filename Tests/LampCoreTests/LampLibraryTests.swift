@@ -61,7 +61,7 @@ struct LampLibraryTests {
         #expect(dates.count == writings.count)
         for writing in writings {
             #expect(
-                dates[writing.id] == writing.lastModified,
+                dates.first { $0.id == writing.id }?.modified == writing.lastModified,
                 """
                 The sweep decides whether to delete this Mac's only copy of a \
                 source by this date, so it has to be the same date the writing \
@@ -72,7 +72,39 @@ struct LampLibraryTests {
 
         let gone = try #require(writings.first?.id)
         try await library.deletePersonalDevotional(id: gone)
-        #expect(try await library.personalDevotionalModificationDates()[gone] == nil)
+        #expect(try await library.personalDevotionalModificationDates().contains { $0.id == gone } == false)
+    }
+
+    /// Two ids that differ only in Unicode form keep a date each.
+    ///
+    /// Swift compares strings by canonical equivalence, so a dictionary keyed
+    /// by id holds one of them — and each writing's workspace folder is named
+    /// from its id's bytes, so the sweep would judge one writing by the
+    /// other's date.
+    @Test func idsThatDifferOnlyInUnicodeFormKeepTheirOwnDates() async throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-date-bytes-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let library = LampLibrary(rootURL: fixtureURL.appendingPathComponent("Library"))
+        let composed = "writing-\u{00E9}"
+        let decomposed = "writing-e\u{0301}"
+        #expect(composed == decomposed, "one string to Swift")
+        #expect(Array(composed.utf8) != Array(decomposed.utf8), "two ids to SQLite")
+        for (id, title) in [(composed, "One"), (decomposed, "Two")] {
+            _ = try await library.savePersonalDevotional(
+                LampDevotional(
+                    id: id, moduleID: "personal-devotionals", moduleName: "My Writing",
+                    title: title, content: "Something written.", isEditable: true
+                )
+            )
+        }
+
+        let dates = try await library.personalDevotionalModificationDates()
+        #expect(
+            dates.filter { $0.id == composed }.count == 2,
+            "both rows come back, rather than one overwriting the other"
+        )
     }
 
     /// The date query reads dates, not bodies.

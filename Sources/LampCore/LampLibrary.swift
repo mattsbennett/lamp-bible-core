@@ -1984,18 +1984,21 @@ public actor LampLibrary {
     public static let personalDevotionalDatesStatement =
         "SELECT id, last_modified FROM personal_devotionals"
 
-    public func personalDevotionalModificationDates() throws -> [String: Date] {
+    ///
+    /// A list of pairs, not a dictionary keyed by id. Swift compares strings
+    /// by canonical equivalence, so two ids SQLite holds as different bytes —
+    /// an imported writing's path-derived id spelled once composed and once
+    /// not — would be one key, and the second row's date would overwrite the
+    /// first. Each writing's workspace folder is named from its id's bytes,
+    /// so each has to keep its own date.
+    public func personalDevotionalModificationDates() throws -> [(id: String, modified: Date)] {
         let queue = try openUserDatabase()
         return try queue.read { db in
-            var dates: [String: Date] = [:]
-            for row in try Row.fetchAll(
-                db, sql: Self.personalDevotionalDatesStatement
-            ) {
-                guard let id: String = row["id"] else { continue }
+            try Row.fetchAll(db, sql: Self.personalDevotionalDatesStatement).compactMap { row in
+                guard let id: String = row["id"] else { return nil }
                 let seconds: Int64 = row["last_modified"] ?? 0
-                dates[id] = Date(timeIntervalSince1970: TimeInterval(seconds))
+                return (id, Date(timeIntervalSince1970: TimeInterval(seconds)))
             }
-            return dates
         }
     }
 

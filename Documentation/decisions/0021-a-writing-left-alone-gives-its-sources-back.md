@@ -468,3 +468,60 @@ and the lock going on before the first unlink, are held by reading.
 One server for the whole library, not one per source: while the lock holds,
 every outstanding offload went to the same server, so recording it once is
 enough and the act stays one value per path.
+
+## Offload happens after a sync
+
+**The owner's decision, 2026-11-25.** Rounds six to eight each found new races
+in which the Offload button deleted a file at the same moment as something
+else — a sync pass gathering, a change of server, a refresh of the lock — and
+each round's fixes produced the next round's findings. Three options were put
+to the owner: keep patching, patch these and stop, or change when a button
+may delete anything. The owner chose the last.
+
+So **Offload no longer deletes when pressed.** It records a request — a third
+act, `leaving`, the only one a file that is here keeps — and starts a sync.
+Right after that sync finishes, and before another can start, the controller
+carries out every offload there is: first what the reader asked for, then what
+the inactivity setting picks. There is one moment at which a source is deleted
+to save space, the look at the server is the one that pass has just taken, no
+other pass is running, and the lock on where sync points is written down
+before anything goes and not released until after. The whole class of overlap
+these rounds kept finding has nowhere to happen.
+
+This changes `0020`, which said Offload deletes this Mac's copy. It now does
+so after the next sync — seconds to minutes — and the row says "Going after
+next sync" with a way to keep the file after all. A request the server can
+satisfy later stays; one it never can — a volume whose identities cannot be
+trusted, a file with a resource fork, a path that is not a plain file — is
+dropped and said. A requested offload is not held back by the setting, the
+hour between sweeps, the writing's dates or an open editor: the reader is the
+one at that editor, pressing the button. Every safety check still applies.
+
+Round eight's other findings, fixed with it:
+
+- A look at the server answers only for the **account** that took it: the
+  records name a WebDAV store by address alone, and another account at the
+  same address can be another set of files.
+- A source with a **resource fork** is never offloaded. Neither the digest nor
+  any store carries the fork, so no download could bring it back. Core's
+  verified read now says whether there is one.
+- **Writings whose ids differ only in Unicode form** keep a date and a folder
+  each. Swift calls such ids one string; their workspace folders are named
+  from the bytes. The dates come back as pairs, a workspace is matched to its
+  writing by the folder name the bytes make, and each candidate carries its
+  own folder rather than having one derived from its id.
+- **Remove** refuses if what the reader confirmed has changed by the time it
+  is confirmed — the act the row showed is no longer the act there is — and
+  checks a file that has landed only against the server holding the offloads.
+- **Presence** follows no link anywhere on the way, as the gather follows
+  none: a folder linked to another folder inside the context directory
+  resolves inside it, and still is not a way to the source.
+- An attachment's name is reserved **without regard to case**, since a library
+  usually lives on a case-insensitive volume.
+- Download starts **one** pass rather than two, and an ask made during a pass
+  is answered after it whether or not that pass finished.
+
+Held by reading rather than a test: that offloads run only in the controller's
+after-pass step, that no pass starts while they run, and that the lock is not
+released meanwhile. Everything else above has a test that fails when the fix
+is reverted.
