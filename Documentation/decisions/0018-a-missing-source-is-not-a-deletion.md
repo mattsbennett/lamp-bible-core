@@ -43,13 +43,29 @@ moment a source became a deletable kind.
   not deleted, not recorded, not a failure — and pruning still sees the whole
   listing. It is the treatment `plannedKinds` already gives a kind, which is
   what the phone has done to every workspace file from the start.
-- **The Mac withholds a source it does not hold.** Still on the server,
-  absent here, fetched when something asks. That is lazy fetch, and it is the
-  same predicate that stops the refetch loop in (2).
-- **`WorkspaceContextFileStore.deleteContextFile`** is the only thing that
-  means *delete it everywhere*. It removes the file, prunes the object store,
-  and records the deletion in the ledger. `noteChanges` no longer invents one
-  for a context key.
+- **The Mac withholds a source it has *offloaded*** — recorded in that
+  workspace's ledger, local only. Still on the server, absent here, fetched
+  when something asks.
+
+  The first version withheld every source the Mac did not hold, and review
+  caught it: that cannot tell a file this Mac offloaded from one it has never
+  seen, so a **new Mac withheld the whole library's sources and had no way to
+  ask for one** — the attachment silently unavailable for ever. Absence is
+  not a fact about intent, which is the same sentence this record is named
+  for, and the fourth time it has had to be said. A source that merely goes
+  missing is fetched back, once, and that is the right answer: it is what the
+  reader had.
+- **`WorkspaceContextFileStore.removeContextItem`** — the app's own Remove,
+  which the Context pane already calls — is the only thing that means *delete
+  it everywhere*. It removes the file, prunes the object store, and records a
+  deletion **per file removed**, so removing a folder deletes the files inside
+  it on the other Mac rather than a folder key nothing matches.
+  `noteChanges` no longer invents a deletion for a context key.
+
+  The first version of this added a *parallel* function and left the pane
+  calling the old one — so clicking Remove silently stopped propagating the
+  moment absence stopped being a deletion. Review caught that too. The act
+  has to be the one the app already performs.
 
 **Withheld is a policy, not a claim**, and that distinction is the whole
 lesson of `0016` and `0017`. Those records exist because a client asserted a
