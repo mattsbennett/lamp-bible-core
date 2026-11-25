@@ -546,61 +546,27 @@ collection, and not before.
   that collection, and migration v45 extends those triggers from writings to
   notes and highlights. Held by
   `testNotesAndHighlightsAreCountedForTheirOwnCollection`.
-- **3d. Drop and rebuild FTS around bulk imports** `[S]`. **Measured, and
-  it matters**: 31 000 verses — a full Bible — into the phone's
-  `translation_verses` and its external-content FTS5 index take **918–936 ms**
-  with the migrations' triggers attached, against **374–390 ms** without them
-  plus a `'rebuild'` that costs **24 ms**. Two and a half times faster, and
-  the rebuild is almost free, because an index built in one pass does not
-  pay a per-row trigger. Held by `SearchIndexImportMeasurementTests` here,
-  where the output can be read, and by `ImportIndexMeasurementTests` on the
-  phone, which asserts the index says the same thing whichever way it was
-  filled. Recommended, with the drop, the insert and the rebuild in one write
-  transaction so that a crash cannot leave an index that silently returns
-  nothing. **Done**, on the phone, in
-  `ExternalContentSearchIndex.acrossABulkImport`, wrapped around the
-  replacement and the row copy in `ModuleSyncManager`'s existing
-  `BEGIN IMMEDIATE`.
+- **3d. Drop and rebuild FTS around bulk imports** `[S]`. **Measured, and it
+  matters**: a full Bible's 31 000 verses are **918–936 ms** with the index's
+  per-row triggers attached against about **380 ms** without them. **It does
+  not land** — `decisions/0014` carries the mechanism, the three attempts and
+  what would finish it.
 
-  Two things the first answer had wrong, both measured:
+  The short of it: dropping only the insert trigger corrupts the index,
+  because the still-installed update trigger tells FTS5 to delete an entry it
+  never had ("database disk image is malformed"). Dropping all three and
+  rebuilding is right about that and still breaks two module-import rollback
+  tests for a reason nobody has explained. And `'rebuild'` costs 23 ms with
+  nothing installed but 280 ms with six translations, where indexing only the
+  additions is flat — which is why the first attempt chose the latter, and
+  why that choice was wrong: it is only sound when the import deletes and
+  updates nothing, and a replacement does both.
 
-  - **`'rebuild'` is the wrong instrument.** It reindexes the whole content
-    table, so it costs 23 ms with nothing installed and **280 ms with six
-    translations** — it grows with the library. Indexing only what the import
-    added, in one statement, is **26–58 ms whatever is installed**. So the
-    saving stays two and a half times however large the library gets, where
-    with `'rebuild'` the trade would have inverted somewhere past a dozen
-    translations.
-  - **"Rows added since a high-water mark" is unsound.** A content table
-    without `AUTOINCREMENT` can reuse a rowid the replacement's delete just
-    freed, and such a row lands *below* the mark and would never be indexed —
-    search would miss it for good, silently. What is asked for instead is
-    every row the index has no entry for, read from its own `_docsize`
-    shadow table.
+  Kept from the attempt: the measurement, an `'integrity-check'` over every
+  external-content index, and an assertion that an imported translation's
+  verses are findable — none of which existed before, and the last of which
+  is what would have caught the corruption on the success path.
 
-  Only the **insert** trigger is dropped: a replacement's deletions have to
-  reach the index, or it keeps entries for rows that are gone.
-
-  **Implemented, then backed out.** Dropping the insert trigger inside the
-  module import makes `ModuleSyncManager.takeIn` fail afterwards with
-  `NSFileNoSuchFileError` while removing the decompressed temporary
-  database, which breaks `testFailedSQLiteCopyRollsBackInstalledModule` and
-  `testFailedSQLiteMetadataSaveRollsBackCopiedRows`. Reproduced on a clean
-  tree; reverting restores both. Narrowed to the trigger **drop** — a wrapper
-  that only inspects the indexes passes, and so does one that drops nothing —
-  but the mechanism between a dropped trigger and a missing temp file is not
-  explained, so nothing was shipped on a guess.
-
-  What stands: the measurements, the choice of instrument, and the two
-  soundness conditions. What is left is one afternoon's debugging of that
-  interaction, from a known repro.
-
-  `TranslationImportTests` keeps the assertion the attempt earned — that an
-  imported translation's verses are **in the search index** — asked of the
-  index for that translation rather than through a ranked search across the
-  library, since with other Bibles installed "shepherd" fills any limit long
-  before reaching a psalter imported a moment ago. Nothing asserted that
-  before.
 - ~~**3e. The digest cache on the phone**~~ **done**, `decisions/0007`: the
   phone's media and book pictures go through the same gate and the same cache.
 
