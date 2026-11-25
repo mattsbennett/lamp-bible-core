@@ -202,10 +202,14 @@ it already covers, each found by review:
   condition beside the list rather than the whole of the claim. Recorded so
   the next reviewer who notices does not reopen it.
 
-Three details the name brings with it, all from review:
+Five details the name brings with it, all from review:
 
 - **Compared folded**, and only where exactly one missing member folds that
-  way. A folded match could otherwise claim two members on one retirement,
+  way — counted over folded whole *paths*, across every member with no file.
+  Counting basenames made two workspaces' `autosave.json` look like a
+  collision, so neither was claimed and both were fetched for ever: the loop
+  this record exists to stop, reintroduced by the guard against a different
+  one. A folded match could otherwise claim two members on one retirement,
   and `0013`'s refusal of case-colliding members is checked among the
   *planned downloads* — which a claim has already removed them from, so the
   collision would go unreported and the other member dropped in silence.
@@ -213,10 +217,23 @@ Three details the name brings with it, all from review:
   so a published name can hold a space, or a newline, which is this file's own
   record separator. A trimmed name read ` run.json` back as `run.json` and
   would have claimed the wrong member.
-- **Retirement is withheld by subsumed coverage, not by id.** A merge's
-  covered set names originals and never another merge, so asking whether a
-  deleted revision's own id is covered missed a deleted *tagged merge*
-  entirely — which is exactly what `removingReplaced` could use, given one
+- **Each record ends with a sentinel.** An append of
+  `draft.json.backup.json` interrupted after `draft.json` would otherwise be
+  a valid retirement for a different file that really exists — and the next
+  append, which starts a line of its own, would leave the fragment looking
+  complete for ever.
+- **A wanted revision vetoes its name, not just its id.** Two retirements
+  whose names differ only in case fold alike, so dropping the wanted entry
+  and keeping the other left the same folded name in the answer, claiming
+  the very revision the demotion was waiting for.
+- **Retirement is withheld by subsumed coverage, not by id**, and only for a
+  revision that could actually *be* a holder. `removingReplaced` takes its
+  holders from revisions not themselves up for demotion, and an untagged
+  merge always is — so withholding an untagged intermediate (`A+B` under
+  `A+B+C`) could never help a demotion and only had it fetched on every
+  pass. And a merge's covered set names originals, never another merge, so
+  asking whether a deleted revision's own id was covered missed a deleted
+  *tagged merge* entirely — which is exactly what `removingReplaced` could use, given one
   more original, to put a turn's name back.
 
 ## The case still accepted
