@@ -600,10 +600,31 @@ above, and three of the four turned out not to need a decision at all.
   Diffs are rejected for now: no `apply` exists, and a chain breaks when a
   predecessor is compacted away on one Mac while the other holds its child,
   where today every revision is self-contained and a restore is a copy.
-  Before revisiting, measure on a real library: bytes under
-  `*/.lamp/revisions` against bytes of documents, revision uploads per day
-  of writing, and the gzip ratio of a revision file. If bytes do matter, the
-  lever is policy — a coarser `oldestGap` — not format.
+  **Two of the three figures are now measured**, on fixtures shaped like the
+  real thing — a revision carrying the whole document on both sides, which
+  is what the store writes. At 250 writings of fifty revisions each:
+  **122.5 MB of history against 7.2 MB of documents, seventeen times**, and
+  all of it crosses sync. The first attempt at this measurement said 1.6×,
+  because the fixture kept only 400 characters a side; the correction is
+  more than tenfold and it is the difference between "no case to answer" and
+  "the largest thing in the library".
+
+  And it compresses **forty-four times** — a before-and-after pair of
+  consecutive autosaves is nearly the same text twice, which zlib crushes.
+  122.5 MB becomes about 2.8 MB, under the documents themselves.
+
+  So the recommendation sharpens: **leave the policy and the format as they
+  are, and if the bytes ever matter, compress the two Markdown fields inside
+  the same JSON file.** That keeps a restore a copy rather than a replay, it
+  needs no predecessor chain and no tombstones, and an older Mac that cannot
+  read it leaves it alone rather than deleting it — `storedRevisions` drops
+  what it cannot decode and compaction leaves undecodable files be. The cap
+  stays rejected on mechanics; diffs stay rejected for a correctness surface
+  that buys less than compression does.
+
+  The third figure — revision uploads per day of actual writing — needs the
+  owner's real library, and reading inside it is theirs to allow.
+  `measuresWhatRevisionHistoryCostsAtRest` keeps the first two.
 - ~~The deck listing cache (1a) trusting a modification date~~ **decided,
   `decisions/0003`**: it keys on the whole file identity, `st_ctime` and
   inode included, not a date — and `0007` then wrote down which filesystems
