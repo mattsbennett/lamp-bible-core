@@ -470,4 +470,21 @@ struct LampSyncOpenFileTests {
         labelled[9] = 0x0C  // label 6, set in an older Finder with no tag beside it
         #expect(!LampVerifiedFileRead.finderInfoIsSafeToLose(labelled))
     }
+
+    /// An attribute named with a non-ASCII letter keeps the file. The names
+    /// come back as signed bytes, and converting one above 0x7F by value
+    /// traps; this pins that the read survives such a name and judges it.
+    @Test func anAttributeNamedInAnotherAlphabetKeepsTheFile() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("source.pdf")
+        try Data("data".utf8).write(to: file)
+        let value = Data("x".utf8)
+        let set = value.withUnsafeBytes {
+            setxattr(file.path, "org.example.étiquette", $0.baseAddress, $0.count, 0, 0)
+        }
+        #expect(set == 0)
+
+        #expect(try LampVerifiedFileRead.read(file).hasAttributesNoStoreKeeps)
+    }
 }

@@ -119,7 +119,16 @@ struct LampSyncOpenFile {
         guard size > 0 else { return false }
         var buffer = [CChar](repeating: 0, count: size)
         guard flistxattr(descriptor, &buffer, size, 0) == size else { return nil }
-        let names = buffer.split(separator: 0).map { String(decoding: $0.map(UInt8.init), as: UTF8.self) }
+        // By bit pattern, said so. Darwin hands the names back as signed
+        // `CChar`, and the plain value conversion traps on any byte above 0x7F
+        // — a name with one non-ASCII letter would crash the app rather than
+        // keep the file. The `map(UInt8.init)` this replaced did not trap,
+        // but only because of the overload the compiler picked in that exact
+        // expression; the same conversion typed as a function does trap.
+        // Which one is chosen is not something to leave to inference.
+        let names = buffer.split(separator: 0).map {
+            String(decoding: $0.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
         for name in names {
             if name == LampVerifiedFileRead.finderInfoName {
                 guard let value = attributeValue(name),
