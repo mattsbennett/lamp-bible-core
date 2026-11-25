@@ -210,3 +210,38 @@ the feature lied to the reader.
 - **The editor hold** was taken once before the batch. Hashing a workspace's
   sources takes long enough for a reader to open the writing in the middle of
   it, so it is asked again before each file goes.
+
+## A third review, and a fix that did nothing
+
+The folder removal above — "removing a folder takes its *offloaded*
+descendants too" — **did not work when it was written**, and shipped with no
+test. It asked the ledger for members under an empty prefix; that function
+answers in published paths and checks them against the published shape, so
+handed anything less than the whole workspace prefix it filtered everything
+out and returned nothing. The record said the behaviour existed. It did not.
+It does now, and a test fails if it stops.
+
+That is the argument for the loop rather than against it: the fix read
+correctly, the record described it correctly, and only a reviewer reading the
+function it called noticed that the two did not meet.
+
+Four more of the same kind, all introduced by the two rounds of fixes before
+this one:
+
+- Recording the *ask* so a failed download keeps its row meant that carrying
+  out another device's deletion recorded one too, leaving a row saying
+  "Coming back" for something that was never coming. A deletion forgets the
+  note; only a reader asking records a request.
+- Remove on a row that was waiting for a download did nothing: it has no
+  local file either, so it needs the same path an offloaded row takes.
+- The digest and the identity were read separately, so a file replaced
+  between them bound one file's verified bytes to another file's identity —
+  and the check before the unlink would then wave it through. They are taken
+  either side of the read now.
+- Comparing the *whole* identity treated a hard-linked sibling as replaced:
+  sources are links into the object store, and unlinking either moves the
+  shared inode's change time. Two copies of one file would never both go.
+  Everything but the change time is compared.
+
+And the pane's Offload now refuses on an observation older than a quarter of
+an hour, rather than acting on a listing from whenever this Mac last synced.
