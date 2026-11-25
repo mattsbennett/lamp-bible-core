@@ -169,12 +169,23 @@ public enum LampSyncDevotionalMedia {
     /// Only regular files directly inside `Media/<folder>/<owner>/`. A link
     /// is skipped, as `outgoingFileURLs` skips one, and for the reason
     /// `decisions/0010` gives: a pass publishes only an ordinary file.
+    /// - Parameter satisfying: the member paths this answer may cover.
+    ///   **Required, and the whole safety of this.** Disk discovery exists to
+    ///   say "that member is here", never to volunteer something new: a
+    ///   writing deleted before its first sync leaves its attachments on
+    ///   disk, and a candidate at a path the manifest does not name is
+    ///   uploaded — which would publish pictures the owner deleted. It also
+    ///   keeps a notes *module*'s pictures out of this, since
+    ///   `Media/Notes/module-<id>/` is a different owner namespace whose
+    ///   members are named differently and gathered elsewhere.
     public static func filesOnDisk(
         scope: LampMediaScope,
         moduleID: String,
+        satisfying members: Set<String>,
         in libraryRootURL: URL,
         fileManager: FileManager = .default
     ) -> [OutgoingFile] {
+        guard !members.isEmpty else { return [] }
         let root = libraryRootURL
             .appendingPathComponent("Media", isDirectory: true)
             .appendingPathComponent(scope.folder, isDirectory: true)
@@ -201,6 +212,7 @@ public enum LampSyncDevotionalMedia {
                         ownerID: ownerID, filename: url.lastPathComponent
                       )
                 else { continue }
+                guard members.contains(remotePath) else { continue }
                 files.append(OutgoingFile(remotePath: remotePath, localURL: url))
             }
         }

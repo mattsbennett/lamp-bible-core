@@ -3254,14 +3254,17 @@ the server for the plan to fetch or to reap.
 Two exclusions, both ordinary business. A deletion made *here* is why the
 tombstone exists, so claiming nothing at that path is right and the record
 goes when the file is reaped. And a path no library deletes is never carried
-out anywhere by design (`refusedTombstoneAction`). -/
+out anywhere by design (`refusedTombstoneAction`).
+
+Reported once: the pass forgets the record afterwards, which is
+`aforgottenRecordIsNotReportedAgain`. -/
 
 def deletionNotCarriedOut (e : ManifestEntry) (recorded : Option Nat)
     (claimed deletedHere deletable : Bool) : Bool :=
   !entryIsMember e && recorded.isSome && !claimed && !deletedHere && deletable
 
 -- What it reports is exactly a deletion this pass does not carry out, and no
--- later pass will either: nothing about the path changes between passes.
+-- later pass will either: nothing the plan does to the path can change that.
 theorem whatIsReportedIsNeverDeleted (cls : FileClass) (e : ManifestEntry) (d r : Nat)
     (listed : Option Nat) (deleted : e.deletedAt = some d)
     (reported : deletionNotCarriedOut e (some r) false false true = true) :
@@ -3269,6 +3272,25 @@ theorem whatIsReportedIsNeverDeleted (cls : FileClass) (e : ManifestEntry) (d r 
   have gone : entryIsMember e = false := by
     simpa [deletionNotCarriedOut] using reported
   exact anUnclaimedDeletionIsNeverCarriedOut cls e d listed gone deleted
+
+/-- Said once, not for ever.
+
+The pass forgets the record behind a reported deletion, once the deletion is
+older than the reap's retry window and the pass did nothing else with the
+path. Under a tombstone the record's only remaining effect *is* this report:
+no pass fetches a path the manifest says is deleted, whatever a record says,
+so dropping it carries nothing out and deletes nothing —
+`whatIsReportedIsNeverDeleted` still holds of the pass that reports it. What
+it buys is that stale records cannot repeat the report for ever and drown the
+next real one.
+
+The window is not decoration. A deletion made here whose file the server no
+longer has is asked about while it is young, and that record is what the
+retry reads; forgetting it early is the one way this can lose something. -/
+theorem aforgottenRecordIsNotReportedAgain (e : ManifestEntry)
+    (claimed deletedHere deletable : Bool) :
+    deletionNotCarriedOut e none claimed deletedHere deletable = false := by
+  simp [deletionNotCarriedOut]
 
 -- The shape the reading plan actually had by the time anybody looked: the
 -- Mac had already reaped the file, so the server listed nothing and the plan

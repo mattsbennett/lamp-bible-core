@@ -844,6 +844,59 @@ public struct LampSyncBundlePass {
             }
         }
 
+        // Reported once, not on every pass for ever: the record behind a
+        // deletion this pass will not carry out is forgotten, now that the
+        // pass knows it did nothing else with the path.
+        //
+        // This file otherwise reports and never corrects, because a record
+        // with no claim cannot be told from a client holding the file
+        // silently. Under a *tombstone* that doubt costs nothing: no pass
+        // fetches a path the manifest says is deleted, whatever a record
+        // says, so the record's only remaining effect is to repeat the
+        // report. Forgetting it carries nothing out and deletes nothing —
+        // `whatIsReportedIsNeverDeleted` still holds of this pass — and
+        // `aforgottenRecordIsNotReportedAgain` is the model's word for what
+        // it changes.
+        //
+        // Never a path this pass touched. A deletion made here whose file the
+        // server no longer has is asked about while the deletion is young,
+        // and that record is what the retry needs:
+        // `anOldDeletionIsNotAskedAboutAndNothingIsForgotten` is right to
+        // insist on it, and forgetting blindly broke it.
+        //
+        // What this gives up is the fingerprint: a client silently holding a
+        // tombstoned file is reported on the pass the tombstone arrives and
+        // not again. Three stale translation records were repeating for ever
+        // on the owner's library, which drowns the next real one
+        // (`Documentation/ScalabilityPlan.md`).
+        // Never while the deletion is young. A deletion made here whose file
+        // the server no longer has is asked about for as long as
+        // `reapRetryWindow`, and *that* record is what the retry needs:
+        // `anOldDeletionIsNotAskedAboutAndNothingIsForgotten` is right to
+        // insist on it, and forgetting blindly broke it. Past the window the
+        // retry has given up and the record has no other use.
+        let now = self.now()
+        let actedOn = Set(outcome.reaped)
+            .union(outcome.deferred)
+            .union(outcome.settled)
+            .union(outcome.tombstoned)
+            .union(outcome.installed)
+            .union(outcome.deletedLocally)
+        // Two more a reviewer found, both about records the pass still needs.
+        // A path the *closing* manifest names is live again — restored on the
+        // server and being adopted — and its record is the baseline the next
+        // install compares against. And a refused path is protected by
+        // `isPlanned` under either spelling, while the report matches exactly,
+        // so the folded check belongs here too (`decisions/0013`).
+        for path in outcome.deletionsNotCarriedOut where !actedOn.contains(path) {
+            guard let deletedAt = opened.bundle.manifest.entry(at: path)?.deletedAt,
+                  now - deletedAt >= Self.reapRetryWindow,
+                  !refusedSpellings.contains(folded(path)),
+                  snapshot.bundle.manifest.entry(at: path)?.isMember != true
+            else { continue }
+            records.forget(path, in: source)
+        }
+
         return outcome
     }
 

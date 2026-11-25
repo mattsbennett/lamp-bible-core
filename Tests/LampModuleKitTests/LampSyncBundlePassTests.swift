@@ -1914,6 +1914,39 @@ struct LampSyncBundlePassTests {
         #expect(store.bodies[path] == nil)
     }
 
+    /// A deletion this client will never carry out is reported **once**: the
+    /// record behind it is forgotten, so the next pass has nothing to report.
+    ///
+    /// Three stale translation records were repeating that report on every
+    /// pass for ever on the owner's library, which drowns the next real one
+    /// (`Documentation/ScalabilityPlan.md`). Under a tombstone the record
+    /// cannot be acted on — no pass fetches a path the manifest says is
+    /// deleted — so dropping it carries nothing out and deletes nothing.
+    @Test func adeletionThisClientWillNotCarryOutIsReportedOnce() async throws {
+        let path = "Translations/ESVs.lamp"
+        let store = try seeded(path: path, revision: "\"e1\"", deletedAt: 1_000)
+        store.bodies[path] = nil
+        store.revisions[path] = nil
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"e1\"")
+        records.confirmRecorded([path: "\"e1\""], in: source)
+        // Well past the reap's retry window, so no retry wants this record.
+        let now = 1_000 + LampSyncBundlePass.reapRetryWindow + 1
+
+        let first = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { now }
+        ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
+
+        #expect(first.deletionsNotCarriedOut == [path])
+        #expect(records.record(path, in: source) == nil, "the record it could not act on is gone")
+
+        let second = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { now + 1_000 }
+        ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
+
+        #expect(second.deletionsNotCarriedOut.isEmpty, "said once, not for ever")
+    }
+
     /// A deletion's file the server no longer has is asked about only while
     /// the deletion is young, and its record is kept: a stale answer is only a
     /// retry, and nothing the record serves is lost.
