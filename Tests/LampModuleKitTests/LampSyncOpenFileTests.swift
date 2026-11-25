@@ -331,4 +331,29 @@ struct LampSyncOpenFileTests {
             try LampVerifiedFileRead.read(URL(fileURLWithPath: path))
         }
     }
+
+    /// A file this process may not reach is unreadable, not missing.
+    ///
+    /// With a folder on the way that denies traversal, both the open and the
+    /// type check fail with `EACCES` — and calling that "not an ordinary
+    /// file" would let a caller treat a source that is plainly there as gone.
+    @Test func afileBehindAfolderThatDeniesAccessIsUnreadableNotGone() throws {
+        let root = try fixture()
+        let locked = root.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        let file = locked.appendingPathComponent("source.pdf")
+        try Data("x".utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        #expect(throws: LampVerifiedFileRead.Failure.unreadable) {
+            try LampVerifiedFileRead.read(file)
+        }
+        #expect(throws: LampVerifiedFileRead.Failure.notAnOrdinaryFile) {
+            try LampVerifiedFileRead.read(root.appendingPathComponent("not there.pdf"))
+        }
+    }
 }

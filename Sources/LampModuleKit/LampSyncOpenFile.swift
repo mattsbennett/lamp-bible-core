@@ -281,6 +281,27 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
         case unreadable
     }
 
+    /// What a path that would not open holds, asked without following a link.
+    ///
+    /// Not there, or not a regular file: not an ordinary file. A regular file,
+    /// or one whose type cannot be learned because a folder on the way denies
+    /// it: unreadable — the path may well hold a source the process is not
+    /// allowed to see, and calling that "not a file" would let a caller treat
+    /// it as gone.
+    static func whyItWouldNotOpen(_ url: URL) -> Failure {
+        do {
+            _ = try LampFileIdentity(regularFileAt: url)
+            return .unreadable
+        } catch let error as NSError where error.domain == NSPOSIXErrorDomain {
+            switch Int32(error.code) {
+            case ENOENT, ENOTDIR, EFTYPE: return .notAnOrdinaryFile
+            default: return .unreadable
+            }
+        } catch {
+            return .unreadable
+        }
+    }
+
     /// Opens `url` once, without following a link, and reads its identity
     /// and digest from that descriptor.
     ///
@@ -317,8 +338,7 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
             // file" is not one to keep by hand. A regular file that would not
             // open — no permission, no descriptors left — is unreadable, which
             // a caller must not mistake for one that is not there.
-            throw (try? LampFileIdentity(regularFileAt: url)) == nil
-                ? Failure.notAnOrdinaryFile : Failure.unreadable
+            throw Self.whyItWouldNotOpen(url)
         } catch {
             throw Failure.unreadable
         }
