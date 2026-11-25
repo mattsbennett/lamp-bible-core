@@ -641,3 +641,52 @@ caught the moment it ran. The finding stays open: a download already planned
 when the reader removes a source can still land, if its file is dated after
 the removal. Closing it needs the import to tell a download of the removed
 copy from a new one, which a queued path alone cannot.
+
+## Round twelve
+
+**Core: a sixth round with no serious finding.** Its one finding said a byte
+of an attribute's value could trap on conversion; it could not — the value
+was already `UInt8` — but the conversion is now written as the bit pattern it
+is, so nobody has to check again.
+
+**Mac: four serious findings, all fixed.**
+
+- *A file where a folder was took the folder's children.* Removing a context
+  item cleared the acts, and queued the server removals, of every path under
+  it. A regular file put where a folder of offloaded sources used to be
+  shares their prefix and nothing else, and its row confirmed nothing about
+  them. Descendants now go only when what is removed is a folder.
+- *A button could write over a ledger that would not read.* Round eleven
+  kept passes from it; Offload, Download and Keep Here still loaded an
+  unreadable ledger as empty and saved. The lock reads an unreadable ledger
+  as unknown and holds, so a fresh one written over it could release the
+  lock with sources still only on the old server. `save` itself now refuses,
+  so every mutation fails instead; the removal of a source deleted elsewhere
+  still removes the file and leaves the ledger alone.
+- *A weak validator vouched for bytes.* `namesSameRevision` strips `W/`, so
+  an unchanged weak tag matched — and a weak tag promises the same meaning,
+  not the same bytes. Weak tags are refused outright. Every revision on the
+  owner's server is strong, so this costs nothing there.
+- *A record made as another account was proof.* The records name a WebDAV
+  store by its address alone. Change the username, and a record made as the
+  old account could meet the new account's listing at the same path and the
+  same tag — a server that numbers each file's versions from one would do
+  exactly that — and the digest would vouch for bytes Download would not
+  give back. The pass's look was already labelled by its account; the
+  records were not. `SyncAccountHistory` now keeps which account each
+  address's records were made as; on a change, every revision recorded until
+  then stops counting as proof, path by path, until the new account's own
+  upload or download records that path again. An address seen for the first
+  time takes the account it is seen with. Rewriting the records' source names
+  to include the account would have scoped them properly, at the cost of
+  every Mac treating its whole library as unrecorded on the first pass after
+  the upgrade; this changes nothing for a Mac that never changes account.
+
+Also: a request to offload a file now goes when the file does, so a file
+attached at the same path later is not sent away with nobody having asked;
+and with sync off, Download, Offload and Download All are disabled with a
+line saying why, instead of recording a request no pass would carry out.
+
+**Still open: an in-flight download can undo a Remove.** Unchanged from round
+eleven: telling a download of the removed copy from a genuine re-add needs
+the removal to carry what it removed into the import.
