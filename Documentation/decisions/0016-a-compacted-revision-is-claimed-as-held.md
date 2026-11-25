@@ -49,9 +49,30 @@ Passes run by themselves, so this is the term items 0 and 2a of
 
 ## Decision
 
-**A workspace's revision member with no file at its path is claimed as held.**
-The gather adds every such member to `heldWithoutAFile`, after the workspaces
-have been described.
+**A writing workspace's revision member with no file at its path is claimed
+as held**, unless an untagged merge here still needs that id. The gather adds
+every such member to `heldWithoutAFile`, after the workspaces have been
+described.
+
+Both qualifications came out of review, and both changed the decision rather
+than the code around it:
+
+- **Writing workspaces only.** A custom skill is published by copying its
+  whole directory with *no* extension filter, so
+  `Workspaces/Skills/<skill>/Revisions/index.json` is an ordinary file of a
+  skill's own that matches the shape exactly. Claiming it would stop sync
+  restoring it. Only `Workspaces/Writing` carries the invariant this claim
+  reasons about, so only it is claimed.
+- **Except what a demotion is waiting for.** `removingReplaced` drops an
+  untagged merge in favour of the records that know which turn made the
+  changes, and that needs **every** id the merge replaced to be held by
+  something not itself up for demotion. An id nobody here holds stops the
+  demotion — and if its file is also claimed, it never arrives, so the merge
+  keeps a turn's changes under no turn's name for good. Those ids are left
+  unclaimed and go on being fetched until one of them settles the demotion,
+  after which the merge no longer names them. On the owner's library that is
+  9 members of the 43, so 34 stop being fetched rather than all 43. Not
+  hypothetical: 70 of the 125 local revisions are untagged merges.
 
 Why the claim is true rather than convenient: a revision file is written once
 and never edited, and the only thing that removes one is compaction, which
@@ -114,7 +135,12 @@ not restate it.
   every revision ever uploaded, uncompacted and unbounded, and nothing
   deletes one. This record stops the traffic, not the accumulation. Bounding
   it needs a tombstone, which is `0015`'s rejected format change.
+- **The log says how many, not which.** A member's path carries names the
+  reader chose — a context file is titled whatever the book is called — and
+  the unified log is what a sysdiagnose collects and a person sends on. The
+  count and the two-component folder are public; the paths are private. The
+  count is what the two-pass check needs.
 - **Still to do:** two passes over the owner's store with no editing, reading
-  the unified log for "Fetched again". Before the fix the 43 paths should
-  appear on both; after it, on neither.
+  the unified log for "Fetched again". Before the fix it should report 43
+  under `Workspaces/Writing` on both passes; after it, 9.
 - **`0015` is untouched.** Nothing here changes the revision format.
