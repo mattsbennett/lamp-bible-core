@@ -1,17 +1,17 @@
 # 0021. A writing left alone gives its sources back
 
-Status: Accepted for the Mac, 2026-11-25, held by
-`WorkspaceSourceOffloadTests`, `WorkspaceSourceOffloadGatheringTests`,
+Status: Accepted for the Mac, 2026-11-25; **its safety rule is superseded by
+`0022`**, which replaced the listing-and-records proof with a read of the
+server's copy, keyed the lock by account, and removed Remove on a source not
+here. Held by `WorkspaceSourceOffloadTests`,
+`WorkspaceSourceOffloadGatheringTests`,
 `offloadsAbatchAgainstTheCurrentServerAndTheUploadedBytes`,
 `asourceThatWillNotGoIsNotMarkedOffloaded`,
-`asourceTheServerNoLongerListsIsNotOffloaded`,
-`asourceTheServerHoldsAtAnotherRevisionIsNotOffloaded`,
-`asourceConfirmedDuringThatPassWaitsForTheNext`,
 `asourceAttachedWhereOneWasOffloadedIsNoLongerWithheld` and
-`thecheapDateQueryAgreesWithTheWritingsThemselves`. Its safety rule was
-rewritten the same day, after review; the first version is kept below. Completes `0020`, which
-built the mechanism and said plainly that nothing used it. Planned by Fable;
-the owner asked for the setting by name.
+`thecheapDateQueryAgreesWithTheWritingsThemselves`. The sections below record
+the rounds as they happened, including mechanisms `0022` removed. Completes
+`0020`, which built the mechanism and said plainly that nothing used it.
+Planned by Fable; the owner asked for the setting by name.
 
 ## Context
 
