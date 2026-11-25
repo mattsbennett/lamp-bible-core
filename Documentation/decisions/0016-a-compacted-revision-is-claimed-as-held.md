@@ -135,6 +135,25 @@ not restate it.
   every revision ever uploaded, uncompacted and unbounded, and nothing
   deletes one. This record stops the traffic, not the accumulation. Bounding
   it needs a tombstone, which is `0015`'s rejected format change.
+- **One case is accepted, not fixed: a tagged *merge* that was dropped by an
+  untagged superset.** `removingReplaced` drops any revision whose covered
+  set is a strict subset of another's, tags or not, so an untagged legacy
+  merge covering `A+B+C` deletes a tagged merge covering `A+B`. That tagged
+  merge's filename carries its own `mergedID`, not `A` or `B`, so nothing
+  local names it and it is claimed as held.
+
+  The ordinary recovery still works: `A`, `B` and `C` *are* named by the
+  untagged merge, so the exception above keeps them fetchable, and a tagged
+  single among them settles the demotion without the tagged merge. The case
+  that cannot recover is narrower — where `A` and `B` were merged into the
+  tagged merge before either was ever uploaded, so the server holds the merge
+  and not its parts.
+
+  Left as it is. What is lost there is per-turn granularity on legacy agent
+  history, not a version of the text: the untagged merge still carries every
+  version. Fixing it needs a member's *kind* to be visible before it is
+  downloaded — in the manifest, or encoded in the name — which is the format
+  change `0015` rejected, for a corner of legacy data.
 - **The log says how many, not which.** A member's path carries names the
   reader chose — a context file is titled whatever the book is called — and
   the unified log is what a sysdiagnose collects and a person sends on. The
