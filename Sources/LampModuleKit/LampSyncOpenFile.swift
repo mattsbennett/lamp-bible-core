@@ -260,9 +260,9 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
     /// Opens `url` once, without following a link, and reads its identity
     /// and digest from that descriptor.
     ///
-    /// The identity is taken either side of the read and must agree, so the
-    /// digest is of the bytes the identity names rather than of a file
-    /// rewritten part way through.
+    /// The identity is taken either side of the read and must agree in
+    /// full — change time included — so the digest is of the bytes the
+    /// identity names rather than of a file rewritten part way through.
     public static func read(_ url: URL) throws -> LampVerifiedFileRead {
         do {
             return try LampSyncOpenFile.with(url, followingLinks: false) { file in
@@ -270,15 +270,24 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
                 let before = try file.identity()
                 let digest = try file.digest()
                 let after = try file.identity()
-                guard before.namesSameBytes(as: after) else { throw Failure.changedWhileRead }
+                // The whole identity, change time included. `0007`: a file
+                // replaced at the same size with its date put back is noticed
+                // by the change time, and nothing else will notice it.
+                guard before == after else { throw Failure.changedWhileRead }
                 return LampVerifiedFileRead(identity: before, digest: digest)
             }
         } catch let failure as Failure {
             throw failure
         } catch LampSyncOpenFile.Failure.notAnOrdinaryFile {
             throw Failure.notAnOrdinaryFile
-        } catch LampSyncOpenFile.Failure.cannotBeOpened {
-            throw Failure.notAnOrdinaryFile
+        } catch LampSyncOpenFile.Failure.cannotBeOpened(let code) {
+            // Nothing there, a link (`O_NOFOLLOW` answers `ELOOP`), or a path
+            // through something that is not a folder: no ordinary file. Any
+            // other refusal — no permission, no descriptors left — is a file
+            // that could not be read, which a caller must not mistake for one
+            // that is not there.
+            throw [ENOENT, ELOOP, ENOTDIR].contains(code)
+                ? Failure.notAnOrdinaryFile : Failure.unreadable
         } catch {
             throw Failure.unreadable
         }

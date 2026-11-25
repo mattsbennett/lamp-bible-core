@@ -63,21 +63,6 @@ public struct LampFileIdentity: Codable, Equatable, Sendable {
         self.init(info)
     }
 
-    /// Whether `other` names the same bytes as this: everything but the
-    /// **change** time.
-    ///
-    /// A reader's sources are hard links into a store of content-addressed
-    /// objects, so one workspace holding the same file twice holds two links
-    /// to one inode — and unlinking either moves that inode's `ctime`. Full
-    /// equality would read the survivor as replaced. Replacement still shows:
-    /// a new file is a new inode, and a write in place moves the modification
-    /// time or the size.
-    public func namesSameBytes(as other: LampFileIdentity) -> Bool {
-        device == other.device && inode == other.inode && size == other.size
-            && modifiedSeconds == other.modifiedSeconds
-            && modifiedNanoseconds == other.modifiedNanoseconds
-    }
-
     public init(url: URL) throws {
         var info = stat()
         let result = url.withUnsafeFileSystemRepresentation { path in

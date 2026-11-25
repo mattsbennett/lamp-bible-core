@@ -211,7 +211,7 @@ struct LampSyncOpenFileTests {
 
         let read = try LampVerifiedFileRead.read(file)
         #expect(read.digest == LampSyncContentRevision.digest(for: Data("the bytes".utf8)))
-        #expect(read.identity.namesSameBytes(as: try LampFileIdentity(url: file)))
+        #expect(read.identity == (try LampFileIdentity(url: file)))
     }
 
     /// The Mac deletes a source on the strength of this answer, so it refuses
@@ -235,23 +235,41 @@ struct LampSyncOpenFileTests {
         }
     }
 
-    /// Two links to one file are the same bytes, though unlinking one moves
-    /// the inode's change time — which is how a workspace holding a source
-    /// twice used to keep both copies for ever.
-    @Test func ahardLinkedSiblingIsTheSameBytesAfterItsTwinGoes() throws {
+    /// A file rewritten at the same size with its date put back is noticed,
+    /// by the change time and by nothing else (`decisions/0007`).
+    ///
+    /// The Mac deletes a reader's source when a verified read still names
+    /// it, so a comparison that ignored the change time — tempting, because
+    /// unlinking a hard-linked twin moves it too — would delete bytes the
+    /// server has never seen.
+    @Test func afileRewrittenWithItsDatePutBackIsNotTheSameFile() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        let one = root.appendingPathComponent("one.pdf")
-        let two = root.appendingPathComponent("two.pdf")
-        try Data("same".utf8).write(to: one)
-        try FileManager.default.linkItem(at: one, to: two)
-        let before = try LampFileIdentity(url: two)
+        let file = root.appendingPathComponent("source.pdf")
+        try Data("first".utf8).write(to: file)
+        let before = try LampFileIdentity(url: file)
+        // The exact timespecs, not a `Date`: a `Date` keeps microseconds, so
+        // putting one back moves the modification time by the remainder and
+        // the file is noticed for the wrong reason.
+        var original = stat()
+        #expect(stat(file.path, &original) == 0)
 
-        try FileManager.default.removeItem(at: one)
-        let after = try LampFileIdentity(url: two)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.write(contentsOf: Data("other".utf8))
+        try handle.close()
+        var times = [original.st_atimespec, original.st_mtimespec]
+        #expect(utimensat(AT_FDCWD, file.path, &times, 0) == 0)
 
-        #expect(before != after, "the change time did move — that is the trap")
-        #expect(before.namesSameBytes(as: after))
+        let after = try LampFileIdentity(url: file)
+        #expect(before.size == after.size, "same size")
+        #expect(before.inode == after.inode, "same file")
+        // The date really is back, to the nanosecond — so what tells them
+        // apart below is the change time and only that.
+        #expect(before.modifiedSeconds == after.modifiedSeconds)
+        #expect(before.modifiedNanoseconds == after.modifiedNanoseconds)
+        #expect(before.changedSeconds != after.changedSeconds
+            || before.changedNanoseconds != after.changedNanoseconds)
+        #expect(before != after, "and still noticed")
     }
 
     @Test func aWriteInPlaceIsNotTheSameBytes() throws {
@@ -266,6 +284,6 @@ struct LampSyncOpenFileTests {
 
         let after = try LampFileIdentity(url: file)
         #expect(before.inode == after.inode, "the same file, written over")
-        #expect(!before.namesSameBytes(as: after))
+        #expect(before != after)
     }
 }
