@@ -310,6 +310,7 @@ struct LampSyncOpenFileTests {
         )
     }
 
+    #if os(macOS)
     /// A socket is not an ordinary file, though it refuses to open with an
     /// errno that says nothing of the kind.
     @Test func aVerifiedReadCallsASocketNotAfile() throws {
@@ -338,6 +339,7 @@ struct LampSyncOpenFileTests {
             try LampVerifiedFileRead.read(URL(fileURLWithPath: path))
         }
     }
+    #endif
 
     /// A file this process may not reach is unreadable, not missing.
     ///
@@ -389,18 +391,57 @@ struct LampSyncOpenFileTests {
         )
     }
 
-    /// Finder tags are the reader's and no store keeps them, so a file that
-    /// carries them says so.
-    @Test func aVerifiedReadSaysWhenThereAreFinderTags() throws {
+    /// Anything the reader made that lives beside the bytes — Finder tags, a
+    /// Finder comment, an app's own attribute — is reported, because no store
+    /// keeps it and a download would bring the file back without it.
+    @Test func aVerifiedReadReportsWhatNoStoreKeeps() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        let plain = root.appendingPathComponent("plain.pdf")
-        let tagged = root.appendingPathComponent("tagged.pdf")
-        try Data("data".utf8).write(to: plain)
-        try Data("data".utf8).write(to: tagged)
-        try (tagged as NSURL).setResourceValue(["Reading"], forKey: .tagNamesKey)
+        func file(_ name: String, attribute: String?) throws -> URL {
+            let url = root.appendingPathComponent(name)
+            try Data("data".utf8).write(to: url)
+            if let attribute {
+                let value = Data("x".utf8)
+                let set = value.withUnsafeBytes {
+                    setxattr(url.path, attribute, $0.baseAddress, $0.count, 0, 0)
+                }
+                #expect(set == 0)
+            }
+            return url
+        }
+        let plain = try file("plain.pdf", attribute: nil)
+        let tagged = try file("tagged.pdf", attribute: "com.apple.metadata:_kMDItemUserTags")
+        let commented = try file("commented.pdf", attribute: "com.apple.metadata:kMDItemFinderComment")
+        let unheardOf = try file("unheard.pdf", attribute: "org.example.something-nobody-listed")
+        let downloaded = try file("downloaded.pdf", attribute: "com.apple.quarantine")
 
         #expect(try LampVerifiedFileRead.read(plain).hasAttributesNoStoreKeeps == false)
         #expect(try LampVerifiedFileRead.read(tagged).hasAttributesNoStoreKeeps)
+        #expect(try LampVerifiedFileRead.read(commented).hasAttributesNoStoreKeeps)
+        #expect(
+            try LampVerifiedFileRead.read(unheardOf).hasAttributesNoStoreKeeps,
+            "an attribute nobody here has thought about keeps the file"
+        )
+        #expect(
+            try LampVerifiedFileRead.read(downloaded).hasAttributesNoStoreKeeps == false,
+            "the system's own marks are safe to lose"
+        )
+    }
+
+    /// Every attribute found on the owner's sources when this was measured is
+    /// one the list lets go. Every one of those sources carried
+    /// `com.apple.provenance`: had the list missed it, no source could ever
+    /// have been offloaded, and nothing else here would have said so.
+    @Test func everyAttributeMeasuredOnRealSourcesIsSafeToLose() {
+        let measured = [
+            "com.apple.provenance", "com.apple.quarantine", "com.apple.macl",
+            "com.apple.metadata:kMDItemWhereFroms", "com.apple.lastuseddate#PS",
+            "com.apple.FinderInfo", "INFileURLIsMarkedForDeletionOnDeallocation",
+            "com.apple.metadata:kMDLabel_dyr2yz6jm3xjpazd4gusqm2v5y",
+            "com.apple.metadata:kMDItemScreenCaptureType",
+            "com.apple.metadata:kMDItemScreenCaptureGlobalRect",
+            "com.apple.metadata:kMDItemIsScreenCapture", "com.apple.iwork.documentUUID#PS",
+        ]
+        #expect(measured.filter { !LampVerifiedFileRead.isSafeToLose(attributeNamed: $0) } == [])
     }
 }

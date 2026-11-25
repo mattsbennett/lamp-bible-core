@@ -101,11 +101,29 @@ struct LampSyncOpenFile {
         hasAttribute(XATTR_RESOURCEFORK_NAME)
     }
 
-    /// Whether the reader has tagged this file in Finder. The tags are an
-    /// extended attribute no store carries, so a download brings the bytes
-    /// back without them.
-    func hasFinderTags() -> Bool? {
-        hasAttribute("com.apple.metadata:_kMDItemUserTags")
+    /// Whether this file carries an extended attribute that is not on the
+    /// list of ones the system writes for itself — or nil where they could
+    /// not be listed.
+    ///
+    /// No store carries extended attributes, so a download brings back the
+    /// bytes and nothing else. Finder tags, Finder comments, and whatever an
+    /// app the reader uses writes next would all be lost; checking for each by
+    /// name was the same hunt, one review round at a time. So this is a list
+    /// of what is known to be safe to lose, never a list of what is known not
+    /// to be — `LampSyncIdentityTrust`'s rule for filesystems, for the same
+    /// reason: an attribute nobody here has thought about keeps the file.
+    func hasAttributesNoStoreKeeps() -> Bool? {
+        #if canImport(Darwin)
+        let size = flistxattr(descriptor, nil, 0, 0)
+        guard size >= 0 else { return nil }
+        guard size > 0 else { return false }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard flistxattr(descriptor, &buffer, size, 0) == size else { return nil }
+        let names = buffer.split(separator: 0).map { String(decoding: $0.map(UInt8.init), as: UTF8.self) }
+        return names.contains { !LampVerifiedFileRead.isSafeToLose(attributeNamed: $0) }
+        #else
+        return false
+        #endif
     }
 
     /// Whether the extended attribute `name` is here with anything in it —
@@ -316,10 +334,45 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
     /// of the digest must not where this is true: the fork would be gone, and
     /// no download could bring it back.
     public let hasResourceFork: Bool
-    /// Whether the file carries anything else of the reader's that no store
-    /// keeps: Finder tags, or an attribute that could not be read at all — a
-    /// fork or tags this process may not look at are no less lost.
+    /// Whether the file carries any extended attribute not known to be safe
+    /// to lose — Finder tags, a Finder comment, an app's own — or attributes
+    /// that could not be read at all, which are no less lost.
     public let hasAttributesNoStoreKeeps: Bool
+
+    /// Extended attributes the system or an app writes for its own purposes,
+    /// which a source can lose on a round trip through a store without the
+    /// reader losing anything they made.
+    ///
+    /// Measured, not guessed: these are every name found on the owner's 72
+    /// sources on 2026-11-25, and every one of those sources carried
+    /// `com.apple.provenance` — so a list that missed it would have kept the
+    /// whole library from ever being offloaded, with every test still green.
+    static let attributesSafeToLose: Set<String> = [
+        "com.apple.provenance",
+        "com.apple.quarantine",
+        "com.apple.macl",
+        "com.apple.metadata:kMDItemWhereFroms",
+        "com.apple.metadata:kMDItemDownloadedDate",
+        "com.apple.lastuseddate#PS",
+        // Type and creator codes and Finder flags. A colour label set in a
+        // current Finder is written as a tag as well, which is not on this
+        // list, so a labelled file still stays.
+        "com.apple.FinderInfo",
+        "com.apple.TextEncoding",
+        "INFileURLIsMarkedForDeletionOnDeallocation",
+        "com.apple.iwork.documentUUID#PS",
+        "com.apple.metadata:kMDItemIsScreenCapture",
+        "com.apple.metadata:kMDItemScreenCaptureType",
+        "com.apple.metadata:kMDItemScreenCaptureGlobalRect",
+    ]
+
+    /// Spotlight's own labels, named by a generated suffix.
+    static let attributePrefixesSafeToLose = ["com.apple.metadata:kMDLabel_"]
+
+    public static func isSafeToLose(attributeNamed name: String) -> Bool {
+        attributesSafeToLose.contains(name)
+            || attributePrefixesSafeToLose.contains { name.hasPrefix($0) }
+    }
 
     public enum Failure: Error, Equatable {
         /// Not an ordinary file, or a symbolic link, or not there.
@@ -380,7 +433,7 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
                     // Unknown counts as present: a fork that could not be
                     // looked at is no less lost by deleting the file.
                     hasResourceFork: file.hasResourceFork() ?? true,
-                    hasAttributesNoStoreKeeps: (file.hasFinderTags() ?? true)
+                    hasAttributesNoStoreKeeps: (file.hasAttributesNoStoreKeeps() ?? true)
                         || file.hasResourceFork() == nil
                 )
             }

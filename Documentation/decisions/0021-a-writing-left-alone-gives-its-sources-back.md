@@ -563,3 +563,39 @@ the one taken.
 
 Held by reading rather than a test: the gate, the account's capture, and the
 follow-up passes, which live in the controller.
+
+## Round ten
+
+**What a source carries beside its bytes is judged by a list of what is safe
+to lose, measured.** Round nine kept a source with Finder tags here; round ten
+found a Finder comment would still be lost — the same hunt, one attribute at a
+time. So the rule is inverted, as `LampSyncIdentityTrust` already does for
+filesystems: a list of extended attributes the system or an app writes for
+itself, and anything not on it keeps the source. The list was built from every
+attribute on the owner's 72 sources, and the measurement mattered: every one
+of them carries `com.apple.provenance`, which a list written from memory might
+well have missed — and then no source could ever have been offloaded, with
+every test still green. A test pins the measured names. The system stamps the
+same attribute on a test's own new files, which is how a mutation that dropped
+it from the list was caught twice over.
+
+Also: a ledger that is there and will not read keeps the lock on where sync
+points, rather than reading as empty; a folder Remove is bound to the folder
+the reader confirmed, by device and inode, so a replacement put at the path
+while the dialog was open is refused; the server's removal is queued before
+the act is cleared, so a crash between the two cannot leave a source gone
+from the list with nothing telling the server; verifying a source and
+unlinking it follow no link anywhere on the way, as presence already did; a
+request whose unlink fails is put back by the batch before it lets go, rather
+than by the controller afterwards, where it could undo a Keep Here; and the
+phone's pull waits for a whole pass, offloads included. Core's tests that use
+macOS-only facilities are kept to macOS, as core also builds for the phone.
+
+**Open: a sync folder renamed while sources are offloaded.** The lock names
+the folder by its path, as the sync records do. Turn sync off, rename or move
+the folder, and macOS resolves the bookmark to the new path — which is not the
+server the lock names, so Folder sync cannot be turned back on, and Download
+All needs it on. The way out today is to put the folder back where it was.
+Naming a folder independently of its path is a change to how sync identifies a
+folder at all, since every record is keyed the same way, and belongs with that
+rather than in this feature.
