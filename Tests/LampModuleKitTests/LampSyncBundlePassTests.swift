@@ -33,11 +33,15 @@ struct LampSyncBundlePassTests {
 
     private func gathered(
         _ local: [LampSyncLocalFile],
-        deletedLocally: [String: Int64] = [:]
+        deletedLocally: [String: Int64] = [:],
+        withheld: Set<String> = [],
+        extraListing: [String: String] = [:]
     ) -> LampSyncBundlePass.Gathered {
         var gathered = LampSyncBundlePass.Gathered()
         gathered.local = local
         gathered.deletedLocally = deletedLocally
+        gathered.withheld = withheld
+        gathered.extraListing = extraListing
         return gathered
     }
 
@@ -1945,6 +1949,78 @@ struct LampSyncBundlePassTests {
         ).run(gathering: { gathered([]) }, records: &records, patience: immediate)
 
         #expect(second.deletionsNotCarriedOut.isEmpty, "said once, not for ever")
+    }
+
+    // MARK: - A path the client withholds
+
+    /// A withheld member is left out of the plan entirely: not fetched, not
+    /// recorded, not reported, and not a failure.
+    ///
+    /// This is the shape a writing's sources need — hundreds of megabytes a
+    /// second device should be able to see without pulling. It is
+    /// deliberately *not* a claim: `0016` and `0017` are what happens when a
+    /// client asserts a fact about *why* a file is absent, and this asserts
+    /// nothing. The phone has treated every workspace file this way from the
+    /// beginning, by kind rather than by path.
+    @Test func awithheldMemberIsNeitherFetchedNorRecordedNorReported() async throws {
+        let path = "Workspaces/Writing/w/Context/big.pdf"
+        let store = try seeded(path: path, revision: "\"c1\"")
+        var records = LampSyncFileRecords()
+        // Nothing lists a workspace file, so the Mac hands the pass its
+        // revision itself. Without that the plan would do nothing here
+        // whether it was withheld or not, and this would prove nothing.
+        let seen = [path: "\"c1\""]
+
+        let withoutWithholding = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([], extraListing: seen) },
+            records: &records, patience: immediate
+        )
+        try #require(
+            withoutWithholding.installed == [path],
+            "the control: this member is fetchable, so withholding has work to do"
+        )
+
+        records = LampSyncFileRecords()
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([], withheld: [path], extraListing: seen) },
+            records: &records, patience: immediate
+        )
+
+        #expect(outcome.installed.isEmpty, "nothing fetched")
+        #expect(records.record(path, in: source) == nil, "nothing recorded")
+        #expect(outcome.failures.isEmpty, "withholding is not a failure")
+        #expect(outcome.fetchedAgain.isEmpty)
+        #expect(outcome.deletionsNotCarriedOut.isEmpty)
+    }
+
+    /// Withheld and tombstoned: not a deletion this pass failed to carry
+    /// out, because the pass is not taking part in the path at all.
+    ///
+    /// Stated on a *module*, not on a context file. `LampSyncLocalDeletion`
+    /// answers `.unsupported` for a workspace file, so a context path is
+    /// already left out of that report — this would pass whatever the code
+    /// did. The property being pinned is about withholding, so it is pinned
+    /// on a kind where the report is live.
+    @Test func awithheldMembersDeletionIsNotReportedAsUncarried() async throws {
+        let path = "Translations/withheld.lamp"
+        let store = try seeded(path: path, revision: "\"c1\"", deletedAt: 1_000)
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"c1\"")
+        records.confirmRecorded([path: "\"c1\""], in: source)
+
+        let outcome = try await LampSyncBundlePass(
+            store: store, library: StubLibrary(), source: source, now: { 2_000 }
+        ).run(
+            gathering: { gathered([], withheld: [path]) },
+            records: &records, patience: immediate
+        )
+
+        #expect(outcome.deletionsNotCarriedOut.isEmpty)
+        #expect(outcome.reaped.isEmpty, "and nothing is deleted on its behalf")
     }
 
     /// A deletion's file the server no longer has is asked about only while

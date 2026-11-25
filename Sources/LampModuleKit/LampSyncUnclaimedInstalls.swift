@@ -102,12 +102,14 @@ public enum LampSyncUnclaimedInstalls {
         records: LampSyncFileRecords,
         source: String,
         planned: (LampSyncFileKind) -> Bool,
-        /// Paths the gather would not sync. A refused path is not acted on,
-        /// so a deletion it was to carry out is not one this pass failed to.
-        refused: Set<String> = []
+        /// Paths this gather does not sync at all — one it refused as
+        /// unreadable, or one the client withheld on purpose. Neither is
+        /// acted on, so a deletion at one is not a deletion this pass failed
+        /// to carry out.
+        notSynced: Set<String> = []
     ) -> [String] {
         manifest.tombstones.compactMap { entry in
-            guard let kind = entry.kind, planned(kind), !refused.contains(entry.path),
+            guard let kind = entry.kind, planned(kind), !notSynced.contains(entry.path),
                   !claimed.contains(entry.path), !deletedHere.contains(entry.path),
                   LampSyncLocalDeletion.target(of: entry.path).isAllowed,
                   records.record(entry.path, in: source) != nil

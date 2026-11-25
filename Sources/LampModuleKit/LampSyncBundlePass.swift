@@ -220,6 +220,28 @@ public struct LampSyncBundlePass {
         /// says nothing true, and is dropped rather than believed.
         public var heldWithoutAFile: Set<String> = []
 
+        /// Paths this client has **chosen** not to hold.
+        ///
+        /// Not a claim and not a failure. `heldWithoutAFile` asserts a fact
+        /// about content — *I have this, in another form* — and the engine
+        /// then plans for it; `refused` says the gather could not read
+        /// something and wants it reported. This says only that the client
+        /// is not taking part in this path: it is left out of the plan
+        /// before any action, so nothing is fetched, nothing is deleted,
+        /// nothing is recorded, and pruning still sees the whole listing
+        /// (`0013`'s treatment, which the phone has applied to every
+        /// workspace file since the beginning through `plannedKinds`).
+        ///
+        /// This exists so a client can decline a path rather than a *kind*.
+        /// A writing's sources are the case: hundreds of megabytes of PDFs
+        /// that a second device should be able to see without pulling, and
+        /// that the Mac holding them may offload once it has them on the
+        /// server. A member with no local copy is otherwise fetched on
+        /// every pass for ever, which is `0016`'s defect — and the lesson
+        /// those records carry is why this is a policy rather than an
+        /// inference: it asserts nothing about *why* the file is absent.
+        public var withheld: Set<String> = []
+
         /// Paths this client holds something at and will not sync, by the
         /// reason to tell the person, which is reported once per pass.
         ///
@@ -420,8 +442,11 @@ public struct LampSyncBundlePass {
         // that is the conservative way round: nothing is lost on the server,
         // and a pair of paths differing only in case is a thing to tell the
         // person about rather than to act on (see `0010`).
+        let withheldSpellings = Set(gathered.withheld.map(folded))
         func isPlanned(_ path: String) -> Bool {
-            guard !refusedSpellings.contains(folded(path)) else { return false }
+            guard !refusedSpellings.contains(folded(path)),
+                  !withheldSpellings.contains(folded(path))
+            else { return false }
             return LampSyncFolderLayout.kind(of: path).map(plannedKinds) ?? false
         }
         for (path, reason) in gathered.refused.sorted(by: { $0.key < $1.key }) {
@@ -489,7 +514,10 @@ public struct LampSyncBundlePass {
             records: records,
             source: source,
             planned: plannedKinds,
-            refused: Set(gathered.refused.keys)
+            // Withheld as well as refused: both are paths this gather does
+            // not sync, so a deletion at one is not a deletion this pass
+            // failed to carry out.
+            notSynced: Set(gathered.refused.keys).union(gathered.withheld)
         )
 
         // A local copy is acted on — installed over or deleted — only while
