@@ -7,7 +7,11 @@ Status: Accepted for the Mac, 2026-11-25, held by
 `afolderHoldingAnOffloadedSourceWaitsForItsDownload`,
 `acopyComingBackDifferentIsSaidAndNotMarked`,
 `adownloadWhoseQuarantineWillNotTakeIsKeptAndSaid`,
-`asourceComesBackWithItsQuarantine` and `arequestNeedsAfileToBeAbout`.
+`asourceComesBackWithItsQuarantine`, `arequestNeedsAfileToBeAbout`,
+`attachingRefusesOverAnUnreadableLedger`, `aledgerBehindAdeniedFolderIsUnreadable`,
+`acopyAnInterruptedImportLeftIsCheckedAtTheNextGather`,
+`afileTheReaderPutsInPlaceIsNotSaidToHaveComeBack` and
+`asourceHiddenByAfolderIsDrawnBesideIt`.
 Replaces the safety rule of `0021` and its review rounds five to fourteen.
 Planned by Fable after the fourteenth round; the owner chose the rebuild, the
 Remove cut and keeping the quarantine mark.
@@ -100,3 +104,29 @@ Not covered by a test, because it lives in the app's controller: refusing a
 pass whose account does not match the lock, and the keychain read error. Each
 is a few lines over `OffloadLock.admits` and `SyncAccount.identity`, which are
 tested.
+
+## First review of the rebuild
+
+No finding was about the read-back. Two serious ones were about the ledger
+that says what is offloaded, in code older than this record:
+
+- *Attaching over an unreadable ledger.* The names offloaded sources still
+  hold were read from a ledger that answers empty when it will not read, so a
+  new file could take an offloaded source's name and go up over its only copy.
+  Attaching now refuses when the ledger will not read.
+- *A ledger behind a folder Lamp may not search read as none.* "Is there a
+  ledger" was asked with `fileExists`, which answers no for a file it cannot
+  reach; the lock then saw nothing offloaded. Only a read that fails with
+  "no such file" now means no ledger. Anything else is unreadable, and the
+  lock holds.
+
+And five lesser ones: what left is now kept until a returning copy is checked,
+not until the gather answers the act — and checked at the gather too, so a copy
+an interrupted import wrote still gets its mark (a different file there is the
+reader's, and is not reported as having come back); re-entering the locked
+account's own credentials is allowed, so a lost password can be restored
+without opening a switch; a source hidden by a folder at its own path is drawn
+beside the folder, telling the reader to move it; the read-back allowance is
+shared by the whole run and checked before each read, with one oversized file
+allowed only as a run's first; and both kinds of return notice are said when
+both happen.
