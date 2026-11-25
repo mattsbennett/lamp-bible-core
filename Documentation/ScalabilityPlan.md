@@ -570,22 +570,45 @@ collection, and not before.
   limit is measured: a GUI-launched app gets **256** open files, so one
   descriptor per module really was a ceiling. The cache keeps forty-eight
   connections and the Mac app raises its own soft limit to 8 192.
-- Streaming bundle extraction, and the manifest's size on the wire — only if
-  iOS reports low memory, or Phase 0's remaining measurements show a multi-MB
-  bundle.
+- ~~Streaming bundle extraction, and the manifest's size on the wire~~
+  **not needed, measured.** The condition was "only if iOS reports low
+  memory, or Phase 0's remaining measurements show a multi-MB bundle", and
+  the bundle had never been measured. It is **126 KB at 13 800 members** (50
+  modules, 250 writings with their workspaces) and **507 KB at 55 200** (200
+  modules, 1 000 writings) — about nine bytes a member, so a library far
+  larger than anyone has is still half a megabyte.
+  `SyncBundleSizeMeasurementTests` keeps the figure. Nothing to stream, and
+  no reason to shrink the manifest.
 
 ## Owner decisions
 
-Four of these are product calls, not engineering ones.
+Four product calls, not engineering items — nothing here blocks the phases
+above, and three of the four turned out not to need a decision at all.
 
-- Routing writing search through FTS (2d's third step) changes what matches:
-  tokens and prefixes instead of substrings. **Not needed for 3b**, which
-  turned out not to depend on it: the phone's writing search is over title,
-  subtitle and tags, and a projection leaves it exactly as it was.
-- Capping revision history, or storing diffs instead of full copies, changes a
-  format both Macs read.
-- The deck listing cache (1a) is the first place in this codebase that trusts a
-  modification date for anything. It is safe in practice — writers replace a deck
-  atomically, so the inode moves — but the principle has been held deliberately.
-- The archive cache (1d) keys on the same ledger stamp sync already trusts to
-  decide whether to run a pass at all.
+- ~~Routing writing search through FTS~~ (2d's third step) would change what
+  matches: tokens and prefixes instead of substrings. **Not needed.** 3b
+  turned out not to depend on it — the phone's writing search is over title,
+  subtitle and tags, and a projection leaves it exactly as it was. Nothing
+  is asking for FTS here.
+- **Capping revision history, or storing diffs instead of full copies.**
+  The one still open, and the recommendation is to **leave it**: a count cap
+  cannot converge, because revision folders merge by union and only a file
+  that names what it replaced stays dropped — so a capped revision comes
+  back from the other Mac on the next pass, for ever. A cap would need its
+  own tombstones, which is the format change it was meant to avoid, for the
+  worst outcome of the three (a version seen yesterday silently gone).
+  Diffs are rejected for now: no `apply` exists, and a chain breaks when a
+  predecessor is compacted away on one Mac while the other holds its child,
+  where today every revision is self-contained and a restore is a copy.
+  Before revisiting, measure on a real library: bytes under
+  `*/.lamp/revisions` against bytes of documents, revision uploads per day
+  of writing, and the gzip ratio of a revision file. If bytes do matter, the
+  lever is policy — a coarser `oldestGap` — not format.
+- ~~The deck listing cache (1a) trusting a modification date~~ **decided,
+  `decisions/0003`**: it keys on the whole file identity, `st_ctime` and
+  inode included, not a date — and `0007` then wrote down which filesystems
+  that may be trusted on. The principle the plan was protecting is intact.
+- ~~The archive cache (1d) keying on the sync ledger stamp~~ **decided, and
+  it does not**: `decisions/0002` records that key as unsound — five writers
+  change rows without stamping it — and the cache keys on a revision each
+  table keeps by trigger instead.

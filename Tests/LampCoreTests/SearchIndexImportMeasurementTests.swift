@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import LampModuleKit
 import Testing
 
 /// Item 3d of `Documentation/ScalabilityPlan.md`: whether a bulk import
@@ -239,6 +240,52 @@ struct SearchIndexImportMeasurementTests {
                 rebuildAfterwards=\(String(format: "%.0f", rebuild))ms \
                 dropAndRebuildTotal=\(String(format: "%.0f", withoutTriggers + rebuild))ms \
                 matches=\(hits)
+                """)
+        }
+    }
+}
+
+/// The last of Phase 0's measurements: how big the settings bundle gets on the
+/// wire. `Documentation/ScalabilityPlan.md`'s Phase 4 holds streaming
+/// extraction and a smaller manifest for "only if iOS reports low memory, or
+/// Phase 0's remaining measurements show a multi-MB bundle", and nobody had
+/// measured the bundle.
+///
+/// Skipped unless `LAMP_SCALE=1`. Nothing asserts a size.
+struct SyncBundleSizeMeasurementTests {
+    private static func enabled() -> Bool {
+        ProcessInfo.processInfo.environment["LAMP_SCALE"] == "1"
+    }
+
+    @Test(.enabled(if: enabled()))
+    func measuresTheSettingsBundleAtSize() throws {
+        // A library at the sizes the plan worries about: modules, writings
+        // with their media, decks, and a workspace tree per writing.
+        for (modules, writings, perWriting) in [(50, 250, 54), (200, 1_000, 54)] {
+            var manifest = LampSyncLibraryManifest()
+            var at: Int64 = 1_000
+            func record(_ path: String) throws {
+                at += 1
+                manifest = try manifest.recordingWrite(
+                    path, revision: "\"r\(at)\"", replacing: nil, at: at
+                )
+            }
+            for module in 0..<modules {
+                try record("Translations/translation-\(module).lamp")
+            }
+            for writing in 0..<writings {
+                try record("Writing/writing-\(writing).lamp")
+                for file in 0..<perWriting {
+                    try record("Workspaces/Writings/w\(writing)/Revisions/\(file).json")
+                }
+            }
+            var bundle = LampSyncSettingsBundle()
+            bundle.manifest = manifest
+            let bytes = try bundle.encoded().count
+            print("""
+                SCALE modules=\(modules) writings=\(writings) \
+                members=\(manifest.paths.count) bundleBytes=\(bytes) \
+                bundleMB=\(String(format: "%.1f", Double(bytes) / 1_048_576))
                 """)
         }
     }
