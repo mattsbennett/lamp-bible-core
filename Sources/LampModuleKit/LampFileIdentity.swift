@@ -31,6 +31,53 @@ public struct LampFileIdentity: Codable, Equatable, Sendable {
     public let changedSeconds: Int64
     public let changedNanoseconds: Int64
 
+    /// The identity of the regular file **at** `url`, without following a
+    /// link there; throws for anything else.
+    ///
+    /// For a caller about to unlink the path. `init(url:)` follows a link,
+    /// so a link put where a checked file was would answer with its target's
+    /// identity — and a link into the object store a source came from would
+    /// answer with the source's own. A folder is refused too: what the caller
+    /// checked was a file.
+    ///
+    /// Refusing here rather than storing the file's type: this value is
+    /// persisted in digest caches, and a new stored field would discard every
+    /// one of them on the next read.
+    public init(regularFileAt url: URL) throws {
+        var info = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            path.map { fstatat(AT_FDCWD, $0, &info, AT_SYMLINK_NOFOLLOW) } ?? -1
+        }
+        guard result == 0 else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain, code: Int(errno),
+                userInfo: [NSFilePathErrorKey: url.path]
+            )
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain, code: Int(EFTYPE),
+                userInfo: [NSFilePathErrorKey: url.path]
+            )
+        }
+        self.init(info)
+    }
+
+    /// Whether `other` names the same bytes as this: everything but the
+    /// **change** time.
+    ///
+    /// A reader's sources are hard links into a store of content-addressed
+    /// objects, so one workspace holding the same file twice holds two links
+    /// to one inode — and unlinking either moves that inode's `ctime`. Full
+    /// equality would read the survivor as replaced. Replacement still shows:
+    /// a new file is a new inode, and a write in place moves the modification
+    /// time or the size.
+    public func namesSameBytes(as other: LampFileIdentity) -> Bool {
+        device == other.device && inode == other.inode && size == other.size
+            && modifiedSeconds == other.modifiedSeconds
+            && modifiedNanoseconds == other.modifiedNanoseconds
+    }
+
     public init(url: URL) throws {
         var info = stat()
         let result = url.withUnsafeFileSystemRepresentation { path in

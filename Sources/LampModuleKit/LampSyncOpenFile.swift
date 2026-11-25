@@ -229,3 +229,58 @@ struct LampSyncOpenFile {
         }
     }
 }
+
+/// What one open of a file said about it: which file it was, and the digest
+/// of its bytes — for a caller outside this module that is about to act on
+/// the answer.
+///
+/// The Mac deletes a reader's source on the strength of a digest matching
+/// what it uploaded. Hashing a path and then asking the path who it is are
+/// two resolutions that can name two files, which is how a review found it
+/// binding one file's verified bytes to another's identity. Both come from a
+/// single descriptor here (`Documentation/decisions/0012`).
+///
+/// The descriptor itself stays inside this module, for `0012`'s reason: one
+/// that escapes its closure names whatever the system gives the number to
+/// next. Only the answer leaves, and it can only be made by reading —
+/// there is no public initialiser.
+public struct LampVerifiedFileRead: Equatable, Sendable {
+    public let identity: LampFileIdentity
+    public let digest: String
+
+    public enum Failure: Error, Equatable {
+        /// Not an ordinary file, or a symbolic link, or not there.
+        case notAnOrdinaryFile
+        /// Written to while it was being read: the bytes hashed are not the
+        /// bytes of any one moment.
+        case changedWhileRead
+        case unreadable
+    }
+
+    /// Opens `url` once, without following a link, and reads its identity
+    /// and digest from that descriptor.
+    ///
+    /// The identity is taken either side of the read and must agree, so the
+    /// digest is of the bytes the identity names rather than of a file
+    /// rewritten part way through.
+    public static func read(_ url: URL) throws -> LampVerifiedFileRead {
+        do {
+            return try LampSyncOpenFile.with(url, followingLinks: false) { file in
+                guard file.isOrdinaryFile else { throw Failure.notAnOrdinaryFile }
+                let before = try file.identity()
+                let digest = try file.digest()
+                let after = try file.identity()
+                guard before.namesSameBytes(as: after) else { throw Failure.changedWhileRead }
+                return LampVerifiedFileRead(identity: before, digest: digest)
+            }
+        } catch let failure as Failure {
+            throw failure
+        } catch LampSyncOpenFile.Failure.notAnOrdinaryFile {
+            throw Failure.notAnOrdinaryFile
+        } catch LampSyncOpenFile.Failure.cannotBeOpened {
+            throw Failure.notAnOrdinaryFile
+        } catch {
+            throw Failure.unreadable
+        }
+    }
+}

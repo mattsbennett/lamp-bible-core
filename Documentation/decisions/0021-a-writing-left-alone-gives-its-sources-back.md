@@ -245,3 +245,82 @@ this one:
 
 And the pane's Offload now refuses on an observation older than a quarter of
 an hour, rather than acting on a listing from whenever this Mac last synced.
+
+## The collapse
+
+Four review rounds found about forty defects, nearly all of one shape: two
+representations that had to agree, and did not. Fixing them one at a time
+kept producing the next — most of each round's P1s came from the round
+before. So the design was taken back to the planner, which named two
+faults and one window, and the feature was rebuilt around them. Everything
+above this section is the history that led here; this is what the code does.
+
+**One act per path; presence observed.** The ledger records what the reader
+*did* to a source — let it go to the server, or asked for it back — as one
+value per path, `offloaded` or `wanted`, or none. Whether the file is here is
+never stored: it is read from the disk every time, and only a regular file
+counts — a folder that has taken the path does not. Everything else is a
+function of the two:
+
+| act | file here | withheld | row |
+|---|---|---|---|
+| none | yes | no | the file |
+| none | no | no | none: the pass fetches it, as `0018` says |
+| `offloaded` | no | **yes** | "On the server", Download |
+| `offloaded` | yes | no | the file — an unlink that never happened, or a reattachment |
+| `wanted` | no | no | "Coming back", Try Again |
+| `wanted` | yes | no | the file |
+
+It replaced a set of offloaded paths and a dictionary of fetch times whose
+value meant "asked at" before arrival and "landed at" after. A path cannot be
+both offloaded and wanted now, because it holds one value; forgetting and
+asking are different values rather than two helpers that shared a line.
+The withholding, the pane's rows and the agent's inventory all read one
+derivation, so they cannot disagree with each other.
+
+**Grace is by arrival.** A source is left alone for a week after it *arrives
+here*, however it came — fetched, attached, or copied in by another Mac —
+which is `presentSince`, already stamped when a context file first appears.
+Measuring from the ask arrived already expired for a download slower than the
+grace. And it closed a gap no review found: none of the writing's activity
+clocks moves when a source is attached, so a PDF attached to a six-month-old
+writing in preparation for working on it was uploaded, listed, and offloaded
+by the sweep two passes later.
+
+**One observation, from one place.** What a finished pass saw — which store,
+which members the manifest counted, what the listing of the context folders
+said — is one value, written by the gather and labelled with the source *its
+store was built from*. It used to live in three places, and a review found
+them disagreeing about which server they described. It answers only for that
+server and only for a quarter of an hour, and it becomes the current
+observation only when the pass finishes. There is no longer a way to offload
+without one.
+
+**The unlink takes a verified source, and nothing else.** A source is read
+through one open of the file, which gives its identity and the digest of the
+same bytes (`decisions/0012`, through core's `LampVerifiedFileRead`); the
+identity is taken either side of the read and must agree. The unlink takes
+only that value, asks the path — without following a link, and refusing
+anything but a regular file — whether it still holds those bytes, and calls
+`unlink(2)`, which will not remove a folder. Comparing bytes ignores the
+change time, because unlinking one of two hard links to a source moves the
+other's.
+
+**What is accepted rather than closed.** Between that last question and the
+unlink there is no I/O and a few microseconds; macOS cannot unlink by
+descriptor, so it cannot be closed, and only another process of the same user
+in the workspace could use it. That is the bound `0010` already accepts. Three
+review rounds went into narrowing it; this is where it stops.
+
+The hold on an open writing is asked once per file, **before** anything is
+noted for it, and nothing suspends from noting the offload to unlinking the
+file — so a pass gathering the workspace can never see between them.
+
+A Download asked for while a pass is running is answered when that pass
+finishes, rather than left for a poll only the reader window runs.
+
+One finding from the earlier rounds turned out to describe nothing: comparing
+names in NFC so a decomposed name is not drawn twice. Swift compares strings
+by canonical equivalence, so the two spellings were already one row. The
+normalisation stays, because the path goes on to name a file and a ledger key,
+where the bytes do matter — but the row was never wrong.

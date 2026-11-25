@@ -200,4 +200,72 @@ struct LampSyncOpenFileTests {
         let copied = try Data(contentsOf: copy)
         #expect(copied == Data("as opened".utf8))
     }
+
+    // MARK: - The verified read, for callers outside this module
+
+    @Test func aVerifiedReadNamesTheFileItHashed() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("source.pdf")
+        try Data("the bytes".utf8).write(to: file)
+
+        let read = try LampVerifiedFileRead.read(file)
+        #expect(read.digest == LampSyncContentRevision.digest(for: Data("the bytes".utf8)))
+        #expect(read.identity.namesSameBytes(as: try LampFileIdentity(url: file)))
+    }
+
+    /// The Mac deletes a source on the strength of this answer, so it refuses
+    /// anything that is not a plain file rather than hashing what a link
+    /// points at or treating a folder as nothing.
+    @Test func aVerifiedReadRefusesALinkAndAFolder() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("target.pdf")
+        try Data("x".utf8).write(to: target)
+        let link = root.appendingPathComponent("link.pdf")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let folder = root.appendingPathComponent("folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        #expect(throws: LampVerifiedFileRead.Failure.notAnOrdinaryFile) {
+            try LampVerifiedFileRead.read(link)
+        }
+        #expect(throws: LampVerifiedFileRead.Failure.notAnOrdinaryFile) {
+            try LampVerifiedFileRead.read(folder)
+        }
+    }
+
+    /// Two links to one file are the same bytes, though unlinking one moves
+    /// the inode's change time — which is how a workspace holding a source
+    /// twice used to keep both copies for ever.
+    @Test func ahardLinkedSiblingIsTheSameBytesAfterItsTwinGoes() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let one = root.appendingPathComponent("one.pdf")
+        let two = root.appendingPathComponent("two.pdf")
+        try Data("same".utf8).write(to: one)
+        try FileManager.default.linkItem(at: one, to: two)
+        let before = try LampFileIdentity(url: two)
+
+        try FileManager.default.removeItem(at: one)
+        let after = try LampFileIdentity(url: two)
+
+        #expect(before != after, "the change time did move — that is the trap")
+        #expect(before.namesSameBytes(as: after))
+    }
+
+    @Test func aWriteInPlaceIsNotTheSameBytes() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("source.pdf")
+        try Data("first".utf8).write(to: file)
+        let before = try LampFileIdentity(url: file)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.write(contentsOf: Data("second, and longer".utf8))
+        try handle.close()
+
+        let after = try LampFileIdentity(url: file)
+        #expect(before.inode == after.inode, "the same file, written over")
+        #expect(!before.namesSameBytes(as: after))
+    }
 }
