@@ -690,3 +690,55 @@ line saying why, instead of recording a request no pass would carry out.
 **Still open: an in-flight download can undo a Remove.** Unchanged from round
 eleven: telling a download of the removed copy from a genuine re-add needs
 the removal to carry what it removed into the import.
+
+## Round thirteen
+
+Mac only: core has met its stopping rule and had no code change since.
+
+**Three serious findings, all fixed. Two were in last round's account fix.**
+
+- *Each switch has to mark what the record holds then.* A change of account
+  merged the records' revisions into the marks keeping the *older* mark at a
+  path. Anna records `r1`; a switch to Ben marks it; Ben's pass records `r2`;
+  a switch to Carl before Ben's next pass kept the `r1` mark, the prune then
+  dropped it because the record held `r2`, and `r2` — Ben's — was proof for
+  Carl. The current revision now replaces any older mark.
+- *Anonymous is not an empty username.* With no username, saving a first
+  password turns anonymous requests into signed-in ones, and a server can
+  answer the two with different libraries; the account was the username
+  alone, so both were "". The account is now empty only with no username and
+  no password, and `user:` and the username otherwise; a password change that
+  would switch between the two is refused while sources are only on the
+  server, as a username change already was. A new password for the same
+  account is not. This changes nothing installed: the account history was
+  added in the round before and has not shipped.
+- *A replacement during the pass kept the opening listing.* The closing look
+  took membership from the manifest the pass wrote, and the revisions from
+  the listing at the gather. Another device replacing a source between the
+  two left a listing of the old revision matching this Mac's record of the old
+  bytes. A listed revision now survives only where the path's manifest entry
+  is unchanged from the opening one.
+
+**Four lesser findings, all fixed.**
+
+- A request to offload is bound to the file it was made about, by device and
+  inode, and checked at the moment the offload would be noted: a file put in
+  its place under the same name withdraws the request instead of inheriting
+  it. And a request goes when its file does even if that file never reached a
+  pass. An editor that saves by replacing the file also withdraws it; that
+  errs the right way.
+- Remove reads the ledger, and whether the item is a folder, before it touches
+  anything. Both were read after the removal: the ledger, so an unreadable one
+  threw only once the files had gone and their removals were queued; and the
+  folder test only worked because the URL had cached the answer from earlier.
+- A requested offload the server never confirms — a server that only gives
+  weak tags, say — now says so in the pane once its follow-up passes are spent,
+  instead of reading "Going after next sync" for ever. The request stays.
+- A downloaded source whose quarantine will not take is not left here without
+  it: the copy is removed again and the source is offloaded, with its mark
+  kept for the next Download. Left in place it would have sat unmarked, and
+  nothing makes a later pass import that workspace again to retry.
+
+Not covered by a test, because they live in the app target's controller: the
+wiring of the closing look, the refusal of a password change, and the waiting
+message. Each is a few lines over a tested rule.
