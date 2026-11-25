@@ -3,8 +3,13 @@
 Status: Accepted for the Mac, 2026-11-25, held by
 `WorkspaceSourceOffloadTests`, `WorkspaceSourceOffloadGatheringTests`,
 `offloadsAbatchAgainstTheCurrentServerAndTheUploadedBytes`,
-`asourceThatWillNotGoIsNotMarkedOffloaded` and
-`thecheapDateQueryAgreesWithTheWritingsThemselves`. Completes `0020`, which
+`asourceThatWillNotGoIsNotMarkedOffloaded`,
+`asourceTheServerNoLongerListsIsNotOffloaded`,
+`asourceTheServerHoldsAtAnotherRevisionIsNotOffloaded`,
+`asourceConfirmedDuringThatPassWaitsForTheNext`,
+`asourceAttachedWhereOneWasOffloadedIsNoLongerWithheld` and
+`thecheapDateQueryAgreesWithTheWritingsThemselves`. Its safety rule was
+rewritten the same day, after review; the first version is kept below. Completes `0020`, which
 built the mechanism and said plainly that nothing used it. Planned by Fable;
 the owner asked for the setting by name.
 
@@ -50,12 +55,54 @@ Three clocks instead, newest wins:
 None of the three moves when the sweep fires. Where none of them says
 anything the workspace is kept: the answer to not knowing is to keep.
 
-**After a finished pass, not at launch.** Offloading may only touch a file
-the server is known to hold, and a confirmed revision is what a pass's bundle
-update has just produced. A launch sweep would run on what the records said
-when the app last quit. The launch pass means "after a pass" covers launch
-anyway, and with sync off there is no pass and so no sweep — which is right,
-because there is nowhere for the sources to go. Throttled to once an hour.
+**After a finished pass, not at launch.** A launch sweep would run on what
+the records said when the app last quit; the launch pass means "after a pass"
+covers launch anyway, and with sync off there is no pass and so no sweep —
+which is right, because there is nowhere for the sources to go. Throttled to
+once an hour.
+
+**A record is a memory. The listing is the observation.**
+
+This was wrong when first written, and the first version is kept here because
+it is the kind of wrong that reads as careful. It said: offloading may only
+touch a file the server is known to hold, and *a confirmed revision is what a
+pass's bundle update has just produced*. True, and empty. A record's
+`installedRevision` is the last observation of that file, made once when it
+was uploaded, and **no pass ever refreshes it**. A source deleted from the
+sync folder by hand keeps its confirmation for ever: a workspace file is an
+unlisted kind, so core never probes it; `LampSyncFilePlan.change` answers
+`.none` for an unchanged local copy with no listing; and the absence report
+covers listed kinds only. The pass finishes, having confirmed nothing, and a
+sweep trusting the record deletes the last copy in existence.
+
+The observation already exists and was being thrown away. The Mac's own
+gather lists each workspace's `Context/` folder once per pass
+(`revisionsOfUnlistedMembers`) to give those members a revision at all. The
+controller now keeps that result, and a source may be offloaded only where
+the listing showed it **at the revision recorded for it**. Zero extra
+requests.
+
+Three other shapes were considered and rejected:
+
+- **A HEAD or PROPFIND per candidate** before deleting. It is a second notion
+  of truth, taken by a store built outside the pass, duplicating the
+  provider switch and the folder provider's security scope. The folder
+  listing is the same request the engine trusts to install over local files,
+  taken under the engine's retries, minutes old at most.
+- **Moving the sweep inside the pass**, which would give it a store. It would
+  also make core's modelled engine the thing that deletes unlisted-kind files
+  unattended. The pass stays a pass; the sweep stays housekeeping after it.
+- **Widening core's absence report to unlisted kinds.** The Mac draws that
+  report as an error mark per file; 559 marks for sources is not what it is
+  for, and the Mac already holds the listing it would be built from.
+
+Properties worth knowing. The listing is taken at the gather, *before* the
+uploads, so a source first confirmed during that same pass is not in it and
+waits one more — conservative, and correct. A folder that would not list is
+indistinguishable from one that showed nothing; both read as not seen, so
+nothing is offloaded, which is the safe direction. And on a server whose
+`PROPFIND` carries no `getetag` the sweep would be inert; on the owner's
+Synology all 559 source records carry an ETag-shaped revision, so it is not.
 
 **The sweep is stricter than the button**, in two ways, because nobody is
 watching it:
@@ -65,14 +112,30 @@ watching it:
   would delete the only copy of a file the new one never took.
 - it checks the bytes on disk are the bytes that went up. A confirmed
   revision says an upload completed, not that nothing has happened since.
-  Sources are read-only hard links and nothing writes one in place, so this
-  should never fire; it costs one hash of a file about to be deleted anyway.
+
+The second of those is **not** a sweep-only rule, though it was written as
+one. The reasoning for sparing the button — the app never replaces a source
+in place, since `addContextItem` picks a free name rather than overwriting —
+answers the wrong question. A workspace is a folder CLI agents run in: an
+agent can remove and rewrite a file, Finder can drag-replace one, a restore
+can put old bytes at a path. Both paths now go through one function, so the
+button cannot drift from the sweep again. What the button does not get is the
+listing: a press has no pass behind it, and there is a reader standing there
+to see what happens.
 
 A writing with an editor open is never swept, whatever its dates say. The
 agent pane lives inside that editor, so a chat or a Terminal turn mid-flight
 is held back by the same check.
 
 ## Consequences
+
+A source is withheld only while there is **no file here** — the note says
+what this Mac let go of, and a file back at that path says it has one again,
+by a fetch that landed or by the reader attaching something new under the
+same name. Withholding on the note alone left a reattached source withheld
+for ever and never uploaded, the pane showing it as local while the pass
+refused to carry it. This is strictly narrower than the note alone, so it
+cannot bring `0018`'s regression back.
 
 A source that will not delete has its note cleared again. A note saying
 "offloaded" on a file still on disk is a lie in the one direction that shows:
