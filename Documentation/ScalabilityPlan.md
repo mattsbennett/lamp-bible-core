@@ -5,7 +5,26 @@ numbers are from those trees and will drift; the names are the durable part.
 
 This is a plan, not a description of the code. Strike an item when it lands, and
 delete the file when the work is done. The decisions behind it keep their own
-records, which outlive this file: `decisions/0001`–`0007`.
+records, which outlive this file: `decisions/0001`–`0017`.
+
+## Status: complete, 2026-11-25
+
+Every item is landed, decided, or recorded as a non-goal with its reason, and
+every owner decision has been put and answered. Nothing here is waiting on
+anybody. The file is kept rather than deleted because its *measurements* are
+the record of what the code used to cost and the records cite them; the
+decisions themselves live in `decisions/`.
+
+Two things a reader should take from it before trusting any of the numbers
+below. The first attempt at almost every measurement here was wrong in a way
+that flattered the change — a fixture that compressed 44× where real prose
+compresses 2.5×, a digest cache that looked four times faster than it was, a
+"15,002 files" that was a count of subpaths. Each correction is written beside
+its number. And the worst defect this pass produced, item 0's folder listing,
+**presented as a fix**: it silently stopped every unlisted kind syncing and
+the symptom was the revision re-fetch loop appearing to stop. A sync change
+that makes a problem disappear deserves more suspicion than one that makes a
+problem appear.
 
 The question it answers: when someone holds many modules, many writings and many
 decks, what gets slow? The short answer is that several surfaces read a whole
@@ -732,15 +751,32 @@ above, and three of the four turned out not to need a decision at all.
   boundary, so the model and `coverage.json` move with it, and it is shared
   with the phone.
 
-  Still not addressed: the server and the phone hold every revision ever
-  uploaded, uncompacted, and nothing deletes one. This stops the traffic, not
-  the accumulation — bounding that needs the tombstone `0015` rejected, and
-  it is the one thing this item leaves for someone else.
+  **Decided, not left open**: the server and the phone keep every revision
+  ever uploaded, uncompacted, and nothing deletes one. This item stops the
+  *traffic*, and the accumulation stays — bounding it needs a tombstone for
+  revision files, which `0015` rejects because a revision folder merges by
+  union and only a file naming what it replaced stays dropped, so a capped
+  or swept revision returns from the server on the next pass for ever. The
+  cost of leaving it is bytes at rest on a store the owner controls, measured
+  at 9.03 MB against 401 MB of workspace; the cost of fixing it is the
+  format change the cap was refused for. If it ever matters, it is a new
+  item with its own record, not unfinished business in this one.
 
   `0017`'s two-Mac case is **closed** as of 2026-11-25: compaction un-retires
   the originals an untagged merge covers when a record that knows its turn is
-  dropped under it, so the demotion gets its chance and the two Macs converge
-  rather than one keeping a version the other cannot reach.
+  dropped under it — and keeps that record fetchable with them, because the
+  demotion needs a holder that knows a turn and retiring it meant the next
+  pass fetched the originals, still could not demote, and retired them again.
+  Review caught that; freeing the originals alone would have replaced one
+  loop with another.
+
+  The three stale `Translations` records are **waiting, not stuck**: measured
+  on 2026-11-25 their tombstones are 7 days old against the reap's 14-day
+  retry window, so the pass is right to keep them — a deletion made here
+  whose file the server has lost is still being retried inside that window,
+  and that record is what the retry reads. They stop being reported on or
+  after about 2026-12-01, by the mechanism `0017` records and
+  `adeletionThisClientWillNotCarryOutIsReportedOnce` holds.
 
   **Explained, and it was this plan's own doing.** A probe over one pass
   logged, for every recorded `Revisions/` path, whether the manifest named
