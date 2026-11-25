@@ -102,9 +102,11 @@ struct LampLibraryTests {
             path: root.appendingPathComponent("UserData.sqlite").path
         )
         let plan = try await queue.read { db in
-            try String.fetchAll(db, sql: """
-                EXPLAIN QUERY PLAN SELECT id, last_modified FROM personal_devotionals
-                """, adapter: ColumnMapping(["0": "detail"]))
+            try String.fetchAll(
+                db,
+                sql: "EXPLAIN QUERY PLAN " + LampLibrary.personalDevotionalDatesStatement,
+                adapter: ColumnMapping(["0": "detail"])
+            )
         }.joined(separator: " / ")
         #expect(
             plan.contains("COVERING INDEX"),

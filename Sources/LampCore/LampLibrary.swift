@@ -1976,12 +1976,20 @@ public actor LampLibrary {
     /// reason: the Mac's source-offload sweep asks this after each sync pass,
     /// and `personalDevotionals()` would read every writing's whole body —
     /// content, content JSON and media JSON — to take a date off.
+    ///
+    /// The statement is named rather than written inline so the test can
+    /// explain *this* query rather than a copy of it: a test that pins the
+    /// index while the query quietly goes back to `SELECT *` would pass while
+    /// the sweep read every writing's body again.
+    public static let personalDevotionalDatesStatement =
+        "SELECT id, last_modified FROM personal_devotionals"
+
     public func personalDevotionalModificationDates() throws -> [String: Date] {
         let queue = try openUserDatabase()
         return try queue.read { db in
             var dates: [String: Date] = [:]
             for row in try Row.fetchAll(
-                db, sql: "SELECT id, last_modified FROM personal_devotionals"
+                db, sql: Self.personalDevotionalDatesStatement
             ) {
                 guard let id: String = row["id"] else { continue }
                 let seconds: Int64 = row["last_modified"] ?? 0
