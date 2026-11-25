@@ -736,29 +736,36 @@ above, and three of the four turned out not to need a decision at all.
   uploaded, uncompacted, and nothing deletes one. This stops the traffic, not
   the accumulation.
 
-  **And one thing is unexplained.** On the installed build the 45 orphaned
-  `Revisions/` members are neither fetched nor claimed, and no retirement list
-  exists — compaction runs on every pass but returns early when it deletes
-  nothing, and the list is written only on a deletion. So the new mechanism is
-  *inert* on this library, and for these members the installed build is
-  behaviourally identical to the one that fetched all 45 twice over a few
-  hours earlier. Something else stopped it, and it is not identified.
+  **Explained, and it was this plan's own doing.** A probe over one pass
+  logged, for every recorded `Revisions/` path, whether the manifest named
+  it, whether it was tombstoned, and whether the listing reached it. All
+  **169** came back `member=true tomb=false listed=false` — including the 124
+  that were on disk and had been uploaded from that very Mac. The pass was
+  blind to every revision path, so `change` answered `.none` and nothing was
+  fetched, uploaded or checked.
 
-  Ruled out: a reap through this client, because a deletion carried out
-  forgets the record and the records still name 169 against 124 on disk; and
-  the unclaimed-deletion case, because `deletionsNotCarriedOut` named only the
-  three `Translations` paths on those passes, not these. What remains is
-  either a member the server no longer lists, or a path no longer in the
-  manifest at all — both of which reach `.none` without a download.
+  The cause is item 0 itself. `b5e46ae` replaced asking after each unlisted
+  member with listing its folder, and keyed the listing by the entry's path —
+  but a WebDAV listing's path is the href the server returned, carrying the
+  share prefix (`/home/LampBible/Workspaces/…`), while a member path is
+  store-relative. It matched nothing, for every member of every folder. Every
+  unlisted kind — revisions, context files, workspace files, writing
+  documents — stopped syncing at 11:06 that morning, silently, and the only
+  reason it showed at all is that it looked like the revision loop being
+  fixed.
 
-  The test, when someone wants it: one pass of a build that logs, for each
-  recorded `Revisions/` path with no local file, whether the manifest names
-  it, whether it is tombstoned, and whether the listing reached it. That
-  splits the two without anyone opening the store. Until then this plan does
-  **not** claim the live loop was stopped by the retired list — only that the
-  loop existed, that it is gone, and that each link of the new mechanism is
-  tested on its own.
+  The fixtures are why it passed review: every one of them built listing
+  entries whose path was already store-relative. Matching is by the entry's
+  **name** within the folder that was listed now, which cannot be wrong about
+  a prefix or an escape, and the test that would have caught it — a listing
+  whose paths carry the share prefix — is in
+  `UnlistedMemberRevisionsTests`.
 
+  **With sight restored, the retired list was confirmed end to end on the
+  owner's library.** One pass reported the 45 members fetched again; its
+  compaction deleted and retired them; the next pass reported none, and the
+  three workspaces now hold 45 retirement entries between them — exactly the
+  45 orphans. That is the claim this plan could not make a few hours ago.
   `measuresWhatRevisionHistoryCostsAtRest` should drop its `gzipRatio` or use
   prose-shaped bodies, and should write through `record` so its "at rest" is
   what the store leaves at rest.
