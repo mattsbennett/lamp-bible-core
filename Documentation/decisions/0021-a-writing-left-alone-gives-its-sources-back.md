@@ -241,7 +241,8 @@ this one:
 - Comparing the *whole* identity treated a hard-linked sibling as replaced:
   sources are links into the object store, and unlinking either moves the
   shared inode's change time. Two copies of one file would never both go.
-  Everything but the change time is compared.
+  Everything but the change time was compared — reversed in round five,
+  below, because it cost `0007`'s guard.
 
 And the pane's Offload now refuses on an observation older than a quarter of
 an hour, rather than acting on a listing from whenever this Mac last synced.
@@ -279,8 +280,14 @@ The withholding, the pane's rows and the agent's inventory all read one
 derivation, so they cannot disagree with each other.
 
 **Grace is by arrival.** A source is left alone for a week after it *arrives
-here*, however it came — fetched, attached, or copied in by another Mac —
-which is `presentSince`, already stamped when a context file first appears.
+here*, however it came — fetched, attached, or copied in by another Mac. That
+is a local field of its own, `arrivedAt`, stamped both when the gather first
+sees a context file and when a pass records what it has just installed: a pass
+installs sources after the gather's note, so the gather alone never sees a
+download arrive. It is kept apart from `presentSince`, which is portable and
+settles deletions across devices — an arrival here is this Mac's fact, and
+moving the shared value on every download would move when other Macs judge a
+deletion to have happened.
 Measuring from the ask arrived already expired for a download slower than the
 grace. And it closed a gap no review found: none of the writing's activity
 clocks moves when a source is attached, so a PDF attached to a six-month-old
@@ -302,9 +309,14 @@ same bytes (`decisions/0012`, through core's `LampVerifiedFileRead`); the
 identity is taken either side of the read and must agree. The unlink takes
 only that value, asks the path — without following a link, and refusing
 anything but a regular file — whether it still holds those bytes, and calls
-`unlink(2)`, which will not remove a folder. Comparing bytes ignores the
-change time, because unlinking one of two hard links to a source moves the
-other's.
+`unlink(2)`, which will not remove a folder. The comparison is the **whole**
+identity, change time included: the change time is the only thing that
+notices a file rewritten at the same size with its date put back, which
+`0007` requires be noticed. A first version of the rebuild ignored it, because
+unlinking one of two hard links to a source moves the other's — and a review
+pointed out that this traded away `0007`'s guard to save a pass. So a
+workspace holding the same file twice offloads one copy now and the other on
+the next sweep, read afresh.
 
 **What is accepted rather than closed.** Between that last question and the
 unlink there is no I/O and a few microseconds; macOS cannot unlink by
@@ -324,3 +336,39 @@ names in NFC so a decomposed name is not drawn twice. Swift compares strings
 by canonical equivalence, so the two spellings were already one row. The
 normalisation stays, because the path goes on to name a file and a ledger key,
 where the bytes do matter — but the row was never wrong.
+
+## Round five, on the rebuilt design
+
+Nothing in it landed in the act-and-presence core, the verified unlink, or
+the row table's logic, which is what the rebuild was for. Two findings were
+the old shape in a path that had not been moved onto the shared derivation —
+a folder that has taken an offloaded file's own path hid it from the
+confirmation while the removal still counted it, and the arrival stamp that a
+pass's import never reached. The rest were where this feature meets the rest
+of sync:
+
+- **The comparison ignored the change time**, so a file rewritten at the same
+  size with its date put back passed as unchanged — `0007`'s guard, given up to
+  let a hard-linked twin go a pass sooner. Reversed, as above.
+- **A pending upload vouched for bytes nothing had confirmed.** `recordUpload`
+  moves the uploaded digest and the pending revision together and leaves the
+  installed revision until the bundle update confirms, so after a failed update
+  the digest named new bytes and the revision old ones. The digest and the
+  revision have to be a confirmed pair now; a pending record vouches for
+  nothing.
+- **A sync refused because one was running looked like a sync that failed**,
+  and threw away the observation the running pass had just written. It is now
+  turned into a request for a pass afterwards, before anything is touched.
+- **Membership comes from the closing manifest**, so an update that retried
+  against another device's deletion does not leave that source drawn as on the
+  server. The listing stays the gather's: revisions are what was seen.
+- **Switching servers does not forget what the old one holds.** Reconciliation
+  only forgets a source the server it is talking to ever recorded.
+- **Each unlink also asks whether the same server is still configured**, so a
+  sweep does not go on deleting after sync is turned off or moved.
+- **Removing a source that has just landed goes through the verified unlink**,
+  so it cannot remove a folder put at the path while it was being hashed.
+
+Three of those live in the controller and are held by reading rather than by a
+test: the refused-sync guard, the closing manifest, and the per-unlink check of
+the server. The others each have a test that fails when the fix is reverted.
