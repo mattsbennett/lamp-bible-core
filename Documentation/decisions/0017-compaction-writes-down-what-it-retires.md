@@ -92,37 +92,52 @@ the claim needs is *removed here deliberately, with its replacement on disk*,
 and only the code that did the removing can say that.** Every guard in `0016`
 was an attempt to infer that fact from things that do not carry it.
 
-The demotion exception moves to the writer, where everything is already
-decoded: **nothing a surviving demotable merge covers is retired.** The first
-version withheld only revisions that knew their own turn, and a reviewer
-showed that was not enough — `removingReplaced` needs a holder for *every* id
-the merge covers and only one of them has to know a turn, so retiring an
-untagged original blocks the demotion for good while the tagged one is
-fetched and discarded for ever. Only an agent's merge counts as demotable: a
-`.userEdit` merge can never be demoted, so nothing is held back for it.
+**Everything compaction deletes is retired. There is no demotion
+exception.** One was built and removed, and the reason is the useful part.
 
-Everything else compaction deletes is retired, including a duplicate name of
-a revision that stays — the published copy at the deleted name has no file
-either, and nothing else would say why.
+`compact` begins with `removingReplaced`, so a demotion that *can* fire here
+already has: if every original of an untagged merge were present, the merge
+would be gone and the originals kept. Originals are deleted under an untagged
+merge only when one of them is already missing locally — and whether the
+missing one ever arrives is a fact about the server, which no local predicate
+can see. So the exception was not an approximation of `removingReplaced`; it
+was an attempt to evaluate it on an input this Mac does not have, which is
+why four versions of it were each wrong in a new way:
+
+1. asking whether the deleted revision's own id was covered — a merge's
+   covered set names originals, never another merge, so a deleted tagged
+   merge never matched;
+2. withholding anything a demotable merge subsumed — which caught untagged
+   intermediates, and an untagged merge can never be a holder at all;
+3. restricting that to revisions that could be holders — which still withheld
+   a tagged `A+B` whose every change a surviving tagged `A+B+C` held;
+4. withholding only the last holder of something wanted — correct about the
+   folder, and still blind to the server.
+
+And withholding was never patient waiting: a withheld revision is fetched,
+written and deleted again on **every pass, for ever**, which is the loop this
+list exists to stop. Twice over, a version of this exception reintroduced the
+defect the record was written to fix.
+
+**What that costs**, written plainly: where this Mac compacted an untagged
+merge before every original of it had arrived, that merge may keep a turn's
+changes under no turn's name. Never a version of the text, which the merge
+carries whole — and `removingReplaced` still prefers the originals whenever
+all of them are present. If anyone proposes bringing the exception back, the
+bar is to name the input it needs and show it is on disk.
 
 **And a retirement is not trusted on its own.** It says the replacement was
-on disk when compaction ran, not that it still is, and it is not a standing
-verdict. Two further conditions, both from review:
-
-- **Some history here still decodes.** If the history was lost afterwards the
-  replacement went with it, and the server's copy of the retired original may
-  be the only one left. A filename was not enough to check this — the one
-  remaining file can be corrupt — so a revision has to decode.
-- **Nothing a surviving demotable merge covers.** A legacy untagged merge
-  arriving later can displace the tagged replacement that justified a
-  retirement, after which `removingReplaced` wants that original back. The
-  live state overrides the older entry.
+on disk when compaction ran, not that it still is. One further condition,
+from review: **some history here still decodes.** If the history was lost
+afterwards the replacement went with it, and the server's copy of the retired
+original may be the only one left — and a filename was not enough to check
+that, because the one remaining file can be corrupt.
 
 So the claim costs one decode per workspace that has a member with no file,
-cached, and nothing at all for a workspace that has none — against the shape
-before this, which decoded the library's whole history on every pass.
-`0016`'s rejected evidence survives only in that first bullet, demoted to its
-proper job: necessary, never sufficient.
+and nothing at all for a workspace that has none, against the shape before
+this, which decoded the library's whole history on every pass. `0016`'s
+rejected evidence survives only as that condition, demoted to its proper job:
+necessary, never sufficient.
 
 Core still keeps a claim only where its own records name an install at the
 path, so a member another Mac wrote comes down the first time regardless.
@@ -235,6 +250,19 @@ Five details the name brings with it, all from review:
   asking whether a deleted revision's own id was covered missed a deleted
   *tagged merge* entirely — which is exactly what `removingReplaced` could use, given one
   more original, to put a turn's name back.
+
+## How the list is checked
+
+Not by a test per guess — that is how one predicate was wrong four rounds
+running, each round shipping a test that encoded the version it came with.
+The claim a retirement makes is *this Mac holds that history in merged form*,
+and that is exactly true when **a retired file coming back would change
+nothing the store keeps**. `RetirementKeepsWhatItClaimsTests` states that
+over generated runs of edits: compact a set, take what was dropped, put
+subsets of it back, and `removingReplaced` must keep the same ids. It catches
+a compactor regression directly — reversing the strict-superset rule in
+`removingReplaced` fails it on several seeds — and if it ever fails, the fault
+is in `compact` or `removingReplaced` rather than in anything beside them.
 
 ## The case still accepted
 
