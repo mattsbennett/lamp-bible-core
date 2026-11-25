@@ -97,10 +97,26 @@ struct LampSyncOpenFile {
     /// a resource fork is neither hashed nor uploaded. A caller deleting the
     /// file on the strength of the digest would delete the fork with it, and
     /// a download could never put it back.
-    func hasResourceFork() -> Bool {
+    func hasResourceFork() -> Bool? {
+        hasAttribute(XATTR_RESOURCEFORK_NAME)
+    }
+
+    /// Whether the reader has tagged this file in Finder. The tags are an
+    /// extended attribute no store carries, so a download brings the bytes
+    /// back without them.
+    func hasFinderTags() -> Bool? {
+        hasAttribute("com.apple.metadata:_kMDItemUserTags")
+    }
+
+    /// Whether the extended attribute `name` is here with anything in it —
+    /// or nil where that could not be asked. `fgetxattr` answers -1 both for
+    /// "not there" and for "not allowed to look", and only the first means
+    /// there is nothing to lose.
+    private func hasAttribute(_ name: String) -> Bool? {
         #if canImport(Darwin)
-        let size = fgetxattr(descriptor, XATTR_RESOURCEFORK_NAME, nil, 0, 0, 0)
-        return size > 0
+        let size = fgetxattr(descriptor, name, nil, 0, 0, 0)
+        if size >= 0 { return size > 0 }
+        return errno == ENOATTR ? false : nil
         #else
         return false
         #endif
@@ -300,6 +316,10 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
     /// of the digest must not where this is true: the fork would be gone, and
     /// no download could bring it back.
     public let hasResourceFork: Bool
+    /// Whether the file carries anything else of the reader's that no store
+    /// keeps: Finder tags, or an attribute that could not be read at all — a
+    /// fork or tags this process may not look at are no less lost.
+    public let hasAttributesNoStoreKeeps: Bool
 
     public enum Failure: Error, Equatable {
         /// Not an ordinary file, or a symbolic link, or not there.
@@ -357,7 +377,11 @@ public struct LampVerifiedFileRead: Equatable, Sendable {
                     identityIsTrusted: LampSyncIdentityTrust.trustsIdentity(
                         filesystemNamed: file.filesystemName()
                     ),
-                    hasResourceFork: file.hasResourceFork()
+                    // Unknown counts as present: a fork that could not be
+                    // looked at is no less lost by deleting the file.
+                    hasResourceFork: file.hasResourceFork() ?? true,
+                    hasAttributesNoStoreKeeps: (file.hasFinderTags() ?? true)
+                        || file.hasResourceFork() == nil
                 )
             }
         } catch let failure as Failure {

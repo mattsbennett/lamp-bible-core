@@ -525,3 +525,41 @@ Held by reading rather than a test: that offloads run only in the controller's
 after-pass step, that no pass starts while they run, and that the lock is not
 released meanwhile. Everything else above has a test that fails when the fix
 is reverted.
+
+## Round nine
+
+The redesign held where it was meant to: no finding was the button deleting
+at a bad moment. Its two serious findings were slips in carrying it out.
+
+- **The account was read from Settings at the gather**, so a username changed
+  while a pass was running labelled the old account's look at the server with
+  the new one. That is round four's mistake about the server's address,
+  repeated for the account after the address had been fixed. The account is
+  now captured where the store is built, in the same expression as its
+  credentials, and the look is labelled with that.
+- **The pass's exclusive gate had gaps.** `runSyncPass` clears `isSyncing`
+  before its last await, and the offloads were marked as running only after
+  reconciliation — a second pass could start in either gap and gather a newer
+  view while the first deleted on the older. One gate is now held from the
+  start of a pass to the end of its offloads, taken with no suspension after
+  the check, and released before any request made meanwhile is answered. A
+  layout move checks it too.
+
+Also from this round: Keep Here pressed while the batch is already reading
+the file still wins, read again at the moment the offload would be noted; an
+inventory that could not be read keeps the lock rather than lifting it; a
+context folder that is itself a link is no way to a source; an Offload of a
+source not yet uploaded is followed by up to two more passes, since the pass
+that uploads it looked before the upload, and nothing local changes after;
+and a refusal is said in the pane where Offload was pressed, with the promise
+there taken back.
+
+**Finder tags, decided by default.** No store carries a file's extended
+attributes, so a source the reader has tagged would come back from a download
+without its tags. Like a resource fork, it is not offloaded, and an attribute
+that could not even be read counts the same. Preserving tags through the
+round trip is possible; it was not asked for, so the conservative answer is
+the one taken.
+
+Held by reading rather than a test: the gate, the account's capture, and the
+follow-up passes, which live in the controller.

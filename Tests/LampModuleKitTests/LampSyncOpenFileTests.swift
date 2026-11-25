@@ -242,13 +242,16 @@ struct LampSyncOpenFileTests {
     /// it, so a comparison that ignored the change time — tempting, because
     /// unlinking a hard-linked twin moves it too — would delete bytes the
     /// server has never seen.
-    @Test func afileRewrittenWithItsDatePutBackIsNotTheSameFile() throws {
+    // The claim is about a volume whose change time the kernel keeps;
+    // elsewhere it may not hold, which is why identity is not trusted there
+    // (`0007`). Skipped, not failed, where the test's own volume is not one.
+    @Test(.enabled(
+        if: LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: FileManager.default.temporaryDirectory),
+        "the change time is only kept on a trusted volume"
+    ))
+    func afileRewrittenWithItsDatePutBackIsNotTheSameFile() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        // The claim is about a volume whose change time the kernel keeps;
-        // elsewhere it may not hold, which is why identity is not trusted
-        // there (`0007`).
-        try #require(LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: root))
         let file = root.appendingPathComponent("source.pdf")
         try Data("first".utf8).write(to: file)
         let before = try LampFileIdentity(url: file)
@@ -384,5 +387,20 @@ struct LampSyncOpenFileTests {
             try LampVerifiedFileRead.read(plain).digest == LampVerifiedFileRead.read(forked).digest,
             "the digest cannot tell them apart, which is the point"
         )
+    }
+
+    /// Finder tags are the reader's and no store keeps them, so a file that
+    /// carries them says so.
+    @Test func aVerifiedReadSaysWhenThereAreFinderTags() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let plain = root.appendingPathComponent("plain.pdf")
+        let tagged = root.appendingPathComponent("tagged.pdf")
+        try Data("data".utf8).write(to: plain)
+        try Data("data".utf8).write(to: tagged)
+        try (tagged as NSURL).setResourceValue(["Reading"], forKey: .tagNamesKey)
+
+        #expect(try LampVerifiedFileRead.read(plain).hasAttributesNoStoreKeeps == false)
+        #expect(try LampVerifiedFileRead.read(tagged).hasAttributesNoStoreKeeps)
     }
 }
