@@ -627,8 +627,12 @@ above, and three of the four turned out not to need a decision at all.
   `measuresWhatRevisionHistoryCostsAtRest` keeps the first two.
 - ~~The deck listing cache (1a) trusting a modification date~~ **decided,
   `decisions/0003`**: it keys on the whole file identity, `st_ctime` and
-  inode included, not a date — and `0007` then wrote down which filesystems
-  that may be trusted on. The principle the plan was protecting is intact.
+  inode included, not a date. An earlier version of this line said `0007`
+  "wrote down which filesystems that may be trusted on", which read as
+  though the gate covered this cache. It did not — the deck cache had none,
+  on any filesystem — and a Fable review found it. It now applies the same
+  gate `0007` gives the digest cache, so the principle the plan was
+  protecting is intact in the code and not only in the prose.
 - ~~The archive cache (1d) keying on the sync ledger stamp~~ **decided, and
   it does not**: `decisions/0002` records that key as unsound — five writers
   change rows without stamping it — and the cache keys on a revision each

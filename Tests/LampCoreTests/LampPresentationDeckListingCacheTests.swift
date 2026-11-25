@@ -81,6 +81,35 @@ struct LampPresentationDeckListingCacheTests {
     /// file is rewritten in place, at the same size, with its date put back.
     /// The inode has not moved and `mtime` matches; `st_ctime` is the kernel's
     /// and has.
+    /// On a volume whose identities mean nothing, every listing reads every
+    /// file — which is the behaviour `0001` required and `0007` kept for the
+    /// digest cache. The deck cache went in without that gate.
+    ///
+    /// The gate itself is the volume's device, so this asks the cache the
+    /// question a listing asks it, with a device that is not the file's.
+    @Test func onAnUntrustedVolumeNothingIsAnsweredFromTheCache() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = try store.save(deck("deck-1", title: "Deck"))
+        let revision = try #require(try? LampDatabaseFileRevision(url: url))
+        let cache = LampPresentationDeckCache.shared
+        cache.forget(at: url)
+
+        // Nothing vouched for: neither kept nor answered.
+        cache.remember(deck("deck-1", title: "Deck"), at: url, revision: revision, on: nil)
+        #expect(cache.deck(at: url, revision: revision, on: nil) == nil)
+        // And not answered even once it is held, if the volume is not the
+        // one the caller trusts.
+        cache.remember(
+            deck("deck-1", title: "Deck"), at: url, revision: revision, on: revision.device
+        )
+        #expect(cache.deck(at: url, revision: revision, on: revision.device) != nil)
+        #expect(
+            cache.deck(at: url, revision: revision, on: revision.device &+ 1) == nil,
+            "a file on another device must not be answered for"
+        )
+    }
+
     @Test func noticesARewriteInPlaceWithTheDatePutBack() throws {
         let (store, root) = try store()
         defer { try? FileManager.default.removeItem(at: root) }

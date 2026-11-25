@@ -37,6 +37,12 @@ struct LampDatabaseFileRevision: Codable, Equatable, Sendable {
         wal = try? File(url: URL(fileURLWithPath: url.path + "-wal"))
     }
 
+    /// Which volume the file sits on, so a caller can ask whether identities
+    /// may be trusted there (`LampSyncIdentityTrust`,
+    /// `Documentation/decisions/0003`). The stored JSON is unchanged: this
+    /// reads a field it already keeps.
+    var device: Int64 { database.device }
+
     /// Which file is at `url`, by device and inode, whatever it holds.
     static func identity(of url: URL) throws -> (device: Int64, inode: UInt64) {
         try LampFileIdentity(url: url).place

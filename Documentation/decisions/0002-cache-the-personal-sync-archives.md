@@ -48,7 +48,7 @@ maximum over *every* kind, so a writing's autosave moved the key for the notes
 and every highlight set too. Useless rather than unsound.
 
 **A per-kind maximum of the sync ledger** replaced it, and that one was unsound
-— caught by a review the day it landed, before it had reached a build anyone
+— caught by a Fable review the day it landed, before it had reached a build anyone
 runs. The ledger is not a record of change: `present_since` means "this device
 saved this item", and a copy carried in by sync deliberately does not stamp it,
 so that an arriving copy cannot outrank a deletion recorded in between. Five

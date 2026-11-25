@@ -2,7 +2,10 @@
 
 Status: Accepted, 2026-11-24, held by `LampPresentationDeckListingCacheTests`.
 The owner's call the first draft asked for turned out not to be needed — see
-**Decision**: what is trusted is not a modification date.
+**Decision**: what is trusted is not a modification date. Amended twice since
+it was written, and both amendments were review findings rather than mine: a
+Codex review changed what a save does, and a Fable review found the
+filesystem gate missing.
 
 ## Context
 
@@ -42,8 +45,36 @@ deck the running build cannot decode or validate is left out of the listing, as
 before, and nothing is remembered about it, so it is reported again rather than
 disappearing from one listing and not the next.
 
-A save remembers the deck it just wrote, against the file as it stands
-afterwards, so a listing that follows a save reads nothing.
+**A save forgets what was held for that file rather than remembering what it
+wrote.** The first version of this record said the opposite, and so did the
+first version of the code: remember the deck just written, against the file
+as it stands afterwards, so a listing that follows a save reads nothing. A
+Codex review found the hole — the identity would be taken *after* the write,
+and another writer (an agent, a sync pass) could replace the file in between,
+at which point the cache would hand out the deck this app saved for as long
+as the file sat still. So a save drops the entry and the next listing reads
+the file. Held by `aSavedDeckIsReadBackOnceAndThenNotAgain`. What the cache
+is for is the decks nobody touched, which is nearly all of them.
+
+**The cache answers only for a volume whose identities mean something.** It
+went in without that gate, which was an oversight and the awkward one:
+`0007` had kept decks out of the *digest* cache for being mutable, while this
+cached them against identity on any filesystem — exFAT, a share, or a volume
+mounted inside the library (`0011`'s case), where the key degrades to size
+and a synthesised change time. `decks()` and `deck(id:)` now ask
+`LampSyncIdentityTrust.trustedDevice(ofVolumeAt:)` once per call — one open
+and two stats of the directory, against four hundred stats of the files in
+it — and the cache neither answers nor keeps anything for a file on another
+device. On such a library every listing decodes every deck again, which is
+what it cost before this record and what `0007` accepts for sync.
+
+Found by a Fable review, which also corrected the severity: a stale listing
+is not merely cosmetic. Four callers read a deck from the cache, change it
+and save it back — Slide Studio as somebody types, the manuscript-notes
+refresh, the writing-import compare-and-swap, and the Strong's analysis —
+so a stale read means the next edit overwrites whatever arrived from
+outside. One tier below a stale digest, which loses a file silently and
+needs nothing else to go wrong, but not harmless.
 
 The cache is one per process, shared by every store, because the store is a
 value that callers make wherever they need one. Pruning a listed directory's

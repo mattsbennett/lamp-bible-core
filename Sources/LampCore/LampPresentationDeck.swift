@@ -1,4 +1,5 @@
 import Foundation
+import LampModuleKit
 
 /// A portable, editable presentation authored by Lamp Bible.
 ///
@@ -1632,12 +1633,15 @@ public struct LampPresentationDeckStore: Sendable {
         cache.keepingOnly(
             Set(urls.map { $0.standardizedFileURL.path }), under: decksDirectoryURL
         )
+        // Asked once for the whole listing: one open and two stats of the
+        // directory, against four hundred stats of the files in it.
+        let trusted = LampSyncIdentityTrust.trustedDevice(ofVolumeAt: decksDirectoryURL)
         return urls
             .compactMap { url -> LampPresentationDeck? in
                 guard let revision = try? LampDatabaseFileRevision(url: url) else { return nil }
-                if let held = cache.deck(at: url, revision: revision) { return held }
+                if let held = cache.deck(at: url, revision: revision, on: trusted) { return held }
                 guard let decoded = try? decode(Data(contentsOf: url)) else { return nil }
-                cache.remember(decoded, at: url, revision: revision, counting: true)
+                cache.remember(decoded, at: url, revision: revision, on: trusted, counting: true)
                 return decoded
             }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
@@ -1648,9 +1652,10 @@ public struct LampPresentationDeckStore: Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let cache = LampPresentationDeckCache.shared
         if let revision = try? LampDatabaseFileRevision(url: url) {
-            if let held = cache.deck(at: url, revision: revision) { return held }
+            let trusted = LampSyncIdentityTrust.trustedDevice(ofVolumeAt: decksDirectoryURL)
+            if let held = cache.deck(at: url, revision: revision, on: trusted) { return held }
             let decoded = try decode(Data(contentsOf: url))
-            cache.remember(decoded, at: url, revision: revision, counting: true)
+            cache.remember(decoded, at: url, revision: revision, on: trusted, counting: true)
             return decoded
         }
         return try decode(Data(contentsOf: url))
@@ -1863,9 +1868,30 @@ final class LampPresentationDeckCache: @unchecked Sendable {
 
     private func key(_ url: URL) -> String { url.standardizedFileURL.path }
 
+    /// Whether this cache will answer for a file on this device.
+    ///
+    /// The same gate `LampSyncDigestCache` has, and for the same reason:
+    /// a file's identity only means what this needs it to mean on a
+    /// filesystem that maintains one (`decisions/0007`). The deck cache
+    /// went in without it — an oversight rather than a decision, and the
+    /// awkward one, since `0007` had kept decks out of the *digest* cache
+    /// for being mutable while this one caches them against identity.
+    ///
+    /// `nil` trusts nothing, which is what a caller passes for a library on
+    /// a filesystem nobody vouched for.
+    func answers(for revision: LampDatabaseFileRevision, on trustedDevice: Int64?) -> Bool {
+        guard let trustedDevice else { return false }
+        return revision.device == trustedDevice
+    }
+
     /// The deck held for this file, if what is held was read from the file as
-    /// it now stands.
-    func deck(at url: URL, revision: LampDatabaseFileRevision) -> LampPresentationDeck? {
+    /// it now stands, and if this volume's identities can be trusted.
+    func deck(
+        at url: URL,
+        revision: LampDatabaseFileRevision,
+        on trustedDevice: Int64?
+    ) -> LampPresentationDeck? {
+        guard answers(for: revision, on: trustedDevice) else { return nil }
         let path = key(url)
         lock.lock()
         defer { lock.unlock() }
@@ -1880,12 +1906,16 @@ final class LampPresentationDeckCache: @unchecked Sendable {
         _ deck: LampPresentationDeck,
         at url: URL,
         revision: LampDatabaseFileRevision,
+        on trustedDevice: Int64?,
         counting: Bool = false
     ) {
         let path = key(url)
         lock.lock()
         defer { lock.unlock() }
         if counting { reads[path, default: 0] += 1 }
+        // Read on an untrusted volume: counted, because the file was read,
+        // and not kept, because its identity says nothing about its bytes.
+        guard answers(for: revision, on: trustedDevice) else { return }
         entries[path] = (revision, deck)
         touch(path)
         while used.count > limit, let oldest = used.first {
