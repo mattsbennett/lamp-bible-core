@@ -188,11 +188,25 @@ Remove on an offloaded row asks first, because that click destroys the only
 copy there is. Remove on a row whose file is here does not ask, which is the
 behaviour it has always had.
 
-**Known and not closed.** A download that fails leaves no pending state, so
-the row disappears and an idle Mac has no reason to retry until something
-else changes. If two Macs both offload a source and one removes it, the
-other's note is not reconciled against the tombstone, so its row still offers
-Download. The agent's inventory is rewritten when a download is *asked* for
-rather than when it lands. And the editor hold is checked per workspace
-before the batch, so opening a writing while that batch is hashing can still
-take its sources — recoverable by Download, but not nothing.
+**And then closed.** Those four were written here as follow-ups and done the
+same day, which is the right order round: they are small, and each was a way
+the feature lied to the reader.
+
+- **A download that failed left no row.** Clearing the note is what lets a
+  pass fetch a source, and that also took it off the list — so an unreachable
+  server left nothing to see and nothing to press. The *ask* outlives the
+  attempt now: a source asked back and not yet here reads "Coming back" and
+  carries Try Again. It stops being awaited when the file arrives, and when
+  it is let go of again.
+- **Another Mac's removal of a source neither is holding** reached nothing.
+  There is no local file for the plan to delete, so the note survived and the
+  row went on saying "On the server". The pass's manifest is now reconciled
+  against the notes — on membership, never on a folder listing, since a
+  listing that failed is not a deletion.
+- **The agent's inventory** was rewritten when a download was asked for
+  rather than when it landed, so an agent started in the pane in between was
+  told about a source that was not there. It is rewritten when the pane
+  notices the sources have actually changed.
+- **The editor hold** was taken once before the batch. Hashing a workspace's
+  sources takes long enough for a reader to open the writing in the middle of
+  it, so it is asked again before each file goes.
