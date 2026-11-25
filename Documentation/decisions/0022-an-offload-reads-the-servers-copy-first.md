@@ -17,7 +17,10 @@ Status: Accepted for the Mac, 2026-11-25, held by
 `membersWhoseNamesFoldTogetherAreNotOffloaded`,
 `downloadAllLeavesOutAsourceAfolderHides`,
 `afailedReadCostsNothingFromTheAllowance`,
-`asharedObjectIsNotMarkedForOneSource` and `afolderLockFollowsItsFolder`.
+`asharedObjectIsNotMarkedForOneSource`, `afolderLockFollowsItsFolder`,
+`afolderLockAdmitsOnlyItsFolder`,
+`anOffloadIsForgottenOnlyWhenTheServerRecordsItsDeletion` and
+`asourceSomethingStandsInTheWayOfStaysPut`.
 Replaces the safety rule of `0021` and its review rounds five to fourteen.
 Planned by Fable after the fourteenth round; the owner chose the rebuild, the
 Remove cut and keeping the quarantine mark.
@@ -180,3 +183,30 @@ sweep stops if the inactivity setting changes while a read is in flight; and a
 returning source linked to a stored object other sources share is not marked
 where they carry another mark or none, since the mark would be theirs too — it
 is said instead.
+
+## Fourth review of the rebuild
+
+The serious finding was again the previous round's fix. **Following a renamed
+folder also has to refuse a replaced one.** The lock learned the folder's
+device and inode to follow a rename, but admitted any folder at the locked
+path; a different folder put there could settle the offloads as gone. A folder
+lock now admits a pass only at its own folder, path or no path. The owner chose
+to fix this and every lesser finding, then review again.
+
+The lesser ones: an offload is settled as gone only by a deletion the manifest
+*records* — a manifest that merely does not mention it may be an older one
+restored on the server, with the copy still there; turning folder sync back on
+to the locked folder, renamed since, is allowed by its identity rather than
+refused by its path; a source with anything in its way — a folder at its path,
+or a file where one of its folders should be — is left out of Download All,
+refuses its own Download, is withheld if already asked for, and is drawn as
+blocked, since its failed import would stop the rest of the workspace's; the
+check made after a long read-back asks whether the look is still the pass's,
+at the same server and account, without expiring it under a read that has just
+matched; and the phone's pull waits for the offloads after a pass and for any
+pass queued behind them before reading the library.
+
+Still open: a source the server holds but a restored manifest no longer names
+keeps its row and the lock, which is the safe direction, but Download cannot
+fetch it — the gather only asks about paths the manifest names. Getting it
+back needs the manifest to name it again.
