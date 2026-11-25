@@ -86,12 +86,23 @@ a revision that stays — the published copy at the deleted name has no file
 either, and nothing else would say why.
 
 **And a retirement is not trusted on its own.** It says the replacement was
-on disk when compaction ran, not that it still is. A workspace holding no
-revision file claims nothing, list or no list: if the history was lost
-afterwards the replacement went with it, and the server's copy of the retired
-original may be the only one left. That condition is `0016`'s rejected
-evidence demoted to its proper job — necessary, never sufficient — and it
-costs a directory listing, not a decode.
+on disk when compaction ran, not that it still is, and it is not a standing
+verdict. Two further conditions, both from review:
+
+- **Some history here still decodes.** If the history was lost afterwards the
+  replacement went with it, and the server's copy of the retired original may
+  be the only one left. A filename was not enough to check this — the one
+  remaining file can be corrupt — so a revision has to decode.
+- **Nothing a surviving demotable merge covers.** A legacy untagged merge
+  arriving later can displace the tagged replacement that justified a
+  retirement, after which `removingReplaced` wants that original back. The
+  live state overrides the older entry.
+
+So the claim costs one decode per workspace that has a member with no file,
+cached, and nothing at all for a workspace that has none — against the shape
+before this, which decoded the library's whole history on every pass.
+`0016`'s rejected evidence survives only in that first bullet, demoted to its
+proper job: necessary, never sufficient.
 
 Core still keeps a claim only where its own records name an install at the
 path, so a member another Mac wrote comes down the first time regardless.
