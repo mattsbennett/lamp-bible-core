@@ -73,7 +73,9 @@ the descriptor count stops at the cache's limit rather than at one per module.
 Three caveats the numbers carry. The fixture's prose repeats, so it compresses
 far better than real writing — 760 KB for 4 000 writings — which understates the
 compress and digest terms of an archive while leaving the insert and `VACUUM`
-terms honest. The fixture's modules are 200 KB, so the per-module open cost is
+terms honest. The owner's real library puts a number on how far: fixture
+revisions compress 44× and the real ones 2.5×, so any conclusion that rests on
+a fixture's compressibility is worth re-taking on real files. The fixture's modules are 200 KB, so the per-module open cost is
 understated for a real commentary of several hundred MB, where the comment on
 `openReadOnlyDatabase` records roughly 200 ms. And a measurement on a quiet
 machine is a floor, not what a person with a busy Mac sees.
@@ -609,22 +611,46 @@ above, and three of the four turned out not to need a decision at all.
   more than tenfold and it is the difference between "no case to answer" and
   "the largest thing in the library".
 
-  And it compresses **forty-four times** — a before-and-after pair of
-  consecutive autosaves is nearly the same text twice, which zlib crushes.
-  122.5 MB becomes about 2.8 MB, under the documents themselves.
+  **And the real library now says the same thing at its own scale.** Read
+  with the owner's permission, `AgentWorkspaces` holds 14 writing workspaces
+  and 6 reader ones; four of the writings carry history at all, **125
+  revision files, 9.03 MB, against 0.25 MB of live Markdown — thirty-six
+  times**, the heaviest single workspace 101 revisions and 7.4 MB against
+  76 KB. The fixture's seventeen was not pessimistic; it was mild.
 
-  So the recommendation sharpens: **leave the policy and the format as they
-  are, and if the bytes ever matter, compress the two Markdown fields inside
-  the same JSON file.** That keeps a restore a copy rather than a replay, it
-  needs no predecessor chain and no tombstones, and an older Mac that cannot
-  read it leaves it alone rather than deleting it — `storedRevisions` drops
-  what it cannot decode and compaction leaves undecodable files be. The cap
-  stays rejected on mechanics; diffs stay rejected for a correctness surface
-  that buys less than compression does.
+  But the ratio is not the decision. Those same workspaces hold **401 MB on
+  disk**, nearly all of it PDFs a writing was given as context — one is 87
+  MB on its own. **Revision history is about 2% of what a workspace already
+  weighs.**
 
-  The third figure — revision uploads per day of actual writing — needs the
-  owner's real library, and reading inside it is theirs to allow.
-  `measuresWhatRevisionHistoryCostsAtRest` keeps the first two.
+  Compression on the real files is also far less than the fixture promised:
+  **2.5×, not forty-four.** The fixture's before-and-after pairs were
+  `String(repeating:)` text, which zlib crushes; real revisions hold real
+  prose, and gzip of the actual 125 files gives 9.03 MB → 3.55 MB. So
+  compressing the Markdown fields would save about **5.5 MB, a little over
+  1% of the workspace bytes** — and the whole of the saving is dwarfed by a
+  single context PDF.
+
+  So the recommendation is now **leave the policy and the format exactly as
+  they are, and do not compress either.** The cap stays rejected on
+  mechanics. Diffs stay rejected on the correctness surface. And compression
+  — which this plan previously held as the cheap fallback — is not worth its
+  one real cost: `storedRevisions` decodes with `compactMap` and `try?`, so a
+  Mac running an older build does not fail on a revision it cannot read, it
+  **silently leaves it out of the history the pane shows**. Compaction is
+  careful about exactly this ("history this version cannot read is not
+  history it is entitled to discard") — the file survives, but during a
+  version skew the user sees versions disappear from a feature whose whole
+  job is that they do not. Paying that for 5.5 MB, against 401 MB of context
+  the owner put there deliberately, is the wrong trade.
+
+  The third figure — revision uploads per day of actual writing — is still
+  not measurable: the workspaces hold history from four sittings, not a
+  daily rhythm, and the owner's writing corpus mostly lives outside Lamp. If
+  that changes, it is the figure to take, because it measures sync traffic
+  rather than bytes at rest, and traffic is the part 0 and 2a cared about.
+  `measuresWhatRevisionHistoryCostsAtRest` keeps the fixture figures for
+  comparison.
 - ~~The deck listing cache (1a) trusting a modification date~~ **decided,
   `decisions/0003`**: it keys on the whole file identity, `st_ctime` and
   inode included, not a date. An earlier version of this line said `0007`
