@@ -757,10 +757,34 @@ above, and three of the four turned out not to need a decision at all.
   revision files, which `0015` rejects because a revision folder merges by
   union and only a file naming what it replaced stays dropped, so a capped
   or swept revision returns from the server on the next pass for ever. The
-  cost of leaving it is bytes at rest on a store the owner controls, measured
-  at 9.03 MB against 401 MB of workspace; the cost of fixing it is the
-  format change the cap was refused for. If it ever matters, it is a new
-  item with its own record, not unfinished business in this one.
+  cost of fixing it is the format change the cap was refused for.
+
+  **The cost of leaving it, on the right denominator.** An earlier version of
+  this paragraph weighed revision history against 401 MB of *workspace on
+  disk*, which is the wrong comparison for a claim about what accumulates on
+  a **server**: much of a workspace could be local-only. Measured instead
+  against what this library has actually published — the paths its own sync
+  records name:
+
+  | | members | MB behind them |
+  |---|---|---|
+  | `Context` | 559 | **355.0** |
+  | `Revisions` | 169 | 8.9 |
+  | `Documents` | 3 | 0.1 |
+  | everything else (modules, media, decks, ledgers) | 111 | — |
+  | **published total** | | **364.0** |
+
+  Of 383.1 MB of workspace bytes on disk, **364.0 MB are behind recorded
+  members and only 19.1 MB are local-only** — so the earlier figure was not
+  misleading by much, but it was asserted without being checked, which is
+  the part worth not repeating.
+
+  Revision history is **2.5% of what this library pushes**, and that holds the
+  conclusion. It also reframes the item: if server bytes ever matter here, the
+  thing to look at is `Context`, which is **97.5%** of what syncs — a
+  writing's source PDFs, one of them 87 MB on its own. Revision history is
+  noise beside it. A future item about accumulation should be about context
+  files, not revisions, and would have its own record.
 
   `0017`'s two-Mac case is **closed** as of 2026-11-25: compaction un-retires
   the originals an untagged merge covers when a record that knows its turn is
