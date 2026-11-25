@@ -202,6 +202,23 @@ it already covers, each found by review:
   condition beside the list rather than the whole of the claim. Recorded so
   the next reviewer who notices does not reopen it.
 
+Three details the name brings with it, all from review:
+
+- **Compared folded**, and only where exactly one missing member folds that
+  way. A folded match could otherwise claim two members on one retirement,
+  and `0013`'s refusal of case-colliding members is checked among the
+  *planned downloads* — which a claim has already removed them from, so the
+  collision would go unreported and the other member dropped in silence.
+- **Percent-encoded on the line.** The store reads any `.json` in the folder,
+  so a published name can hold a space, or a newline, which is this file's own
+  record separator. A trimmed name read ` run.json` back as `run.json` and
+  would have claimed the wrong member.
+- **Retirement is withheld by subsumed coverage, not by id.** A merge's
+  covered set names originals and never another merge, so asking whether a
+  deleted revision's own id is covered missed a deleted *tagged merge*
+  entirely — which is exactly what `removingReplaced` could use, given one
+  more original, to put a turn's name back.
+
 ## The case still accepted
 
 A tagged *merge* dropped by an untagged superset is not retired, so it is
