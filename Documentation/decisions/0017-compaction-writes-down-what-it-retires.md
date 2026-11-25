@@ -146,6 +146,26 @@ revision ever uploaded, uncompacted, and nothing deletes one. This stops the
 traffic, not the accumulation; bounding that needs the tombstone `0015`
 rejected.
 
+## The list is advisory
+
+**A failure to write or read the list costs one more download of what it would
+have claimed, and never a compaction, never history.** That is the rule, not
+an implementation detail, and every hardening of it has to keep it true. What
+it already covers, each found by review:
+
+- A retirement that cannot be written does not fail the compaction.
+  `prepareLibraryForSync` compacts every workspace before importing anything,
+  so a throw over a bookkeeping file stopped unrelated documents syncing.
+- A list that exists and will not open is left alone rather than replaced. The
+  atomic-write fallback would have discarded every earlier retirement and set
+  those entries alternating between claimed and downloaded.
+- One damaged byte loses its own line, not the file. Decoding the whole thing
+  as UTF-8 first answered "nothing is retired", after which compaction
+  appended good entries behind the damage and neither old nor new was seen
+  again.
+- An append starts on a line of its own, so an append interrupted mid-line
+  cannot have the next good entry glued to its fragment.
+
 ## What was rejected
 
 - **Records plus absence** — `0016`, above.
@@ -167,6 +187,20 @@ rejected.
   and would make a new-format merge un-demotable.
 - **A guard on the member's filename stamp.** Narrows one rare case for a
   parse of every member name on every pass.
+- **Deriving the id from the published name** instead of recording the name.
+  It is an inference about a convention the store does not enforce on read,
+  and it broke on the convention's own second shape — a member published as
+  `<uuid>.json` could never be matched, so it was fetched for ever. The test
+  written with it asserted the wrong answer, which is how it went unnoticed.
+- **Following the chain of retirements to a live replacement**, which is what
+  positive evidence that *this* revision's replacement still exists would
+  need: with intermediate merges the replacement may itself be retired, so it
+  is a walk, not a lookup. Rejected for cost. What is there instead — some
+  revision in the workspace still decodes — is knowingly an approximation of
+  it, and the same *shape* of weak evidence that `holdsAnyRevision` was
+  retired for in `0016`; the difference is that it is now a necessary
+  condition beside the list rather than the whole of the claim. Recorded so
+  the next reviewer who notices does not reopen it.
 
 ## The case still accepted
 
