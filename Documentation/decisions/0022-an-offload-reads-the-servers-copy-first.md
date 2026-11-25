@@ -10,8 +10,12 @@ Status: Accepted for the Mac, 2026-11-25, held by
 `asourceComesBackWithItsQuarantine`, `arequestNeedsAfileToBeAbout`,
 `attachingRefusesOverAnUnreadableLedger`, `aledgerBehindAdeniedFolderIsUnreadable`,
 `acopyAnInterruptedImportLeftIsCheckedAtTheNextGather`,
-`afileTheReaderPutsInPlaceIsNotSaidToHaveComeBack` and
-`asourceHiddenByAfolderIsDrawnBesideIt`.
+`afileTheReaderPutsInPlaceIsNotSaidToHaveComeBack`,
+`asourceHiddenByAfolderIsDrawnBesideIt`,
+`aworkspaceFolderLampMayNotSearchIsUnknown`,
+`amemberTheServerDoesNotListIsNotOffloaded`,
+`membersWhoseNamesFoldTogetherAreNotOffloaded` and
+`theReadBackAsksForNoMoreThanTheLocalCopy`.
 Replaces the safety rule of `0021` and its review rounds five to fourteen.
 Planned by Fable after the fourteenth round; the owner chose the rebuild, the
 Remove cut and keeping the quarantine mark.
@@ -130,3 +134,27 @@ beside the folder, telling the reader to move it; the read-back allowance is
 shared by the whole run and checked before each read, with one oversized file
 allowed only as a run's first; and both kinds of return notice are said when
 both happen.
+
+## Second review of the rebuild
+
+One serious finding was in the read-back's reach rather than in another
+memory. **Matching bytes are not enough for Download.** A server can return a
+strong tag on PUT and the right bytes on GET, yet list the file with no
+revision; Download plans a fetch only for a member listed with one, so such a
+source, offloaded on its bytes, would sit on "Coming back" for ever. An
+offload now also needs the pass's listing to have shown the path with a
+revision. A source uploaded during that pass is not yet in its listing, so a
+requested offload gets one more pass, once per press, and says so in its pane
+if that does not list it either.
+
+The other serious one was the ledger lesson again, one folder up: the list of
+workspaces was read with `fileExists`, so a folder Lamp may not search read as
+no workspaces and the lock could lift. The list now treats only "no such
+file" as empty, and throws otherwise.
+
+And three lesser ones: two members whose paths differ only in case are not
+offloaded, since the pass refuses to fetch such a pair back; the read-back asks
+for the local copy's size and one byte more — the Mac's WebDAV client did not
+forward the ranged read, so it is now forwarded — so a server copy replaced by
+something far larger costs no more than that to tell apart; and the pane draws
+a source hidden by a folder under its own row identity.
