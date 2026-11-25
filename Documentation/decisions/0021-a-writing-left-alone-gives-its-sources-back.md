@@ -156,3 +156,43 @@ uploaded, reproducible by `npm install`. Excluding it is the other lever and
 a separate decision, because files already on the server cannot simply stop
 being gathered — a listed member with no local file plans as a download, and
 that is the fault `0018` exists to name.
+
+## What a second review changed, and what it left
+
+Every finding of the first review was real, and so was every P1 of the
+second. Three of those were paths where "reversible" was not:
+
+- **Remove on an offloaded row could delete a tree.** The listing is shallow
+  and drawn from the ledger as well as the disk, so a row can name a path a
+  *folder* has since taken; the removal unlinks recursively. It now takes
+  only a regular file inside the context directory, as the sibling that
+  carries out another device's deletion already did.
+- **The batch deleted whatever was at the path, not the file it checked.**
+  Every candidate is hashed before any is deleted, so a batch leaves a window
+  in which Finder, a restore, or an agent running in that very workspace can
+  put other bytes at an already-checked path. The file's identity is taken
+  with the digest and compared again immediately before the unlink — the full
+  identity, not the inode, because a write in place keeps the inode.
+- **The manual button had no look at the server**, which this record had
+  justified on the grounds that a reader is standing there watching. That is
+  not a substitute for knowing: the record it trusted is the same record that
+  outlives a source somebody deleted from the sync folder by hand. The button
+  now takes the last pass's listing, and refuses, saying so, when there has
+  not been one.
+
+Also from that round: removing a folder takes its *offloaded* descendants
+too, or they stay on the server for ever with nothing left here to name them;
+a source asked back is left alone for a week, since a download advances no
+inactivity clock and the sweep would otherwise undo it on the next pass; and
+Remove on an offloaded row asks first, because that click destroys the only
+copy there is. Remove on a row whose file is here does not ask, which is the
+behaviour it has always had.
+
+**Known and not closed.** A download that fails leaves no pending state, so
+the row disappears and an idle Mac has no reason to retry until something
+else changes. If two Macs both offload a source and one removes it, the
+other's note is not reconciled against the tombstone, so its row still offers
+Download. The agent's inventory is rewritten when a download is *asked* for
+rather than when it lands. And the editor hold is checked per workspace
+before the batch, so opening a writing while that batch is hashing can still
+take its sources — recoverable by Download, but not nothing.
