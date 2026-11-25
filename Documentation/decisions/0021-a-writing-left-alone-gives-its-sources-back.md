@@ -425,26 +425,46 @@ against the old server — this is the one that cannot strand anything, and if
 a server is being left for good, downloading first is what has to happen
 anyway.
 
-The lock holds while any source is only on the server: let go, *or asked back
-and not yet arrived*, since one on its way still exists only on the old
-server. It is precise rather than a freeze. Sync may always be turned **off**
-— that changes no server — and may be pointed at any server this Mac has
-confirmed holding every one of those sources, which is what lets it be turned
-off and on again: the same server comes back, and it holds them. What is
-refused is a provider, address or folder that would not, and forgetting the
-sync details, which would forget the way to the only copies.
+The lock is the server the offloads went to, **written down when the first
+offload begins** — before anything is deleted — and released only when
+nothing is only on the server and no removal of a source is still queued for
+it, since a removal sent after a switch would reach the wrong server. While it
+holds, sync may always be turned **off**, which changes no server, and may be
+turned back on to that server; it may be pointed nowhere else, and the sync
+details may not be forgotten. The WebDAV account is locked with the address:
+another account at the same address can be another set of files.
+
+A first version inferred the lock instead: sync could go to any server this
+Mac had a confirmed record of holding every source. A review pointed out that
+this was round one's mistake again in new code — a record is a memory of a
+past upload, and an old server holding one may since have lost or replaced the
+file, so switching back to it would have left Download fetching the wrong
+version or nothing while the only current copy sat on the server just left.
+It also left a window: the list the lock was read from lagged the first unlink
+of a batch, and a server could be changed in it.
 
 The Sync settings say so above the controls, with **Download All**, and
-disable the address field, the folder chooser and Forget while it holds; the
-controller refuses the change as well, with the reason, so nothing reaches it
-by another way. Download All asks for every offloaded source and starts a
-pass; the lock lifts once they have arrived.
+disable the address, account, folder chooser and Forget while it holds; a lock
+held only by a queued removal says that instead. The controller refuses at
+each setter as well, with the reason. Download All asks for every offloaded
+source and starts a pass whatever the automatic-sync setting says, since it is
+a press; the lock lifts once they have arrived and nothing is queued.
 
-Because the destination cannot change while anything is offloaded, an offload
-never needs to record which server holds it — the server it was made against
-is still the one sync talks to. That is why this did not become a field on the
-act.
+Reconciliation follows the same server: only the manifest of the server the
+offloads went to may settle them, and within it a source missing from the
+manifest is forgotten whether or not its record survives — another device's
+deletion reaps the record, and requiring one kept the row for ever.
 
-Held by tests: the rule (`syncCannotLeaveAserverHoldingTheOnlyCopy`) and the
-way out (`downloadAllAsksForEverySourceAndTheLockHoldsUntilTheyArrive`). The
-controller's refusals at each setter are held by reading.
+An attachment never takes the name of a source that is not here: the disk
+shows it free, and a new file given it would have been published over the
+server's copy.
+
+Held by tests: the rule (`syncCannotLeaveTheServerTheOffloadsWentTo`), the
+reconciliation (`onlyTheHoldingServersManifestSettlesAnOffload`), the way out
+(`downloadAllAsksForEverySourceAndTheLockHoldsUntilTheyArrive`) and the names
+(`anAttachmentDoesNotTakeAnOffloadedSourcesName`). The controller's refusals,
+and the lock going on before the first unlink, are held by reading.
+
+One server for the whole library, not one per source: while the lock holds,
+every outstanding offload went to the same server, so recording it once is
+enough and the act stays one value per path.
