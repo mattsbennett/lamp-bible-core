@@ -82,3 +82,15 @@ turn it off while sources are only on the server, the withdrawal, its stop
 when offloads are allowed again, and its report of a cancellation that failed.
 Still without a test: the live check before an offload and a Move's reading
 of the setting and its queued pass, which need a pass run against a server.
+
+## Stopping
+
+Three further reviews of the fixes found only lesser faults, all in the
+previous fix and all in the Move or Join — the one-time move from the old
+layout, which the owner's library has made. That is `0022`'s stopping rule
+met, and its cutting rule applied: the follow-up after a Move goes back to
+running only for waiting offloads. A pass asked for during a Move — turning
+workspace sync on, say — waits for the next pass, or Sync Now. Chasing it from
+the Move met a server not yet showing the moved library, and a refusal whose
+own error it would replace, round after round. The withdrawal's reason is now
+taken with each cancellation, as the settings stood when it acted.
