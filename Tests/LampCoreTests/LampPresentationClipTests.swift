@@ -106,6 +106,32 @@ struct LampPresentationClipTests {
         #expect(block.clip?.start == nil)
         #expect(block.clip?.starts == .click)
         #expect(block.assetPaths == ["Assets/s.jpg", "Assets/a.mp4"])
+        // And says how it is read.
+        #expect(block.clip?.unrecognisedStarts == "on-a-nod")
+        let read = LampPresentationDeckValidator.validate(LampPresentationDeck(title: "D", slides: [.init(layout: .image, blocks: [block])]))
+            .filter { $0.path.hasSuffix(".clip") }
+        #expect(read.map(\.message) == ["Lamp starts a clip on click or on arrival; 'on-a-nod' is read as click."])
+        #expect(read.map(\.severity) == [.warning])
+        // A known way says nothing, and the order of a clip's times is said
+        // as the rule it is.
+        let known = try JSONDecoder().decode(LampPresentationClip.self, from: Data(#"{"source":"Assets/a.mp4","starts":"arrival"}"#.utf8))
+        #expect(known.unrecognisedStarts == nil)
+        #expect(paths(.init(source: "Assets/a.mp4", start: 20, end: 10)).count == 1)
+        let backwards = LampPresentationDeckValidator.validate(
+            LampPresentationDeck(title: "D", slides: [clipSlide(.init(source: "Assets/a.mp4", start: 20, end: 10))])
+        ).filter { $0.path.hasSuffix(".clip") }.map(\.message)
+        #expect(backwards == ["A clip's end must come after its start."])
+
+        // Choosing how it starts answers the unknown way; and the unknown
+        // way, never written back, does not make a saved clip differ from
+        // itself read again.
+        var chosen = try #require(block.clip)
+        chosen.starts = .arrival
+        #expect(chosen.unrecognisedStarts == nil)
+        let saved = try #require(block.clip)
+        let reread = try JSONDecoder().decode(LampPresentationClip.self, from: try JSONEncoder().encode(saved))
+        #expect(reread.unrecognisedStarts == nil)
+        #expect(reread == saved)
     }
 
     @Test func aSlidePlaysOneClipTheOneBehindItFirst() {

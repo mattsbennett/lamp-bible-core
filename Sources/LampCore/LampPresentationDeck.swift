@@ -1004,7 +1004,10 @@ public enum LampPresentationDeckValidator {
             issues.append((.error, "A clip's end is seconds from its beginning, more than 0."))
         }
         if let start = clip.start, let end = clip.end, start.isFinite, end.isFinite, end <= start {
-            issues.append((.error, "A clip's end comes after its start."))
+            issues.append((.error, "A clip's end must come after its start."))
+        }
+        if let raw = clip.unrecognisedStarts {
+            issues.append((.warning, "Lamp starts a clip on click or on arrival; '\(raw)' is read as click."))
         }
         if block.kind != .image {
             issues.append((.warning, "Only a picture can carry a clip; this one is not played."))

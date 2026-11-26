@@ -99,6 +99,14 @@ chats, so nothing there syncs and no sync rule changed for it.
 - A deck naming a video over its limit, or in a codec a phone cannot play,
   is to get a validator warning pointing to `prepare_video`, not an error, so
   decks already made keep opening (owner's decision; not built yet).
+- The deck tools (`validate_deck`, `render_deck`) asked from a workspace look
+  for the deck's files there, reached the same way (`LampWorkspaceFiles`):
+  given only the deck's text, they had called every file missing and drawn
+  every picture as a placeholder, in any writing. A file missing now counts
+  against its own slide.
+- The answer also says what sound came in and was kept, shows a clip's last
+  frame, takes the still at `still_at` where asked, and lists files named as
+  the video's, from earlier prepares, which Lamp leaves.
 - A folder of numbered frames with a frame rate is planned as a second input,
   since frames are what every program can write.
 - An encode is not stopped part way when the call is cancelled; it runs to its

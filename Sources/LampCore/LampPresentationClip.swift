@@ -20,7 +20,20 @@ public struct LampPresentationClip: Codable, Equatable, Sendable {
     /// Seconds into the clip to stop at. Absent means its end.
     public var end: Double?
     /// When the clip plays. Absent means on a click.
-    public var starts: Starting?
+    /// Setting it, as Slide Studio's picker does, answers any way of
+    /// starting the deck had that this app did not know.
+    public var starts: Starting? {
+        didSet { unrecognisedStarts = nil }
+    }
+    /// A way of starting this app does not know, as the deck gave it: read
+    /// as a click, and said so by the validator. Not written back, and so
+    /// not part of whether two clips are the same: a deck saved and read
+    /// again must equal the one saved.
+    public var unrecognisedStarts: String?
+
+    public static func == (lhs: LampPresentationClip, rhs: LampPresentationClip) -> Bool {
+        lhs.source == rhs.source && lhs.start == rhs.start && lhs.end == rhs.end && lhs.starts == rhs.starts
+    }
 
     public enum Starting: String, Codable, CaseIterable, Identifiable, Sendable {
         /// On the presenter's click, as a step of the slide's reveal.
@@ -63,6 +76,9 @@ public struct LampPresentationClip: Codable, Equatable, Sendable {
         start = try? container.decodeIfPresent(Double.self, forKey: .start)
         end = try? container.decodeIfPresent(Double.self, forKey: .end)
         starts = try? container.decodeIfPresent(Starting.self, forKey: .starts)
+        if let raw = try? container.decodeIfPresent(String.self, forKey: .starts), Starting(rawValue: raw) == nil {
+            unrecognisedStarts = raw
+        }
     }
 
     /// The largest clip file Slide Studio copies into a deck. A deck's files
