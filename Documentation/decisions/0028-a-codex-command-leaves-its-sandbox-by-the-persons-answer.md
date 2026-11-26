@@ -1,10 +1,16 @@
 # 0028. A Codex command leaves its sandbox by the person's answer
 
-Status: Proposed, 2026-11-26. Items 1 and 2 below are in the Mac app, held by
-`codexIsGivenLampsServerApprovedInEveryHeadlessChat`, `WritingChatServerTests`
-and `aReaderChatCannotChangeOrImportWritings` (`lamp-bible-macos`); the rest
-is planned. Planned by Fable; the owner chose it over pre-approved command
-rules, a no-sandbox mode, and leaving Codex sandboxed.
+Status: Proposed, 2026-11-26, until a Blender render allowed on Lamp's card,
+in the installed app, reaches the GPU. Allowed over the protocol by a test
+client, the same Codex 0.170 turn ran Blender outside its sandbox, and Eevee
+rendered on Metal in 0.38 s; in the sandbox it cannot start. Built in the Mac app (`lamp-bible-macos`): Lamp's server,
+held by `codexIsGivenLampsServerApprovedInEveryHeadlessChat` and
+`WritingChatServerTests`; reader chats, by
+`aReaderChatCannotChangeOrImportWritings`; the app-server turn, by
+`AgentCodexRunTests` (a turn recorded from Codex 0.170) and
+`AgentCodexRunnerTests` (a fake Codex). Planned by Fable; the owner chose it
+over pre-approved command rules, a no-sandbox mode, and leaving Codex
+sandboxed.
 
 ## Context
 
@@ -57,6 +63,40 @@ Built first:
    `allow` rule runs a matching command outside the sandbox without asking,
    whatever the policy.
 
+3. **The turn** (`AgentCodexRun`, `runCodexAppServer`): `initialize`,
+   `thread/start` or `thread/resume` with the sandbox, the policy and the
+   reviewer set every time, `turn/start`, ending at `turn/completed`; Stop
+   sends `turn/interrupt`. A thread `codex exec` made resumes on it, so
+   existing chats carry over; one Codex no longer has answers "no rollout
+   found for thread id …", which the resume path already reads. Closing the
+   server's input ends it, and no daemon is left. Codex streams its
+   commentary in the same deltas as its answer; the runner keeps it out of
+   the reply by the item's `phase`.
+4. **What comes to the card:** a command request with the command, unwrapped
+   from the `zsh -lc '…'` Codex puts round it only where the body holds no
+   quote, its folder, and Codex's reason, said to be Codex's. Allow sends
+   `accept`, once; Deny sends `decline`, which Codex accepts though its
+   request lists only `accept`, a rule and `cancel` (recorded), and the turn
+   goes on. Unanswered after 580 seconds it is declined; after Stop nothing
+   waiting is allowed, and a request arriving after Stop is declined unshown.
+   While a request waits, the turn's step reads "Waiting for your answer on
+   the Mac", so a phone following the turn, which has no card yet, shows it
+   waiting rather than working; answered, the step goes back to what it was.
+   A step names a command shortened, as Claude's do, since steps are kept in
+   the transcript and sent to the phone; the card alone has it whole. A
+   command's streamed output is dropped as it arrives: Lamp reads nothing
+   from it, and a render's log is long.
+5. **Turned down where it stands,** the turn going on: a network prompt; a
+   file change outside the workspace, since what it writes is not in the
+   request and a card must show what it allows; more permissions (an empty
+   grant); a question for the person (no answers); an MCP server's form; the
+   older approval messages; anything else, refused as not provided.
+6. **Antigravity's writing chats** are given the server Lamp makes the same
+   way, no longer the one named in the workspace's `.mcp.json`.
+7. **The deck guidance** says to set the render device first, then that a
+   renderer still reporting no Metal device is in a sandbox, and to ask
+   rather than fall back to the CPU unsaid.
+
 ## What follows
 
 - `--ignore-rules` drops the person's `forbidden` rules too; a reader chat
@@ -67,8 +107,14 @@ Built first:
   switched off, would stop a writing chat starting or leave it without
   tools. Renaming Lamp's server would change every Lamp tool's name to the
   agent, so it is left.
-- The app-server is labelled experimental; its messages are to be pinned by
-  a recorded turn, and anything unrecognised refused visibly.
+- The app-server is labelled experimental; its messages are pinned by the
+  recorded turn, and anything unrecognised is refused.
+- The person's own Codex hooks still run in a turn, as their Claude settings
+  do in Claude's; a `PermissionRequest` hook of theirs that allows a command
+  answers before Lamp's card.
+- Claude and OpenCode writing chats still take Lamp's server from files in
+  the workspace (`.mcp.json` with `enableAllProjectMcpServers`, and
+  `opencode.json`), which their agents can rewrite; open, for the owner.
 
 ## Rejected
 
