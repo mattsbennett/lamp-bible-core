@@ -3,8 +3,10 @@
 Status: Accepted, 2026-11-25, held by `whatIsInsideAtoolsFolderIsItsOutput`,
 `theWritersOwnFilesBesideItAreNot` (core), and on the Mac by
 `atoolsOutputIsNotGatheredButTheFilesBesideItAre`,
-`toolOutputOnTheServerIsQueuedOnce`, `removingAfolderQueuesNoneOfItsToolOutput`
-and `neitherTheLedgerNorTheSweepWalksIntoAtoolsFolder`. Planned by Fable; the
+`toolOutputOnTheServerIsQueuedOnce`, `removingAfolderQueuesNoneOfItsToolOutput`,
+`neitherTheLedgerNorTheSweepWalksIntoAtoolsFolder`,
+`toolOutputCleanupSparesOffloadsAndPostdatesTheWrite` and
+`removingAtoolsFolderQueuesNothing`. Planned by Fable; the
 owner asked for it after `0022`.
 
 ## Context
@@ -67,3 +69,30 @@ two go back and forth — 489 writes and 489 deletions a round — until the old
 Mac is updated. Every Mac that syncs this library should be updated together.
 
 The tombstones themselves age out after 180 days, like any other.
+
+## Review
+
+Core: one lesser finding — a name beginning with a combining mark joined the
+slash before it into one `Character`, so the rule missed the folder; it now
+splits on the slash scalar.
+
+Mac, two serious findings:
+
+- *Tool output offloaded under `0022` could lose its only copy.* The offload
+  sweep could have let such a file go before this change; cleaning it up then
+  reaps the server's copy, the only one. Tool output this Mac has offloaded
+  or asked back is left out of the cleanup until it is here again, and the
+  sweep no longer looks inside a tool's folder at all.
+- *Two weeks of per-file questions.* Core asks the server about every recent
+  deletion of a kind no listing reaches, one request each, for the fourteen
+  days a failed reap is retried — about 489 requests a pass where the same
+  files cost 81 folder listings before. **Accepted by the owner**: the cost
+  ends by itself after a fortnight, and passes are lighter for good after it.
+  Teaching core that a file missing from its folder's listing is confirmed
+  gone would remove it, at the price of a change to the merge model; not
+  worth it for a one-time migration on one Mac.
+
+And: a cleanup is dated past the member's own write, so a clock behind the
+uploader's cannot make it lose; it is queued on the actor the reader's own
+removals use, so neither overwrites the other; and removing a folder no
+longer walks into a tool's folder to list what it holds.
