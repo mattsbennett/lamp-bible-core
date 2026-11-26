@@ -38,3 +38,5 @@ that measured the wrong thing, and what it cost to believe it.
 
 Records 0001–0017 come out of the scalability pass of 2026-11-24, and 0018–0024 from the context-sync question it raised,
 (`../ScalabilityPlan.md`), which holds the measurements and the sequencing.
+0025 on comes out of the animation runtime pass of 2026-11-26
+(`../AnimationRuntimePlan.md`).
