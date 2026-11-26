@@ -10,6 +10,9 @@ struct LampWritingWorkspaceToolFoldersTests {
         #expect(LampWritingWorkspaceLayout.isToolOutput(relativePath: "tool/venv/lib/site.py"))
         #expect(LampWritingWorkspaceLayout.isToolOutput(relativePath: "a/__pycache__/b.pyc"))
         #expect(LampWritingWorkspaceLayout.isToolOutput(relativePath: "repo/.git/HEAD"))
+        // A name beginning with a combining mark joins the slash before it
+        // into one Character; the folder is still seen.
+        #expect(LampWritingWorkspaceLayout.isToolOutput(relativePath: "node_modules/\u{0301}pkg/index.js"))
     }
 
     @Test func theWritersOwnFilesBesideItAreNot() {

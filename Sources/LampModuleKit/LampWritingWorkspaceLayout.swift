@@ -117,8 +117,13 @@ public enum LampWritingWorkspaceLayout {
     /// Whether a path under `Context/` lies inside a tool's folder: any of
     /// its folders is one. The file's own name is not looked at — a source
     /// called `venv` is still a source.
+    ///
+    /// Split on the slash scalar, not on `Character`s: a name that begins
+    /// with a combining mark joins the slash before it into one character,
+    /// and the folder before it would go unseen.
     public static func isToolOutput(relativePath: String) -> Bool {
-        relativePath.split(separator: "/").dropLast().contains { toolFolders.contains(String($0)) }
+        relativePath.unicodeScalars.split(separator: "/").dropLast()
+            .contains { toolFolders.contains(String(String.UnicodeScalarView($0))) }
     }
 
     /// Where one of a writing's sources is published:
