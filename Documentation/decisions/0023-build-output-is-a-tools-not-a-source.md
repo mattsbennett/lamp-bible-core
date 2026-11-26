@@ -125,3 +125,10 @@ own premise: tool output is reproducible.
 Also: the withdrawal that stops when offloads are allowed again still reports
 what it had already done; and the pass a Move runs afterwards runs only once
 the library has moved, so a refused Move keeps its own error.
+
+Its review found three lesser faults, fixed: tool output an older build had
+offloaded was still withheld, which strips the tombstone its cleanup needs —
+it is no longer withheld; a Move the server took but did not confirm skipped
+the pass queued behind it — the follow-up is now skipped only for a Move
+refused before anything was written; and a withdrawal said why it happened as
+the settings stood when it finished, not as they stood when it acted.
