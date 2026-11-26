@@ -5,7 +5,7 @@ Status: Accepted, 2026-11-25, held by `whatIsInsideAtoolsFolderIsItsOutput`,
 `atoolsOutputIsNotGatheredButTheFilesBesideItAre`,
 `toolOutputOnTheServerIsQueuedOnce`, `removingAfolderQueuesNoneOfItsToolOutput`,
 `neitherTheLedgerNorTheSweepWalksIntoAtoolsFolder`,
-`toolOutputCleanupSparesOffloadsAndPostdatesTheWrite` and
+`toolOutputIsCleanedUpWhateverItsMarkAndPostdatesTheWrite` and
 `removingAtoolsFolderQueuesNothing`. Planned by Fable; the
 owner asked for it after `0022`.
 
@@ -109,3 +109,19 @@ that writes the same queue on the main actor: every write to the queue now
 goes through one locked read-change-write (`LampSyncRemovedModules.update`),
 whatever actor it runs on. The lock has no test of its own; a race is not
 something a test here can provoke reliably.
+
+## A cut instead of a third check
+
+The second fix — clearing a returned file's mark so it is cleaned up — could
+itself delete the wrong copy: a build recreating the file with other bytes
+would read as the download having landed. Rather than check the bytes, the
+exception is gone. **Nothing under a tool's folder is kept for an offload
+mark**: none is gathered or offloaded any more, the owner's library had none
+offloaded, and a `node_modules` file deleted from the server is reinstalled by
+the tool. Reconciliation then forgets the mark with the tombstone, as for any
+source deleted. The first review's "only copy" finding is answered by `0023`'s
+own premise: tool output is reproducible.
+
+Also: the withdrawal that stops when offloads are allowed again still reports
+what it had already done; and the pass a Move runs afterwards runs only once
+the library has moved, so a refused Move keeps its own error.
