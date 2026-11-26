@@ -96,3 +96,16 @@ And: a cleanup is dated past the member's own write, so a clock behind the
 uploader's cannot make it lose; it is queued on the actor the reader's own
 removals use, so neither overwrites the other; and removing a folder no
 longer walks into a tool's folder to list what it holds.
+
+## Review of the fixes
+
+Reviewed on its own, the fix commit had two lesser faults, now fixed. Tool
+output downloaded after being offloaded kept its "asked back" mark for ever —
+nothing gathers a tool's folder, so nothing answered it — and so was never
+cleaned up; a file that is here again now has its mark cleared and is cleaned
+up like the rest. And moving the cleanup onto the workspace actor to keep it
+from overwriting a reader's source removal put it beside a module removal
+that writes the same queue on the main actor: every write to the queue now
+goes through one locked read-change-write (`LampSyncRemovedModules.update`),
+whatever actor it runs on. The lock has no test of its own; a race is not
+something a test here can provoke reliably.

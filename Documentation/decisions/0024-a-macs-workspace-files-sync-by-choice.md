@@ -1,6 +1,6 @@
 # 0024. A Mac's workspace files sync by choice
 
-Status: Accepted for the Mac, 2026-11-25, held by
+Status: Accepted for the Mac, 2026-11-25, held by `WorkspaceSyncSettingTests`,
 `withWorkspaceSyncOffOnlyDocumentsAreGathered`,
 `workspaceSyncDefaultsByWhetherThisMacHasSyncedBefore` and
 `withWorkspaceSyncOffOnlyDocumentsAreWork`. Planned by Fable; the owner asked
@@ -67,6 +67,18 @@ once, without waiting for a pass that may fail; and off, the export reads and
 stages nothing of the kind, so an unreadable skill or chat cannot stop the
 pass that carries the documents.
 
-Not covered by a test, because they live in the app's controller: the live
-check before offloads, the Move's reading of the setting, and the withdrawal
-on turning it off.
+## Review of the fixes
+
+Reviewed on its own, the fix commit had three lesser faults, now fixed: a Move
+ran a pass queued while it ran only if offloads were waiting, so turning
+workspace sync on during a Move did not bring the downloads; the withdrawal
+started by turning it off could outlive a turn back on and cancel a request
+made after it, so it now stops the moment offloads are allowed again; and it
+reported a cancellation it could not save as done.
+
+The controller is testable after all: `WorkspaceSyncSettingTests` builds one
+on a private defaults suite and a temporary library, and holds the refusal to
+turn it off while sources are only on the server, the withdrawal, its stop
+when offloads are allowed again, and its report of a cancellation that failed.
+Still without a test: the live check before an offload and a Move's reading
+of the setting and its queued pass, which need a pass run against a server.
