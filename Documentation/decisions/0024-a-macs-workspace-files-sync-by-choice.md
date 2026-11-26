@@ -53,3 +53,20 @@ differ exactly as a Mac and the phone always have.
 A recent deletion of the kind is still asked about by core's per-file probe
 for a fortnight, whether or not it is planned — the phone pays the same. A
 guard there would touch the merge model, and is left for a change of its own.
+
+## Review
+
+Two serious findings, both the setting read too early. A pass read it once at
+its start, so turning it off during a pass still let that pass's offloads
+delete a local copy; offloads now also check it as it stands — before the run
+and before each file goes. And a Move or Join ran its pass without reading it
+at all; it is now read where every pass starts, a Move's included.
+
+And two lesser ones: turning it off withdraws a waiting offload request at
+once, without waiting for a pass that may fail; and off, the export reads and
+stages nothing of the kind, so an unreadable skill or chat cannot stop the
+pass that carries the documents.
+
+Not covered by a test, because they live in the app's controller: the live
+check before offloads, the Move's reading of the setting, and the withdrawal
+on turning it off.
