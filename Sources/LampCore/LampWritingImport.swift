@@ -180,8 +180,9 @@ public struct LampWritingImportResult: Equatable, Sendable {
 }
 
 public enum LampWritingImport {
-    /// Folders an import never looks in: tools' own files, not writing.
-    static let skippedFolders: Set<String> = ["node_modules", "venv", ".venv", "__pycache__"]
+    /// Folders an import never looks in: tools' own files, not writing. The
+    /// same list sync leaves out of a writing's sources.
+    static let skippedFolders: Set<String> = LampWritingWorkspaceLayout.toolFolders
     static let markdownExtensions: Set<String> = ["md", "markdown"]
     /// More than this many files is a folder chosen by mistake.
     public static let fileLimit = 5_000

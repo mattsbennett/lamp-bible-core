@@ -103,6 +103,24 @@ public enum LampWritingWorkspaceLayout {
     /// The folder a writing's sources are published under.
     public static let contextFolder = "Context"
 
+    /// Folders that hold a tool's output rather than the writer's sources:
+    /// installed packages, virtual environments, caches, a repository's
+    /// history. Reproducible by the tool, and often thousands of files — on
+    /// the owner's library one `node_modules` was 489 of 842 synced files.
+    /// Nothing under one is a source: it is not published, and a copy
+    /// already on the server is removed from it (`decisions/0023`). Matched
+    /// by exact name, as the tools write them.
+    public static let toolFolders: Set<String> = [
+        "node_modules", "venv", ".venv", "__pycache__", ".git",
+    ]
+
+    /// Whether a path under `Context/` lies inside a tool's folder: any of
+    /// its folders is one. The file's own name is not looked at — a source
+    /// called `venv` is still a source.
+    public static func isToolOutput(relativePath: String) -> Bool {
+        relativePath.split(separator: "/").dropLast().contains { toolFolders.contains(String($0)) }
+    }
+
     /// Where one of a writing's sources is published:
     /// `Workspaces/Writing/<folder>/Context/<relativePath>`.
     public static func contextPath(folder: String, relativePath: String) throws -> String {
