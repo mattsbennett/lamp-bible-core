@@ -17,10 +17,11 @@ Status: Accepted for the Mac, 2026-11-25, held by
 `membersWhoseNamesFoldTogetherAreNotOffloaded`,
 `downloadAllLeavesOutAsourceAfolderHides`,
 `afailedReadCostsNothingFromTheAllowance`,
-`asharedObjectIsNotMarkedForOneSource`, `afolderLockFollowsItsFolder`,
-`afolderLockAdmitsOnlyItsFolder`,
-`anOffloadIsForgottenOnlyWhenTheServerRecordsItsDeletion` and
-`asourceSomethingStandsInTheWayOfStaysPut`.
+`asharedObjectIsNotMarkedForOneSource`,
+`anOffloadIsForgottenOnlyWhenTheServerRecordsItsDeletion`,
+`asourceSomethingStandsInTheWayOfStaysPut`, `alinkAtAsourcesPathStandsInItsWay`,
+`asourceTheServerNoLongerNamesWaitsForTheReader` and
+`asourceTheManifestNoLongerNamesIsDrawnAsGone`.
 Replaces the safety rule of `0021` and its review rounds five to fourteen.
 Planned by Fable after the fourteenth round; the owner chose the rebuild, the
 Remove cut and keeping the quarantine mark.
@@ -210,3 +211,46 @@ Still open: a source the server holds but a restored manifest no longer names
 keeps its row and the lock, which is the safe direction, but Download cannot
 fetch it — the gather only asks about paths the manifest names. Getting it
 back needs the manifest to name it again.
+
+## Fifth review, and stopping the loop
+
+The fifth review's two serious findings were both in the fourth round's
+fixes — the phone pull's wait polled an idle flag that a queued pass leaves
+false across an await, and the folder lock's identity used a device number a
+remounted volume changes. Fable, asked again, read the pattern: every serious
+finding since the second review was in a fix for a provider or a path the
+owner does not use, and every one since then added an identity, an "is it
+idle" predicate, or a new observation of the server. The loop had stopped
+finding faults in the design and was finding them in its own repairs.
+
+So, by the owner's decision:
+
+- **Offload is WebDAV only.** A sync folder is on this Mac's disk — iCloud
+  Drive's included — so deleting a source here frees nothing while the synced
+  copy sits beside it; iCloud's own storage optimisation is what frees that,
+  and the read-back would download what it had evicted. Under a folder,
+  Offload and the setting are unavailable with a line saying why, waiting
+  requests are withdrawn and said, and the lock is `{server, account}` again:
+  following a renamed folder, refusing a replaced one and surviving a remount
+  are gone, with `0021`'s open rename item.
+- **The phone pull waits as it did:** up to a minute for a running pass. A
+  pull that outlasts offloads reads the library before its queued pass runs —
+  a stale read, never a lost edit. Waiting for its own request properly needs
+  pass counters, waiters and cancellation, more machinery than the case is
+  worth.
+- **A source the manifest no longer names** — neither a member nor a recorded
+  deletion, a tombstone expired or an older manifest restored — is drawn as
+  "No longer on the server" with Remove from List, which forgets only this
+  Mac's note; the lock holds until the reader does. Asking the server whether
+  the file is there was rejected: absence is the inference `0018` refuses, and
+  a misconfigured share answering 404 would settle every offload as gone.
+- **A link at a source's path** now stands in its way, as the importer treats
+  it.
+
+**The rule from here:** the loop ends when two rounds running find serious
+faults only in the previous round's fixes or in environments the owner does
+not run; and a fix that would add an identity, an idleness predicate or a new
+observation of the server is refused in favour of cutting what it protects.
+The next evidence is the owner's server, not another review: offload by
+button and Download back, the sweep on a stale writing, a username change
+while sources are away, a phone pull during offloads.
