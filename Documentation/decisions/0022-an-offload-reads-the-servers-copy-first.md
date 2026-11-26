@@ -254,3 +254,20 @@ observation of the server is refused in favour of cutting what it protects.
 The next evidence is the owner's server, not another review: offload by
 button and Download back, the sweep on a stale writing, a username change
 while sources are away, a phone pull during offloads.
+
+## Review of the cuts
+
+One serious finding, and it corrected this record: going back to the phone
+pull's one-minute wait is not only a stale read. A pull queued behind offloads
+had not run when the turn was checked, and the check after a pull compared
+only the dates — so a phone edit and a Mac copy saved in the same second with
+different texts let the turn run on the Mac's copy and save over the phone's
+edit. After a pull, a copy still not the phone's, by date or by digest, is now
+refused as behind, which the phone retries. Not covered by a test: the check
+is private to the host and needs a paired phone.
+
+And: a source the server no longer names is drawn beside a folder at its own
+path, so its Remove from List is never hidden; the agent's instructions leave
+such sources out rather than telling the reader to download them; and a
+blocked source's row says something is in its place — a folder, a link, or a
+file where a folder should be — rather than naming a folder.
