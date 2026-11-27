@@ -102,12 +102,19 @@ Built:
    answer held to the warning's words rather than the bytes. Fable's
    allow-list replaced it.
 
-   While the Terminal starts, the writing is held: no chat begins a turn
-   there, from any pane or the phone, and the Terminal doesn't open while
-   one is under way. Each launch owns its hold, released when the CLI first
-   reports in (Claude's and OpenCode's start, which means it has read its
-   settings), after 30 seconds for one that reports nothing until asked
-   (Codex), or when the launch is given up.
+   The Terminal doesn't open while a chat in the writing is busy, and the
+   check is the last thing before it does: from the end of the check to the
+   hand-over of its command nothing waits, and a turn begun meanwhile, from
+   any pane or the phone (counted per writing), means checking again.
+
+   A hold on the writing's chats until the CLI had read its settings was
+   built and taken out: five review rounds found a fault in it each time
+   (it expired during a slow scan, was released by capture data an agent
+   could write, by time before a slow CLI had started, and closed an
+   OpenCode Terminal set up the person's own way that never reported in).
+   No provider gives a proof it has read its settings that an agent can't
+   write and every setup sends, and a guard that can close the owner's
+   working Terminal is worse than the second or two it covered (Fable).
 
    Rules were at first vouched for by when they appeared, as those present
    when the last Claude Terminal session ended. Five review rounds broke
@@ -119,11 +126,12 @@ Built:
 ## What follows
 
 - The check does not follow what an approved entry points at: an approved
-  hook that runs `./x.sh` does not bind `x.sh`. Nor does it see a change made
-  while the Terminal runs: Claude Code reloads its settings then, so a rule
-  a chat's agent writes beside an open Claude Terminal applies there at
-  once. Holding every chat while a Claude Terminal is open would close that,
-  at the cost of not chatting meanwhile; left open, for the owner.
+  hook that runs `./x.sh` does not bind `x.sh`. Nor does it cover a change
+  made from the hand-over until the CLI has read its settings, or for as long
+  as it runs: Claude Code reloads its settings then, so a rule a chat's agent
+  writes beside an open Claude Terminal applies there at once. Holding every
+  chat while a Claude Terminal is open would close that, at the cost of not
+  chatting meanwhile; left open, for the owner.
 
 - A Claude writing chat no longer shows the workspace's skills in its own
   list; it reads them through `read_skill`.
