@@ -1,9 +1,11 @@
 # 0028. A Codex command leaves its sandbox by the person's answer
 
-Status: Proposed, 2026-11-26, until a Blender render allowed on Lamp's card,
-in the installed app, reaches the GPU. Allowed over the protocol by a test
-client, the same Codex 0.170 turn ran Blender outside its sandbox, and Eevee
-rendered on Metal in 0.38 s; in the sandbox it cannot start. Built in the Mac app (`lamp-bible-macos`): Lamp's server,
+Status: Accepted, 2026-11-26. The owner allowed a Blender render on Lamp's
+card in the installed app, and it rendered; allowed over the protocol by a
+test client, the same Codex 0.170 turn rendered with Eevee on Metal in
+0.38 s. In the sandbox Blender cannot start Eevee, and crashes on the window
+server before Codex asks, so the deck guidance says to ask from the start.
+Built in the Mac app (`lamp-bible-macos`): Lamp's server,
 held by `codexIsGivenLampsServerApprovedInEveryHeadlessChat` and
 `WritingChatServerTests`; reader chats, by
 `aReaderChatCannotChangeOrImportWritings`; the app-server turn, by
