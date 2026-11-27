@@ -514,7 +514,18 @@ and a search for a chart's words finds it in both modules.
    `DevotionalBlockRenderer` parses link strings itself): if not, this does
    not end the question.
 6. Core readers: blocks, media, front matter, front-matter search, link
-   resolution.
+   resolution. Link resolution takes over what both apps do for a
+   `.commentaryPassage` until then, so the rule has one copy: a verse-0
+   reference (a psalm's title, `sv` 19003000) opens verse 1, since
+   translations keep the title as a heading over verse 1 (iOS
+   `DevotionalBlockRenderer`, Mac `LampDeepLink.init(url:)`, each with a
+   test of 19003000 → 19003001, landed with 3d). Two things both copies get
+   wrong, for the core rule to get right (found by Codex on the Mac): the
+   fallback to verse 1 only where the translation has no verse-0 row (ESV
+   keeps a psalm's title as one, which the fallback skips); and the
+   passage mapped to the active translation's numbering through
+   `LampVersification.opens` (with Brenton selected, a note on Psalm 51:1
+   opens Brenton's 51:1, not its 50:3).
 7. `CommentaryMedia/` kind with the Lean tables, agreed with both apps
    **before any file is written under it**. The Mac's engine keys folder
    listings by name and every synced kind needs explicit membership, or a
