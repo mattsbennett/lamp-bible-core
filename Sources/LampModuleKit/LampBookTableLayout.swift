@@ -16,16 +16,41 @@ public enum LampBookTableLayout {
         }
     }
 
+    /// The most columns a table is laid out with. Past it a cell is left
+    /// out, as one at a negative column is, and a span is clipped.
+    ///
+    /// Unbounded, a cell whose `column` plus `colSpan` passed the largest
+    /// integer stopped any reader that opened its section, and one merely
+    /// very wide made it lay out a gap per empty column — a view each, per
+    /// row. 64 is well past real tables: the widest of 691 in the bundled
+    /// books reaches 24 columns, the widest of a study Bible's 364 reaches 13.
+    /// The inspector warns about a table past it, and the module still builds.
+    public static let maximumColumnCount = 64
+
     /// The table's columns: as many as it declares, or as its widest row
-    /// reaches, across every row. Counted per row, a row missing its last
-    /// cells would be laid out narrower than the rest. A cell that names a
-    /// column far past the rest widens the table to reach it.
+    /// reaches, across every row, up to `maximumColumnCount`. Counted per
+    /// row, a row missing its last cells would be laid out narrower than the
+    /// rest. A cell that names a column far past the rest widens the table
+    /// to reach it, as far as the bound.
     public static func resolvedColumnCount(declared: Int?, rows: [LampBookTableRow]) -> Int {
+        // A cell at a negative column is never placed, so it widens nothing.
         let reached = rows
             .flatMap(\.cells)
-            .map { $0.column + max($0.columnSpan, 1) }
+            .filter { $0.column >= 0 }
+            .map { reach(of: $0) }
             .max() ?? 0
-        return max(declared ?? 0, reached, 1)
+        return min(max(declared ?? 0, reached, 1), maximumColumnCount)
+    }
+
+    /// The column just past a cell's span, at most the largest integer.
+    static func reach(of cell: LampBookTableCell) -> Int {
+        let (end, overflow) = cell.column.addingReportingOverflow(max(cell.columnSpan, 1))
+        return overflow ? .max : end
+    }
+
+    /// A column count a caller passes, kept to the table's bound.
+    private static func bounded(_ columnCount: Int) -> Int {
+        min(max(columnCount, 0), maximumColumnCount)
     }
 
     /// A row's cells at the columns they name, with a gap wherever no cell
@@ -38,6 +63,7 @@ public enum LampBookTableLayout {
     /// `resolvedColumnCount` means only one naming a negative column; of two
     /// cells naming the same column the first is kept.
     public static func placements(of row: LampBookTableRow, columnCount: Int) -> [Placement] {
+        let columnCount = bounded(columnCount)
         var cells: [Int: LampBookTableCell] = [:]
         for cell in row.cells where cell.column >= 0 && cell.column < columnCount && cells[cell.column] == nil {
             cells[cell.column] = cell
@@ -66,6 +92,7 @@ public enum LampBookTableLayout {
     /// another to a wider table that scrolls. Widening a column to fit its
     /// longest word takes the app's font, so is the app's to do.
     public static func columnWeights(rows: [LampBookTableRow], columnCount: Int) -> [Double] {
+        let columnCount = bounded(columnCount)
         guard columnCount > 0 else { return [] }
         var lengths = Array(repeating: 0.0, count: columnCount)
         for row in rows {

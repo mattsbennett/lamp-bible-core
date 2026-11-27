@@ -61,8 +61,18 @@ public struct LampBookSectionIndex: Equatable, Sendable {
             if let content = block.content { collect(content) }
             if let caption = block.caption?.annotatedText { collect(caption) }
             for item in block.items { collect(item) }
+            // A table's cells as the readers place them, and only a table's:
+            // a cell they leave out — past the bound, at a negative column, a
+            // second at one column — listed a footnote and a verse preview
+            // for a marker no one could see. Found by Codex.
+            guard block.type == "table" else { return }
+            let columnCount = LampBookTableLayout.resolvedColumnCount(
+                declared: block.columnCount, rows: block.rows
+            )
             for row in block.rows {
-                for cell in row.cells { collect(cell.content) }
+                for placement in LampBookTableLayout.placements(of: row, columnCount: columnCount) {
+                    if let cell = placement.cell { collect(cell.content) }
+                }
             }
         }
 

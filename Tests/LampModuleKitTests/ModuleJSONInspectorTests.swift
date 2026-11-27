@@ -217,6 +217,48 @@ struct ModuleJSONInspectorTests {
         #expect(devotional.issues.contains { $0.path == "/content" })
     }
 
+    /// A table wider than readers lay out is warned about, and still builds:
+    /// readers show it clipped, so refusing it would only stop it opening
+    /// anywhere.
+    @Test func atableWiderThanReadersShowIsAWarningNotAnError() throws {
+        let book = try inspector.inspect(Data(#"""
+        {
+          "meta": {"schemaVersion": "1.0", "id": "wide-book", "type": "book", "title": "Wide", "language": "en"},
+          "sections": [{
+            "id": "charts", "type": "chapter", "title": "Charts",
+            "content": [
+              {"type": "table", "columnCount": 2, "rows": [{"cells": [
+                {"column": 0, "content": {"text": "fits"}}, {"column": 1, "content": {"text": "too"}}
+              ]}]},
+              {"type": "table", "columnCount": 2, "rows": [{"cells": [
+                {"column": 0, "content": {"text": "a"}},
+                {"column": 1, "colSpan": 9223372036854775807, "content": {"text": "past every column"}},
+                {"column": -1, "content": {"text": "before the first"}}
+              ]}]}
+            ]
+          }]
+        }
+        """#.utf8))
+        #expect(book.canCompile)
+        let warnings = book.issues.filter { $0.severity == .warning }
+        #expect(warnings.map(\.path) == ["/sections/0/content/1", "/sections/0/content/1"], "\(warnings)")
+
+        // A fractional span is no clipping: readers cannot decode the table
+        // at all, and the warning says so.
+        let unreadable = try inspector.inspect(Data(#"""
+        {
+          "meta": {"schemaVersion": "1.0", "id": "odd-book", "type": "book", "title": "Odd", "language": "en"},
+          "sections": [{"id": "c", "type": "chapter", "title": "C", "content": [
+            {"type": "table", "columnCount": 2, "rows": [{"cells": [
+              {"column": 0, "colSpan": 65.5, "content": {"text": "half a column"}}
+            ]}]}
+          ]}]
+        }
+        """#.utf8))
+        #expect(unreadable.issues.map(\.message) == ["Readers cannot read this table, and leave it out."])
+        #expect(book.issues.allSatisfy { $0.severity != .error })
+    }
+
     @Test func validatesHierarchicalBookSections() throws {
         let book = try inspector.inspect(Data(#"""
         {

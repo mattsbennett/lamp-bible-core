@@ -1,7 +1,7 @@
 # 0029. A commentary holds a study Bible's notes whole
 
-Status: Proposed, 2026-11-26. The schema awaits the owner's sign-off; the
-first item is in the code (`CommentaryCompiledShapeTests`,
+Status: Proposed, 2026-11-26. The owner signed off the schema the same day,
+and the first item is in the code (`CommentaryCompiledShapeTests`,
 `acommentaryWithTheRicherFormatsAdditionsStillReads`, and
 `awordInABookTableIsSearchable` as a known issue). Planned by Fable, with
 measurements from the converter; the owner asked for it. The plan and its

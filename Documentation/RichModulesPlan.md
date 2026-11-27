@@ -1,9 +1,9 @@
 # Rich commentary and translation modules — plan
 
-Status: **Proposed. Revised once (below) for the owner's decisions D1, D3,
-D5 and D10 and the converter's measurements; awaiting sign-off of the
-revised schema. All ten owner decisions are answered or defaulted.** Nothing here is in
-the code yet. Planned 2026-11-26 (Fable), every load-bearing claim checked
+Status: **Proposed; the schema signed off by the owner on 2026-11-26.**
+Revised once (below) for the owner's decisions and the converter's
+measurements. Steps 1 (068cf57) and 2a are in the code; the rest is not yet.
+Planned 2026-11-26 (Fable), every load-bearing claim checked
 against the code before this was written (see "Verified").
 
 The JSON fragments here are drafts of shape. The schema files written in
@@ -366,7 +366,7 @@ and a search for a chart's words finds it in both modules.
    Python writer. The two join search text differently (newlines in
    `commentary_units.py:63`, spaces in `CommentaryModuleCompiler.swift:515`);
    choose one here.
-2a. Bound the table layout, its own commit before step 3: saturating
+2a. **Done.** Bound the table layout, its own commit before step 3: saturating
    `column + span`, a capped column count (a named constant, at least twice
    the widest real table: 64, measured against the widest of 691 bundled
    tables, 24 columns, and the study Bible's 364, 13 columns, none with a

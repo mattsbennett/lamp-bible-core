@@ -212,6 +212,54 @@ public struct ModuleJSONInspector: Sendable {
         }
     }
 
+    /// A warning for a table wider than readers lay out, or with a cell at a
+    /// column no reader shows.
+    ///
+    /// A warning, not an error: the module can be stored, and readers show it
+    /// clipped to `LampBookTableLayout.maximumColumnCount`. Refusing it would
+    /// make a book that opens on one device open on none, which the
+    /// repository has already tried for IDs and undone
+    /// (`LampModuleCompiler.compile`).
+    private func warnAboutTableWidth(
+        _ block: [String: Any]?, path: String, issues: inout [ModuleValidationIssue]
+    ) {
+        guard let block, string(block["type"]) == "table" else { return }
+        // Read as the readers read it, so the warning describes what they
+        // show: a span of 65.5 is not clipped to 64, it makes the table
+        // unreadable, and the readers leave the whole of it out. Found by
+        // Codex.
+        guard let data = try? JSONSerialization.data(withJSONObject: block),
+              let table = try? JSONDecoder().decode(LampBookContentBlock.self, from: data)
+        else {
+            issues.append(.init(
+                severity: .warning,
+                path: path,
+                message: "Readers cannot read this table, and leave it out."
+            ))
+            return
+        }
+        let bound = LampBookTableLayout.maximumColumnCount
+        let cells = table.rows.flatMap(\.cells)
+        let widest = max(
+            table.columnCount ?? 0,
+            cells.filter { $0.column >= 0 }.map(LampBookTableLayout.reach(of:)).max() ?? 0
+        )
+        if widest > bound {
+            issues.append(.init(
+                severity: .warning,
+                path: path,
+                message: "This table reaches \(widest == .max ? "past every" : "\(widest)") columns; readers show the first \(bound), and leave out any cell past them."
+            ))
+        }
+        if cells.contains(where: { $0.column < 0 }) {
+            issues.append(.init(
+                severity: .warning,
+                path: path,
+                message: "A cell in this table names a negative column; readers leave it out."
+            ))
+        }
+    }
+
     private func validateBook(
         root: [String: Any],
         issues: inout [ModuleValidationIssue]
@@ -290,6 +338,11 @@ public struct ModuleJSONInspector: Sendable {
                         path: "\(sectionPath)/sections",
                         message: "Expected an array."
                     ))
+                }
+                for (blockIndex, block) in (content ?? []).enumerated() {
+                    warnAboutTableWidth(
+                        object(block), path: "\(sectionPath)/content/\(blockIndex)", issues: &issues
+                    )
                 }
                 if (content?.isEmpty ?? true) && (children?.isEmpty ?? true) {
                     issues.append(.init(

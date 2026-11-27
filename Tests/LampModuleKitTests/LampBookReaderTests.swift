@@ -246,6 +246,16 @@ struct LampBookSectionIndexTests {
             LampBookContentBlock(type: "table", rows: [LampBookTableRow(cells: [
                 LampBookTableCell(content: text("Cell", [annotation("footnote", 0, 4,
                     LampBookAnnotationData(footnoteID: "n2"))]), column: 0),
+                // Cells the readers leave out — a second at one column, one
+                // at a negative column — cite nothing a reader can see.
+                LampBookTableCell(content: text("Shadowed", [annotation("footnote", 0, 8,
+                    LampBookAnnotationData(footnoteID: "n9"))]), column: 0),
+                LampBookTableCell(content: text("Behind", [annotation("scripture", 0, 6, john)]), column: -1),
+            ])]),
+            // Rows on a block the readers do not draw as a table are not read.
+            LampBookContentBlock(type: "paragraph", content: text("Prose"), rows: [LampBookTableRow(cells: [
+                LampBookTableCell(content: text("Stray", [annotation("footnote", 0, 5,
+                    LampBookAnnotationData(footnoteID: "n8"))]), column: 0),
             ])]),
         ]
 
@@ -264,7 +274,7 @@ struct LampBookSectionIndexTests {
         #expect(index.footnoteIDs == ["n2", "n1"])
         #expect(index.annotatedTexts.map(\.text) == [
             "  Sin and Death  ", "All have sinned; see John.", "Entry", "Untitled level", "   ",
-            "Item", "John again", "Cell",
+            "Item", "John again", "Cell", "Prose",
         ])
     }
 }
@@ -282,6 +292,39 @@ struct LampBookTableLayoutTests {
         #expect(LampBookTableLayout.resolvedColumnCount(declared: nil, rows: rows) == 3)
         #expect(LampBookTableLayout.resolvedColumnCount(declared: 4, rows: rows) == 4)
         #expect(LampBookTableLayout.resolvedColumnCount(declared: nil, rows: []) == 1)
+    }
+
+    /// A table is laid out with no more than `maximumColumnCount` columns,
+    /// however far a cell reaches.
+    ///
+    /// A cell whose `column` plus `colSpan` passed the largest integer
+    /// stopped any reader that opened its section, and a merely very wide
+    /// one had it lay out a gap per empty column, a view each per row.
+    @Test func atableIsLaidOutWithinItsBound() {
+        let bound = LampBookTableLayout.maximumColumnCount
+        let overflowing = [LampBookTableRow(cells: [cell("a", 0), cell("far", 1, span: .max)])]
+        #expect(LampBookTableLayout.resolvedColumnCount(declared: nil, rows: overflowing) == bound)
+        let distant = [LampBookTableRow(cells: [cell("a", 0), cell("distant", 1_000_000)])]
+        #expect(LampBookTableLayout.resolvedColumnCount(declared: nil, rows: distant) == bound)
+        #expect(LampBookTableLayout.resolvedColumnCount(declared: .max, rows: []) == bound)
+
+        // A count passed straight in is held to the bound too, so no caller
+        // can ask for a row of a million gaps.
+        let placements = LampBookTableLayout.placements(of: distant[0], columnCount: 1_000_000)
+        #expect(placements.count == bound)
+        #expect(placements.compactMap(\.cell).map(\.content.text) == ["a"])
+        let spanned = LampBookTableLayout.placements(of: overflowing[0], columnCount: .max)
+        #expect(spanned.map(\.span) == [1, bound - 1])
+        #expect(LampBookTableLayout.columnWeights(rows: distant, columnCount: .max).count == bound)
+
+        // A cell at a negative column is never placed, so however far its
+        // span reaches it does not widen the table. Found by Codex.
+        let behind = [LampBookTableRow(cells: [cell("a", 0), cell("b", 1), cell("before", -1, span: 67)])]
+        #expect(LampBookTableLayout.resolvedColumnCount(declared: 2, rows: behind) == 2)
+
+        // Real tables are untouched: the widest bundled one reaches 24.
+        let wide = [LampBookTableRow(cells: (0..<24).map { cell("c\($0)", $0) })]
+        #expect(LampBookTableLayout.resolvedColumnCount(declared: nil, rows: wide) == 24)
     }
 
     @Test func cellsGoToTheColumnsTheyName() {
