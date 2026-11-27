@@ -178,11 +178,24 @@ struct LampAgentRemoteApprovalTests {
     /// A folder may hold any script's letters, but nothing that draws as
     /// nothing or as a space it isn't.
     @Test func aFolderMustReadAsItself() {
-        #expect(LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/Users/x/Génesis notes"))
-        #expect(LampAgentRemoteApproval.mayAllow(command: "ls", folder: nil))
-        #expect(!LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/Users/x/\u{202E}gpj.sh"))
-        #expect(!LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/Users/x/a\u{00A0}b"))
+        #expect(LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/Users/x/Writing notes"))
+        // A folder is held to the command's rule: a blank braille cell, a
+        // letter in another script, an override or a no-break space in it,
+        // or none named at all, is Deny-only.
+        for folder in ["/Users/x/G\u{00E9}nesis", "/Users/x/\u{2800}", "/Users/x/\u{202E}gpj.sh", "/Users/x/a\u{00A0}b", "/w\nx"] {
+            #expect(!LampAgentRemoteApproval.mayAllow(command: "ls", folder: folder), "\(folder)")
+        }
+        #expect(!LampAgentRemoteApproval.mayAllow(command: "ls", folder: nil))
         #expect(!LampAgentRemoteApproval.mayAllow(command: nil, folder: "/w"))
+        // Too long to send whole.
+        #expect(!LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/" + String(repeating: "a", count: LampAgentRemoteApproval.largestField)))
+        var long = request
+        long.folder = "/" + String(repeating: "a", count: 3_000)
+        #expect(!long.bounded().canAllow)
+        // An id too long to send is left to the Mac.
+        var named = request
+        named.id = String(repeating: "x", count: LampAgentRemoteApproval.largestID + 1)
+        #expect(LampAgentRemoteChatState(messages: [question], isRunning: true, approvals: [named, request]).approvals == [request])
     }
 
     /// A change between a precomposed accent and a combining one is told,

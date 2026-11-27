@@ -45,13 +45,17 @@ one taken.**
   is `approval-gone`.
 - **What a device may allow.** Only what it can show whole: a command of at
   most 8,000 characters, every one printable ASCII, a line break or a tab,
-  run in a folder that reads as itself (any script's letters, but nothing
-  that draws as nothing or as a space it isn't). A list of what doesn't draw
+  run in a folder named, whole, by the same rule on one line, since a
+  relative path in the command is read from it. Antigravity names none, so
+  its session's folder, the workspace, stands for it. A list of what doesn't draw
   came first, and two review rounds each found a character it missed: a
   combining grapheme joiner, a mark that draws nothing, and a no-break
   space, which looks like a space but which the shell reads as part of a
-  word. Only what reads as itself is let through, so a command naming a
-  file in another script is Deny-only on a device and allowed on the Mac.
+  word; a third found a blank braille cell passing a folder check that let
+  other scripts through. Only what reads as itself is let through, so a
+  command or folder naming a file in another script is Deny-only on a
+  device and allowed on the Mac. A request whose id is longer than 256 bytes
+  is left to the Mac, and none is sent while no turn can be named.
   The host sets `canAllow` itself;
   anything else, and every non-command tool call (Claude's file edits are
   excerpted even on the Mac, its other tools are raw JSON), is Deny-only on a
@@ -67,6 +71,10 @@ one taken.**
   unsent.
 
 ## What follows
+
+- A chat whose transcript alone nearly fills a frame could be pushed past
+  it by its requests, and the snapshot would not be sent; no transcript
+  near that size is known.
 
 - A phone-started turn with no pane open can be answered only while the
   phone has the chat open: there is no push for a waiting request yet. One

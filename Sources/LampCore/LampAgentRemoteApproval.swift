@@ -72,25 +72,15 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
         }
     }
 
-    /// Whether a folder a command runs in reads as itself: a path may hold
-    /// any script's letters, but nothing that draws as nothing or as a space
-    /// it isn't.
-    public static func readsPlainly(_ text: String) -> Bool {
-        text.unicodeScalars.allSatisfy { scalar in
-            if scalar.properties.isDefaultIgnorableCodePoint { return false }
-            return switch scalar.properties.generalCategory {
-            case .spaceSeparator: scalar == " "
-            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .unassigned, .privateUse: false
-            default: true
-            }
-        }
-    }
-
-    /// Whether a device may allow a command run in `folder`: one shown whole,
-    /// in a folder that reads as itself.
+    /// Whether a device may allow a command run in `folder`: the command
+    /// shown whole, and the folder too, by the same rule, since a relative
+    /// path in the command is read from it. A command with no folder named,
+    /// or one too long to send whole, is Deny-only on a device.
     public static func mayAllow(command: String?, folder: String?) -> Bool {
-        guard let command, canShowWhole(command) else { return false }
-        return folder.map(readsPlainly) ?? true
+        guard let command, canShowWhole(command), let folder, canShowWhole(folder),
+              folder.utf8.count <= largestField, !folder.contains("\n"), !folder.contains("\t")
+        else { return false }
+        return true
     }
 
     /// The most requests a device is sent at once, and the longest any of
@@ -99,6 +89,9 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
     /// connection seals, which it would otherwise drop unsent.
     public static let largestListed = 16
     public static let largestField = 2_000
+    /// The longest id a device is sent. A provider's own ids are short; one
+    /// longer is left to the Mac, since cutting it could make two one.
+    public static let largestID = 256
 
     /// This request cut to what a device is sent: a command it may allow is
     /// whole already; anything longer is cut, and can only be denied. Cut by
@@ -118,10 +111,11 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
         }
         var copy = self
         copy.title = cut(title, 200) ?? ""
-        if cut(command, Self.largestAllowedCommand) != command {
-            copy.command = cut(command, Self.largestAllowedCommand)
+        // Allowed only as sent whole: a command or folder cut is Deny-only.
+        if cut(command, Self.largestAllowedCommand) != command || cut(folder, Self.largestField) != folder {
             copy.canAllow = false
         }
+        copy.command = cut(command, Self.largestAllowedCommand)
         copy.folder = cut(folder, Self.largestField)
         copy.agentReason = cut(agentReason, Self.largestField)
         copy.note = cut(note, Self.largestField)

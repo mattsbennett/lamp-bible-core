@@ -25,7 +25,8 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
     }
 
     static func sendable(_ approvals: [LampAgentRemoteApproval]) -> [LampAgentRemoteApproval] {
-        approvals.prefix(LampAgentRemoteApproval.largestListed).map { $0.bounded() }
+        approvals.filter { $0.id.utf8.count <= LampAgentRemoteApproval.largestID }
+            .prefix(LampAgentRemoteApproval.largestListed).map { $0.bounded() }
     }
 
     public init(
