@@ -81,7 +81,8 @@ Owner's decisions, 2026-11-26:
      the notices script pins the manifest's hash.
    - Registered: `.copy` in `Package.swift`, a folder reference in the app's
      Resources phase and in lamp-mcp's skill-catalog copy phase.
-   - Decision record 0027.
+   - Decision record 0027. Landed: 274 files, 9.5 MB (0.187 ships no
+     minified builds), served from the manifest.
 4. **Expose WebGPU**: `three/webgpu` and `three/tsl` in the map, after items 2
    and 3. The tool result says which backend drew.
 
