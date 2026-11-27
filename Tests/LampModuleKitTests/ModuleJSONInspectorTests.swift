@@ -292,7 +292,24 @@ struct ModuleJSONInspectorTests {
              {"column": 0, "content": {"text": "hidden", "annotations": [
                {"type": "link", "start": 0, "end": 6, "data": {"target": {"sv": 1001001}}}
              ]}}
-           ]}]}
+           ]}]},
+           {"type": "paragraph", "content": {"text": "drawn"}, "notes": [{"text": "not drawn", "annotations": [
+             {"type": "link", "start": 0, "end": 3, "data": {"target": {"sv": 1001001}}}
+           ]}], "title": {"text": "nor this", "annotations": [
+             {"type": "link", "start": 0, "end": 3, "data": {"target": {"sv": 1001001}}}
+           ]}},
+           {"type": "figure", "children": [{"type": "paragraph", "content": {"text": "in a child", "annotations": [
+             {"type": "link", "start": 0, "end": 2, "data": {"target": {"sv": 1001001}}}
+           ]}}]},
+           {"type": "figure", "children": [], "notes": [{"text": "a figure's note", "annotations": [
+             {"type": "link", "start": 0, "end": 1, "data": {"target": {"sv": 1001001}}}
+           ]}]},
+           {"type": "list", "items": [{"content": {"text": "top"}, "children": [{"content": {"text": "nested", "annotations": [
+             {"type": "link", "start": 0, "end": 6, "data": {"target": {"sv": 1001001}}}
+           ]}}]}]},
+           {"type": "figure", "children": [], "content": {"text": "stored", "annotations": [
+             {"type": "link", "start": 0, "end": 6, "data": {"target": {"sv": 1001001}}}
+           ]}}
          ]}],
          "footnotes": [{"id": "1", "content": {"text": "see it", "annotations": [
            {"type": "link", "start": 4, "end": 6, "data": {"target": {"kind": "commentary", "module": "N", "sv": 1002001, "ev": 1001001}}}
@@ -300,10 +317,19 @@ struct ModuleJSONInspectorTests {
         """#.utf8))
         // The dead link, the one written wrong, a scripture note that is no
         // passage, one on no words, and a footnote's — not the live link,
-        // metadata that is no annotation, nor a cell the layout hides.
-        #expect(Set(dead.issues.filter { $0.severity == .warning }.map(\.path))
+        // metadata that is no annotation, nor a cell the layout hides; and
+        // the texts a reader draws, a figure's by its parts, a nested list
+        // item's — not a title or notes on a paragraph, which none draws.
+        // Found in planning step 4.
+        // Warnings: a dead link does not stop the book building.
+        #expect(dead.canCompile)
+        #expect(Set(dead.issues.filter {
+            $0.severity == .warning && $0.message.hasSuffix("no place a reader of this book can open.")
+        }.map(\.path))
             == ["/sections/0/content/0", "/sections/0/content/2", "/sections/0/content/3",
-                "/sections/0/content/5", "/footnotes/0/content"],
+                "/sections/0/content/5", "/footnotes/0/content",
+                "/sections/0/content/8", "/sections/0/content/9", "/sections/0/content/10",
+                "/sections/0/content/11"],
                 "\(dead.issues)")
 
         // A fractional span is no clipping: readers cannot decode the table

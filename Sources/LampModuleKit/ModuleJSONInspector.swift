@@ -230,56 +230,48 @@ public struct ModuleJSONInspector: Sendable {
     }
 
     /// A warning for a block whose link or scripture targets a reader of the
-    /// book will not follow — one written wrong, a passage whose range runs
+    /// module will not follow — one written wrong, a passage whose range runs
     /// backwards, a commentary named without its module, a scripture note
-    /// that is not a passage — so it is found before the book ships, not as
+    /// that is not a passage — so it is found before the module ships, not as
     /// words that link nowhere. Judged by the resolver's own rule
-    /// (`LampBookTextResolver.usableTarget`), on the texts the reader reads.
-    /// Found by Codex, over three reviews.
+    /// (`LampBookTextResolver.usableTarget`), in the module's own kind, on
+    /// the texts a reader reads: the block's lines as `LampBookDrawnText`
+    /// walks them, a figure by its parts — what a reader that knows figures
+    /// draws, and what a compiler projects — and by its stored `content`,
+    /// which today's readers draw. Read its own way, the check took
+    /// a title, second line or notes on any block, which no reader draws.
+    /// Found by Codex, over three reviews, and in planning step 4.
     private func warnAboutDeadLinks(
-        _ block: [String: Any]?, path: String, issues: inout [ModuleValidationIssue]
+        _ block: [String: Any]?, path: String, containingKind: String, issues: inout [ModuleValidationIssue]
     ) {
         guard let block,
               let data = try? JSONSerialization.data(withJSONObject: block),
               let decoded = try? JSONDecoder().decode(LampBookContentBlock.self, from: data)
         else { return }
-        func texts(_ block: LampBookContentBlock) -> [LampBookAnnotatedText] {
-            var out = [block.content, block.caption?.annotatedText, block.title?.annotatedText,
-                       block.subtitle?.annotatedText].compactMap { $0 }
-            func items(_ list: [LampBookListItem]) -> [LampBookAnnotatedText] {
-                list.flatMap { [$0.content] + items($0.children) }
-            }
-            out += items(block.items)
-            // The cells a reader shows, as the layout places them. Found by
-            // Codex.
-            if block.type == "table" {
-                let columnCount = LampBookTableLayout.resolvedColumnCount(declared: block.columnCount, rows: block.rows)
-                out += block.rows.flatMap { row in
-                    LampBookTableLayout.placements(of: row, columnCount: columnCount).compactMap { $0.cell?.content }
-                }
-            }
-            out += block.notes
-            out += block.children.flatMap(texts)
-            return out
-        }
-        warnAboutDeadLinks(in: texts(decoded), path: path, issues: &issues)
+        // A figure both ways: by its parts, as a reader that knows figures
+        // draws it and a compiler projects it, and by the `content` stored
+        // beside them, which today's readers draw. Found by Codex.
+        let readings: [LampBookDrawnText.Figures] = decoded.type == "figure" ? [.asParts, .asContent] : [.asParts]
+        let texts = readings.flatMap { LampBookDrawnText.lines(of: decoded, figures: $0).joined().map(\.text) }
+        warnAboutDeadLinks(in: texts, path: path, containingKind: containingKind, issues: &issues)
     }
 
     private func warnAboutDeadLinks(
-        in texts: [LampBookAnnotatedText], path: String, issues: inout [ModuleValidationIssue]
+        in texts: [LampBookAnnotatedText], path: String, containingKind: String,
+        issues: inout [ModuleValidationIssue]
     ) {
         // A target the resolver will not follow, or on words it covers none
         // of, so never tappable. Found by Codex.
         let dead = texts.flatMap { text in text.annotations.map { (text, $0) } }.filter { text, annotation in
             annotation.data?.hasTargetField == true
-                && (LampBookTextResolver.usableTarget(for: annotation, containingKind: "book") == nil
+                && (LampBookTextResolver.usableTarget(for: annotation, containingKind: containingKind) == nil
                     || !LampBookTextResolver.coversText(annotation, in: text))
         }.count
         guard dead > 0 else { return }
         issues.append(.init(
             severity: .warning,
             path: path,
-            message: "\(dead) link\(dead == 1 ? "" : "s") here name\(dead == 1 ? "s" : "") no place a reader of this book can open."
+            message: "\(dead) link\(dead == 1 ? "" : "s") here name\(dead == 1 ? "s" : "") no place a reader of this \(containingKind) can open."
         ))
     }
 
@@ -385,7 +377,10 @@ public struct ModuleJSONInspector: Sendable {
             guard let data = object(value).flatMap({ try? JSONSerialization.data(withJSONObject: $0) }),
                   let note = try? JSONDecoder().decode(LampBookFootnote.self, from: data)
             else { continue }
-            warnAboutDeadLinks(in: [note.content.annotatedText], path: "/footnotes/\(index)/content", issues: &issues)
+            warnAboutDeadLinks(
+                in: [note.content.annotatedText], path: "/footnotes/\(index)/content",
+                containingKind: "book", issues: &issues
+            )
         }
         guard let sections = array(root["sections"]) else { return }
         if sections.isEmpty {
@@ -465,7 +460,7 @@ public struct ModuleJSONInspector: Sendable {
                 for (blockIndex, block) in (content ?? []).enumerated() {
                     let blockPath = "\(sectionPath)/content/\(blockIndex)"
                     warnAboutTableLayout(object(block), path: blockPath, issues: &issues)
-                    warnAboutDeadLinks(object(block), path: blockPath, issues: &issues)
+                    warnAboutDeadLinks(object(block), path: blockPath, containingKind: "book", issues: &issues)
                     // And a figure's tables, laid out within the same bound —
                     // a figure's only: another block's `children` is never
                     // drawn. Found by Codex.
