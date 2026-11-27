@@ -495,6 +495,54 @@ and a search for a chart's words finds it in both modules.
    at 1:20 is ordered before the note on 1:2. A source-tracked commentary
    keeps its printed order, which may return to an earlier passage
    (`compilesSourceOrderedCommentaryBlocksAndScopedNotes`; found by Codex).
+   **Step 4 as commits** (planned 2026-11-27, after step 3; each lands
+   green, the version gate opening last). "Last, declare the shape" cannot
+   stand as worded: `LampModuleCompiledSchemaTests` holds the compiled
+   columns equal to the declared ones, so a column is created, written and
+   declared in one commit; and the phone builds against core's tree
+   (`../lamp-bible-core`), so that commit is the same-day landing. Commits
+   5–7 therefore build in memory, tested on `CommentaryUnitBuilder` and the
+   internal `compileCommentary(root:databaseURL:moduleID:)`.
+   1. **One walk gives a block's words with their annotations.**
+      `LampBookDrawnText.lines(of:figures:)` — the only switch over a
+      block's type — and `projection(of:figures:keeping:)`, the one
+      annotated text a 2.3 unit's `commentary_json` holds (blocks by
+      `"\n\n"`, lines by `"\n"`, cells by a named whitespace); annotations
+      kept and clipped by the resolver's own bounds, factored out of
+      `LampBookTextResolver` so `resolve` calls them too. Held by a
+      differential: resolving the projection equals resolving each piece,
+      joined.
+   2. **The link check reads a block's texts through the walk**, in the
+      module's kind (`warnAboutDeadLinks` hard-codes a book's today).
+   3. **A 2.3 block is one the model reads whole**: decode, encode, and
+      report each key the author wrote that the model did not carry, by
+      path, never value. (The book model has no annotation `id`,
+      `implicit`, `lexiconId`, `transliteration`, `expansion`, which
+      commentary annotations carry and the phone reads.)
+   4. **One writer for a commentary's rows**, volume and series (two DDLs
+      and two INSERTs today); no behaviour change.
+   5. **A 2.3 unit's body is its blocks**, in memory: `blocksJSON`,
+      `declaredID`, the builder's own findings (both bodies, unread fields,
+      duplicate block ids, dead links, table warnings), which the inspector
+      takes rather than walking again.
+   6. **A 2.3 unit is filed and ordered by its own verse** — 2.3 only, so no
+      2.2 volume reorders or renumbers; two verse notes on one passage, and
+      two units at one `sv` with one declared id, refused.
+   7. **Front matter and media, planned as rows**, in memory: `section_id`
+      unique within its book; media read whole, its filename a safe relative
+      path with no scheme (`safeRelativeMediaPath` keeps `https:/host/…`);
+      a series refusing one id or filename given two ways.
+   8. **Store a commentary's blocks, media and front matter** — the
+      cross-repo landing, 2.3 still refused: `media_json`, `blocks_json`,
+      `declared_id`, `commentary_front_matter` and its FTS, in volume and
+      series (the series' tables without `module_id`, as its others are).
+   9. **Hold a schema's `linkTarget` to the target's own rule**, by a
+      matrix through a small draft-07 evaluator in the tests: the book
+      schema admits `sv` 2000001, which `destination(in:)` refuses.
+   10. **Read commentary 2.3**: the schema, a synthetic rich example, the
+       gate, README, a decision record.
+   Step 4 does not unblock a book module's figures: a figure's `content`,
+   which today's book readers and search read, is step 5's projection.
 5. Book compiler: figure projection, search keys.
 6a. **Before step 6, its own commit and review:** a writing import checks
    the links the reader draws, by asking the reader — every link URL in
