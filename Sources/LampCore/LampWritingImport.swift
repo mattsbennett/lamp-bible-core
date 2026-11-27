@@ -665,7 +665,12 @@ public enum LampWritingImport {
             }
         }
 
-        for link in Set(captures(lampLink)).sorted() {
+        // Each once, by its bytes: as `String`s, two spellings of one name
+        // were one, and the second, which the route refuses, went unread.
+        // Found by Codex. Which links a reader follows — entities, a `)` in a
+        // value, a footnote's continuation — is `RichModulesPlan.md` step 6a.
+        var seen = Set<[UInt8]>()
+        for link in captures(lampLink).sorted() where seen.insert(Array(link.utf8)).inserted {
             guard let url = URL(string: link), let parsed = LampApplicationLink(url: url) else {
                 candidate.errors.append("\(link) is not a link Lamp can open.")
                 continue
@@ -676,6 +681,10 @@ public enum LampWritingImport {
                 references = [reference] + (end.map { [$0] } ?? [])
             case .reader(let reference, _):
                 references = reference.map { [$0] } ?? []
+            case .commentaryPassage(_, let reference, let end, _, _, _):
+                // A note on a passage the Bible has, as a verse link is
+                // checked. Found by Codex.
+                references = [reference] + (end.map { [$0] } ?? [])
             default:
                 references = []
             }

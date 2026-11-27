@@ -414,7 +414,7 @@ and a search for a chart's words finds it in both modules.
    projection all use it; `plainText` stays for annotated text and footnote
    lists. Media metadata is not indexed (the readers disagree: the Mac falls
    back to a picture's `alt`, the phone to its media caption). Then the
-   shared model — **done but for the link routes**:
+   shared model — **done**:
    `LampBookContentBlock` reads `id`, `role`, `title`, `subtitle`,
    `children`, `notes` and `legend`, a row and a cell their `label` and a
    cell its `align`, each field read on its own so a malformed one is absent
@@ -442,7 +442,40 @@ and a search for a chart's words finds it in both modules.
    index stay on the per-row walk. The bundled books hold 151 such cells in 36 tables,
    the study Bible 73 in 22; one bundled cell stops above words, and the
    inspector warns of a span cut short. Readers draw it in step 6 (both lay
-   tables out with SwiftUI `Grid`, which spans no rows). The planned list:
+   tables out with SwiftUI `Grid`, which spans no rows). The link routes:
+   `LampApplicationLink` reads `lampbible://commentary` as
+   `.commentaryPassage` or `.commentaryFrontMatter`, and `.book` gains
+   `anchor`, by the rules a target is read by — the route builds a
+   `LampLinkTarget` and asks it for its destination, so a URL and a target
+   cannot disagree; a link written wrong opens nothing. A commentary link,
+   and a book link with an anchor, is read as the target it writes: its
+   parameters are the target's fields, read as from JSON — exactly, not
+   trimmed; one given empty (but `suffix`), undecodable, without a value,
+   or twice differently is wrong, not absent or the first — and the target
+   says where it goes, its module named; a value given twice is the same
+   only byte for byte. A book link without an anchor is read as it always
+   was (a module, a section, both, or neither for the shelf, one given
+   empty or with no value as none), but never beside a commentary's
+   selector. Both read the query as written and decode it themselves: a
+   name or value that does not decode is wrong, where Foundation's reading
+   made it no name or no value. A writing import checks a note's passage as
+   it checks a verse link's, on the links it has always captured —
+   `](lampbible://…)` up to the first `)` or space, outside fenced code —
+   each checked once by its bytes. (A walk of the Markdown parser's links
+   was tried for three reviews and taken back out: it was a third reading,
+   neither the capture nor the reader's, and lost a footnote continuation's
+   verse link the capture caught. Which links a reader follows is step
+   6a.) Three reviews in turn
+   found a route reading its own way; a test now gives the same fields as
+   a URL and as a target, of both kinds, and expects the same place. No book link was
+   written anywhere before `placeURL`, so the book route lost nothing by
+   no longer trimming.
+   `init?(target:containingKind:containingModuleID:)` turns a resolved
+   target into the link, and `placeURL` writes a place back out, percent-
+   encoding `&`, `=` and `+`, which `URLComponents.queryItems` leaves in a
+   value, and only when the URL reads back as the same link. Both apps switch over the enum exhaustively, so each lands its
+   switch with it; until step 6 the phone opens a note's passage. The
+   planned list:
    figure, row and cell additions, `smallcaps`, `link` and its
    target, resolver cases, `rowSpan`, the link forms.
 4. Commentary 2.3 in the compiler, volume and series (an unsupported
@@ -463,6 +496,23 @@ and a search for a chart's words finds it in both modules.
    keeps its printed order, which may return to an earlier passage
    (`compilesSourceOrderedCommentaryBlocksAndScopedNotes`; found by Codex).
 5. Book compiler: figure projection, search keys.
+6a. **Before step 6, its own commit and review:** a writing import checks
+   the links the reader draws, by asking the reader — every link URL in
+   `LampProse.blocks(content, options: .writing)`, footnote blocks
+   included, filtered by scheme — held by a differential test: the set the
+   import checks is the set of link URLs in the drawn blocks. Step 6 is
+   where `ev`, `unit` and `anchor` first select anything, so where an
+   unchecked one first matters. Cases to start from: `&amp;` before an
+   optional field (unread, so passed) and before `sv` (refused, though a
+   reader opens it); a `)` in a value; `URL(string:)` repairing `%2` to
+   `%252`, as the readers' own construction does (`LampProse.swift`, the
+   phone's `DevotionalBlockRenderer.swift`), so refusing it needs a string
+   entry point; `lampbible:/` with one slash; titled, auto- and
+   reference-style links; a link in inline code. Settle first whether the
+   phone's writing view draws from `LampProse` (the Mac's
+   `DevotionalContentView` and the phone's `NoteMarkdownRenderer` do; its
+   `DevotionalBlockRenderer` parses link strings itself): if not, this does
+   not end the question.
 6. Core readers: blocks, media, front matter, front-matter search, link
    resolution.
 7. `CommentaryMedia/` kind with the Lean tables, agreed with both apps

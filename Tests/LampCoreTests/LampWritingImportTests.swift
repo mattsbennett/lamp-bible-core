@@ -229,6 +229,26 @@ struct LampWritingImportTests {
         let folder = root.appendingPathComponent("bundle")
         try write("---\nid: \"bad/id\"\ntitle: Bad id\n---\nText.", to: "a-bad-id.md", in: folder)
         try write("# Verse\n\nSee [Matthew 99:1](lampbible://verse/40099001).", to: "b-verse.md", in: folder)
+        // A note on a passage the Bible lacks, as a verse link is checked.
+        // Found by Codex.
+        try write("# Note\n\nSee [the note](lampbible://commentary?module=NIC&sv=43099001).", to: "b-note.md", in: folder)
+        // A link after a fence, with backticks either side of the fence:
+        // still a link to check. Found by Codex.
+        // A link in a footnote's continuation, which the reader draws as
+        // part of the note and a Markdown parser alone takes for code.
+        // Found by Codex.
+        try write(
+            "# Noted\n\nA claim.[^1]\n\n[^1]: A note.\n\n    [bad](lampbible://verse/40099001)\n",
+            to: "b-continued.md", in: folder
+        )
+        // Two links alike as `String`s and not as bytes, the second giving
+        // its module twice in two spellings, which the route refuses: each
+        // is read. Found by Codex.
+        try write(
+            "# Twice\n\n[a](lampbible://book?module=Caf\u{E9}&module=Caf\u{E9}) [b](lampbible://book?module=Caf\u{E9}&module=Cafe\u{301})\n",
+            to: "b-twice.md", in: folder
+        )
+        try write("# Fence\n\nA `tick\n```\ncode\n```\n[bad](lampbible://verse/40099001)` after\n", to: "b-fence.md", in: folder)
         try write("# Picture\n\n![A map](media/map.png)", to: "c-media.md", in: folder)
         try write("---\nid: same\ntitle: One\n---\nOne.", to: "d-one.md", in: folder)
         try write("---\nid: same\ntitle: Two\n---\nTwo.", to: "e-two.md", in: folder)
@@ -260,6 +280,10 @@ struct LampWritingImportTests {
         })
         #expect(byFile["a-bad-id.md"]?.action == .rejected)
         #expect(byFile["b-verse.md"]?.errors.first?.contains("not a verse") == true)
+        #expect(byFile["b-note.md"]?.errors.first?.contains("not a verse") == true)
+        #expect(byFile["b-fence.md"]?.errors.first?.contains("not a verse") == true)
+        #expect(byFile["b-continued.md"]?.errors.first?.contains("not a verse") == true)
+        #expect(byFile["b-twice.md"]?.errors.first?.contains("is not a link Lamp can open") == true, "\(byFile["b-twice.md"]?.errors ?? [])")
         #expect(byFile["c-media.md"]?.errors.first?.contains("media/map.png") == true)
         #expect(byFile["d-one.md"]?.errors.first?.contains("e-two.md") == true)
         #expect(byFile["e-two.md"]?.action == .rejected)
