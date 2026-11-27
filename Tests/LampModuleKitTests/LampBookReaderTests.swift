@@ -651,7 +651,7 @@ struct LampBookRichBlockTests {
         #expect(figure.legend == [LampBookLegendEntry(label: "good-king", title: "Good")])
         // Its own words, as a reader that knows figures draws them …
         #expect(LampBookDrawnText.figureText(of: figure)
-            == "The Table of Nations c. 2200 B.C. Peoples descended from Noah. Part two Asa 41 years Dates are approximate.")
+            == "The Table of Nations c. 2200 B.C. Peoples descended from Noah. Part two Asa 41 years Dates are approximate. Good")
         // … and its words as the readers draw it today, which know no
         // figures: its `content`, which here it has none of.
         #expect(LampBookDrawnText.text(of: [figure]) == "")

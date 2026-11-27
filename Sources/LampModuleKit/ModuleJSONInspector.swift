@@ -225,8 +225,42 @@ public struct ModuleJSONInspector: Sendable {
         case .quiz:
             validateQuiz(root: root, issues: &issues)
         case .commentary:
-            break
+            validateRichCommentary(root: root, issues: &issues)
         }
+    }
+
+    /// What building a 2.3 volume finds — a body given twice, a block the
+    /// model does not read whole, an id given twice, a link that opens
+    /// nothing — told by the builder itself, dry, so the inspector reads a
+    /// unit no way the compiler does not. A volume of an earlier version is
+    /// built as it always was, and finds nothing new.
+    private func validateRichCommentary(root: [String: Any], issues: inout [ModuleValidationIssue]) {
+        guard object(root["meta"]).flatMap({ string($0["schemaVersion"]) }) == "2.3",
+              let chapters = array(root["chapters"]),
+              let bookNumber = JSONSupport.integer(root["bookNumber"])
+        else { return }
+        var builder = CommentaryUnitBuilder(
+            moduleID: "inspect",
+            bookNumber: bookNumber,
+            footnotes: array(root["footnotes"]) ?? [],
+            sourceOrdered: object(root["extraction"])?["sourceTracked"] as? Bool == true,
+            rich: true
+        )
+        builder.hasTopLevelFootnoteIDs = root["footnoteIds"] != nil
+        // The notes a 2.3 volume defines are one list. Found by Codex.
+        if let given = root["footnotes"], !(given is NSNull), !(given is [Any]) {
+            issues.append(.init(severity: .error, path: "/footnotes", message: "Expected a list of notes."))
+        }
+        do {
+            try builder.append(chapters: chapters)
+        } catch ModuleCompilationError.missingValue(let path) {
+            issues.append(.init(severity: .error, path: path, message: "Expected a value here."))
+        } catch ModuleCompilationError.invalidValue(let path, let expected) {
+            issues.append(.init(severity: .error, path: path, message: "Expected \(expected)."))
+        } catch {
+            issues.append(.init(severity: .error, path: "/chapters", message: "The volume's units cannot be built."))
+        }
+        issues += builder.issues
     }
 
     /// A warning for a block whose link or scripture targets a reader of the
@@ -241,7 +275,7 @@ public struct ModuleJSONInspector: Sendable {
     /// which today's readers draw. Read its own way, the check took
     /// a title, second line or notes on any block, which no reader draws.
     /// Found by Codex, over three reviews, and in planning step 4.
-    private func warnAboutDeadLinks(
+    static func warnAboutDeadLinks(
         _ block: [String: Any]?, path: String, containingKind: String, issues: inout [ModuleValidationIssue]
     ) {
         guard let block,
@@ -253,20 +287,48 @@ public struct ModuleJSONInspector: Sendable {
         // beside them, which today's readers draw. Found by Codex.
         let readings: [LampBookDrawnText.Figures] = decoded.type == "figure" ? [.asParts, .asContent] : [.asParts]
         let texts = readings.flatMap { LampBookDrawnText.lines(of: decoded, figures: $0).joined().map(\.text) }
-        warnAboutDeadLinks(in: texts, path: path, containingKind: containingKind, issues: &issues)
+        Self.warnAboutDeadLinks(in: texts, path: path, containingKind: containingKind, issues: &issues)
     }
 
-    private func warnAboutDeadLinks(
+    static func warnAboutDeadLinks(
         in texts: [LampBookAnnotatedText], path: String, containingKind: String,
-        issues: inout [ModuleValidationIssue]
+        strictBounds: Bool = false, issues: inout [ModuleValidationIssue]
     ) {
-        // A target the resolver will not follow, or on words it covers none
-        // of, so never tappable. Found by Codex.
-        let dead = texts.flatMap { text in text.annotations.map { (text, $0) } }.filter { text, annotation in
-            annotation.data?.hasTargetField == true
-                && (LampBookTextResolver.usableTarget(for: annotation, containingKind: containingKind) == nil
-                    || !LampBookTextResolver.coversText(annotation, in: text))
-        }.count
+        // A link is dead when it is tapped on no words, or names nowhere a
+        // reader opens. Each case found by Codex:
+        // - a target the resolver will not follow;
+        // - a passage naming none, whose first passage (the one opened, read
+        //   directly rather than by gathering every one) ends before it
+        //   starts, or lies in no Bible book's chapter (verse 0, a psalm's
+        //   title, is one);
+        // - a web link naming nothing a URL can be made of, or with no scheme
+        //   to be read without a base.
+        // A text's length is counted once, not once per link. Found by Codex.
+        var dead = 0
+        for text in texts where !text.annotations.isEmpty {
+            let length = text.text.unicodeScalars.count
+            let covers = { (annotation: LampBookAnnotation) in
+                strictBounds
+                    ? annotation.start >= 0 && annotation.start < annotation.end && annotation.end <= length
+                    : LampBookTextResolver.coveredScalars(annotation.start, annotation.end, length: length) != nil
+            }
+            let real = { (reference: Int) in (1...66).contains(reference / 1_000_000) && reference / 1_000 % 1_000 > 0 }
+            dead += text.annotations.filter { annotation in
+                let passage = annotation.type == "scripture" || annotation.type == "crossref"
+                let first = annotation.data?.startReference.map { ($0, annotation.data?.endReference) }
+                    ?? annotation.data?.references.first.map { ($0.startReference, $0.endReference) }
+                let deadPassage = first.map { start, end in (end ?? start) < start || !real(start) || !(end.map(real) ?? true) } ?? true
+                if annotation.data?.hasTargetField == true {
+                    // Its passage too, which a reader that ignores targets
+                    // opens. Found by Codex.
+                    return LampBookTextResolver.usableTarget(for: annotation, containingKind: containingKind) == nil
+                        || !covers(annotation) || (passage && first != nil && deadPassage)
+                }
+                if passage { return !covers(annotation) || deadPassage }
+                return annotation.type == "link"
+                    && (!covers(annotation) || annotation.data?.url.flatMap(URL.init(string:)).flatMap(\.scheme) == nil)
+            }.count
+        }
         guard dead > 0 else { return }
         issues.append(.init(
             severity: .warning,
@@ -310,10 +372,10 @@ public struct ModuleJSONInspector: Sendable {
     /// make a book that opens on one device open on none, which the
     /// repository has already tried for IDs and undone
     /// (`LampModuleCompiler.compile`).
-    private func warnAboutTableLayout(
+    static func warnAboutTableLayout(
         _ block: [String: Any]?, path: String, issues: inout [ModuleValidationIssue]
     ) {
-        guard let block, string(block["type"]) == "table" else { return }
+        guard let block, JSONSupport.string(block["type"]) == "table" else { return }
         // Read as the readers read it, so the warning describes what they
         // show: a span of 65.5 is not clipped to 64, it makes the table
         // unreadable, and the readers leave the whole of it out. Found by
@@ -339,6 +401,31 @@ public struct ModuleJSONInspector: Sendable {
                 severity: .warning,
                 path: path,
                 message: "This table reaches \(widest == .max ? "past every" : "\(widest)") columns; readers show the first \(bound), and leave out any cell past them."
+            ))
+        }
+        // A cell with words the layout does not place — under another's
+        // span, or a second at one column — is drawn by no reader, its words
+        // lost from search and a projection. Found by Codex.
+        let columnCount = LampBookTableLayout.resolvedColumnCount(declared: table.columnCount, rows: table.rows)
+        let hidden = table.rows.reduce(0) { count, row in
+            let placed = LampBookTableLayout.placements(of: row, columnCount: columnCount).compactMap(\.cell)
+            var unplaced = placed
+            return count + row.cells.filter { cell in
+                // Judged as the layout judges a cell holding nothing: a
+                // footnote marker alone is something. Found by Codex.
+                guard cell.column >= 0, cell.column < columnCount, !LampBookTableLayout.isBlank(cell) else { return false }
+                if let index = unplaced.firstIndex(of: cell) {
+                    unplaced.remove(at: index)
+                    return false
+                }
+                return true
+            }.count
+        }
+        if hidden > 0 {
+            issues.append(.init(
+                severity: .warning,
+                path: path,
+                message: "\(hidden) cell\(hidden == 1 ? "" : "s") in this table holding words or a marker \(hidden == 1 ? "is" : "are") covered by another's colSpan or share\(hidden == 1 ? "s" : "") its column; readers show neither the cell nor what it holds."
             ))
         }
         if cells.contains(where: { $0.column < 0 }) {
@@ -377,7 +464,7 @@ public struct ModuleJSONInspector: Sendable {
             guard let data = object(value).flatMap({ try? JSONSerialization.data(withJSONObject: $0) }),
                   let note = try? JSONDecoder().decode(LampBookFootnote.self, from: data)
             else { continue }
-            warnAboutDeadLinks(
+            Self.warnAboutDeadLinks(
                 in: [note.content.annotatedText], path: "/footnotes/\(index)/content",
                 containingKind: "book", issues: &issues
             )
@@ -459,14 +546,14 @@ public struct ModuleJSONInspector: Sendable {
                 }
                 for (blockIndex, block) in (content ?? []).enumerated() {
                     let blockPath = "\(sectionPath)/content/\(blockIndex)"
-                    warnAboutTableLayout(object(block), path: blockPath, issues: &issues)
-                    warnAboutDeadLinks(object(block), path: blockPath, containingKind: "book", issues: &issues)
+                    Self.warnAboutTableLayout(object(block), path: blockPath, issues: &issues)
+                    Self.warnAboutDeadLinks(object(block), path: blockPath, containingKind: "book", issues: &issues)
                     // And a figure's tables, laid out within the same bound —
                     // a figure's only: another block's `children` is never
                     // drawn. Found by Codex.
                     if string(object(block)?["type"]) == "figure" {
                         for (childIndex, child) in (array(object(block)?["children"]) ?? []).enumerated() {
-                            warnAboutTableLayout(
+                            Self.warnAboutTableLayout(
                                 object(child), path: "\(blockPath)/children/\(childIndex)", issues: &issues
                             )
                         }

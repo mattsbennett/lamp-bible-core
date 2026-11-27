@@ -102,6 +102,7 @@ public enum LampBookDrawnText {
                     placement.cell.map { Field(column: placement.column, text: $0.content, isCell: true) }
                 })
             }
+            if figures == .asParts { legendLines(of: block, body) }
         case "image", "audio":
             if let caption = block.caption?.annotatedText { body([Field(text: caption)]) }
         case "figure":
@@ -118,8 +119,11 @@ public enum LampBookDrawnText {
                 for head in [block.title, block.subtitle, block.caption].compactMap({ $0?.annotatedText }) {
                     body([Field(text: head)])
                 }
-                for child in block.children { forEachLine(of: child, figures: .asContent, body) }
+                // Its children by their parts too: a table's legend in a
+                // figure was lost. Found by Codex. (No child is a figure.)
+                for child in block.children { forEachLine(of: child, figures: .asParts, body) }
                 for note in block.notes { body([Field(text: note)]) }
+                legendLines(of: block, body)
             }
         case "thematic-break":
             break
@@ -127,6 +131,16 @@ public enum LampBookDrawnText {
             // Heading, paragraph, quotation, and any type a reader does not
             // know, which both draw as its content.
             if let content = block.content { body([Field(text: content)]) }
+        }
+    }
+
+    /// A legend's titles, a line each, as a reader that draws blocks shows
+    /// the key to a table's or figure's labels: left out, an older reader
+    /// and search lost what the labels mean. Found by Codex. Read only with
+    /// a block's parts: today's book readers draw no legend.
+    private static func legendLines(of block: LampBookContentBlock, _ body: ([Field]) -> Void) {
+        for entry in block.legend where !entry.title.isEmpty {
+            body([Field(text: LampBookAnnotatedText(text: entry.title))])
         }
     }
 

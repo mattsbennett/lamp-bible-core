@@ -533,27 +533,84 @@ and a search for a chart's words finds it in both modules.
       commentary annotations carry and the phone reads.)
    4. **One writer for a commentary's rows**, volume and series (two DDLs
       and two INSERTs today); no behaviour change.
-   5. **A 2.3 unit's body is its blocks**, in memory, its `commentary_json`
-      the projection written in the form an older commentary reader takes
-      (read iOS `CommentaryRenderer` first): a scripture annotation given
-      only `refs` gains its first range as `sv`/`ev`, and an inline
-      `footnote` span its note's id as the annotation's own `id`, or the
-      old reader cannot open either (found by Codex, reviewing commit 1);
-      a page annotation marking a point (`start == end`), which that reader
-      skips, written as its label in the text with later offsets moved;
-      `title`, `subtitle` or `notes` on a block other than a figure, which
-      no reader draws, refused rather than dropped;
-      `blocksJSON`,
-      `declaredID`, the builder's own findings (both bodies, unread fields,
-      duplicate block ids, dead links, table warnings), which the inspector
-      takes rather than walking again.
+   5. **A 2.3 unit's body is its blocks**, in memory: `blocksJSON`,
+      `declaredID`, and the builder's own findings — both bodies, unread
+      fields, a text no reader draws, duplicate block ids, dead links, table
+      warnings — which the inspector takes rather than walking again.
+      Ten review rounds kept finding one more case of two things carried
+      over from 2.2, so each is now a rule with no precedence (replanned
+      2026-11-27):
+      - **Rule A, a 2.3 row's notes.** A 2.3 volume defines notes only in
+        its top-level `footnotes`, each with a string `id`, unique, and a
+        `content` the phone can read; `footnotes` anywhere under
+        `/chapters`, and `footnoteIds`, are refused where written. A row
+        carries exactly the definitions of the notes cited by the texts
+        written to its own columns — by a marker's `id`, a footnote span's
+        `id` or its `data.footnoteId` — each once, in order of first
+        citation. Nothing is inherited, no scope outranks another, and the
+        source-tracked placement pass does not run for 2.3. A note cited
+        and not defined is refused at the citing unit; one defined and
+        cited by no row is refused at `/footnotes/N` (owner, 2026-11-27).
+        2.2 is built as it was. (The NIC volumes already define every note
+        at volume level, ids unique; 9,190 of their notes are cited by no
+        unit, which a move to 2.3 would have to mark or drop.)
+      - **Rule B, the form an older reader takes.** B1, every 2.3 text
+        written to a unit column or a carried note's `content`: additive
+        only — a `scripture` or `crossref` given only `refs` gains the
+        first as `sv`/`ev`; a footnote span given `data.footnoteId` gains it
+        as `id` — and refused where it would blank the phone (`text` not a
+        string, a `footnote_refs` entry without a string `id` and an integer
+        `offset`). B2, only the older reader's own copy of a blocks body,
+        whose original is in `blocks_json`: the types it knows, no
+        underline, a point page written as its label by an offset map, and
+        markers at one offset written in reverse for the phone's insertion
+        by descending offset; then B1. Recorded edges: two markers at one
+        place in a blocks body carry their notes in the reverse of their
+        reading order, since the citations are read from that reversed
+        copy (none in the NIC data; the cost is the order of a row's note
+        list); a footnote span whose words a later scripture, cross-reference,
+        Strong's or footnote span covers whole opens that span on an old
+        phone, whose
+        renderer lets the later tap replace the earlier, not the note (rare,
+        the note still on its row; step 6's readers end it); a plain 2.3 text
+        shows an old phone a point page as nothing and tied markers
+        reversed, as a 2.2 text does (none in the NIC data); the newer
+        reader, which keeps written order, reads that column too; and a
+        link the dead-link warning does not know is dead. That warning is
+        advisory, never a refusal, and covers what can be judged without
+        the versification: a target the resolver will not follow, a span
+        over no words (by the phone's bounds in a plain text, the clipped
+        ones in a block), a passage naming none, ending before it starts or
+        outside a Bible book's chapter, and a web link with no address, none
+        a URL can be made of, or no scheme. A well-formed address naming
+        nothing — `https:///guide`, John 999:1 — opens nothing, unwarned. It
+        stays: a chapter's last verse is the versification's to say (step
+        6), every review round from 25 to 35 found one more such case, and
+        each is an author's slip the reader survives. And an annotation
+        offset past 2³¹ is refused in a block too, where the projection
+        would have clipped it: no text is that long, the author is told
+        where, and one rule for every text keeps the phone's encoded-span
+        reading, which adds to offsets, from overflowing.
+      Held by a model of the older phone in the tests — its decode and open
+      rules — over every place a note can be cited, in every form.
    6. **A 2.3 unit is filed and ordered by its own verse** — 2.3 only, so no
       2.2 volume reorders or renumbers; two verse notes on one passage, and
-      two units at one `sv` with one declared id, refused.
+      two units at one `sv` with one declared id, refused. And **each unit
+      read whole**, as a block is: a field a 2.3 chapter, section, pericope,
+      verse or entry gives that the builder does not read is refused where
+      written. Reviewing commit 5 found one such field after another —
+      `verses` beside entries, a chapter's `introduction` or `blocks` in a
+      source-tracked volume, a chapter's `blocks` in any — each refused by
+      name; a check of the whole unit ends the class. Each unit's `sv` and
+      `ev`, where given, a whole verse number at its own path: an entry's
+      fractional `sv` was truncated and taken as its own verse, a string one
+      passed over for its passage's (found reviewing commit 5).
    7. **Front matter and media, planned as rows**, in memory: `section_id`
       unique within its book; media read whole, its filename a safe relative
       path with no scheme (`safeRelativeMediaPath` keeps `https:/host/…`);
-      a series refusing one id or filename given two ways.
+      a series refusing one id or filename given two ways. A front-matter
+      section has no notes column, so a citation in its blocks is refused
+      (Rule A).
    8. **Store a commentary's blocks, media and front matter** — the
       cross-repo landing, 2.3 still refused: `media_json`, `blocks_json`,
       `declared_id`, `commentary_front_matter` and its FTS, in volume and
@@ -584,7 +641,9 @@ and a search for a chart's words finds it in both modules.
    `DevotionalBlockRenderer` parses link strings itself): if not, this does
    not end the question.
 6. Core readers: blocks, media, front matter, front-matter search, link
-   resolution. Link resolution takes over what both apps do for a
+   resolution. The resolver reads a footnote span's note by
+   `data.footnoteId` only; a plain 2.3 text may give it as the span's
+   `id` (Rule A), which the newer reader must read too. Link resolution takes over what both apps do for a
    `.commentaryPassage` until then, so the rule has one copy: a verse-0
    reference (a psalm's title, `sv` 19003000) opens verse 1, since
    translations keep the title as a heading over verse 1 (iOS

@@ -569,8 +569,10 @@ extension LampModuleCompiler {
             moduleID: JSONSupport.string(volumeMeta["seriesAbbrev"]) ?? "commentary",
             bookNumber: bookNumber,
             footnotes: JSONSupport.array(root["footnotes"]) ?? [],
-            sourceOrdered: JSONSupport.object(root["extraction"])?["sourceTracked"] as? Bool == true
+            sourceOrdered: JSONSupport.object(root["extraction"])?["sourceTracked"] as? Bool == true,
+            rich: JSONSupport.string(volumeMeta["schemaVersion"]) == "2.3"
         )
+        builder.hasTopLevelFootnoteIDs = root["footnoteIds"] != nil
         // The builder's errors named for the volume too, so a series' build
         // says where a verse lacks its `sv`. Found by Codex.
         do {
@@ -579,6 +581,11 @@ extension LampModuleCompiler {
             throw ModuleCompilationError.missingValue(path: "\(url.lastPathComponent): \(path)")
         } catch ModuleCompilationError.invalidValue(let path, let expected) {
             throw ModuleCompilationError.invalidValue(path: "\(url.lastPathComponent): \(path)", expected: expected)
+        }
+        if let refused = builder.issues.first(where: { $0.severity == .error }) {
+            throw ModuleCompilationError.invalidValue(
+                path: "\(url.lastPathComponent): \(refused.path)", expected: refused.message
+            )
         }
         for row in builder.units {
             try CommentaryUnitTable.insert(row, moduleID: nil, book: bookNumber, in: db)
