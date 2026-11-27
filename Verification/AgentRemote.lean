@@ -183,8 +183,8 @@ theorem aSpentCodeIsNotLetIn (r : Bool) : admit .pairingCode r false = .close :=
 
 A host sends a device a snapshot of a chat, then events as it changes. The
 model's messages carry an id, whether they are the person's, and words named
-by a number; the reply so far, the run's activity and a failure are numbers
-too, 0 meaning none. -/
+by a number; the reply so far, the run's activity, a failure and what the run
+waits on the person for are numbers too, 0 meaning none. -/
 
 structure Msg where
   id : Nat
@@ -197,6 +197,7 @@ structure State where
   activity : Nat
   running : Bool
   failure : Nat
+  approvals : Nat
   deriving DecidableEq, Repr
 
 structure View where
@@ -205,10 +206,12 @@ structure View where
   activity : Nat
   notice : Nat
   running : Bool
+  approvals : Nat
   deriving DecidableEq, Repr
 
 def snapshot (s : State) : View :=
-  ⟨s.msgs, if s.running then s.arriving else 0, if s.running then s.activity else 0, s.failure, s.running⟩
+  ⟨s.msgs, if s.running then s.arriving else 0, if s.running then s.activity else 0, s.failure, s.running,
+   if s.running then s.approvals else 0⟩
 
 inductive Event where
   | turnStarted (turn : Option Nat) (msg : Option Msg)
@@ -217,19 +220,21 @@ inductive Event where
   | reply (turn : Option Nat) (msg : Msg)
   | failed (turn : Option Nat) (text : Nat)
   | turnEnded (turn : Option Nat)
+  | approvals (turn : Option Nat) (a : Nat)
   deriving DecidableEq, Repr
 
 def upsert (ms : List Msg) (m : Msg) : List Msg :=
   if ms.any (·.id == m.id) then ms.map (fun x => if x.id == m.id then m else x) else ms ++ [m]
 
 def apply (v : View) : Event → View
-  | .turnStarted _ m => let v := { v with running := true, soFar := 0, activity := 0, notice := 0 }
+  | .turnStarted _ m => let v := { v with running := true, soFar := 0, activity := 0, notice := 0, approvals := 0 }
                         match m with | some m => { v with msgs := upsert v.msgs m } | none => v
   | .fragment _ t => { v with running := true, soFar := t }
   | .activity _ a => { v with running := true, activity := a }
   | .reply _ m => { v with msgs := upsert v.msgs m }
   | .failed _ t => { v with notice := t }
-  | .turnEnded _ => { v with running := false, soFar := 0, activity := 0 }
+  | .turnEnded _ => { v with running := false, soFar := 0, activity := 0, approvals := 0 }
+  | .approvals _ a => { v with running := true, approvals := a }
 
 def applyAll (v : View) (es : List Event) : View := es.foldl apply v
 
@@ -275,7 +280,8 @@ def settle (new : State) (p : Plan) : Plan :=
           { (p.send (.turnStarted o none)) with open_ := o }
         else p
       let p := if p.copy.soFar != target.soFar then p.send (.fragment p.open_ target.soFar) else p
-      if p.copy.activity != target.activity then p.send (.activity p.open_ target.activity) else p
+      let p := if p.copy.activity != target.activity then p.send (.activity p.open_ target.activity) else p
+      if p.copy.approvals != target.approvals then p.send (.approvals p.open_ target.approvals) else p
     else p
   let p := if target.notice != 0 && p.copy.notice != target.notice then
       p.send (.failed (p.open_.orElse (fun _ => lastQuestion new.msgs)) target.notice) else p
@@ -309,8 +315,8 @@ theorem eventsArriveAtTheNextSnapshot (old new : State) (es : List Event)
 
 /-- A failure cleared with no turn begun is a change no event can say, so
 the host sends a snapshot rather than leave the device showing it. -/
-theorem aClearedFailureNeedsASnapshot (msgs : List Msg) (a1 a2 c1 c2 f : Nat) (hf : f ≠ 0) :
-    plan ⟨msgs, a1, c1, false, f⟩ ⟨msgs, a2, c2, false, 0⟩ = none := by
+theorem aClearedFailureNeedsASnapshot (msgs : List Msg) (a1 a2 c1 c2 f w1 w2 : Nat) (hf : f ≠ 0) :
+    plan ⟨msgs, a1, c1, false, f, w1⟩ ⟨msgs, a2, c2, false, 0, w2⟩ = none := by
   simp [plan, planEvents, messagePhase, settle, snapshot, applyAll, hf]
 
 /-- Messages taken away cannot be said by events either. -/
@@ -323,20 +329,72 @@ is told by events, and the device ends where the host does. -/
 def q : Msg := ⟨1, true⟩
 def r : Msg := ⟨2, false⟩
 def turn : List State :=
-  [ ⟨[], 0, 0, false, 0⟩,
-    ⟨[q], 0, 0, true, 0⟩,
-    ⟨[q], 0, 1, true, 0⟩,
-    ⟨[q], 3, 2, true, 0⟩,
-    ⟨[q], 4, 2, true, 0⟩,
-    ⟨[q, r], 0, 0, false, 0⟩ ]
+  [ ⟨[], 0, 0, false, 0, 0⟩,
+    ⟨[q], 0, 0, true, 0, 0⟩,
+    ⟨[q], 0, 1, true, 0, 0⟩,
+    ⟨[q], 3, 2, true, 0, 0⟩,
+    ⟨[q], 4, 2, true, 0, 0⟩,
+    ⟨[q, r], 0, 0, false, 0, 0⟩ ]
 
 theorem anOrdinaryTurnIsToldByEvents :
     (List.zip turn turn.tail).all (fun (a, b) => (plan a b).isSome) = true := by decide
+
+/-- What a turn waits on the person for goes with it: a device's copy holds
+none once the turn ends, nor in the snapshot of a chat not running. -/
+theorem noApprovalOutlivesItsTurn (v : View) (t : Option Nat) (s : State) (hs : s.running = false) :
+    (apply v (.turnEnded t)).approvals = 0 ∧ (snapshot s).approvals = 0 := by
+  simp [apply, snapshot, hs]
+
+/-- A turn that comes to wait on the person, and is answered, is told by
+events: the request shown, then taken away, then the turn's end. -/
+def waits : List State :=
+  [ ⟨[q], 0, 1, true, 0, 0⟩,
+    ⟨[q], 0, 1, true, 0, 1⟩,
+    ⟨[q], 0, 2, true, 0, 0⟩,
+    ⟨[q, r], 0, 0, false, 0, 0⟩ ]
+
+theorem aWaitIsToldByEvents :
+    ((List.zip waits waits.tail).map (fun (a, b) => (plan a b).getD [])).flatten =
+      [.approvals (some 1) 1, .activity (some 1) 2, .approvals (some 1) 0, .reply (some 1) r, .turnEnded (some 1)] := by decide
 
 theorem anOrdinaryTurnIsToldInOrder :
     ((List.zip turn turn.tail).map (fun (a, b) => (plan a b).getD [])).flatten =
       [.turnStarted (some 1) (some q), .activity (some 1) 1, .fragment (some 1) 3, .activity (some 1) 2,
        .fragment (some 1) 4, .reply (some 1) r, .turnEnded (some 1)] := by decide
+
+/-! ## A device's answer to a request
+
+A device answers a request the running turn waits on with a decision, the
+turn it was shown in, and a digest of what it showed. The host takes it only
+for the request shown, still waiting in the same turn and unchanged, and
+allows only one a device may allow (`LampAgentRemoteApprovalAnswer.decide`). -/
+
+inductive Decision where
+  | allowOnce | deny | other
+  deriving DecidableEq, Repr
+
+inductive Outcome where
+  | allowOnce | deny | gone | notAllowed
+  deriving DecidableEq, Repr
+
+/-- `sameTurn`: the turn shown is the one running; `waiting`: a request of
+that id waits; `unchanged`: its digest is the one shown; `canAllow`: a device
+may allow it. -/
+def decide (d : Decision) (sameTurn waiting unchanged canAllow : Bool) : Outcome :=
+  match d with
+  | .other => .notAllowed
+  | .allowOnce => if sameTurn && waiting && unchanged then (if canAllow then .allowOnce else .notAllowed) else .gone
+  | .deny => if sameTurn && waiting && unchanged then .deny else .gone
+
+/-- Only the request shown, waiting as shown in the turn it was shown in, and
+one a device may allow, is allowed. -/
+theorem onlyTheShownRequestIsAllowed (d : Decision) (t w u c : Bool) (h : decide d t w u c = .allowOnce) :
+    d = .allowOnce ∧ t = true ∧ w = true ∧ u = true ∧ c = true := by
+  cases d <;> cases t <;> cases w <;> cases u <;> cases c <;> simp_all [decide]
+
+/-- A decision the host doesn't know allows nothing, whatever else holds. -/
+theorem anUnknownDecisionNeverAllows (t w u c : Bool) : decide .other t w u c = .notAllowed := by
+  simp [decide]
 
 /-! ## Conformance tables
 
@@ -383,7 +441,8 @@ def allCounters : Nat → List (List Nat)
 def msgName (m : Msg) : String := (if m.user then "u" else "a") ++ toString m.id
 def msgsName (ms : List Msg) : String := if ms.isEmpty then "-" else ".".intercalate (ms.map msgName)
 def stateName (st : State) : String :=
-  "/".intercalate [msgsName st.msgs, if st.running then "r" else "i", toString st.arriving, toString st.activity, toString st.failure]
+  "/".intercalate [msgsName st.msgs, if st.running then "r" else "i", toString st.arriving, toString st.activity,
+    toString st.failure, toString st.approvals]
 def turnName : Option Nat → String | none => "-" | some n => toString n
 def eventName : Event → String
   | .turnStarted t m => "S" ++ turnName t ++ ":" ++ (m.map msgName).getD "-"
@@ -392,6 +451,7 @@ def eventName : Event → String
   | .reply t m => "R" ++ turnName t ++ ":" ++ msgName m
   | .failed t x => "X" ++ turnName t ++ ":" ++ toString x
   | .turnEnded t => "E" ++ turnName t
+  | .approvals t a => "P" ++ turnName t ++ ":" ++ toString a
 
 def lists : List (List Msg) :=
   [[], [⟨1, true⟩], [⟨1, true⟩, ⟨2, false⟩], [⟨1, true⟩, ⟨2, false⟩, ⟨3, true⟩],
@@ -404,7 +464,10 @@ def states (msgLists : List (List Msg)) : List State := Id.run do
       for arriving in [0, 1] do
         for activity in [0, 1] do
           for failure in [0, 1, 2] do
-            out := out ++ [⟨ms, arriving, activity, running, failure⟩]
+            -- Waiting on the person only while running: a snapshot of a chat
+            -- not running holds none, so varying it there tests nothing.
+            for approvals in (if running then [0, 1] else [0]) do
+              out := out ++ [⟨ms, arriving, activity, running, failure, approvals⟩]
   return out
 
 #eval show IO Unit from do
@@ -420,5 +483,15 @@ def states (msgLists : List (List Msg)) : List State := Id.run do
       if old.msgs.isPrefixOf new.msgs && (old.failure == 0 || new.failure != 0) && (plan old new).isNone then
         ordinaryRefused := ordinaryRefused + 1
   IO.println s!"SYSTEMCHECK chatPlanOrdinaryNeedsNoSnapshot {ordinaryRefused}"
+
+#eval show IO Unit from do
+  for (d, name) in [(Decision.allowOnce, "allowOnce"), (.deny, "deny"), (.other, "other")] do
+    for t in [false, true] do
+      for w in [false, true] do
+        for u in [false, true] do
+          for c in [false, true] do
+            let answer := match decide d t w u c with
+              | .allowOnce => "allowOnce" | .deny => "deny" | .gone => "gone" | .notAllowed => "notAllowed"
+            IO.println <| conformanceLine "approvalAnswer" [name, toString t, toString w, toString u, toString c, answer]
 
 end LampAgentRemoteVerification

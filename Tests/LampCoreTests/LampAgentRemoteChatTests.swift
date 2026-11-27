@@ -30,6 +30,11 @@ struct LampAgentRemoteChatTests {
         LampAgentRemoteActivity(kind: LampAgentRemoteActivity.writing),
     ]
 
+    private static let waiting: [LampAgentRemoteApproval] = [
+        LampAgentRemoteApproval(id: "codex-0", provider: "codex", kind: LampAgentRemoteApproval.command, title: "Run", command: "blender -b", canAllow: true),
+        LampAgentRemoteApproval(id: "codex-1", provider: "codex", kind: LampAgentRemoteApproval.command, title: "Run", command: "ls", canAllow: true),
+    ]
+
     /// The contract, over thousands of steps: a device holding one state's
     /// snapshot and applying the events to the next holds the next one's
     /// snapshot — or, where events cannot say the change, is sent it.
@@ -59,6 +64,7 @@ struct LampAgentRemoteChatTests {
                 next.arriving = g.pick(["", "", "So", "So far", "Something else"])
                 next.activity = g.pick(Self.activities)
                 next.failure = g.pick([nil, nil, nil, "Not signed in", "Stopped"])
+                next.approvals = g.pick([[], [], [Self.waiting[0]], Self.waiting])
 
                 let snapshot = LampAgentRemoteChatUpdates.snapshot(summary: summary, state: next)
                 if LampAgentRemoteChatUpdates.needsSnapshot(from: state, to: next) {

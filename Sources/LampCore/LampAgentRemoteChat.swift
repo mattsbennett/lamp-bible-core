@@ -14,6 +14,8 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
     /// questions a device sent through this host: what lets that device know
     /// its own question from the same words sent elsewhere.
     public var askedBy: [UUID: UUID]
+    /// What the running turn waits on the person for, oldest first.
+    public var approvals: [LampAgentRemoteApproval]
 
     public init(
         messages: [LampAgentRemoteChatMessage] = [],
@@ -21,7 +23,8 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
         activity: LampAgentRemoteActivity? = nil,
         isRunning: Bool = false,
         failure: String? = nil,
-        askedBy: [UUID: UUID] = [:]
+        askedBy: [UUID: UUID] = [:],
+        approvals: [LampAgentRemoteApproval] = []
     ) {
         self.messages = messages
         self.arriving = arriving
@@ -29,6 +32,13 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
         self.isRunning = isRunning
         self.failure = failure
         self.askedBy = askedBy
+        self.approvals = approvals
+    }
+
+    /// The turn running, by the question it answers, as events name it and
+    /// a device's copy works it out (`LampAgentRemoteChatView.turnID`).
+    public var runningTurn: UUID? {
+        isRunning ? messages.last { $0.role == LampAgentRemoteChatMessage.user }?.id : nil
     }
 }
 
@@ -53,7 +63,9 @@ public enum LampAgentRemoteChatUpdates {
             notice: state.failure,
             askedBy: state.messages.compactMap { message in
                 state.askedBy[message.id].map { .init(messageID: message.id, requestID: $0) }
-            }
+            },
+            // Only while a turn runs: none outlives its turn.
+            approvals: state.isRunning ? state.approvals : []
         )
     }
 
@@ -96,10 +108,10 @@ public enum LampAgentRemoteChatUpdates {
         var events: [LampAgentRemoteChatEvent] = []
         let user = LampAgentRemoteChatMessage.user
         func send(_ kind: String, _ turn: UUID?, message: LampAgentRemoteChatMessage? = nil,
-                  text: String? = nil, activity: LampAgentRemoteActivity? = nil) {
+                  text: String? = nil, activity: LampAgentRemoteActivity? = nil, approvals: [LampAgentRemoteApproval]? = nil) {
             let event = LampAgentRemoteChatEvent(
                 chatID: chatID, kind: kind, turnID: turn, message: message, text: text, activity: activity,
-                requestID: message.flatMap { $0.role == user ? new.askedBy[$0.id] : nil }
+                requestID: message.flatMap { $0.role == user ? new.askedBy[$0.id] : nil }, approvals: approvals
             )
             events.append(event)
             copy.apply(event)
@@ -143,6 +155,9 @@ public enum LampAgentRemoteChatUpdates {
             if copy.activity != target.activity {
                 send(LampAgentRemoteChatEvent.activity, open, activity: target.activity)
             }
+            if copy.approvals != (target.approvals ?? []) {
+                send(LampAgentRemoteChatEvent.approvals, open, approvals: target.approvals ?? [])
+            }
         }
         // What went wrong, before the turn it went wrong in is ended.
         if let notice = target.notice, copy.notice != notice {
@@ -166,6 +181,15 @@ public struct LampAgentRemoteChatView: Equatable, Sendable {
     public var activity: LampAgentRemoteActivity?
     /// What went wrong, as the host said it.
     public var notice: String?
+    /// What the running turn waits on the person for, oldest first. A host
+    /// older than this sends none, and takes no answer.
+    public var approvals: [LampAgentRemoteApproval]
+    /// The turn running, by the question it answers: what an answer to a
+    /// request names (`LampAgentRemoteMessage.answerApproval`), and the host
+    /// checks against its own (`LampAgentRemoteChatState.runningTurn`).
+    public var turnID: UUID? {
+        isRunning ? messages.last { $0.role == LampAgentRemoteChatMessage.user }?.id : nil
+    }
 
     public var id: String { summary.id }
     public var isRunning: Bool { summary.isRunning }
@@ -176,6 +200,7 @@ public struct LampAgentRemoteChatView: Equatable, Sendable {
         partialReply = snapshot.partialReply
         activity = snapshot.activity
         notice = snapshot.notice
+        approvals = snapshot.approvals ?? []
     }
 
     /// A fresh snapshot of this chat: the host's account replaces what was
@@ -192,6 +217,7 @@ public struct LampAgentRemoteChatView: Equatable, Sendable {
             partialReply = nil
             activity = nil
             notice = nil
+            approvals = []
             if let message = event.message { upsert(message) }
         case LampAgentRemoteChatEvent.fragment:
             summary.isRunning = true
@@ -199,6 +225,9 @@ public struct LampAgentRemoteChatView: Equatable, Sendable {
         case LampAgentRemoteChatEvent.activity:
             summary.isRunning = true
             activity = event.activity
+        case LampAgentRemoteChatEvent.approvals:
+            summary.isRunning = true
+            approvals = event.approvals ?? []
         case LampAgentRemoteChatEvent.reply:
             // A question too, when a turn was stopped before its first update,
             // or one asked elsewhere.
@@ -211,6 +240,8 @@ public struct LampAgentRemoteChatView: Equatable, Sendable {
             summary.isRunning = false
             partialReply = nil
             activity = nil
+            // None outlives its turn.
+            approvals = []
         default:
             // A kind a later Lamp knows.
             break
@@ -235,5 +266,6 @@ public struct LampAgentRemoteChatView: Equatable, Sendable {
             && activity == snapshot.activity
             && notice == snapshot.notice
             && isRunning == snapshot.summary.isRunning
+            && approvals == (snapshot.approvals ?? [])
     }
 }

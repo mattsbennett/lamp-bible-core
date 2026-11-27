@@ -62,7 +62,7 @@ enum AgentRemoteModel {
 
 @Suite(.disabled(if: SyncModel.skipped, "LAMP_SKIP_LEAN=1"))
 struct AgentRemoteModelConformanceTests {
-    static let checkedRules: Set<String> = ["pairingWindow", "channelOpens", "admit", "chatPlan"]
+    static let checkedRules: Set<String> = ["pairingWindow", "channelOpens", "admit", "chatPlan", "approvalAnswer"]
 
     @Test func theModelChecks() {
         let run = AgentRemoteModel.run
@@ -189,14 +189,19 @@ struct AgentRemoteModelConformanceTests {
 
     private static func state(_ field: String) -> LampAgentRemoteChatState {
         let parts = field.split(separator: "/", omittingEmptySubsequences: false)
-        let arriving = Int(parts[2])!, activity = Int(parts[3])!, failure = Int(parts[4])!
+        let arriving = Int(parts[2])!, activity = Int(parts[3])!, failure = Int(parts[4])!, waiting = Int(parts[5])!
         return LampAgentRemoteChatState(
             messages: parts[0] == "-" ? [] : parts[0].split(separator: ".").map(message),
             arriving: arriving == 0 ? "" : "t\(arriving)",
             activity: activity == 0 ? nil : LampAgentRemoteActivity(kind: "k\(activity)"),
             isRunning: parts[1] == "r",
-            failure: failure == 0 ? nil : "f\(failure)"
+            failure: failure == 0 ? nil : "f\(failure)",
+            approvals: waiting == 0 ? [] : [approval(waiting)]
         )
+    }
+
+    private static func approval(_ n: Int) -> LampAgentRemoteApproval {
+        LampAgentRemoteApproval(id: "p\(n)", provider: "codex", kind: LampAgentRemoteApproval.command, title: "Run", command: "make \(n)", canAllow: true)
     }
 
     private static func name(_ event: LampAgentRemoteChatEvent) -> String {
@@ -209,6 +214,8 @@ struct AgentRemoteModelConformanceTests {
         case LampAgentRemoteChatEvent.reply: return "R\(turn):" + (event.message.map(name) ?? "-")
         case LampAgentRemoteChatEvent.failed: return "X\(turn):" + value(event.text)
         case LampAgentRemoteChatEvent.turnEnded: return "E\(turn)"
+        case LampAgentRemoteChatEvent.approvals:
+            return "P\(turn):" + (event.approvals?.first.map { String($0.id.dropFirst()) } ?? "0")
         default: return "?"
         }
     }
@@ -224,6 +231,29 @@ struct AgentRemoteModelConformanceTests {
                 answer = events.isEmpty ? "none" : events.map(Self.name).joined(separator: ",")
             }
             return answer == f[2]
+        }
+    }
+
+    // MARK: - A device's answer to a request
+
+    @Test func approvalAnswer() {
+        conform("approvalAnswer") { f in
+            let decision: String? = ["allowOnce": LampAgentRemoteApprovalAnswer.allowOnce, "deny": LampAgentRemoteApprovalAnswer.deny][f[0]] ?? "always-allow"
+            let sameTurn = f[1] == "true", waiting = f[2] == "true", unchanged = f[3] == "true", canAllow = f[4] == "true"
+            let turn = Self.id(1)
+            var request = Self.approval(1)
+            request.canAllow = canAllow
+            // What the device showed: this request, or another of the same
+            // id where it changed since.
+            var shown = request
+            if !unchanged { shown.command = "make 2" }
+            let outcome = LampAgentRemoteApprovalAnswer.decide(
+                decision: decision, approvalID: request.id,
+                digest: LampAgentRemoteApproval.digest(chatID: "c", turnID: sameTurn ? turn : Self.id(2), approval: shown),
+                shownTurn: sameTurn ? turn : Self.id(2), chatID: "c", currentTurn: turn,
+                waiting: waiting ? [request] : [Self.approval(9)]
+            )
+            return outcome.rawValue == f[5]
         }
     }
 }

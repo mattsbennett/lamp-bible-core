@@ -656,12 +656,13 @@ database engines, filesystem, or network provider.
 ## Agent chats on the phone
 
 `AgentRemote.lean` is a second, smaller model: the decisions behind following
-a Mac's reader chats from a paired phone (`LampAgentRemote*` in LampCore). It
+a Mac's reader and writing chats from a paired phone (`LampAgentRemote*` in
+LampCore). It
 models the decisions, not CryptoKit, the network or the apps. It is checked
 with the core suite by `AgentRemoteModelConformanceTests`, in the same way as
 the sync model: the proofs must check with nothing else printed, and the
-shipped Swift is asked every question in its tables (12,241 cases across
-four decisions).
+shipped Swift is asked every question in its tables (27,440 cases across
+five decisions).
 
 What it proves:
 
@@ -683,7 +684,15 @@ What it proves:
   order (`anOrdinaryTurnIsToldByEvents`, `anOrdinaryTurnIsToldInOrder`), and
   the `chatPlanOrdinaryNeedsNoSnapshot` system check counts, over every case
   in the table, the ordinary changes (messages only added, no failure
-  cleared) that would need a snapshot: there must be none.
+  cleared) that would need a snapshot: there must be none. What a turn waits
+  on the person for is part of the contract, and goes with its turn
+  (`noApprovalOutlivesItsTurn`, `aWaitIsToldByEvents`); the table varies it
+  only while a chat runs, since a snapshot of one not running holds none.
+- **A device's answer to a request**: only the request shown, still waiting
+  in the turn it was shown in, unchanged, and one a device may allow, is
+  allowed (`onlyTheShownRequestIsAllowed`); a decision the host doesn't know
+  allows nothing (`anUnknownDecisionNeverAllows`). Its table holds every
+  combination.
 
 Not modelled: the handshake's cryptography (CryptoKit's X25519, HKDF and
 ChaCha20-Poly1305 are taken as given), the network, the host's keychain, and

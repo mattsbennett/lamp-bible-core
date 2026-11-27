@@ -59,6 +59,9 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         /// answer to `get-setup`, and again when a provider's connection has
         /// been checked. A host older than this never sends it.
         public static let setup = Kind(rawValue: "setup")
+        /// A device's `answer-approval` taken: the request it named is
+        /// answered as it said. Echoes the answer's `requestID`.
+        public static let approvalAnswered = Kind(rawValue: "approval-answered")
 
         // Device to host
         /// What the device calls itself, for the host's list of paired devices.
@@ -81,6 +84,15 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         /// window's chat do. Answered with the chat's snapshot, under its new
         /// choices; refused as `busy` while a turn runs in it.
         public static let setChoices = Kind(rawValue: "set-choices")
+        /// Answer a request the open chat's turn is waiting on
+        /// (`LampAgentRemoteApproval`): `approvalID`, `turnID` and
+        /// `approvalDigest` as shown, and `decision`, `allow-once` or `deny`.
+        /// Answered with `approval-answered`, or failed as `approval-gone`
+        /// where it no longer waits as shown, or `not-allowed`. The first
+        /// answer anywhere, on the Mac or a device, is the one taken. A host
+        /// older than this ignores it, and never sends approvals, so a device
+        /// offers no answer to one.
+        public static let answerApproval = Kind(rawValue: "answer-approval")
         public static let ping = Kind(rawValue: "ping")
     }
 
@@ -126,6 +138,13 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
     public var setup: LampAgentRemoteSetup?
     /// On `set-choices`: what to change in the chat named by `chatID`.
     public var choices: LampAgentRemoteChoices?
+    /// On `answer-approval`: the request answered, the turn it was shown in,
+    /// its digest as shown (`LampAgentRemoteApproval.digest`), and the
+    /// answer (`LampAgentRemoteApprovalAnswer`).
+    public var approvalID: String?
+    public var turnID: UUID?
+    public var approvalDigest: String?
+    public var decision: String?
 
     public init(
         kind: Kind,
@@ -147,7 +166,11 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         errorCode: String? = nil,
         errorMessage: String? = nil,
         setup: LampAgentRemoteSetup? = nil,
-        choices: LampAgentRemoteChoices? = nil
+        choices: LampAgentRemoteChoices? = nil,
+        approvalID: String? = nil,
+        turnID: UUID? = nil,
+        approvalDigest: String? = nil,
+        decision: String? = nil
     ) {
         self.kind = kind
         self.requestID = requestID
@@ -169,6 +192,10 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         self.errorMessage = errorMessage
         self.setup = setup
         self.choices = choices
+        self.approvalID = approvalID
+        self.turnID = turnID
+        self.approvalDigest = approvalDigest
+        self.decision = decision
     }
 
     public static func accepted(pairing credential: LampAgentRemoteDeviceCredential? = nil, hostSecret: String? = nil) -> Self {
@@ -247,6 +274,22 @@ public struct LampAgentRemoteMessage: Codable, Equatable, Sendable {
         .init(kind: .setChoices, requestID: requestID, chatID: chatID, choices: choices)
     }
 
+    /// A device's answer to `approval`, as it showed it in `chatID`'s turn
+    /// `turnID`.
+    public static func answerApproval(
+        _ approval: LampAgentRemoteApproval, in chatID: String, turnID: UUID?, decision: String, requestID: UUID = UUID()
+    ) -> Self {
+        .init(
+            kind: .answerApproval, requestID: requestID, chatID: chatID, approvalID: approval.id, turnID: turnID,
+            approvalDigest: LampAgentRemoteApproval.digest(chatID: chatID, turnID: turnID, approval: approval),
+            decision: decision
+        )
+    }
+
+    public static func approvalAnswered(_ chatID: String, approvalID: String, decision: String, requestID: UUID?) -> Self {
+        .init(kind: .approvalAnswered, requestID: requestID, chatID: chatID, approvalID: approvalID, decision: decision)
+    }
+
     public static let ping = Self(kind: .ping)
     public static let pong = Self(kind: .pong)
 }
@@ -267,6 +310,9 @@ public enum LampAgentRemoteFailure {
     /// Something this device may not do, such as writing to a chat the host
     /// keeps to its own windows.
     public static let notAllowed = "not-allowed"
+    /// The request answered no longer waits as it was shown: answered on the
+    /// Mac or another device, unanswered too long, its turn over, or changed.
+    public static let approvalGone = "approval-gone"
 }
 
 /// Where the device is reading, sent with a message so the host can tell the
@@ -426,6 +472,10 @@ public struct LampAgentRemoteChatSnapshot: Codable, Equatable, Sendable {
     /// the snapshot it is sent on coming back, whether its question was
     /// taken. Nil from a host older than this.
     public var askedBy: [Asked]?
+    /// What the running turn is waiting on the person for, oldest first;
+    /// empty while nothing waits. Nil from a host older than this, which
+    /// takes no answer from a device.
+    public var approvals: [LampAgentRemoteApproval]?
 
     public struct Asked: Codable, Equatable, Sendable {
         public var messageID: UUID
@@ -442,7 +492,8 @@ public struct LampAgentRemoteChatSnapshot: Codable, Equatable, Sendable {
         partialReply: String? = nil,
         activity: LampAgentRemoteActivity? = nil,
         notice: String? = nil,
-        askedBy: [Asked]? = nil
+        askedBy: [Asked]? = nil,
+        approvals: [LampAgentRemoteApproval]? = nil
     ) {
         self.summary = summary
         self.messages = messages
@@ -450,6 +501,7 @@ public struct LampAgentRemoteChatSnapshot: Codable, Equatable, Sendable {
         self.activity = activity
         self.notice = notice
         self.askedBy = askedBy
+        self.approvals = approvals
     }
 }
 
@@ -478,6 +530,9 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
     /// and from a host older than this field, where a device falls back on
     /// the words.
     public var requestID: UUID?
+    /// `approvals`: everything the turn now waits on the person for, whole,
+    /// replacing what was shown before; empty once nothing waits.
+    public var approvals: [LampAgentRemoteApproval]?
 
     public static let turnStarted = "turn-started"
     public static let fragment = "fragment"
@@ -485,6 +540,7 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
     public static let reply = "reply"
     public static let failed = "failed"
     public static let turnEnded = "turn-ended"
+    public static let approvals = "approvals"
 
     public init(
         chatID: String,
@@ -493,7 +549,8 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
         message: LampAgentRemoteChatMessage? = nil,
         text: String? = nil,
         activity: LampAgentRemoteActivity? = nil,
-        requestID: UUID? = nil
+        requestID: UUID? = nil,
+        approvals: [LampAgentRemoteApproval]? = nil
     ) {
         self.chatID = chatID
         self.kind = kind
@@ -502,6 +559,7 @@ public struct LampAgentRemoteChatEvent: Codable, Equatable, Sendable {
         self.text = text
         self.activity = activity
         self.requestID = requestID
+        self.approvals = approvals
     }
 }
 
