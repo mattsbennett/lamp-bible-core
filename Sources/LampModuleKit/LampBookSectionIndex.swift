@@ -59,6 +59,9 @@ public struct LampBookSectionIndex: Equatable, Sendable {
 
         mutating func collect(_ block: LampBookContentBlock) {
             if let content = block.content { collect(content) }
+            // A figure is drawn as its `content` alone, so its caption cites
+            // nothing a reader sees. Found by Codex.
+            guard block.type != "figure" else { return }
             if let caption = block.caption?.annotatedText { collect(caption) }
             for item in block.items { collect(item) }
             // A table's cells as the readers place them, and only a table's:

@@ -414,7 +414,25 @@ and a search for a chart's words finds it in both modules.
    projection all use it; `plainText` stays for annotated text and footnote
    lists. Media metadata is not indexed (the readers disagree: the Mac falls
    back to a picture's `alt`, the phone to its media caption). Then the
-   shared model: figure, row and cell additions, `smallcaps`, `link` and its
+   shared model — **done but for `rowSpan` and the link routes**:
+   `LampBookContentBlock` reads `id`, `role`, `title`, `subtitle`,
+   `children`, `notes` and `legend`, a row and a cell their `label` and a
+   cell its `align`, each field read on its own so a malformed one is absent
+   rather than the loss of the block; `LampLinkTarget` with one destination
+   per target, read in the kind of module it is in; the resolver's
+   `smallcaps`, `bold`, `italic` and link targets; `book_schema.json`'s
+   `figure`, `figureChild`, `linkTarget` and `legendEntry`. Search takes a
+   figure as today's readers draw it, its `content`;
+   `LampBookDrawnText.figureText` gives its own words for the projections
+   steps 4 and 5 write into that `content`. A link's target and a scripture
+   annotation's note are two attributes, `bookLinkTarget` beside `link` and
+   `bookScriptureTarget` beside `bookScripture`, each pair set and cleared
+   together: one attribute for both, three reviews in turn found an overlap
+   that paired one annotation's target with another's address or passage.
+   The resolver judges a target in the kind of module the text is in
+   (`containingKind`, a book's by default), and one naming no place there is
+   no target. The planned list:
+   figure, row and cell additions, `smallcaps`, `link` and its
    target, resolver cases, `rowSpan`, the link forms.
 4. Commentary 2.3 in the compiler, volume and series (an unsupported
    `schemaVersion` is refused already, from step 2; 2.3 joins the supported

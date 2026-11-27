@@ -47,6 +47,14 @@ public enum LampBookDrawnText {
             }
         case "image", "audio":
             return [block.caption?.text].compactMap { $0 }
+        case "figure":
+            // As the readers draw one today: they know no figures, and draw
+            // a block of a type they do not know as its `content` — the
+            // projection a compiler writes there of the figure's own words
+            // (`RichModulesPlan.md`, step 5). Indexed from its parts, a hit
+            // opened onto a figure drawn blank, and words drawn were not
+            // found. Found by Codex. The parts are `figureText`'s.
+            return [block.content?.text].compactMap { $0 }
         case "thematic-break":
             return []
         default:
@@ -54,6 +62,18 @@ public enum LampBookDrawnText {
             // know, which both draw as its content.
             return [block.content?.text].compactMap { $0 }
         }
+    }
+
+    /// A figure's own words, as a reader that knows figures draws them: its
+    /// title and second line, its caption, each child, then its notes. What
+    /// a compiler projects into the figure's `content`.
+    public static func figureText(of figure: LampBookContentBlock) -> String {
+        ([figure.title?.text, figure.subtitle?.text, figure.caption?.text].compactMap { $0 }
+            + figure.children.flatMap(pieces)
+            + figure.notes.map(\.text))
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .replacingOccurrences(of: "\0", with: " ")
     }
 
     private static func pieces(_ item: LampBookListItem) -> [String] {

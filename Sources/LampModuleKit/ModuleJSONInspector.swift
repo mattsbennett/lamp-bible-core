@@ -229,6 +229,60 @@ public struct ModuleJSONInspector: Sendable {
         }
     }
 
+    /// A warning for a block whose link or scripture targets a reader of the
+    /// book will not follow — one written wrong, a passage whose range runs
+    /// backwards, a commentary named without its module, a scripture note
+    /// that is not a passage — so it is found before the book ships, not as
+    /// words that link nowhere. Judged by the resolver's own rule
+    /// (`LampBookTextResolver.usableTarget`), on the texts the reader reads.
+    /// Found by Codex, over three reviews.
+    private func warnAboutDeadLinks(
+        _ block: [String: Any]?, path: String, issues: inout [ModuleValidationIssue]
+    ) {
+        guard let block,
+              let data = try? JSONSerialization.data(withJSONObject: block),
+              let decoded = try? JSONDecoder().decode(LampBookContentBlock.self, from: data)
+        else { return }
+        func texts(_ block: LampBookContentBlock) -> [LampBookAnnotatedText] {
+            var out = [block.content, block.caption?.annotatedText, block.title?.annotatedText,
+                       block.subtitle?.annotatedText].compactMap { $0 }
+            func items(_ list: [LampBookListItem]) -> [LampBookAnnotatedText] {
+                list.flatMap { [$0.content] + items($0.children) }
+            }
+            out += items(block.items)
+            // The cells a reader shows, as the layout places them. Found by
+            // Codex.
+            if block.type == "table" {
+                let columnCount = LampBookTableLayout.resolvedColumnCount(declared: block.columnCount, rows: block.rows)
+                out += block.rows.flatMap { row in
+                    LampBookTableLayout.placements(of: row, columnCount: columnCount).compactMap { $0.cell?.content }
+                }
+            }
+            out += block.notes
+            out += block.children.flatMap(texts)
+            return out
+        }
+        warnAboutDeadLinks(in: texts(decoded), path: path, issues: &issues)
+    }
+
+    private func warnAboutDeadLinks(
+        in texts: [LampBookAnnotatedText], path: String, issues: inout [ModuleValidationIssue]
+    ) {
+        // A target the resolver will not follow, or on words it covers none
+        // of, so never tappable. Found by Codex.
+        let dead = texts.flatMap { text in text.annotations.map { (text, $0) } }.filter { text, annotation in
+            annotation.data?.hasTargetField == true
+                && (LampBookTextResolver.usableTarget(for: annotation, containingKind: "book") == nil
+                    || !LampBookTextResolver.coversText(annotation, in: text))
+        }.count
+        guard dead > 0 else { return }
+        issues.append(.init(
+            severity: .warning,
+            path: path,
+            message: "\(dead) link\(dead == 1 ? "" : "s") here name\(dead == 1 ? "s" : "") no place a reader of this book can open."
+        ))
+    }
+
     /// A warning for a source-tracked commentary whose pericopae give a
     /// `sourceOrder` some of the time: one without is read at its place among
     /// all of them, where the modules repository's Python read it as 0, so
@@ -307,6 +361,14 @@ public struct ModuleJSONInspector: Sendable {
         root: [String: Any],
         issues: inout [ModuleValidationIssue]
     ) {
+        // A footnote's links, read and judged as a paragraph's are. Found by
+        // Codex.
+        for (index, value) in (array(root["footnotes"]) ?? []).enumerated() {
+            guard let data = object(value).flatMap({ try? JSONSerialization.data(withJSONObject: $0) }),
+                  let note = try? JSONDecoder().decode(LampBookFootnote.self, from: data)
+            else { continue }
+            warnAboutDeadLinks(in: [note.content.annotatedText], path: "/footnotes/\(index)/content", issues: &issues)
+        }
         guard let sections = array(root["sections"]) else { return }
         if sections.isEmpty {
             issues.append(.init(
@@ -383,9 +445,33 @@ public struct ModuleJSONInspector: Sendable {
                     ))
                 }
                 for (blockIndex, block) in (content ?? []).enumerated() {
-                    warnAboutTableWidth(
-                        object(block), path: "\(sectionPath)/content/\(blockIndex)", issues: &issues
-                    )
+                    let blockPath = "\(sectionPath)/content/\(blockIndex)"
+                    warnAboutTableWidth(object(block), path: blockPath, issues: &issues)
+                    warnAboutDeadLinks(object(block), path: blockPath, issues: &issues)
+                    // And a figure's tables, laid out within the same bound —
+                    // a figure's only: another block's `children` is never
+                    // drawn. Found by Codex.
+                    if string(object(block)?["type"]) == "figure" {
+                        for (childIndex, child) in (array(object(block)?["children"]) ?? []).enumerated() {
+                            warnAboutTableWidth(
+                                object(child), path: "\(blockPath)/children/\(childIndex)", issues: &issues
+                            )
+                        }
+                        // Until a compiler writes a figure's words into its
+                        // `content`, the readers draw that and nothing else.
+                        // Found by Codex.
+                        // Read as the readers read it: a figure whose fallback
+                        // cannot be decoded is dropped whole. Found by Codex.
+                        let decoded = object(block).flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+                            .flatMap { try? JSONDecoder().decode(LampBookContentBlock.self, from: $0) }
+                        if decoded?.content?.text.isEmpty != false {
+                            issues.append(.init(
+                                severity: .warning,
+                                path: blockPath,
+                                message: "Readers draw a figure as its content, which this one has none of; give it the words to show."
+                            ))
+                        }
+                    }
                 }
                 if (content?.isEmpty ?? true) && (children?.isEmpty ?? true) {
                     issues.append(.init(

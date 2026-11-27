@@ -115,6 +115,34 @@ public enum LampBookTextAttributes {
         public typealias Value = String
         public static let name = "LampBookPage"
     }
+
+    /// Small capitals over the letters as written, "ORD" in "LORD": a type of
+    /// its own, since both older readers drew an `emphasis` of a style they
+    /// did not know as italic.
+    public enum SmallCaps: CodableAttributedStringKey {
+        public typealias Value = Bool
+        public static let name = "LampBookSmallCaps"
+    }
+
+    /// A place in an installed module a `link` goes to. Set and cleared with
+    /// the link's address (`link`), as one: the words' link is the pair.
+    public enum LinkTarget: CodableAttributedStringKey {
+        public typealias Value = LampLinkTarget
+        public static let name = "LampBookLinkTarget"
+    }
+
+    /// The note a `scripture` annotation opens, for a reader that knows
+    /// targets. Set and cleared with its passage (`bookScripture`), as one.
+    ///
+    /// Apart from a link's target, so that neither pair can be split by an
+    /// overlap: one attribute serving both, an overlapping link or scripture
+    /// annotation left one's target beside the other's passage or address.
+    /// Which pair a reader follows where both lie is the reader's choice.
+    /// Found by Codex, over three reviews.
+    public enum ScriptureTarget: CodableAttributedStringKey {
+        public typealias Value = LampLinkTarget
+        public static let name = "LampBookScriptureTarget"
+    }
 }
 
 extension AttributeScopes {
@@ -124,6 +152,9 @@ extension AttributeScopes {
         public let bookOriginalLanguage: LampBookTextAttributes.OriginalLanguage
         public let bookUnderline: LampBookTextAttributes.Underline
         public let bookPage: LampBookTextAttributes.Page
+        public let bookSmallCaps: LampBookTextAttributes.SmallCaps
+        public let bookLinkTarget: LampBookTextAttributes.LinkTarget
+        public let bookScriptureTarget: LampBookTextAttributes.ScriptureTarget
         public let foundation: AttributeScopes.FoundationAttributes
     }
 
@@ -163,9 +194,42 @@ extension AttributeDynamicLookup {
 /// same place: those belong to the word the last page ended on. Its number is
 /// the printed page; a page printed without one carries no annotation.
 public enum LampBookTextResolver {
+    /// The target an annotation is followed to, in a module of
+    /// `containingKind`, or nil: the one rule `resolve` and the inspector
+    /// share. A link's target must name a place there; a scripture
+    /// annotation's must name a commentary passage — its note — and the
+    /// annotation must keep a passage of its own for a reader that knows no
+    /// targets. On any other type, a target is not followed.
+    public static func usableTarget(
+        for annotation: LampBookAnnotation, containingKind: String
+    ) -> LampLinkTarget? {
+        guard let target = annotation.data?.target,
+              let destination = target.destination(in: containingKind)
+        else { return nil }
+        switch annotation.type {
+        case "link":
+            return target
+        case "scripture":
+            // The passage a reader that knows no targets opens must be one:
+            // a verse in a Bible book's chapter. Found by Codex.
+            guard let passage = LampBookPassage.passages(of: annotation).first,
+                  (1...66).contains(passage.start / 1_000_000), passage.start / 1_000 % 1_000 > 0,
+                  case .commentaryPassage = destination
+            else { return nil }
+            return target
+        default:
+            return nil
+        }
+    }
+
+    /// The text with its annotations as attributes. `containingKind` is the
+    /// kind of module the text is in, what a target that names no module
+    /// means: a target that names no place there is no target, and replaces
+    /// nothing. Found by Codex.
     public static func resolve(
         _ content: LampBookAnnotatedText,
-        footnoteNumbers: [String: Int]
+        footnoteNumbers: [String: Int],
+        containingKind: String = "book"
     ) -> AttributedString {
         var value = AttributedString(content.text)
         let length = value.unicodeScalars.count
@@ -174,10 +238,17 @@ public enum LampBookTextResolver {
             guard let range = span(annotation.start, annotation.end, in: value, length: length) else {
                 continue
             }
+            // A target is followed on a link's words or a scripture
+            // annotation's, each in its own attribute; on no other type.
             switch annotation.type {
             case "scripture":
+                // The passage and its note as one, the note cleared where
+                // this annotation has none.
+                // Its note is a commentary's, on a passage: any other place
+                // would open somewhere the verses do not. Found by Codex.
                 if let passage = LampBookPassage.passages(of: annotation).first {
                     value[range].bookScripture = passage
+                    value[range].bookScriptureTarget = usableTarget(for: annotation, containingKind: containingKind)
                 }
             case "strongs", "greek", "hebrew":
                 if let kind = LampBookOriginalLanguage.Kind(rawValue: annotation.type) {
@@ -185,8 +256,14 @@ public enum LampBookTextResolver {
                     value[range].bookOriginalLanguage = LampBookOriginalLanguage(kind: kind, strongs: key)
                 }
             case "link":
-                if let url = annotation.data?.url.flatMap(URL.init(string:)) {
+                // A link's address and its target together, each cleared if it
+                // has none: overlapping another link, it kept the other's
+                // target beside its own address. Found by Codex.
+                let url = annotation.data?.url.flatMap(URL.init(string:))
+                let target = usableTarget(for: annotation, containingKind: containingKind)
+                if url != nil || target != nil {
                     value[range].link = url
+                    value[range].bookLinkTarget = target
                 }
             case "footnote":
                 if let id = annotation.data?.footnoteID {
@@ -202,6 +279,13 @@ public enum LampBookTextResolver {
                 }
             case "quote":
                 addIntent(.emphasized, to: range, in: &value)
+            // A commentary's spellings, its styles as types of their own.
+            case "bold":
+                addIntent(.stronglyEmphasized, to: range, in: &value)
+            case "italic":
+                addIntent(.emphasized, to: range, in: &value)
+            case "smallcaps":
+                value[range].bookSmallCaps = true
             default:
                 break
             }
@@ -232,6 +316,14 @@ public enum LampBookTextResolver {
             value.insert(marker.text, at: scalars.index(scalars.startIndex, offsetBy: marker.offset))
         }
         return value
+    }
+
+    /// Whether an annotation covers any of its text, as `resolve` reads it:
+    /// one that covers none is applied to nothing, and a link on it is never
+    /// tappable.
+    public static func coversText(_ annotation: LampBookAnnotation, in content: LampBookAnnotatedText) -> Bool {
+        let length = content.text.unicodeScalars.count
+        return annotation.start >= 0 && annotation.start < length && annotation.end > annotation.start
     }
 
     private static func span(

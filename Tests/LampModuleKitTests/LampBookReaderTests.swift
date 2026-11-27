@@ -410,3 +410,302 @@ struct LampBookDrawnTextTests {
     }
 }
 
+/// What a figure, a row and a cell bring to the shared block model, and what
+/// a reader that knew none of it still reads.
+struct LampBookRichBlockTests {
+    private func blocks(_ json: String) -> [LampBookContentBlock] {
+        LampPortableBookJSON.decodeArray(json, as: LampBookContentBlock.self).items
+    }
+
+    @Test func afigureIsReadWithItsParts() throws {
+        let figure = try #require(blocks(#"""
+        [{"type": "figure", "id": "map-01-02", "role": "map",
+          "title": {"text": "The Table of Nations", "annotations": [{"type": "smallcaps", "start": 4, "end": 9}]},
+          "subtitle": "c. 2200 B.C.", "caption": {"text": "Peoples descended from Noah."},
+          "children": [
+            {"type": "image", "mediaId": "m1"},
+            {"type": "heading", "level": 4, "id": "part-2", "content": {"text": "Part two"}},
+            {"type": "table", "columnCount": 2, "rows": [{"label": "good-king", "cells": [
+              {"column": 0, "align": "center", "label": "reign-start", "content": {"text": "Asa"}},
+              {"column": 1, "content": {"text": "41 years"}}]}]},
+            {"type": "figure", "children": []},
+            {"type": "audio", "mediaId": "a1", "caption": "A recording"}
+          ],
+          "notes": [{"text": "Dates are approximate."}],
+          "legend": [{"label": "good-king", "title": "Good"}]}]
+        """#).first)
+        #expect(figure.id == "map-01-02")
+        #expect(figure.role == "map")
+        #expect(figure.title?.text == "The Table of Nations")
+        #expect(figure.subtitle?.text == "c. 2200 B.C.")
+        // A figure inside a figure is never drawn.
+        #expect(figure.children.map(\.type) == ["image", "heading", "table"])
+        #expect(figure.children[1].id == "part-2")
+        // A figure built in code holds what one read does.
+        let built = LampBookContentBlock(type: "figure", children: [
+            LampBookContentBlock(type: "paragraph", content: LampBookAnnotatedText(text: "Kept")),
+            LampBookContentBlock(type: "audio", caption: .plain("Dropped")),
+            LampBookContentBlock(type: "figure"),
+        ])
+        #expect(built.children.map(\.type) == ["paragraph"])
+        // Only a figure has children.
+        #expect(LampBookContentBlock(type: "paragraph", children: [
+            LampBookContentBlock(type: "paragraph", content: LampBookAnnotatedText(text: "Never drawn")),
+        ]).children.isEmpty)
+        #expect(blocks(#"[{"type": "paragraph", "content": {"text": "p"}, "children": [{"type": "paragraph", "content": {"text": "c"}}]}]"#)
+            .first?.children.isEmpty == true)
+        let row = try #require(figure.children[2].rows.first)
+        #expect(row.label == "good-king")
+        #expect(row.cells.first?.alignment == "center")
+        #expect(row.cells.first?.label == "reign-start")
+        #expect(figure.notes.map(\.text) == ["Dates are approximate."])
+        #expect(figure.legend == [LampBookLegendEntry(label: "good-king", title: "Good")])
+        // Its own words, as a reader that knows figures draws them …
+        #expect(LampBookDrawnText.figureText(of: figure)
+            == "The Table of Nations c. 2200 B.C. Peoples descended from Noah. Part two Asa 41 years Dates are approximate.")
+        // … and its words as the readers draw it today, which know no
+        // figures: its `content`, which here it has none of.
+        #expect(LampBookDrawnText.text(of: [figure]) == "")
+        let projected = try #require(blocks(#"[{"type": "figure", "children": [], "content": {"text": "The words drawn"}}]"#).first)
+        #expect(LampBookDrawnText.text(of: [projected]) == "The words drawn")
+    }
+
+    /// A new field written wrong is absent, never the loss of the block: an
+    /// unknown key never cost one either.
+    @Test func amalformedNewFieldCostsNoBlock() throws {
+        let read = blocks(#"""
+        [{"type": "paragraph", "content": {"text": "Kept"}, "id": 7, "role": [], "title": 3,
+          "children": "none", "notes": [{"text": "A note"}, 5], "legend": [{"label": "x"}],
+          "rows": [{"label": 1, "cells": [{"column": 0, "align": "diagonal", "label": {}, "content": {"text": "c"}}]}]}]
+        """#)
+        let block = try #require(read.first)
+        #expect(block.content?.text == "Kept")
+        #expect(block.id == nil && block.role == nil && block.title == nil && block.children.isEmpty)
+        #expect(block.notes.map(\.text) == ["A note"])
+        #expect(block.legend.isEmpty)
+        #expect(block.rows.first?.label == nil)
+        #expect(block.rows.first?.cells.first?.alignment == nil)
+        #expect(block.rows.first?.cells.first?.label == nil)
+    }
+
+    @Test func smallCapsBoldItalicAndATargetAreResolved() throws {
+        let content = LampBookAnnotatedText(text: "the LORD said, see note", annotations: [
+            LampBookAnnotation(type: "smallcaps", start: 5, end: 8),
+            LampBookAnnotation(type: "bold", start: 0, end: 3),
+            LampBookAnnotation(type: "italic", start: 9, end: 13),
+            LampBookAnnotation(type: "scripture", start: 15, end: 23, data: LampBookAnnotationData(
+                startReference: 1_010_021, endReference: 1_010_032,
+                target: LampLinkTarget(startReference: 1_010_021, endReference: 1_010_032)
+            )),
+        ])
+        let resolved = LampBookTextResolver.resolve(content, footnoteNumbers: [:], containingKind: "commentary")
+        func runs<T: AttributedStringKey>(_ key: KeyPath<AttributeScopes.LampBookAttributes, T>) -> [String] where T.Value: Equatable {
+            resolved.runs.compactMap { run in run.attributes[T.self] == nil ? nil : String(resolved[run.range].characters) }
+        }
+        #expect(runs(\.bookSmallCaps) == ["ORD"])
+        // The note on the passage, in an attribute of its own beside it.
+        #expect(runs(\.bookScriptureTarget) == ["see note"])
+        #expect(runs(\.bookLinkTarget).isEmpty)
+        // The passage is kept for a reader that knows no targets.
+        #expect(runs(\.bookScripture) == ["see note"])
+        // A target on any other type is not followed: overlapping a scripture
+        // link, it would send the reader elsewhere.
+        let stray = LampBookTextResolver.resolve(LampBookAnnotatedText(text: "words", annotations: [
+            LampBookAnnotation(type: "emphasis", start: 0, end: 5, data: LampBookAnnotationData(
+                target: LampLinkTarget(startReference: 1_001_001)
+            )),
+        ]), footnoteNumbers: [:])
+        #expect(stray.runs.allSatisfy { $0.attributes[LampBookTextAttributes.LinkTarget.self] == nil })
+        let intents = resolved.runs.compactMap { run in
+            run.inlinePresentationIntent.map { (String(resolved[run.range].characters), $0) }
+        }
+        #expect(intents.contains { $0.0 == "the" && $0.1.contains(.stronglyEmphasized) })
+        #expect(intents.contains { $0.0 == "said" && $0.1.contains(.emphasized) })
+    }
+}
+
+/// Each target names exactly one place, read in the module it is in.
+struct LampLinkTargetTests {
+    private func target(_ json: String) throws -> LampLinkTarget {
+        try JSONDecoder().decode(LampLinkTarget.self, from: Data(json.utf8))
+    }
+
+    @Test func eachShapeHasOneRoute() throws {
+        #expect(try target(#"{"sv": 1001001, "ev": 1011026, "unit": "outline-1001001-1011026", "anchor": "chart-01-02"}"#)
+            .destination(in: "commentary")
+            == .commentaryPassage(start: 1_001_001, end: 1_011_026, suffix: nil, unit: "outline-1001001-1011026", anchor: "chart-01-02"))
+        #expect(try target(#"{"kind": "commentary", "module": "ESVSB", "book": 1, "section": "introduction-to-genesis"}"#)
+            .destination(in: "book")
+            == .commentaryFrontMatter(book: 1, section: "introduction-to-genesis", anchor: nil))
+        #expect(try target(#"{"section": "preface", "anchor": "p2"}"#).destination(in: "book")
+            == .bookSection(section: "preface", anchor: "p2"))
+    }
+
+    /// A target mixing routes, or one the module it is in cannot hold, names
+    /// none.
+    @Test func amixedOrMisplacedTargetNamesNone() throws {
+        for (json, kind) in [
+            (#"{"sv": 1001001, "section": "intro"}"#, "commentary"),
+            (#"{"section": "intro"}"#, "commentary"),
+            (#"{"kind": "book", "sv": 1001001, "section": "s"}"#, "commentary"),
+            (#"{"book": 1, "section": "s", "unit": "u"}"#, "commentary"),
+            (#"{"section": "s", "book": 1}"#, "book"),
+            (#"{"sv": 1001001}"#, "translation"),
+            // Another module's kind is not assumed to be this one's …
+            (#"{"module": "another", "section": "intro"}"#, "book"),
+            // … and a kind other than this module's names another module,
+            // which must be named.
+            (#"{"kind": "commentary", "sv": 1001001}"#, "book"),
+            // Addresses out of bounds.
+            (#"{"kind": "commentary", "module": "C", "book": 67, "section": "s"}"#, "book"),
+            (#"{"sv": 0}"#, "commentary"),
+            (#"{"sv": 67001001}"#, "commentary"),
+            // A range that ends before it begins.
+            (#"{"sv": 1002001, "ev": 1001001}"#, "commentary"),
+        ] {
+            #expect(try target(json).destination(in: kind) == nil, "\(json) in \(kind)")
+        }
+    }
+
+    /// A module or kind written wrong names nowhere, rather than this module,
+    /// and on an annotation is no target at all, so writing it again cannot
+    /// turn it into one.
+    @Test func amalformedAddressNamesNowhere() throws {
+        // Read on its own it is no target, and so cannot be written again
+        // as one.
+        #expect(throws: DecodingError.self) { try target(#"{"kind": "book", "module": 42, "section": "preface"}"#) }
+        #expect(throws: DecodingError.self) { try target(#"{"kind": 3, "section": "preface"}"#) }
+        let data = try JSONDecoder().decode(
+            LampBookAnnotationData.self,
+            from: Data(#"{"sv": 1001001, "target": {"kind": "book", "module": 42, "section": "preface"}}"#.utf8)
+        )
+        #expect(data.target == nil)
+        #expect(data.startReference == 1_001_001)
+        // Empty, built in code, is written wrong, and names nowhere — not the
+        // note or section it would be without it.
+        #expect(LampLinkTarget(kind: "commentary", module: "", startReference: 1_001_001).destination(in: "book") == nil)
+        #expect(LampLinkTarget(section: "").destination(in: "book") == nil)
+        #expect(LampLinkTarget(startReference: 1_001_001, unit: "").destination(in: "commentary") == nil)
+        #expect(LampLinkTarget(section: "preface", anchor: "").destination(in: "book") == nil)
+    }
+
+    /// Overlapping links keep each address with its own target.
+    @Test func overlappingLinksKeepTheirOwnTargets() {
+        let resolved = LampBookTextResolver.resolve(LampBookAnnotatedText(text: "read here", annotations: [
+            LampBookAnnotation(type: "link", start: 0, end: 9, data: LampBookAnnotationData(
+                target: LampLinkTarget(section: "preface")
+            )),
+            LampBookAnnotation(type: "link", start: 5, end: 9, data: LampBookAnnotationData(url: "https://example.com")),
+        ]), footnoteNumbers: [:])
+        for run in resolved.runs {
+            let words = String(resolved[run.range].characters)
+            let target = run.attributes[LampBookTextAttributes.LinkTarget.self]
+            if words == "here" {
+                #expect(run.link?.absoluteString == "https://example.com" && target == nil)
+            } else {
+                #expect(run.link == nil && target?.section == "preface")
+            }
+        }
+    }
+
+    /// A scripture link's note and a URL link overlapping keep their own
+    /// pairs: the URL does not clear the note beside its passage.
+    @Test func ascriptureNoteAndAURLKeepTheirOwnPairs() {
+        let resolved = LampBookTextResolver.resolve(LampBookAnnotatedText(text: "see here", annotations: [
+            LampBookAnnotation(type: "scripture", start: 0, end: 8, data: LampBookAnnotationData(
+                startReference: 1_001_001, target: LampLinkTarget(startReference: 1_001_001)
+            )),
+            LampBookAnnotation(type: "link", start: 4, end: 8, data: LampBookAnnotationData(url: "https://example.com")),
+        ]), footnoteNumbers: [:], containingKind: "commentary")
+        #expect(resolved.runs.allSatisfy {
+            $0.attributes[LampBookTextAttributes.ScriptureTarget.self]?.startReference == 1_001_001
+                && $0.attributes[LampBookTextAttributes.Scripture.self]?.start == 1_001_001
+        })
+    }
+
+    /// A target judged in the module the text is in: in a book a passage
+    /// alone names no place, and replaces no working address.
+    @Test func atargetIsJudgedWhereItIs() {
+        let resolved = LampBookTextResolver.resolve(LampBookAnnotatedText(text: "read here", annotations: [
+            LampBookAnnotation(type: "link", start: 0, end: 9, data: LampBookAnnotationData(url: "https://example.com")),
+            LampBookAnnotation(type: "link", start: 5, end: 9, data: LampBookAnnotationData(
+                target: LampLinkTarget(startReference: 1_001_001)
+            )),
+        ]), footnoteNumbers: [:])
+        #expect(resolved.runs.allSatisfy { $0.link?.absoluteString == "https://example.com" })
+    }
+
+    /// A scripture annotation's own passage must be one a reader can open,
+    /// or its note is not followed either.
+    @Test func ascriptureNoteNeedsAPassageToFallBackTo() {
+        let annotation = LampBookAnnotation(type: "scripture", start: 0, end: 3, data: LampBookAnnotationData(
+            startReference: 43_000_001, target: LampLinkTarget(startReference: 43_003_016)
+        ))
+        #expect(LampBookTextResolver.usableTarget(for: annotation, containingKind: "commentary") == nil)
+    }
+
+    /// A scripture annotation's note is a commentary passage's, never a
+    /// section: it would open somewhere the verses do not.
+    @Test func ascripturesNoteIsAPassage() {
+        let resolved = LampBookTextResolver.resolve(LampBookAnnotatedText(text: "see", annotations: [
+            LampBookAnnotation(type: "scripture", start: 0, end: 3, data: LampBookAnnotationData(
+                startReference: 1_001_001, target: LampLinkTarget(section: "preface")
+            )),
+        ]), footnoteNumbers: [:])
+        #expect(resolved.runs.allSatisfy {
+            $0.attributes[LampBookTextAttributes.ScriptureTarget.self] == nil
+                && $0.attributes[LampBookTextAttributes.Scripture.self]?.start == 1_001_001
+        })
+    }
+
+    /// A target that names no place replaces no working address.
+    @Test func atargetNamingNoPlaceReplacesNothing() {
+        let resolved = LampBookTextResolver.resolve(LampBookAnnotatedText(text: "read here", annotations: [
+            LampBookAnnotation(type: "link", start: 0, end: 9, data: LampBookAnnotationData(url: "https://example.com")),
+            LampBookAnnotation(type: "link", start: 5, end: 9, data: LampBookAnnotationData(target: LampLinkTarget())),
+        ]), footnoteNumbers: [:])
+        #expect(resolved.runs.allSatisfy { $0.link?.absoluteString == "https://example.com" })
+        #expect(resolved.runs.allSatisfy { $0.attributes[LampBookTextAttributes.LinkTarget.self] == nil })
+    }
+
+    /// Overlapping scripture annotations keep each passage with its own
+    /// target: a later one without a target clears the earlier one's.
+    @Test func overlappingPassagesKeepTheirOwnTargets() {
+        let resolved = LampBookTextResolver.resolve(LampBookAnnotatedText(text: "see both", annotations: [
+            LampBookAnnotation(type: "scripture", start: 0, end: 8, data: LampBookAnnotationData(
+                startReference: 1_001_001, target: LampLinkTarget(startReference: 1_001_001)
+            )),
+            LampBookAnnotation(type: "scripture", start: 4, end: 8, data: LampBookAnnotationData(startReference: 2_001_001)),
+        ]), footnoteNumbers: [:], containingKind: "commentary")
+        for run in resolved.runs {
+            let words = String(resolved[run.range].characters)
+            let target = run.attributes[LampBookTextAttributes.ScriptureTarget.self]
+            let passage = run.attributes[LampBookTextAttributes.Scripture.self]
+            if words == "both" {
+                #expect(passage?.start == 2_001_001 && target == nil, "\(words)")
+            } else {
+                #expect(passage?.start == 1_001_001 && target?.startReference == 1_001_001, "\(words)")
+            }
+        }
+    }
+
+    /// Any field written wrong makes no target: read as absent, a wrong `ev`
+    /// or `unit` picked a different note at the same verse.
+    @Test func amistypedFieldMakesNoTarget() throws {
+        for json in [
+            #"{"sv": 1001001, "ev": "1011026"}"#,
+            #"{"sv": 1001001, "unit": 7}"#,
+            #"{"section": "preface", "anchor": 4}"#,
+            #"{"section": ""}"#,
+        ] {
+            #expect(throws: DecodingError.self, "\(json)") { try target(json) }
+        }
+        // But an empty suffix is none, as the compiler stores it — read, and
+        // built in code, so a round trip means the same.
+        #expect(try target(#"{"sv": 1001001, "suffix": ""}"#).suffix == nil)
+        let built = LampLinkTarget(suffix: "", section: "preface")
+        let reread = try JSONDecoder().decode(LampLinkTarget.self, from: JSONEncoder().encode(built))
+        #expect(built.destination(in: "book") == reread.destination(in: "book"))
+    }
+}
+

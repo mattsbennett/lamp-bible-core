@@ -51,7 +51,8 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["scripture", "strongs", "greek", "hebrew", "link", "emphasis", "quote", "footnote", "page", "media"]
+          "enum": ["scripture", "strongs", "greek", "hebrew", "link", "emphasis", "quote", "footnote", "page", "media", "smallcaps"],
+          "description": "smallcaps covers the capitals as written, \"ORD\" in \"LORD\"; a reader that does not know it draws the words plainly."
         },
         "start": { "type": "integer", "minimum": 0 },
         "end": { "type": "integer", "minimum": 0 },
@@ -75,11 +76,57 @@
               "description": "The page number printed in the source (a roman numeral string for front matter). A page outside any printed sequence has no page annotation."
             },
             "mediaId": { "type": "string" },
-            "mediaType": { "type": "string", "enum": ["image", "audio"] }
+            "mediaType": { "type": "string", "enum": ["image", "audio"] },
+            "target": {
+              "$ref": "#/definitions/linkTarget",
+              "description": "On link: where it goes. On scripture: the note on that passage, which a reader that knows no targets opens as the passage."
+            }
           }
         }
       },
-      "required": ["type", "start", "end"]
+      "required": ["type", "start", "end"],
+      "allOf": [
+        {
+          "description": "Only a link or a scripture annotation is followed to a target.",
+          "if": { "not": { "properties": { "type": { "enum": ["link", "scripture"] } } } },
+          "then": { "properties": { "data": { "not": { "required": ["target"] } } } }
+        },
+        {
+          "description": "A scripture annotation carrying a target keeps its own passage, which a reader that knows no targets opens.",
+          "if": { "properties": { "type": { "const": "scripture" }, "data": { "required": ["target"] } }, "required": ["data"] },
+          "then": { "properties": { "data": {
+            "anyOf": [ { "required": ["sv"] }, { "required": ["refs"], "properties": { "refs": { "minItems": 1 } } } ],
+            "properties": { "target": { "required": ["sv"], "description": "A scripture annotation's note is a commentary's, on a passage." } }
+          } } }
+        }
+      ]
+    },
+
+    "linkTarget": {
+      "type": "object",
+      "description": "A place in an installed module, by kind and declared ID: never a stored row ID. Exactly one route: a commentary passage (sv), a commentary volume's front matter (book and section), or a book section (section).",
+      "properties": {
+        "kind": { "type": "string", "enum": ["commentary", "book"], "description": "Omitted: the kind of the module the link is in." },
+        "module": { "type": "string", "minLength": 1, "description": "The target module's declared ID; a commentary's series ID. Omitted: this module." },
+        "sv": { "type": "integer", "minimum": 1001000, "maximum": 66999999, "description": "Commentary: the note that starts here, as BBCCCVVV." },
+        "ev": { "type": "integer", "minimum": 1001000, "maximum": 66999999 },
+        "suffix": { "type": "string" },
+        "unit": { "type": "string", "minLength": 1, "description": "Commentary, with sv: the declared ID of a section or pericope starting at sv. Omitted: the note on the passage." },
+        "book": { "type": "integer", "minimum": 1, "maximum": 66, "description": "Commentary front matter: the volume's Bible book." },
+        "section": { "type": "string", "minLength": 1, "description": "A book's section ID, or with book a commentary volume's front-matter section." },
+        "anchor": { "type": "string", "minLength": 1, "description": "A block id inside the unit or section the rest of the target finds." }
+      },
+      "dependencies": { "module": ["kind"] },
+      "oneOf": [
+        { "required": ["sv", "kind", "module"], "properties": { "kind": { "const": "commentary" } },
+          "not": { "anyOf": [ { "required": ["section"] }, { "required": ["book"] } ] },
+          "description": "A commentary passage: in a book, always another module's, so named with its kind." },
+        { "required": ["book", "section", "kind", "module"], "properties": { "kind": { "const": "commentary" } },
+          "not": { "anyOf": [ { "required": ["sv"] }, { "required": ["ev"] }, { "required": ["suffix"] }, { "required": ["unit"] } ] },
+          "description": "A commentary volume's front matter: in a book, always another module's." },
+        { "required": ["section"], "properties": { "kind": { "const": "book" } },
+          "not": { "anyOf": [ { "required": ["sv"] }, { "required": ["ev"] }, { "required": ["suffix"] }, { "required": ["unit"] }, { "required": ["book"] } ] } }
+      ]
     },
 
     "footnoteReference": {
@@ -148,7 +195,9 @@
         "column": { "type": "integer", "minimum": 0 },
         "header": { "type": "boolean", "default": false },
         "colSpan": { "type": "integer", "minimum": 1, "default": 1 },
-        "rowSpan": { "type": "integer", "minimum": 1, "default": 1 }
+        "rowSpan": { "type": "integer", "minimum": 1, "default": 1 },
+        "align": { "type": "string", "enum": ["left", "center", "right"] },
+        "label": { "type": "string", "description": "Opaque: cells sharing a label may be drawn alike, and a legend names them." }
       },
       "required": ["content", "column"]
     },
@@ -159,9 +208,27 @@
         "cells": {
           "type": "array",
           "items": { "$ref": "#/definitions/tableCell" }
-        }
+        },
+        "label": { "type": "string", "description": "Opaque: rows sharing a label may be drawn alike, and a legend names them." }
       },
       "required": ["cells"]
+    },
+
+    "legendEntry": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 }
+      },
+      "required": ["label", "title"]
+    },
+
+    "figureChild": {
+      "description": "A block inside a figure: a picture, paragraph, list, table or heading. Never another figure.",
+      "allOf": [
+        { "$ref": "#/definitions/contentBlock" },
+        { "properties": { "type": { "enum": ["image", "paragraph", "list", "table", "heading"] }, "children": { "maxItems": 0 } } }
+      ]
     },
 
     "contentBlock": {
@@ -170,7 +237,7 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["paragraph", "list", "blockquote", "heading", "table", "image", "audio", "thematic-break"]
+          "enum": ["paragraph", "list", "blockquote", "heading", "table", "image", "audio", "thematic-break", "figure"]
         },
         "content": { "$ref": "#/definitions/annotatedText" },
         "level": { "type": "integer", "minimum": 1, "maximum": 6 },
@@ -188,7 +255,26 @@
         "caption": { "$ref": "#/definitions/textValue" },
         "alignment": { "type": "string", "enum": ["left", "center", "right", "full"] },
         "showWaveform": { "type": "boolean" },
-        "autoplay": { "type": "boolean" }
+        "autoplay": { "type": "boolean" },
+        "id": { "type": "string", "minLength": 1, "description": "The block's anchor, unique within the module; in a commentary, within the volume." },
+        "role": { "type": "string", "description": "What the author calls the block, such as map or chart. Not interpreted." },
+        "title": { "$ref": "#/definitions/textValue", "description": "A figure's title." },
+        "subtitle": { "$ref": "#/definitions/textValue", "description": "A figure's second line, such as an era or date." },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/figureChild" },
+          "description": "A figure's contents, in printed order. A later titled part opens with a heading child."
+        },
+        "notes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/annotatedText" },
+          "description": "Notes printed under a figure."
+        },
+        "legend": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/legendEntry" },
+          "description": "What the labels on a table's rows and cells stand for."
+        }
       },
       "required": ["type"],
       "allOf": [
@@ -211,6 +297,11 @@
         {
           "if": { "properties": { "type": { "const": "heading" } } },
           "then": { "required": ["level"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "figure" } } },
+          "then": { "required": ["children"] },
+          "else": { "properties": { "children": { "maxItems": 0 } } }
         }
       ]
     },

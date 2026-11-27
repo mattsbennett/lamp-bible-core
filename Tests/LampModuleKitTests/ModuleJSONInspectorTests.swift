@@ -243,6 +243,69 @@ struct ModuleJSONInspectorTests {
         let warnings = book.issues.filter { $0.severity == .warning }
         #expect(warnings.map(\.path) == ["/sections/0/content/1", "/sections/0/content/1"], "\(warnings)")
 
+        // A figure's tables are laid out within the same bound.
+        let inFigure = try inspector.inspect(Data(#"""
+        {"meta": {"schemaVersion": "1.0", "id": "figure-book", "type": "book", "title": "F", "language": "en"},
+         "sections": [{"id": "c", "type": "chapter", "title": "C", "content": [
+           {"type": "figure", "children": [
+             {"type": "table", "columnCount": 70, "rows": [{"cells": [{"column": 0, "content": {"text": "wide"}}]}]}
+           ]}
+         ]}]}
+        """#.utf8))
+        // Warned for its table, and for having no content to be drawn as.
+        #expect(Set(inFigure.issues.filter { $0.severity == .warning }.map(\.path))
+            == ["/sections/0/content/0/children/0", "/sections/0/content/0"])
+
+        // Another block's `children` is never drawn, so never warned about.
+        let notFigure = try inspector.inspect(Data(#"""
+        {"meta": {"schemaVersion": "1.0", "id": "plain-book", "type": "book", "title": "P", "language": "en"},
+         "sections": [{"id": "c", "type": "chapter", "title": "C", "content": [
+           {"type": "paragraph", "content": {"text": "Shown"}, "children": [
+             {"type": "table", "columnCount": 70, "rows": [{"cells": [{"column": 0, "content": {"text": "wide"}}]}]}
+           ]}
+         ]}]}
+        """#.utf8))
+        #expect(notFigure.issues.filter { $0.severity == .warning }.isEmpty, "\(notFigure.issues)")
+
+        // A link that names no place a reader of the book can open is said.
+        let dead = try inspector.inspect(Data(#"""
+        {"meta": {"schemaVersion": "1.0", "id": "dead-book", "type": "book", "title": "D", "language": "en"},
+         "sections": [{"id": "c", "type": "chapter", "title": "C", "content": [
+           {"type": "paragraph", "content": {"text": "see the note", "annotations": [
+             {"type": "link", "start": 4, "end": 12, "data": {"target": {"kind": "commentary", "module": "N", "sv": 1002001, "ev": 1001001}}}
+           ]}},
+           {"type": "paragraph", "content": {"text": "see the preface", "annotations": [
+             {"type": "link", "start": 8, "end": 15, "data": {"target": {"section": "preface"}}}
+           ]}},
+           {"type": "paragraph", "content": {"text": "see the other", "annotations": [
+             {"type": "link", "start": 4, "end": 13, "data": {"target": {"kind": "book", "module": 42, "section": "preface"}}}
+           ]}},
+           {"type": "paragraph", "content": {"text": "John 3:16", "annotations": [
+             {"type": "scripture", "start": 0, "end": 9, "data": {"sv": 43003016, "target": {"section": "preface"}}}
+           ]}},
+           {"type": "paragraph", "content": {"text": "unrelated", "metadata": {"type": "link", "data": {"target": "source.pdf"}}}},
+           {"type": "paragraph", "content": {"text": "nowhere", "annotations": [
+             {"type": "link", "start": 3, "end": 3, "data": {"target": {"section": "preface"}}}
+           ]}},
+           {"type": "table", "columnCount": 1, "rows": [{"cells": [
+             {"column": 0, "content": {"text": "shown"}},
+             {"column": 0, "content": {"text": "hidden", "annotations": [
+               {"type": "link", "start": 0, "end": 6, "data": {"target": {"sv": 1001001}}}
+             ]}}
+           ]}]}
+         ]}],
+         "footnotes": [{"id": "1", "content": {"text": "see it", "annotations": [
+           {"type": "link", "start": 4, "end": 6, "data": {"target": {"kind": "commentary", "module": "N", "sv": 1002001, "ev": 1001001}}}
+         ]}}]}
+        """#.utf8))
+        // The dead link, the one written wrong, a scripture note that is no
+        // passage, one on no words, and a footnote's — not the live link,
+        // metadata that is no annotation, nor a cell the layout hides.
+        #expect(Set(dead.issues.filter { $0.severity == .warning }.map(\.path))
+            == ["/sections/0/content/0", "/sections/0/content/2", "/sections/0/content/3",
+                "/sections/0/content/5", "/footnotes/0/content"],
+                "\(dead.issues)")
+
         // A fractional span is no clipping: readers cannot decode the table
         // at all, and the warning says so.
         let unreadable = try inspector.inspect(Data(#"""

@@ -12,6 +12,11 @@ public struct LampBookAnnotationData: Codable, Equatable, Hashable, Sendable {
     public let pageNumber: String?
     public let mediaID: String?
     public let mediaType: String?
+    /// Where a `link` goes, or the note a `scripture` annotation also opens.
+    public let target: LampLinkTarget?
+    /// Whether a target was given at all — read, or written wrong and so
+    /// none — for the inspector to tell a link left out from one broken.
+    let hasTargetField: Bool
 
     enum CodingKeys: String, CodingKey {
         case startReference = "sv"
@@ -21,7 +26,7 @@ public struct LampBookAnnotationData: Codable, Equatable, Hashable, Sendable {
         case footnoteID = "footnoteId"
         case pageNumber = "pageNum"
         case mediaID = "mediaId"
-        case mediaType
+        case mediaType, target
     }
 
     public init(
@@ -35,8 +40,11 @@ public struct LampBookAnnotationData: Codable, Equatable, Hashable, Sendable {
         footnoteID: String? = nil,
         pageNumber: String? = nil,
         mediaID: String? = nil,
-        mediaType: String? = nil
+        mediaType: String? = nil,
+        target: LampLinkTarget? = nil
     ) {
+        self.target = target
+        hasTargetField = target != nil
         self.startReference = startReference
         self.endReference = endReference
         self.references = references
@@ -69,6 +77,13 @@ public struct LampBookAnnotationData: Codable, Equatable, Hashable, Sendable {
         }
         mediaID = try container.decodeIfPresent(String.self, forKey: .mediaID)
         mediaType = try container.decodeIfPresent(String.self, forKey: .mediaType)
+        // A target that cannot be read is no target: the annotation, and the
+        // text it is on, still read.
+        // So is one whose address was written wrong: kept, it would lose the
+        // wrong field on being written again and come back as a link to this
+        // module. Found by Codex.
+        target = (try? container.decodeIfPresent(LampLinkTarget.self, forKey: .target)) ?? nil
+        hasTargetField = container.contains(.target)
     }
 }
 
@@ -208,14 +223,23 @@ public struct LampBookTableCell: Codable, Equatable, Sendable {
     public let columnSpan: Int
     public let rowSpan: Int
     public let isHeader: Bool
+    /// `left`, `center` or `right`; nil for the reader's own.
+    public let alignment: String?
+    /// An opaque label the cell shares with others drawn alike, named in a
+    /// legend: what the author's chart marks it as, such as `good-king`.
+    public let label: String?
 
     public init(
         content: LampBookAnnotatedText,
         column: Int,
         columnSpan: Int = 1,
         rowSpan: Int = 1,
-        isHeader: Bool = false
+        isHeader: Bool = false,
+        alignment: String? = nil,
+        label: String? = nil
     ) {
+        self.alignment = alignment
+        self.label = label
         self.content = content
         self.column = column
         self.columnSpan = max(columnSpan, 1)
@@ -239,6 +263,9 @@ public struct LampBookTableCell: Codable, Equatable, Sendable {
             1
         )
         isHeader = try container.decodeIfPresent(Bool.self, forKey: .isHeader) ?? false
+        alignment = LampBookDecoding.string(container, .alignment)
+            .flatMap { ["left", "center", "right"].contains($0) ? $0 : nil }
+        label = LampBookDecoding.string(container, .label)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -246,14 +273,20 @@ public struct LampBookTableCell: Codable, Equatable, Sendable {
         case columnSpan = "colSpan"
         case rowSpan
         case isHeader = "header"
+        case alignment = "align"
+        case label
     }
 }
 
 public struct LampBookTableRow: Codable, Equatable, Sendable {
     public let cells: [LampBookTableCell]
+    /// An opaque label the row shares with others drawn alike, named in a
+    /// legend.
+    public let label: String?
 
-    public init(cells: [LampBookTableCell]) {
+    public init(cells: [LampBookTableCell], label: String? = nil) {
         self.cells = cells
+        self.label = label
     }
 
     public init(from decoder: Decoder) throws {
@@ -262,9 +295,47 @@ public struct LampBookTableRow: Codable, Equatable, Sendable {
             [LampBookTableCell].self,
             forKey: .cells
         ) ?? []
+        label = LampBookDecoding.string(container, .label)
     }
 
-    private enum CodingKeys: String, CodingKey { case cells }
+    private enum CodingKeys: String, CodingKey { case cells, label }
+}
+
+/// Reads for fields added after a reader already read the block: one of the
+/// wrong type is absent, never a reason to lose the block it is on, as an
+/// unknown key never was.
+enum LampBookDecoding {
+    static func string<Key: CodingKey>(_ container: KeyedDecodingContainer<Key>, _ key: Key) -> String? {
+        (try? container.decodeIfPresent(String.self, forKey: key)).flatMap { $0?.isEmpty == false ? $0 : nil }
+    }
+
+    static func value<Value: Decodable, Key: CodingKey>(
+        _ type: Value.Type, _ container: KeyedDecodingContainer<Key>, _ key: Key
+    ) -> Value? {
+        (try? container.decodeIfPresent(type, forKey: key)) ?? nil
+    }
+
+    /// An array read entry by entry, keeping each that reads.
+    static func array<Element: Decodable, Key: CodingKey>(
+        _ type: Element.Type, _ container: KeyedDecodingContainer<Key>, _ key: Key
+    ) -> [Element] {
+        guard var entries = try? container.nestedUnkeyedContainer(forKey: key) else { return [] }
+        var out: [Element] = []
+        while !entries.isAtEnd {
+            if let element = try? entries.decode(type) {
+                out.append(element)
+            } else {
+                _ = try? entries.decode(LampBookSkipped.self)
+            }
+        }
+        return out
+    }
+}
+
+/// Any JSON value, read and set aside, so a list can step past an entry it
+/// cannot read.
+private struct LampBookSkipped: Decodable {
+    init(from decoder: Decoder) throws {}
 }
 
 public struct LampBookContentBlock: Codable, Equatable, Sendable {
@@ -280,11 +351,30 @@ public struct LampBookContentBlock: Codable, Equatable, Sendable {
     public let autoplay: Bool
     public let columnCount: Int?
     public let rows: [LampBookTableRow]
+    /// The block's anchor, unique within its module (a commentary's volume).
+    public let id: String?
+    /// What the author calls the block, such as `map` or `chart`. Not
+    /// interpreted.
+    public let role: String?
+    /// A figure's title, and its second line, such as an era.
+    public let title: LampBookTextValue?
+    public let subtitle: LampBookTextValue?
+    /// A figure's contents, in printed order: pictures, paragraphs, lists,
+    /// tables and headings. Never another figure.
+    public let children: [LampBookContentBlock]
+    /// Notes printed under a figure or table.
+    public let notes: [LampBookAnnotatedText]
+    /// What the labels on a table's rows and cells stand for.
+    public let legend: [LampBookLegendEntry]
+
+    /// What a figure may hold, as `book_schema.json`'s `figureChild` says.
+    public static let figureChildTypes: Set<String> = ["image", "paragraph", "list", "table", "heading"]
 
     enum CodingKeys: String, CodingKey {
         case type, content, level, listType, items
         case mediaID = "mediaId"
         case caption, alignment, showWaveform, autoplay, columnCount, rows
+        case id, role, title, subtitle, children, notes, legend
     }
 
     public init(
@@ -299,8 +389,25 @@ public struct LampBookContentBlock: Codable, Equatable, Sendable {
         showWaveform: Bool = false,
         autoplay: Bool = false,
         columnCount: Int? = nil,
-        rows: [LampBookTableRow] = []
+        rows: [LampBookTableRow] = [],
+        id: String? = nil,
+        role: String? = nil,
+        title: LampBookTextValue? = nil,
+        subtitle: LampBookTextValue? = nil,
+        children: [LampBookContentBlock] = [],
+        notes: [LampBookAnnotatedText] = [],
+        legend: [LampBookLegendEntry] = []
     ) {
+        self.id = id
+        self.role = role
+        self.title = title
+        self.subtitle = subtitle
+        // Held to the kinds a figure holds here as when read, so a figure
+        // built in code projects and round-trips as one read does. Found by
+        // Codex.
+        self.children = type == "figure" ? children.filter { Self.figureChildTypes.contains($0.type) } : []
+        self.notes = notes
+        self.legend = legend
         self.type = type
         self.content = content
         self.level = level
@@ -329,6 +436,24 @@ public struct LampBookContentBlock: Codable, Equatable, Sendable {
         autoplay = try container.decodeIfPresent(Bool.self, forKey: .autoplay) ?? false
         columnCount = try container.decodeIfPresent(Int.self, forKey: .columnCount)
         rows = try container.decodeIfPresent([LampBookTableRow].self, forKey: .rows) ?? []
+        // The fields a figure brought, each read on its own: a malformed one
+        // is absent, and costs no reader the block.
+        id = LampBookDecoding.string(container, .id)
+        role = LampBookDecoding.string(container, .role)
+        title = LampBookDecoding.value(LampBookTextValue.self, container, .title)
+        subtitle = LampBookDecoding.value(LampBookTextValue.self, container, .subtitle)
+        // A child that cannot be read is left out, as a block of a section is,
+        // and so is one of a kind a figure does not hold — another figure, a
+        // recording, a quotation — whatever wrote it: the compilers do not
+        // run the schema. Found by Codex.
+        // And only a figure has any: another block's are never drawn, nor
+        // projected. Found by Codex.
+        children = type == "figure"
+            ? LampBookDecoding.array(LampBookContentBlock.self, container, .children)
+                .filter { Self.figureChildTypes.contains($0.type) }
+            : []
+        notes = LampBookDecoding.array(LampBookAnnotatedText.self, container, .notes)
+        legend = LampBookDecoding.array(LampBookLegendEntry.self, container, .legend)
     }
 }
 
