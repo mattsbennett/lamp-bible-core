@@ -15,8 +15,9 @@ Two tracks, one shared piece:
 - **Commentary track** (record 0029): pictures, tables, lists, small caps and
   internal links in commentary notes, and where a study Bible's articles,
   standalone charts and maps live.
-- **Translation track** (record 0032, the next free number; 0030 was
-  taken): poetry lines within a verse, in-text
+- **Translation track** (its record takes the next free number when
+  written; 0030 and 0032, each named for it in turn, were taken first):
+  poetry lines within a verse, in-text
   cross-references, inline styles in translation footnotes, heading kinds.
 - **Shared:** the inline set (`italic`, `bold`, `smallcaps`, `scripture`,
   `link`) and the link address, `linkTarget`. Nothing else.
@@ -203,7 +204,7 @@ Commentary:
 7. Docs, record to Accepted, hand-off briefs for the apps.
 
 Translation: poetry lines; heading kinds; cross-references and `\x`;
-footnote styles (after commentary step 2); record 0032 and docs.
+footnote styles (after commentary step 2); its record and docs.
 
 ## Owner decisions
 
