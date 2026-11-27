@@ -550,8 +550,13 @@ extension LampMarkdownModel {
     /// parser resolves entities, pairs delimiters and decides blocks,
     /// so two texts that format alike are two texts a reader cannot
     /// tell apart.
+    ///
+    /// Read without smart punctuation, as the editor's page reads: it shows
+    /// quotes and dashes as written. With it on, a marker beside a straight
+    /// quote curled that quote the other way, and a line that reads exactly
+    /// as it did was taken to read otherwise.
     public static func rendering(of text: String) -> String {
-        Document(parsing: hidingSingleTildes(text)).format()
+        Document(parsing: hidingSingleTildes(text), options: [.disableSmartOpts]).format()
     }
 
     /// The shape a text parses to: every node's kind, nested, with its
@@ -581,7 +586,8 @@ extension LampMarkdownModel {
                 .joined(separator: ",")
             return "\(name)[\(children)]"
         }
-        return dump(Document(parsing: hidingSingleTildes(text)))
+        // Without smart punctuation, as `rendering(of:)` and the page.
+        return dump(Document(parsing: hidingSingleTildes(text), options: [.disableSmartOpts]))
     }
 
     /// A string with the review markers taken out, without reaching

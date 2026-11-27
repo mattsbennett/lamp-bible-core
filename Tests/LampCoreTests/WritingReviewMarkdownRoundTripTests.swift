@@ -72,4 +72,23 @@ struct WritingReviewMarkdownRoundTripTests {
             "\(document.name): \(before) markers became \(after) — passages went unread"
         )
     }
+
+    /// A marker beside a straight quote keeps its place. The judge read
+    /// with smart punctuation on, so `hell."` followed by a marker curled
+    /// its quote the other way, the line "read differently", and every
+    /// mark in the paragraph became a point at its start (owner,
+    /// 2026-11-26, a whole paragraph shown as one sliver). The page shows
+    /// quotes and dashes as written, so neither side is read with them
+    /// curled.
+    @Test func aMarkerBesideAStraightQuoteKeepsItsPlace() {
+        let s = LampWritingReview.markStart, e = LampWritingReview.markEnd
+        for line in [
+            "not leave my soul in \(s)hell.\"\(e) \(s)The ESV keeps\(e) \(s)\"Sheol\" in both places;\(e) the NIV",
+            "it is \(s)'one'\(e) and \(s)'two'\(e) -\(s)-\(e) three",
+        ] {
+            let drawn = Markdown.drawable(line, numbering: false)
+            #expect(drawn == line, "moved: \(drawn.debugDescription)")
+            #expect(!drawn.contains(LampWritingReview.markPoint))
+        }
+    }
 }
