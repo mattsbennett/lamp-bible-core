@@ -923,6 +923,17 @@ struct WritingReviewMarkdownCodeFencesTests {
         // An escaped opening, and a Setext heading's underline.
         #expect(reach("[^1]: \\*Literal note.", from: "*Literal") == "[^1]: \\*Literal note.")
         #expect(reach("Title\n=====\n\nBody.", from: "Title", to: "Title") == "Title\n=====")
+        #expect(reach("Para\n---", from: "Para", to: "Para") == "Para\n---")
+        // After a heading, a quote, a list item or a footnote, the line is
+        // a rule of its own, and the ✓ stops at its block's line.
+        #expect(reach("# H\n---", from: "H", to: "H") == "# H")
+        #expect(reach("> q\n---", from: "q", to: "q") == "> q")
+        #expect(reach("- item\n---", from: "item", to: "item") == "- item")
+        #expect(reach("[^1]: n\n---", from: "n", to: "n") == "[^1]: n")
+        // A literal `#` and a list item's own heading are underlined
+        // (Codex).
+        #expect(reach("#hashtag\n---", from: "hashtag", to: "hashtag") == "#hashtag\n---")
+        #expect(reach("- Title\n  ---", from: "Title", to: "Title") == "- Title\n  ---")
         // A caret is left where it is.
         let caret = NSRange(location: 3, length: 0)
         #expect(Markdown.wholeBlock(caret, of: "```\n```") == caret)

@@ -26,7 +26,13 @@ from the characters on the line, not from the parser:
   open emphasis, code or a link.
 - **After the words:** the same closing marks, `]`, and a link's
   `(destination)`. A closing `#` counts only on a heading's line.
-- **On the next line:** a Setext heading's underline.
+- **On the next line:** a Setext heading's underline. The parser decides
+  whether a following line of `-` or `=` underlines this block or is a rule
+  of its own, and it is asked only when such a line follows. Reading this
+  by hand mistook the rule under `# H`, `> q`, `- item` and `[^1]: n` for
+  an underline. Then it mistook the underline under `#hashtag` and under a
+  list item's own heading for a rule. The iOS session's Codex review and
+  ours found these.
 
 Anything else stops the reach at that end: a word, or another table cell's
 `|`. A caret is left where it is. The clear is still made in the stored
@@ -58,6 +64,14 @@ which only the page's per-block ✓ sends.
   `- Item`, so a clear made there cannot find the `+`.
 
 ## Not addressed
+
+- **An empty footnote directly above a heading** (`[^1]:`, then `Title`,
+  then `---`). The parser reads `Title` as a link's destination, so the
+  underline is not taken in.
+- **The parse for an underline runs on the main actor.** It is only asked
+  when such a line follows, and it costs about 170 ms on a 430 KB Debug
+  document. It belongs with the ✓ path's work, R4 in
+  `ReviewMarksPerformancePlan.md`.
 
 A table cell's ✓ asks the host for the whole row. That is how the page
 already behaves, and is left as it is.

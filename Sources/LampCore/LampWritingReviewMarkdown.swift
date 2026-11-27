@@ -462,13 +462,22 @@ public enum LampWritingReviewMarkdown {
         let isHeading = source.substring(with: last).drop { $0 == " " }.hasPrefix("#")
         var end = isOnlyClosingSyntax(tail, heading: isHeading) ? max(lineEnd, NSMaxRange(range)) : NSMaxRange(range)
         // A Setext heading's underline, which the page writes as a `#`.
+        // Whether a line of `-` or `=` underlines this one or is a rule of
+        // its own is the parser's to say: after a heading, a quote or a
+        // footnote it is a rule, after `#hashtag` or inside a list item it
+        // can be an underline, and each reading by hand missed one (iOS
+        // session's Codex, then ours). Asked only when such a line follows.
         if end == lineEnd, NSMaxRange(last) < source.length {
             let next = source.lineRange(for: NSRange(location: NSMaxRange(last), length: 0))
             let underline = source.substring(with: next).trimmingCharacters(in: .whitespacesAndNewlines)
             if !underline.isEmpty, Set(underline).count == 1, underline.first == "=" || underline.first == "-" {
                 var nextEnd = NSMaxRange(next)
                 while nextEnd > next.location, [0x0A, 0x0D].contains(source.character(at: nextEnd - 1)) { nextEnd -= 1 }
-                end = nextEnd
+                let underlines = LampMarkdownModel(parsing: text).blocks.contains {
+                    $0.kind == .heading && NSIntersectionRange($0.range, last).length > 0
+                        && NSMaxRange($0.range) >= nextEnd
+                }
+                if underlines { end = nextEnd }
             }
         }
         return NSRange(location: start, length: end - start)
