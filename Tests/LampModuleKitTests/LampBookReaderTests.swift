@@ -898,3 +898,191 @@ struct LampLinkTargetTests {
     }
 }
 
+
+/// A 2.3 commentary's blocks as the one annotated text an older reader
+/// shows (`LampBookDrawnText.projection`), held to the resolver: resolving
+/// the projection draws what resolving each of its texts and joining them
+/// would.
+struct LampBookProjectionTests {
+    private func blocks(_ json: String) -> [LampBookContentBlock] {
+        LampPortableBookJSON.decodeArray(json, as: LampBookContentBlock.self).items
+    }
+
+    /// Every type of block, an annotation of each kind and a footnote marker
+    /// in each text; a pointed Hebrew word and an astral letter before an
+    /// annotation, so an offset counted in Characters or in UTF-16 is caught;
+    /// a span and a marker past their text's end; and pages at both ends.
+    private let fixture = #"""
+    [
+      {"type": "heading", "level": 2, "content": {"text": "Chapter one", "footnote_refs": [{"id": "1", "offset": 7}]}},
+      {"type": "paragraph", "content": {"text": "שָׁלוֹם and 𝔊race abounding", "annotations": [
+        {"type": "bold", "start": 12, "end": 17},
+        {"type": "emphasis", "start": 18, "end": 999, "data": {"style": "italic"}},
+        {"type": "page", "start": 0, "end": 0, "data": {"pageNum": 12}},
+        {"type": "page", "start": 999, "end": 999, "data": {"pageNum": 13}},
+        {"type": "smallcaps", "start": -1, "end": 3}
+      ], "footnote_refs": [{"id": "2", "offset": 999}, {"id": "1", "offset": -5}]}},
+      {"type": "paragraph", "content": {"text": "See John 3:16 and the note", "annotations": [
+        {"type": "scripture", "start": 4, "end": 13, "data": {"sv": 43003016, "target": {"sv": 43003016}}},
+        {"type": "link", "start": 18, "end": 26, "data": {"target": {"kind": "commentary", "module": "N", "sv": 43003017}}},
+        {"type": "footnote", "start": 22, "end": 26, "data": {"footnoteId": "1"}}
+      ]}},
+      {"type": "paragraph", "content": {"text": ""}},
+      {"type": "paragraph", "content": {"text": "x\u0000y", "annotations": [{"type": "page", "start": 1, "end": 1, "data": {"pageNum": 7}}]}},
+      {"type": "thematic-break"},
+      {"type": "list", "listType": "bullet", "items": [
+        {"content": {"text": "First item", "annotations": [{"type": "italic", "start": 0, "end": 5}]},
+         "children": [{"content": {"text": "Nested", "footnote_refs": [{"id": "2", "offset": 6}]}}]},
+        {"content": {"text": "Second"}}
+      ]},
+      {"type": "table", "columnCount": 2, "rows": [
+        {"cells": [{"column": 0, "header": true, "content": {"text": "King"}}, {"column": 1, "content": {"text": "Years", "annotations": [{"type": "bold", "start": 0, "end": 5}]}}]},
+        {"cells": [{"column": 1, "content": {"text": "41", "footnote_refs": [{"id": "1", "offset": 2}]}}]},
+        {"cells": [{"column": 0, "content": {"text": "Asa"}}, {"column": 1, "content": {"text": "911–910\r\n910–870", "annotations": [{"type": "page", "start": 8, "end": 8, "data": {"pageNum": 9}}, {"type": "bold", "start": 9, "end": 16}]}}]}
+      ]},
+      {"type": "image", "mediaId": "m", "caption": {"text": "A map", "annotations": [{"type": "italic", "start": 2, "end": 5}]}},
+      {"type": "figure", "id": "f", "title": "Kings of Judah", "subtitle": {"text": "931–586 BC"},
+       "caption": {"text": "From Rehoboam", "annotations": [{"type": "bold", "start": 5, "end": 13}]},
+       "children": [
+         {"type": "paragraph", "content": {"text": "Intro"}},
+         {"type": "table", "columnCount": 1, "rows": [{"cells": [{"column": 0, "content": {"text": "Asa"}}]}]}
+       ],
+       "notes": [{"text": "See also Israel", "annotations": [{"type": "italic", "start": 9, "end": 15}]}]}
+    ]
+    """#
+
+    @Test func resolvingTheProjectionDrawsWhatResolvingEachTextDoes() {
+        let numbers = ["1": 1, "2": 2]
+        let blocks = blocks(fixture)
+        #expect(blocks.count == 10)
+        for figures in [LampBookDrawnText.Figures.asParts, .asContent] {
+            let projection = LampBookDrawnText.projection(of: blocks, figures: figures)
+            var expected = AttributedString()
+            let empty = LampBookAnnotatedText(text: "")
+            let drawn = blocks
+                .map { block in
+                    LampBookDrawnText.lines(of: block, figures: figures)
+                        .map { line in line.filter { $0.text != empty } }
+                        .filter { !$0.isEmpty }
+                }
+                .filter { !$0.isEmpty }
+            for (blockIndex, lines) in drawn.enumerated() {
+                if blockIndex > 0 { expected += AttributedString(LampBookDrawnText.blockSeparator) }
+                for (lineIndex, line) in lines.enumerated() {
+                    if lineIndex > 0 { expected += AttributedString(LampBookDrawnText.lineSeparator) }
+                    var column = 0
+                    for field in line {
+                        for _ in 0..<max(field.column - column, 0) {
+                            expected += AttributedString(LampBookDrawnText.cellSeparator)
+                        }
+                        column = field.column
+                        let text = field.isCell
+                            ? LampBookAnnotatedText(
+                                text: LampBookDrawnText.onOneLine(field.text.text),
+                                annotations: field.text.annotations, footnoteReferences: field.text.footnoteReferences
+                            )
+                            : field.text
+                        expected += LampBookTextResolver.resolve(text, footnoteNumbers: numbers, containingKind: "commentary")
+                    }
+                }
+            }
+            let resolved = LampBookTextResolver.resolve(projection, footnoteNumbers: numbers, containingKind: "commentary")
+            #expect(resolved == expected, "\(figures)")
+            #expect(String(resolved.characters) == String(expected.characters), "\(figures)")
+            // The markers and attributes are there to compare: pages at both
+            // ends, footnotes, a link's target, a passage's note.
+            let drawnText = String(resolved.characters)
+            #expect(drawnText.contains("[p. 12]") && drawnText.contains("[p. 13]"), "\(drawnText)")
+            #expect(drawnText.contains("[1]") && drawnText.contains("[2]"))
+            #expect(resolved.runs.contains { $0.bookLinkTarget != nil })
+            #expect(resolved.runs.contains { $0.bookScriptureTarget != nil })
+        }
+        // Its words are the words search takes, as today's readers draw them,
+        // once a NUL is a space, as search text makes it, and with the
+        // columns' visible separators taken out.
+        let words = { (text: String) in
+            text.replacingOccurrences(of: "\0", with: " ")
+                .replacingOccurrences(of: LampBookDrawnText.cellSeparator, with: " ")
+                .split(whereSeparator: \.isWhitespace)
+        }
+        #expect(words(LampBookDrawnText.projection(of: blocks, figures: .asContent).text)
+            == words(LampBookDrawnText.text(of: blocks)))
+    }
+
+    /// An offset from a file, however far out, is clipped before it is
+    /// moved, so none is added to and none traps.
+    @Test func noOffsetFromAFileIsAddedToBeforeItIsClipped() {
+        let blocks = blocks(#"""
+        [{"type": "paragraph", "content": {"text": "before"}},
+         {"type": "paragraph", "content": {"text": "words", "annotations": [
+           {"type": "bold", "start": 9223372036854775807, "end": 9223372036854775807},
+           {"type": "bold", "start": -9223372036854775808, "end": 9223372036854775807},
+           {"type": "italic", "start": 0, "end": 9223372036854775807},
+           {"type": "page", "start": 9223372036854775807, "end": 0, "data": {"pageNum": 2}}
+         ], "footnote_refs": [{"id": "1", "offset": 9223372036854775807}, {"id": "1", "offset": -9223372036854775808}]}}]
+        """#)
+        let projection = LampBookDrawnText.projection(of: blocks, figures: .asParts)
+        #expect(projection.text == "before\n\nwords")
+        #expect(projection.annotations.map { "\($0.type) \($0.start)-\($0.end)" } == ["italic 8-13", "page 13-13"])
+        // A sparse row keeps its words under their headings; its empty
+        // fields after the last are dropped. Found by Codex.
+        let table = LampBookDrawnText.projection(of: self.blocks(#"""
+        [{"type": "table", "columnCount": 4, "rows": [
+          {"cells": [{"column": 0, "content": {"text": "King"}}, {"column": 1, "content": {"text": "Years"}}, {"column": 2, "colSpan": 2, "content": {"text": "Notes"}}]},
+          {"cells": [{"column": 1, "content": {"text": "41"}}, {"column": 3, "content": {"text": "x"}}]},
+          {"cells": [{"column": 0, "content": {"text": ""}}]},
+          {"cells": [{"column": 0, "content": {"text": "Asa"}}]}
+        ]}]
+        """#), figures: .asParts)
+        let bar = LampBookDrawnText.cellSeparator
+        #expect(table.text == "King\(bar)Years\(bar)Notes\n\(bar)41\(bar)\(bar)x\nAsa")
+        #expect(bar == " \u{200E}│\u{200E} ")
+        // A break in a cell keeps the row on one line, offsets unmoved; one
+        // in a paragraph is kept.
+        let broken = LampBookDrawnText.projection(of: self.blocks(#"""
+        [{"type": "table", "rows": [{"cells": [{"column": 0, "content": {"text": "a\nb", "annotations": [{"type": "bold", "start": 2, "end": 3}]}}, {"column": 1, "content": {"text": "Faith | Hope"}}]}]},
+         {"type": "paragraph", "content": {"text": "d\ne"}},
+         {"type": "list", "items": [{"content": {"text": "f\ng"}}, {"content": {"text": "h"}}]}]
+        """#), figures: .asParts)
+        #expect(broken.text == "a b\(LampBookDrawnText.cellSeparator)Faith | Hope\n\nd\ne\n\nf g\nh")
+        #expect(broken.annotations.map(\.start) == [2])
+        // A page covering its printed label keeps the span, clipped, with or
+        // without a page number.
+        let labelled = LampBookDrawnText.projection(of: self.blocks(#"""
+        [{"type": "paragraph", "content": {"text": "x"}},
+         {"type": "paragraph", "content": {"text": "[12] words", "annotations": [{"type": "page", "start": 0, "end": 4, "data": {"pageNum": 12}}, {"type": "page", "start": 6, "end": 99}]}}]
+        """#), figures: .asParts)
+        #expect(labelled.annotations.map { "\($0.start)-\($0.end)" } == ["3-7", "9-13"])
+        #expect(projection.footnoteReferences.map(\.offset) == [13, 8])
+    }
+
+    /// One object, as an older phone decodes `commentary_json`: an array
+    /// showed a blank note. A NUL is kept, for the resolver to space a
+    /// marker beside as it does in the text alone.
+    @Test func theProjectionIsOneTextAndANulIsASpace() throws {
+        let blocks = blocks(#"[{"type": "paragraph", "content": {"text": "a\u0000b", "annotations": [{"type": "bold", "start": 2, "end": 3}]}}, {"type": "paragraph", "content": {"text": "c"}}]"#)
+        let projection = LampBookDrawnText.projection(of: blocks, figures: .asParts)
+        #expect(projection.text == "a\0b\n\nc")
+        #expect(projection.annotations.map(\.start) == [2])
+        let json = String(decoding: try JSONEncoder().encode(projection), as: UTF8.self)
+        #expect(json.hasPrefix("{"))
+        // Only the annotations it is told to keep.
+        let plain = LampBookDrawnText.projection(of: blocks, figures: .asParts) { $0.type != "bold" }
+        #expect(plain.annotations.isEmpty)
+
+        // A text with nothing left once filtered and clipped adds no break;
+        // one left with a marker keeps its place. Found by Codex.
+        let around = self.blocks(#"""
+        [{"type": "paragraph", "content": {"text": "before"}},
+         {"type": "paragraph", "content": {"text": "", "annotations": [{"type": "page", "start": 0, "end": 0, "data": {"pageNum": 4}}]}},
+         {"type": "paragraph", "content": {"text": "", "annotations": [{"type": "bold", "start": 0, "end": 1}]}},
+         {"type": "paragraph", "content": {"text": "", "annotations": [{"type": "page", "start": 0, "end": 0, "data": {"pageNum": ""}}]}},
+         {"type": "paragraph", "content": {"text": "", "annotations": [{"type": "page", "start": 0, "end": 0}]}},
+         {"type": "paragraph", "content": {"text": "after"}}]
+        """#)
+        #expect(LampBookDrawnText.projection(of: around, figures: .asParts) { $0.type != "page" }.text == "before\n\nafter")
+        let paged = LampBookDrawnText.projection(of: around, figures: .asParts)
+        #expect(paged.text == "before\n\n\n\nafter")
+        #expect(paged.annotations.map { "\($0.type) \($0.start)" } == ["page 8"])
+    }
+}

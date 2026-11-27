@@ -296,13 +296,11 @@ public enum LampBookTextResolver {
             let number = footnoteNumbers[reference.id]
             var marker = AttributedString("[\(number.map(String.init) ?? "•")]")
             marker.bookFootnote = LampBookFootnoteMark(id: reference.id, number: number, isMarker: true)
-            markers.append((min(max(reference.offset, 0), length), order, marker))
+            markers.append((markerOffset(reference.offset, length: length), order, marker))
         }
         let scalars = Array(content.text.unicodeScalars)
-        for (order, annotation) in content.annotations.enumerated()
-        where annotation.type == "page" && annotation.start >= 0 {
-            guard let page = annotation.data?.pageNumber, !page.isEmpty else { continue }
-            let offset = min(annotation.start, length)
+        for (order, annotation) in content.annotations.enumerated() {
+            guard let (offset, page) = pageMarker(annotation, length: length) else { continue }
             let before = offset > 0 && !scalars[offset - 1].properties.isWhitespace ? " " : ""
             let after = offset < length && !scalars[offset].properties.isWhitespace ? " " : ""
             var marker = AttributedString("\(before)[p. \(page)]\(after)")
@@ -322,8 +320,35 @@ public enum LampBookTextResolver {
     /// one that covers none is applied to nothing, and a link on it is never
     /// tappable.
     public static func coversText(_ annotation: LampBookAnnotation, in content: LampBookAnnotatedText) -> Bool {
-        let length = content.text.unicodeScalars.count
-        return annotation.start >= 0 && annotation.start < length && annotation.end > annotation.start
+        coveredScalars(annotation.start, annotation.end, length: content.text.unicodeScalars.count) != nil
+    }
+
+    /// The scalars a span from `start` to `end` styles in a text `length`
+    /// scalars long, or nil for one it leaves out: the bounds `resolve`
+    /// applies, and the one copy of them, so a projection that moves
+    /// annotations keeps each where `resolve` would have put it.
+    static func coveredScalars(_ start: Int, _ end: Int, length: Int) -> Range<Int>? {
+        guard start >= 0, start < length, end > start else { return nil }
+        return start..<min(end, length)
+    }
+
+    /// Where a footnote reference's marker goes in a text `length` scalars
+    /// long: at its offset, or the nearer end.
+    static func markerOffset(_ offset: Int, length: Int) -> Int {
+        min(max(offset, 0), length)
+    }
+
+    /// Where an annotation's page marker goes in a text `length` scalars
+    /// long, and the page it names; nil for one that draws no marker — not a
+    /// page, starting before the text, or naming no page. The whole rule, so
+    /// a projection that keeps a marker keeps one `resolve` draws: judged by
+    /// its offset alone, a page naming none kept an empty paragraph's place.
+    /// Found by Codex.
+    static func pageMarker(_ annotation: LampBookAnnotation, length: Int) -> (offset: Int, page: String)? {
+        guard annotation.type == "page", annotation.start >= 0,
+              let page = annotation.data?.pageNumber, !page.isEmpty
+        else { return nil }
+        return (min(annotation.start, length), page)
     }
 
     private static func span(
@@ -332,10 +357,10 @@ public enum LampBookTextResolver {
         in value: AttributedString,
         length: Int
     ) -> Range<AttributedString.Index>? {
-        guard start >= 0, start < length, end > start else { return nil }
+        guard let covered = coveredScalars(start, end, length: length) else { return nil }
         let scalars = value.unicodeScalars
-        let lower = scalars.index(scalars.startIndex, offsetBy: start)
-        let upper = scalars.index(scalars.startIndex, offsetBy: min(end, length))
+        let lower = scalars.index(scalars.startIndex, offsetBy: covered.lowerBound)
+        let upper = scalars.index(scalars.startIndex, offsetBy: covered.upperBound)
         return lower..<upper
     }
 

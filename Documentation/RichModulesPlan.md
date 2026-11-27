@@ -134,11 +134,14 @@ target inside a book module with only `section` is a book section.
   `commentary_json` as one `AnnotatedText` and shows a blank note for anything
   else (found by Codex). Step 4's tests hold a multi-block note's projection
   to that. Paragraphs keep only 2.2 annotation types; a list as a
-  line per item; a table as its title, a line per row, its notes; a picture as
-  its title, subtitle and caption.
+  line per item; a table as a line per row; a picture as its caption; a
+  figure as its title, subtitle, caption, each child and its notes
+  (Revision 1 moved a table's or picture's title and notes onto the
+  figure; on a bare table or picture no reader draws them, and a 2.3
+  unit giving them there is refused, commit 5).
 - `search_text` is built from the projection, so it covers list items, table
-  titles and cells, table notes, and picture titles and captions. Alt text is
-  left out: not on screen.
+  cells, picture captions, and a figure's title, subtitle, caption, children
+  and notes. Alt text is left out: not on screen.
 - Apps detect the shape by column, as they already do for `footnotes_text`.
   The new columns are `mayBeAbsent`/`mayBeNull` in `LampModuleCompiledSchema`
   and are **not** added to the import check.
@@ -512,6 +515,15 @@ and a search for a chart's words finds it in both modules.
       `LampBookTextResolver` so `resolve` calls them too. Held by a
       differential: resolving the projection equals resolving each piece,
       joined.
+      The projection is what a current phone shows of a 2.3 unit until
+      step 6's readers draw its blocks (D8): a row's columns joined by
+      `│`, a break in a cell or list item a space. Text cannot show every
+      table unambiguously — a cell holding `│` reads as two; a row starting
+      in Hebrew takes a right-to-left base where its paragraph's direction
+      is natural, and its columns read right to left (the marks either side
+      of `│` hold the bar, not the row) — and no more is asked of it: eleven
+      reviews of commit 1 found one more such edge each, and further ones
+      belong to step 6.
    2. **The link check reads a block's texts through the walk**, in the
       module's kind (`warnAboutDeadLinks` hard-codes a book's today).
    3. **A 2.3 block is one the model reads whole**: decode, encode, and
@@ -521,7 +533,17 @@ and a search for a chart's words finds it in both modules.
       commentary annotations carry and the phone reads.)
    4. **One writer for a commentary's rows**, volume and series (two DDLs
       and two INSERTs today); no behaviour change.
-   5. **A 2.3 unit's body is its blocks**, in memory: `blocksJSON`,
+   5. **A 2.3 unit's body is its blocks**, in memory, its `commentary_json`
+      the projection written in the form an older commentary reader takes
+      (read iOS `CommentaryRenderer` first): a scripture annotation given
+      only `refs` gains its first range as `sv`/`ev`, and an inline
+      `footnote` span its note's id as the annotation's own `id`, or the
+      old reader cannot open either (found by Codex, reviewing commit 1);
+      a page annotation marking a point (`start == end`), which that reader
+      skips, written as its label in the text with later offsets moved;
+      `title`, `subtitle` or `notes` on a block other than a figure, which
+      no reader draws, refused rather than dropped;
+      `blocksJSON`,
       `declaredID`, the builder's own findings (both bodies, unread fields,
       duplicate block ids, dead links, table warnings), which the inspector
       takes rather than walking again.
