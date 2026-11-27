@@ -944,6 +944,21 @@ public enum LampPresentationDeckValidator {
         _ deck: LampPresentationDeck,
         assetExists: (String) -> Bool
     ) -> [LampPresentationDeckIssue] {
+        validate(deck, assetExists: assetExists, videoFacts: { _ in nil })
+    }
+
+    /// As `validate(_:assetExists:)`, and warns of a video a deck names that
+    /// is over what a deck carries (`LampPresentationVideo.largestFileBytes`
+    /// for a moving background, `LampPresentationClip.largestFileBytes` for a
+    /// clip) or in a codec not every iPhone and iPad plays, each pointing to
+    /// `prepare_video`, which makes one that fits. Warnings, not errors, so a
+    /// deck already made keeps opening. `videoFacts` is asked for each named
+    /// video that is there; nil says nothing is known of it.
+    public static func validate(
+        _ deck: LampPresentationDeck,
+        assetExists: (String) -> Bool,
+        videoFacts: (String) -> LampPresentationVideoFacts?
+    ) -> [LampPresentationDeckIssue] {
         var issues = validate(deck)
         for (slideIndex, slide) in deck.slides.enumerated() {
             for (blockIndex, block) in slide.blocks.enumerated() where block.kind == .image {
@@ -971,9 +986,44 @@ public enum LampPresentationDeckValidator {
                             + "until the video is delivered beside the deck."
                     ))
                 }
+                let named: [(field: String, path: String?, limit: Int64, use: String)] = [
+                    ("video", block.video, LampPresentationVideo.largestFileBytes, "a moving background"),
+                    ("clip", block.clip?.assetPath, LampPresentationClip.largestFileBytes, "a clip"),
+                ]
+                for (field, path, limit, use) in named {
+                    guard let path, isSafeAssetPath(path), assetExists(path), let facts = videoFacts(path) else { continue }
+                    for message in videoAdvice(path: path, facts: facts, limit: limit, use: use) {
+                        issues.append(.init(
+                            severity: .warning,
+                            path: "slides[\(slideIndex)].blocks[\(blockIndex)].\(field)",
+                            message: message
+                        ))
+                    }
+                }
             }
         }
         return issues
+    }
+
+    /// What a video's size and codec mean for a deck, in words.
+    static func videoAdvice(
+        path: String, facts: LampPresentationVideoFacts, limit: Int64, use: String
+    ) -> [String] {
+        var advice: [String] = []
+        if facts.byteCount > limit {
+            let megabytes = (facts.byteCount + 999_999) / 1_000_000
+            advice.append(
+                "'\(path)' is \(megabytes) MB, over the \(limit / 1_000_000) MB a deck carries for \(use). "
+                    + "Bring it in with prepare_video, which makes it smaller; if it is still over, shorten it."
+            )
+        }
+        if let codec = facts.videoCodec, !LampPresentationVideo.everyDevicePlays.contains(codec) {
+            advice.append(
+                "'\(path)' is \(LampPresentationVideo.codecName(codec)) video, which an iPhone or iPad may not play. "
+                    + "Bring it in with prepare_video, which saves it as HEVC."
+            )
+        }
+        return advice
     }
 
     /// What is wrong with a clip, as severity and message.

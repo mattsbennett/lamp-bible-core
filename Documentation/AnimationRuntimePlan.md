@@ -42,8 +42,12 @@ Owner's decisions, 2026-11-26:
    (for a loop, also its last frame beside its first). Built in
    `LampBibleMacSupport` (`LampVideoPreparation`) beside Slide Studio's own
    import, which keeps its own still and HEVC check and shares the encoder
-   and its 1080p rule. Landed for a video file (`decisions/0026`); the frames
-   folder and the validator warning are still to come.
+   and its 1080p rule. Landed for a video file (`decisions/0026`), and the
+   validator warning with it: a deck's video over its limit or in a codec not
+   every device plays (by its sample entries, and H.264's profile) is warned
+   of by core's validator, `validate_deck`, a deck's import and
+   `validate_deck.py`, all reading the same boxes (`LampPresentationVideoFacts`).
+   The frames folder is still to come.
 2. **Capture, narrowed** (`decisions/0025`, Proposed): keep the twin canvas
    for what three r187's `WebGPURenderer` does (size setters each frame,
    reconfigure after resize, repeated `getContext`, uploads then one submit in

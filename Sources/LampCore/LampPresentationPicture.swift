@@ -210,4 +210,180 @@ public enum LampPresentationVideo {
         guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return false }
         return extensions.contains(name[name.index(after: dot)...].lowercased())
     }
+
+    /// Video codecs every iPhone and iPad Lamp runs on plays, by the sample
+    /// entry's four characters: H.264, HEVC, and HEVC with Dolby Vision.
+    /// AV1, ProRes, VP9 and Motion JPEG play only on some, or none.
+    public static let everyDevicePlays: Set<String> = ["avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe"]
+
+    /// A codec's name as a person would know it. H.264 in a profile only
+    /// newer devices play is read as `avc1:<profile>`.
+    public static func codecName(_ code: String) -> String {
+        if code.hasPrefix("avc1:") || code.hasPrefix("avc3:") {
+            switch code.dropFirst(5) {
+            case "110": return "H.264 High 10"
+            case "122": return "H.264 4:2:2"
+            default: return "H.264 4:4:4"
+            }
+        }
+        return switch code {
+        case "av01": "AV1"
+        case "vp09": "VP9"
+        case "vp08": "VP8"
+        case "apcn", "apch", "apcs", "apco", "ap4h", "ap4x": "ProRes"
+        case "jpeg", "mjpa", "mjpb": "Motion JPEG"
+        case "mp4v": "MPEG-4"
+        default: "'\(code)'"
+        }
+    }
+}
+
+/// What a deck's validator needs of a video file it names: its size, against
+/// the limit a deck carries, and its codec, against what every device plays.
+///
+/// Read from the file's own boxes, as `validate_deck.py` reads them, so both
+/// validators give the same answer: the four characters of the first enabled
+/// video track's sample entries (`moov/trak/mdia/minf/stbl/stsd`), the track
+/// found by its handler, `vide`, and enabled by its header's flag; of its
+/// entries, the first not every device plays, else the first. H.264 in High
+/// 10, 4:2:2 or 4:4:4, by its `avcC` profile, is `avc1:<profile>`. Nil codec
+/// for a file that is not an MP4 or QuickTime movie, has no such track, or
+/// whose boxes don't hold together; such a file is no one's to warn about
+/// here, and a malformed one is never more than unknown.
+public struct LampPresentationVideoFacts: Equatable, Sendable {
+    public var byteCount: Int64
+    public var videoCodec: String?
+
+    public init(byteCount: Int64, videoCodec: String?) {
+        self.byteCount = byteCount
+        self.videoCodec = videoCodec
+    }
+
+    /// The facts of the file at `url`, or nil where it can't be read.
+    public static func read(at url: URL) -> LampPresentationVideoFacts? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        return read(from: handle)
+    }
+
+    /// The facts of a file already open, as a caller that opened it by its
+    /// own rules (a workspace walk that follows no link) reads the very file
+    /// it checked.
+    public static func read(from handle: FileHandle) -> LampPresentationVideoFacts? {
+        guard let end = try? handle.seekToEnd() else { return nil }
+        let reader = BoxReader(handle: handle)
+        return LampPresentationVideoFacts(byteCount: Int64(end), videoCodec: reader.videoCodec(fileLength: end))
+    }
+
+    /// Walks a movie's boxes by seeking, reading only headers and the few
+    /// small boxes it needs, so a long video costs what a short one does.
+    /// Every size is the file's word, so each is checked against what is
+    /// left before it is added to anything.
+    private struct BoxReader {
+        let handle: FileHandle
+
+        private struct Box {
+            let type: String
+            let body: UInt64
+            let end: UInt64
+            var bodyLength: UInt64 { end - body }
+        }
+
+        private func bytes(at offset: UInt64, count: Int) -> [UInt8]? {
+            guard (try? handle.seek(toOffset: offset)) != nil,
+                  let data = try? handle.read(upToCount: count), data.count == count
+            else { return nil }
+            return [UInt8](data)
+        }
+
+        /// `count` bytes `skip` into `box`'s body, only if they lie inside it.
+        private func bytes(in box: Box, skip: UInt64, count: Int) -> [UInt8]? {
+            guard box.bodyLength >= skip, box.bodyLength - skip >= UInt64(count) else { return nil }
+            return bytes(at: box.body + skip, count: count)
+        }
+
+        private func number(_ bytes: ArraySlice<UInt8>) -> UInt64 {
+            bytes.reduce(0) { $0 << 8 | UInt64($1) }
+        }
+
+        /// The boxes from `start` to `end`, up to and including the first of
+        /// type `until` if one is named; it stops at the first that does not
+        /// fit.
+        private func boxes(from start: UInt64, to end: UInt64, until: String? = nil) -> [Box] {
+            var found: [Box] = []
+            var offset = start
+            while end >= offset, end - offset >= 8, found.count < 4096 {
+                guard let header = bytes(at: offset, count: 8) else { break }
+                let left = end - offset
+                var size = number(header[0..<4])
+                let type = String(decoding: header[4..<8], as: UTF8.self)
+                var headerLength: UInt64 = 8
+                if size == 1 {
+                    guard left >= 16, let large = bytes(at: offset + 8, count: 8) else { break }
+                    size = number(large[0..<8])
+                    headerLength = 16
+                } else if size == 0 {
+                    size = left
+                }
+                guard size >= headerLength, size <= left else { break }
+                found.append(Box(type: type, body: offset + headerLength, end: offset + size))
+                if type == until { break }
+                offset += size
+            }
+            return found
+        }
+
+        private func child(_ type: String, of box: Box) -> Box? {
+            boxes(from: box.body, to: box.end, until: type).first { $0.type == type }
+        }
+
+        /// The codes of `descriptions`' entries, each checked to lie inside it.
+        private func entryCodes(_ descriptions: Box) -> [String] {
+            guard let count = bytes(in: descriptions, skip: 4, count: 4) else { return [] }
+            var codes: [String] = []
+            var offset = descriptions.body + 8
+            for _ in 0..<min(number(count[0..<4]), 64) {
+                guard descriptions.end >= offset, descriptions.end - offset >= 8,
+                      let header = bytes(at: offset, count: 8)
+                else { break }
+                let size = number(header[0..<4])
+                guard size >= 8, size <= descriptions.end - offset else { break }
+                var code = String(decoding: header[4..<8], as: UTF8.self)
+                // A visual sample entry's 78 bytes of fields, then its boxes;
+                // for H.264, `avcC`, whose second byte is the profile.
+                if code == "avc1" || code == "avc3", size > 86,
+                   let configuration = boxes(from: offset + 86, to: offset + size, until: "avcC").first(where: { $0.type == "avcC" }),
+                   let profile = bytes(in: configuration, skip: 1, count: 1),
+                   [110, 122, 244, 44].contains(profile[0]) {
+                    code += ":\(profile[0])"
+                }
+                codes.append(code)
+                offset += size
+            }
+            return codes
+        }
+
+        func videoCodec(fileLength: UInt64) -> String? {
+            guard let movie = boxes(from: 0, to: fileLength, until: "moov").first(where: { $0.type == "moov" }) else { return nil }
+            for track in boxes(from: movie.body, to: movie.end) where track.type == "trak" {
+                // Only a track its header says is on: the flags, after the
+                // version byte, end in "enabled".
+                guard let header = child("tkhd", of: track),
+                      let flags = bytes(in: header, skip: 0, count: 4), flags[3] & 1 == 1,
+                      let media = child("mdia", of: track),
+                      let handler = child("hdlr", of: media),
+                      // version and flags, pre-defined, then the handler type
+                      let kind = bytes(in: handler, skip: 8, count: 4),
+                      String(decoding: kind, as: UTF8.self) == "vide",
+                      let information = child("minf", of: media),
+                      let table = child("stbl", of: information),
+                      let descriptions = child("stsd", of: table)
+                else { continue }
+                let codes = entryCodes(descriptions)
+                guard let first = codes.first else { continue }
+                return codes.first { !LampPresentationVideo.everyDevicePlays.contains($0) } ?? first
+            }
+            return nil
+        }
+    }
 }
