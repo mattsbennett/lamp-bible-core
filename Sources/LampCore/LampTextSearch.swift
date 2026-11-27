@@ -114,6 +114,22 @@ final class LampTextSearch {
         return built
     }
 
+    /// `text`'s UTF-16 units in a string Foundation holds as UTF-16.
+    ///
+    /// `text as NSString` wraps a Swift string, which is UTF-8, and every
+    /// unit Core Foundation reads through the wrapper, and every substring
+    /// it cuts, is worked out from the UTF-8 again. A carry builds a piece
+    /// of context for each mark it moves, and that was most of the 70 ms a
+    /// carry took after one word typed (0035). The units are those the
+    /// wrapper reports, so every offset and comparison is the same.
+    static func native(_ text: String) -> NSString {
+        let bridged = text as NSString
+        let length = bridged.length
+        var units = [unichar](repeating: 0, count: length)
+        bridged.getCharacters(&units, range: NSRange(location: 0, length: length))
+        return NSString(characters: units, length: length)
+    }
+
     private static func key(_ units: [unichar], at start: Int) -> UInt64 {
         UInt64(units[start]) << 48 | UInt64(units[start + 1]) << 32
             | UInt64(units[start + 2]) << 16 | UInt64(units[start + 3])

@@ -118,9 +118,10 @@ after each item.
 
 Still over R3's line, for R3 to place on or off the main thread:
 
-- **The carry.** It takes 70 ms after typing, 110 ms for a save under the
-  file's lock, and 200 ms from 24 held texts. That is the text alignment and
-  an index per held text.
+- **The carry.** It took 70 ms after typing, 110 ms for a save under the
+  file's lock, and 200 ms from 24 held texts. 0037 halved the first two, to
+  35 ms and 61 ms. The 180 ms from 24 held texts is one alignment and
+  search per held text, off the main thread.
 - **`drawable`**, at 83 ms.
 
 **R4. The Mac's ✓ path.** Signposts first, then fixes only where they

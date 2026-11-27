@@ -202,6 +202,22 @@ struct LampReviewMeasurementTests {
         Self.measure("S6 restoring every drawn range") { c.review.restoring(drawn, in: c.text) }
     }
 
+    /// S7: what a carry is made of, on one word typed: hashing the texts,
+    /// cutting them into tokens, aligning them, indexing one, and the
+    /// carry itself.
+    @Test(.enabled(if: enabled())) func s7CarryStages() throws {
+        let c = try Self.load()
+        let typed = Self.typing("grace", at: (c.text as NSString).length / 4, in: c.text)
+        Self.measure("S7 digest") { LampWritingReview.digest(of: c.text) }
+        Self.measure("S7 tokens") { LampTextAlignment.tokens(of: c.text) }
+        Self.measure("S7 alignment") { LampTextAlignment(from: c.text, to: typed, absorbingSmallEqualities: false) }
+        Self.measure("S7 index") {
+            LampTextSearch(typed as NSString, scansFirst: 0).only("grace and peace to you")
+        }
+        Self.measure("S7 carry") { c.review.carryingToText(typed, from: [c.text]) }
+        Self.measure("S7 carry, nothing moved") { c.review.carryingToText(c.text, from: [c.text]) }
+    }
+
     /// The real record's answers, against those the code before the pass
     /// gave (`LAMP_REVIEW_HASHES`).
     @Test(.enabled(if: enabled() && ProcessInfo.processInfo.environment["LAMP_REVIEW_HASHES"] != nil))

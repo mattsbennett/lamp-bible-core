@@ -336,7 +336,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// sides. A piece anchored in this very text is found where it says,
     /// and only there.
     func located(in text: String, strictly: Bool, search: LampTextSearch? = nil) -> [Located] {
-        let search = search ?? LampTextSearch(text as NSString)
+        let search = search ?? LampTextSearch(LampTextSearch.native(text))
         let source = search.text
         let here = Self.digest(of: text)
         func find(_ piece: Piece) -> NSRange? {
@@ -398,7 +398,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// is placed at a look. Without the marked Markdown or the changes when
     /// the surface takes no marks to place.
     public func drawing(in text: String, forPlacing: Bool = true) -> Drawing {
-        let search = LampTextSearch(text as NSString)
+        let search = LampTextSearch(LampTextSearch.native(text))
         let review = anchored(in: text, search: search)
         let found = review.located(in: text, strictly: false, search: search)
         let ranges = Self.coalesced(found.flatMap(\.ranges), joiningAcross: nil)
@@ -431,7 +431,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// Not for saving: a save keeps an untouched piece as it was, so one
     /// that changed nothing writes nothing.
     public func anchored(in text: String) -> LampWritingReview {
-        anchored(in: text, search: LampTextSearch(text as NSString))
+        anchored(in: text, search: LampTextSearch(LampTextSearch.native(text)))
     }
 
     func anchored(in text: String, search: LampTextSearch) -> LampWritingReview {
@@ -797,7 +797,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// partly inside keeps its part outside; a point inside or at either end
     /// is cleared.
     public func clearing(_ range: NSRange, in text: String, at date: Date = Date()) -> LampWritingReview {
-        let source = text as NSString
+        let source = LampTextSearch.native(text)
         let anchor = Self.digest(of: text)
         var result = self
         let located = Dictionary(self.located(in: text).map { ($0.id, $0.ranges) }, uniquingKeysWith: { first, _ in first })
@@ -1179,7 +1179,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// thousand of them.
     private func restorable(in text: String, located: [Located]) -> [Restorable] {
         guard !wordings.isEmpty else { return [] }
-        let source = text as NSString
+        let source = LampTextSearch.native(text)
         let byMark = Dictionary(wordings.map { ($0.markID, $0) }, uniquingKeysWith: { first, _ in first })
         let cleared = Set(clearances.map(\.markID))
         let strayed = Set(voidedWordings)
@@ -1328,7 +1328,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     private func changes(
         in text: String, ranges: [NSRange], located found: [Located], offered: [UUID: Restorable]
     ) -> [Change?] {
-        let source = text as NSString
+        let source = LampTextSearch.native(text)
         return restoring(ranges, located: found, offered: offered).enumerated().map { index, answer in
             let range = ranges[index]
             switch answer.outcome {
@@ -1917,14 +1917,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// anchored again, in `target`, so it stays exact.
     /// A piece no source holds is kept as it is, to be carried later.
     private func carried(to target: String, from sources: [String], at date: Date) -> LampWritingReview {
-        let targetText = target as NSString
+        let targetText = LampTextSearch.native(target)
+        let sourceTexts = sources.map(LampTextSearch.native)
         let here = Self.digest(of: target)
         let digests = sources.map(Self.digest(of:))
         let targetSearch = LampTextSearch(targetText)
         var searches: [Int: LampTextSearch] = [:]
         func search(_ index: Int) -> LampTextSearch {
             if let made = searches[index] { return made }
-            let made = LampTextSearch(sources[index] as NSString)
+            let made = LampTextSearch(sourceTexts[index])
             searches[index] = made
             return made
         }
@@ -1937,7 +1938,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
         func resolved(_ piece: Piece) -> (source: Int, range: NSRange)? {
             if let anchor = piece.anchoredIn, let index = digests.lastIndex(of: anchor) {
-                return Self.exact(piece, in: sources[index] as NSString).map { (index, $0) }
+                return Self.exact(piece, in: sourceTexts[index]).map { (index, $0) }
             }
             for index in sources.indices.reversed() {
                 if let range = Self.unique(piece, in: search(index)) { return (index, range) }
@@ -1966,7 +1967,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 // on the point a passage was deleted from — that run is
                 // the mark, and it is kept.
                 if range.length > 0 { survived = survived.filter { $0.length > 0 } }
-                if survived.isEmpty, let kept = Self.survivingCopy(of: range, in: sources[index] as NSString,
+                if survived.isEmpty, let kept = Self.survivingCopy(of: range, in: sourceTexts[index],
                                                                    through: alignment(index), to: targetText) {
                     survived = [kept]
                     movedToCopy = true

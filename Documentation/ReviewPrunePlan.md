@@ -89,7 +89,7 @@ returns.
    theorems and table, and both coverage entries, in one commit. It does
    nothing until something leads.
 3. **The lead in `update`.**
-4. **Decision record 0037.** Rejected options:
+4. **A decision record**, at the next free number (0041 at the time of writing). Rejected options:
    - pruning by age in `takeIn`;
    - pruning on writes only;
    - a call in each app;
