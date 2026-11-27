@@ -1,6 +1,6 @@
 ---
 name: lamp-change-workflow
-description: The order of work for a substantial change to Lamp — plan with Fable, implement, review with Codex's Sol, fix what it finds, and go back to the planner when evidence contradicts the plan. Use for a feature, a refactor, a performance pass, a cross-repo change, or when a measurement or a repeated review finding contradicts a plan already in flight. Not for a typo, a mechanical edit, or a question. Triggers on "plan this", "scalability pass", "refactor", "review this change", "the plan says X but the measurement says Y".
+description: The order of work for a substantial change to Lamp — plan with Fable, implement, review with Codex's Sol, fix what it finds, and go back to the planner when evidence contradicts the plan. Use for a feature, a refactor, a performance pass, a cross-repo change, or when a measurement or a repeated review finding contradicts a plan already in flight. Run only the steps asked for: a request to plan stops at the plan, and a request to review stops at verified findings. Not for a typo, a mechanical edit, or a question. Triggers on "plan this", "scalability pass", "refactor", "review this change", "the plan says X but the measurement says Y".
 ---
 
 # How a change gets made in Lamp
@@ -15,9 +15,14 @@ not. Every version string below is an example of the *form* of a name on the
 day it was written, never a pin: check what the newest Fable, Opus and Sol
 are and use those.
 
-The arrow that matters is the one back to the planner. A reviewer checks the
-diff against the plan; nobody checks the plan against the world unless you
-send it back.
+The arrow that matters is the one back to the planner. The reviewer checks
+the diff for defects and you check it against the plan; nobody checks the
+plan against the world unless you send it back.
+
+**Run only the steps you were asked for.** "Plan this" ends with the plan
+written down and its claims verified. "Review this change" ends with the
+findings verified and reported, not fixed. Implementing, fixing and
+committing need a request to make the change.
 
 ## 1. Plan — the latest Fable, high effort
 
@@ -122,18 +127,21 @@ Then review again, against the **pre-change base**: re-running `--commit` on
 the original sha misses the fixes, and `--uncommitted` misses the original
 change.
 
-**Keep going round until a completed review of the final diff finds no P0 or
-P1, and what it still finds is only rare edge cases**: input or state that
-real use seldom reaches. A P2 that ordinary use hits is not an edge case. Fix
-it and review again. The edge cases that remain still get dispositioned: fix
-the cheap ones, and name the rest in the plan or the record so leaving them
-is a decision, not an oversight. The checks must pass after the last fix. A
-review that failed or was cut short is an outstanding review, not a pass.
+**Keep going round until a completed review of the final diff leaves no
+unresolved P0 or P1, and what remains is only rare, low-impact edge cases**:
+input or state that real use seldom reaches, where the failure costs little.
+A P2 that ordinary use hits is not an edge case, and neither is a rare one
+that loses data or corrupts state. Fix those and review again. Fix the cheap
+edge cases too. For each one left, write down its trigger, its impact and why
+it stays, in the plan or the record, so leaving it is a decision, not an
+oversight. The checks must pass after the last fix. A review that failed or
+was cut short is an outstanding review, not a pass.
 
 The P-levels are Codex's: it tags each finding P0 (drop everything) through
-P3 (nice to have). Take the tag as its opinion, not the rule: judge how often
-real use hits the finding yourself, and a P1 that is truly unreachable is a
-finding to disposition as not a defect, not one to fix.
+P3 (nice to have). Take the tag as its opinion, not the rule, and judge reach
+and impact yourself. A P1 that is truly unreachable is resolved by
+dispositioning it as not a defect, with the evidence. If a later round raises
+it again, point to that disposition. It does not reopen the loop.
 
 If the rounds stop converging, with each one turning up the same class of
 defect, go to step 5. Another round won't fix it.
