@@ -422,6 +422,70 @@ public enum LampWritingReviewMarkdown {
         return head + asPoints(moved) + rest
     }
 
+    /// The range a block's own ✓ asks for, reaching to the start of its
+    /// first line and the end of its last over nothing but syntax.
+    ///
+    /// The page draws a line's syntax apart from the block's words, or not
+    /// at all: a heading's `#`, a list's marker, a footnote's `[^1]:`, the
+    /// emphasis or link its words open and close with. So its ✓ asks for
+    /// the words alone, and a mark on the syntax stayed where no ✓ could
+    /// reach it: a passage running through a footnote's label kept a
+    /// sliver nobody could clear (owner, 2026-11-26).
+    ///
+    /// Judged by the characters standing there, not by the parser, which
+    /// reads `[^1]: **Note**` as a link's definition and starts indented
+    /// code after its indent. Before the words: indentation, `>`, `#`, a
+    /// list's marker or number, footnote labels, and the `*` `_` `~` `` ` ``
+    /// `[` `!` that open emphasis, code or a link. After them: the same
+    /// closing marks, `]`, and a link's `(destination)`. Anything else,
+    /// a word or another table cell's `|`, stops the reach at that end,
+    /// so it never takes in words the writer did not see or a neighbour's
+    /// cell. A caret is left as it is: on an empty block it clears the
+    /// whole mark it stands in.
+    ///
+    /// For a block's ✓ only. A selection never reaches: see the Mac's
+    /// `WritingReviewSession.restoring(_:in:)`.
+    public static func wholeBlock(_ range: NSRange, of text: String) -> NSRange {
+        let source = text as NSString
+        guard range.length > 0, range.location >= 0, NSMaxRange(range) <= source.length else { return range }
+        let first = source.lineRange(for: NSRange(location: range.location, length: 0))
+        let last = source.lineRange(for: NSRange(location: NSMaxRange(range) - 1, length: 0))
+        var lineEnd = NSMaxRange(last)
+        while lineEnd > last.location, [0x0A, 0x0D].contains(source.character(at: lineEnd - 1)) { lineEnd -= 1 }
+        let before = source.substring(with: NSRange(location: first.location, length: range.location - first.location))
+        let start = isOnlyOpeningSyntax(before) ? first.location : range.location
+        let tail = NSMaxRange(range) < lineEnd
+            ? source.substring(with: NSRange(location: NSMaxRange(range), length: lineEnd - NSMaxRange(range)))
+            : ""
+        // A closing `#` only on a heading's line; anywhere else it is a
+        // character the writer sees.
+        let isHeading = source.substring(with: last).drop { $0 == " " }.hasPrefix("#")
+        var end = isOnlyClosingSyntax(tail, heading: isHeading) ? max(lineEnd, NSMaxRange(range)) : NSMaxRange(range)
+        // A Setext heading's underline, which the page writes as a `#`.
+        if end == lineEnd, NSMaxRange(last) < source.length {
+            let next = source.lineRange(for: NSRange(location: NSMaxRange(last), length: 0))
+            let underline = source.substring(with: next).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !underline.isEmpty, Set(underline).count == 1, underline.first == "=" || underline.first == "-" {
+                var nextEnd = NSMaxRange(next)
+                while nextEnd > next.location, [0x0A, 0x0D].contains(source.character(at: nextEnd - 1)) { nextEnd -= 1 }
+                end = nextEnd
+            }
+        }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func isOnlyOpeningSyntax(_ prefix: String) -> Bool {
+        var rest = prefix
+        rest = rest.replacing(#/\[\^[^\]\s]+\]:/#, with: "")
+        rest = rest.replacing(#/\d{1,9}[.)]/#, with: "")
+        return rest.allSatisfy { " \t>#-+*_~`[!\\".contains($0) }
+    }
+
+    private static func isOnlyClosingSyntax(_ suffix: String, heading: Bool) -> Bool {
+        let rest = suffix.replacing(#/\]\([^()\s]*(?:\s+"[^"]*")?\)/#, with: "")
+        return rest.allSatisfy { " \t*_~`]".contains($0) || (heading && $0 == "#") }
+    }
+
     /// A range a surface gave back, reaching to the start of its line
     /// where only that line's own block syntax stands before it.
     ///

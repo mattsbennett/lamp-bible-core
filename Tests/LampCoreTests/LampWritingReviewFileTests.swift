@@ -886,6 +886,47 @@ struct WritingReviewMarkdownCodeFencesTests {
         #expect(Markdown.takingInSyntax(NSRange(location: 11, length: 2), of: text)
             == NSRange(location: 11, length: 2))
     }
+
+    /// A block's own ✓ reaches to its line's ends over syntax alone: the
+    /// page draws a footnote's label, a heading's `#` and opening or
+    /// closing emphasis apart from the words it asks for, and a mark on
+    /// them stayed where no ✓ could reach it (owner, 2026-11-26).
+    @Test func aBlocksCheckReachesOverItsLinesSyntax() {
+        func reach(_ text: String, from words: String, to end: String? = nil) -> String {
+            let source = text as NSString
+            let start = source.range(of: words).location
+            let stop = end.map { NSMaxRange(source.range(of: $0)) } ?? source.length
+            let range = NSRange(location: start, length: stop - start)
+            return source.substring(with: Markdown.wholeBlock(range, of: text))
+        }
+        #expect(reach("Body.\n\n[^1]: On the release.", from: "On") == "[^1]: On the release.")
+        // Taken by the parser for a link's definition, drawn by the page
+        // as a footnote: the line decides, not the parse.
+        #expect(reach("Body.\n\n[^1]: **Note**", from: "Note", to: "Note") == "[^1]: **Note**")
+        #expect(reach("[^1]: ***Note*** on it.", from: "Note") == "[^1]: ***Note*** on it.")
+        #expect(reach("[^1]: [Source](https://x.com/a) says so.", from: "Source") == "[^1]: [Source](https://x.com/a) says so.")
+        #expect(reach("Intro.\n\n[^2]: Ends [here](https://x.com/b)", from: "Ends", to: "here") == "[^2]: Ends [here](https://x.com/b)")
+        #expect(reach("**Whole line bold**", from: "Whole", to: "bold") == "**Whole line bold**")
+        #expect(reach("# Title\n\nBody.", from: "Title", to: "Title") == "# Title")
+        #expect(reach("Intro.\n\n12. Item here", from: "Item") == "12. Item here")
+        #expect(reach("> Quoted\n> words", from: "Quoted", to: "words") == "> Quoted\n> words")
+        // A pipe inside the words is no table: the label is still taken.
+        #expect(reach("[^1]: **A | B**", from: "A", to: "B") == "[^1]: **A | B**")
+        // Another cell's `|` and words stand at either end: left as asked.
+        #expect(reach("| one | two | three |", from: "two", to: "two") == "two")
+        // Words a draft added at the end are never taken in.
+        #expect(reach("[^1]: Old note. And more.", from: "Old", to: "note.") == "[^1]: Old note.")
+        // A `#` a draft put after a footnote's words is a character, not
+        // syntax; on a heading's line it closes the heading.
+        #expect(reach("[^1]: Old note. #", from: "Old", to: "note.") == "[^1]: Old note.")
+        #expect(reach("## Title ##", from: "Title", to: "Title") == "## Title ##")
+        // An escaped opening, and a Setext heading's underline.
+        #expect(reach("[^1]: \\*Literal note.", from: "*Literal") == "[^1]: \\*Literal note.")
+        #expect(reach("Title\n=====\n\nBody.", from: "Title", to: "Title") == "Title\n=====")
+        // A caret is left where it is.
+        let caret = NSRange(location: 3, length: 0)
+        #expect(Markdown.wholeBlock(caret, of: "```\n```") == caret)
+    }
 }
 
 /// A bare URL stops at a table's pipe.
