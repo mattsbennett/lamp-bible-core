@@ -7,13 +7,13 @@ import Foundation
 /// pieces. Scanning the whole text for each was most of the second a draw
 /// took on a writing the assistant had worked over (0035). Here the copies
 /// are found from an index of where each run of four UTF-16 units stands,
-/// built the first time a needle is long enough to use it; each candidate
-/// is then confirmed by Core Foundation's own literal comparison at that
-/// place. So which copies count is decided exactly as before, and only the
-/// places looked at change.
+/// and each candidate is confirmed by Core Foundation's own literal
+/// comparison at that place. So which copies count is decided exactly as
+/// before, and only the places looked at change.
 ///
-/// A needle shorter than the run, or a search made for one look, scans as
-/// before: an index costs more to build than one scan of the text.
+/// A needle shorter than the run scans as before, and so do a search's
+/// first few needles: an index costs more to build than a few scans, and a
+/// carry asks some held texts about one stale piece and no more.
 ///
 /// Not shared between threads: one is made for one piece of work.
 final class LampTextSearch {
@@ -21,13 +21,18 @@ final class LampTextSearch {
     private let length: Int
     private let indexing: Bool
     private var index: [UInt64: [Int32]]?
+    private var scans = 0
+    private let scansFirst: Int
 
     static let run = 4
+    /// How many needles are scanned for before the index is built.
+    static let scansBeforeIndexing = 3
 
-    init(_ text: NSString, indexing: Bool = true) {
+    init(_ text: NSString, indexing: Bool = true, scansFirst: Int = scansBeforeIndexing) {
         self.text = text
         self.length = text.length
         self.indexing = indexing
+        self.scansFirst = scansFirst
     }
 
     /// The one copy of `needle` that `accepts`, or nil where there is none
@@ -42,6 +47,10 @@ final class LampTextSearch {
         var units = [unichar](repeating: 0, count: bridged.length)
         bridged.getCharacters(&units, range: NSRange(location: 0, length: bridged.length))
         guard indexing, units.count >= Self.run else { return scanned(needle, where: accepts) }
+        if index == nil, scans < scansFirst {
+            scans += 1
+            return scanned(needle, where: accepts)
+        }
         guard units.count <= length else { return nil }
         let index = builtIndex()
         // The rarest run in the needle names the fewest places to look.

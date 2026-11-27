@@ -33,12 +33,16 @@ struct LampTextSearchTests {
         var random = ReviewFixtures.Seeded(42)
         for text in Self.texts {
             let ns = text as NSString
-            let search = LampTextSearch(ns)
+            // Indexed from the first needle, so every one is asked of the
+            // index; and as a carry makes one, scanning its first few.
+            let search = LampTextSearch(ns, scansFirst: 0)
+            let asACarryMakesIt = LampTextSearch(ns)
             let unindexed = LampTextSearch(ns, indexing: false)
             for needle in Self.needles(in: text, &random) {
                 let expected = LampWritingReviewReference.only(needle, in: ns)
                 #expect(search.only(needle) == expected, "\(String(reflecting: needle)) in \(String(reflecting: text.prefix(20)))")
                 #expect(unindexed.only(needle) == expected)
+                #expect(asACarryMakesIt.only(needle) == expected)
                 // A condition that turns some copies away, as `find`'s
                 // edges do.
                 let even: (NSRange) -> Bool = { $0.location % 2 == 0 }
@@ -51,7 +55,7 @@ struct LampTextSearchTests {
     /// Copies that overlap are each counted, as a scan from each match's
     /// next unit counts them.
     @Test func countsCopiesThatOverlap() {
-        let search = LampTextSearch("xaaaaax" as NSString)
+        let search = LampTextSearch("xaaaaax" as NSString, scansFirst: 0)
         #expect(search.only("aaaa") == nil)
         #expect(search.only("aaaa", where: { $0.location == 2 }) == NSRange(location: 2, length: 4))
         #expect(search.only("xaaaa") == NSRange(location: 0, length: 5))

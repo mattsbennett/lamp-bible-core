@@ -67,12 +67,16 @@ struct LampReviewMeasurementTests {
 
     /// The median of five runs of `body`, after one to warm it.
     @discardableResult
-    static func measure<T>(_ label: String, runs: Int = 5, _ body: () throws -> T) rethrows -> T {
+    static func measure<T>(
+        _ label: String, runs: Int = 5, before setup: () -> Void = {}, _ body: () throws -> T
+    ) rethrows -> T {
+        setup()
         var result = try body()
         var times: [Double] = []
         var counts: [UInt64] = []
         let clock = ContinuousClock()
         for _ in 0..<runs {
+            setup()
             let before = instructions()
             let elapsed = try clock.measure { result = try body() }
             counts.append(instructions() &- before)
@@ -105,7 +109,9 @@ struct LampReviewMeasurementTests {
 
     static func typing(_ word: String, at location: Int, in text: String) -> String {
         let ns = NSMutableString(string: text)
-        ns.insert(word + " ", at: ReviewFixtures.boundary(near: location, in: ns) + 1)
+        let at = ReviewFixtures.boundary(near: location, in: ns)
+        // After the space found, or at the very end, where nothing follows.
+        if at < ns.length { ns.insert(word + " ", at: at + 1) } else { ns.append(" " + word) }
         return ns as String
     }
 
@@ -163,8 +169,7 @@ struct LampReviewMeasurementTests {
                 c.review.clearing(range, in: c.text, carryingFrom: [])
             }
             Self.measure("S4 \(label): draw after") { cleared.drawing(in: c.text) }
-            let block = LampWritingReviewMarkdown.wholeBlock(range, of: c.text)
-            Self.measure("S4 \(label): wholeBlock") { LampWritingReviewMarkdown.wholeBlock(block, of: c.text) }
+            Self.measure("S4 \(label): wholeBlock") { LampWritingReviewMarkdown.wholeBlock(range, of: c.text) }
         }
     }
 
@@ -176,9 +181,8 @@ struct LampReviewMeasurementTests {
         let store = LampWritingReviewStore(rootURL: root)
         try store.save(c.review)
         let saved = Self.typing("peace", at: (c.text as NSString).length / 2, in: c.text)
-        try Self.measure("S5 save's carry") {
-            try store.save(c.review)
-            return try store.update(writingID: c.review.writingID, document: c.review.document) {
+        try Self.measure("S5 save's carry", before: { _ = try! store.save(c.review) }) {
+            try store.update(writingID: c.review.writingID, document: c.review.document) {
                 $0.carryingToText(saved, from: [c.text])
             }
         }
@@ -218,8 +222,12 @@ struct LampReviewMeasurementTests {
         if let before = try? String(contentsOf: file, encoding: .utf8) {
             let was = Set(before.split(separator: "\n").map(String.init))
             let moved = lines.filter { !was.contains($0) }
-            print("REVIEW hashes: \(lines.count - moved.count) of \(lines.count) as before")
-            #expect(moved.isEmpty, "answers that moved: \(moved.map { $0.split(separator: " ")[0] })")
+            // An answer can go as well as move: a nil marked copy leaves no
+            // drawable to hash.
+            let gone = was.subtracting(lines)
+            print("REVIEW hashes: \(lines.count - moved.count) of \(was.count) as before")
+            #expect(moved.isEmpty, "answers that moved or are new: \(moved.map { $0.split(separator: " ")[0] })")
+            #expect(gone.isEmpty, "answers that are gone or moved: \(gone.map { $0.split(separator: " ")[0] }.sorted())")
         } else {
             try now.write(to: file, atomically: true, encoding: .utf8)
             print("REVIEW hashes: \(lines.count) written to \(file.path)")

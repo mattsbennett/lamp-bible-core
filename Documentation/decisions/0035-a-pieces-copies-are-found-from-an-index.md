@@ -26,16 +26,18 @@ draw shares one between `anchored` and `located`, and a carry keeps one for
 each source and one for the target.
 
 - **Candidates from the index.** It finds a needle's copies from an index
-  of where each run of four UTF-16 units stands, built the first time a
-  needle is long enough to use it. The candidates are the places of the
+  of where each run of four UTF-16 units stands. The candidates are the places of the
   needle's rarest run.
 - **Matches confirmed as before.** Each candidate is confirmed by Core
   Foundation's literal comparison anchored at that place, so what counts as
   a match is decided as before.
-- **Short needles and single looks still scan.** A needle shorter than four
-  units scans as before. So does a search made for one look (the static
-  `find` and `unique`), where building an index would cost more than the
-  scan.
+- **Short needles and few looks still scan.** A needle shorter than four
+  units scans as before. So do a search's first three needles, and every
+  needle of a search made for one look (the static `find` and `unique`).
+  Building an index costs more than a few scans, and a carry asks some
+  held texts about one stale piece and nothing more. Codex's review found
+  that the first version built an index for every held text whatever it
+  was asked.
 - **The needle's units.** These come from its `NSString`, the units Core
   Foundation compares.
 - **`exact`'s fast path.** `exact` compares units first and makes a
