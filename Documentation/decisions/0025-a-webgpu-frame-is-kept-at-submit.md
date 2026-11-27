@@ -1,12 +1,11 @@
 # 0025. A WebGPU frame is kept when it is submitted
 
-Status: Proposed, 2026-11-26. The capture was built and held by
-`LampAnimationCaptureTests` (`lamp-bible-macos`), but a second review found
-pages it still keeps wrongly, and the owner then widened the question to every
-tool an agent might make a visualisation with (`../AnimationRuntimePlan.md`).
-The code is not on `main`; it is to be rebuilt from this record and the plan
-when item 2 is taken up. Planned by Fable; the owner asked for richer agent
-animations and chose to allow WebGPU.
+Status: Accepted, 2026-11-27. Rebuilt from this record as item 2 of
+`../AnimationRuntimePlan.md`, in `AnimationRuntime/webgpu-keep.js`
+(`lamp-bible-macos`), held by `LampAnimationCaptureTests` and
+`LampAnimationWebGPUTests`. Planned by Fable; the owner asked for richer agent
+animations and chose to allow WebGPU, and, when the stop rule below fired on
+the rebuild's review, chose to fix and review once more rather than hide it.
 
 ## Context
 
@@ -53,7 +52,36 @@ A frame is a frame of the task that asked for its texture, as the browser's
 own is: a page that asks for the texture and submits only after waiting on a
 timer is not kept. three.js asks and submits in one go.
 
+**What is copied, and when.** A submit copies only the canvases its command
+buffers drew on, found from the views their render passes attach and the
+textures their copies write; a write or copy straight into a texture copies
+only when that texture is a canvas's current one. Copying every canvas being
+drawn at any submit read a canvas before it was drawn, and a WebKit build that
+keeps the first read of a frame would have kept that.
+
 ## What follows
+
+- Rebuilt on 2026-11-27, the raw WebGPU page had every one of its 12 frames
+  wrong without the copy, none with it. The rebuild's review fired the stop
+  rule with two pages given a wrong frame silently: an upload before the draw
+  copied the canvas early, which this Mac's WebKit doesn't keep but WebKit's
+  trunk does (so its test can't fail here); and a canvas configured again and
+  not drawn kept the frame before, where the spec empties it. The owner chose
+  to fix both and to keep reviewing until a round found no P1, which the
+  next did.
+- Limits that round left, in the deck format too: a frame drawn in two
+  submits to one canvas (a scene, then an overlay) is copied after each,
+  and a WebKit that keeps a frame's first read would keep the scene alone;
+  a canvas drawn in a worker is not caught; a canvas set up for a compute
+  shader to write into is refused by name. The tracking is shared by every
+  frame of the page, and a canvas texture given straight as an attachment
+  is followed.
+- Three's `RenderPipeline` shows nothing on its first draw, which builds its
+  shaders, and the first frame is the still: on a page that drew with WebGPU,
+  frame 0 is drawn once and not kept. A 2D or WebGL page is drawn once a
+  frame, as before.
+- The tool says which drew (`drewWith`), since a WebGPU page draws with WebGL
+  on a Mac without WebGPU.
 
 - Measured at 1920×1080, 600 frames, 30 fps, on a quiet machine: 28.4 ms a
   frame with the first version of the copy, 27.9 ms without it — inside

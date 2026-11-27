@@ -84,7 +84,8 @@ Owner's decisions, 2026-11-26:
    - Decision record 0027. Landed: 274 files, 9.5 MB (0.187 ships no
      minified builds), served from the manifest.
 4. **Expose WebGPU**: `three/webgpu` and `three/tsl` in the map, after items 2
-   and 3. The tool result says which backend drew.
+   and 3. The tool result says which backend drew. Items 2 and 4 landed
+   together (`decisions/0025`).
 
 Rejected for the renderer's capture: a second snapshot per frame (tried:
 frames 0-3 black, later ones still one late); an off-screen window (no
