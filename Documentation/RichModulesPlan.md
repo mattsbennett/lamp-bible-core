@@ -15,7 +15,8 @@ Two tracks, one shared piece:
 - **Commentary track** (record 0029): pictures, tables, lists, small caps and
   internal links in commentary notes, and where a study Bible's articles,
   standalone charts and maps live.
-- **Translation track** (record 0030): poetry lines within a verse, in-text
+- **Translation track** (record 0032, the next free number; 0030 was
+  taken): poetry lines within a verse, in-text
   cross-references, inline styles in translation footnotes, heading kinds.
 - **Shared:** the inline set (`italic`, `bold`, `smallcaps`, `scripture`,
   `link`) and the link address, `linkTarget`. Nothing else.
@@ -202,7 +203,7 @@ Commentary:
 7. Docs, record to Accepted, hand-off briefs for the apps.
 
 Translation: poetry lines; heading kinds; cross-references and `\x`;
-footnote styles (after commentary step 2); record 0030 and docs.
+footnote styles (after commentary step 2); record 0032 and docs.
 
 ## Owner decisions
 
@@ -401,7 +402,8 @@ and a search for a chart's words finds it in both modules.
    at compile time turns a module that works on one device into one that
    works on neither. Today a wide enough span traps any reader that opens
    the section.
-3. **One walk over decoded blocks** (lands with the strict table checks in
+3. **One walk over decoded blocks** — done, as `LampBookDrawnText`, for
+   book search; the projections in steps 4 and 5 use it too (lands with the strict table checks in
    `awordInABookTableIsSearchable`, replacing its known issue: the phrase in
    the reader's column order, every shown cell present, the full-text match)
    for a section's drawn text, in reading

@@ -361,3 +361,52 @@ struct LampBookTableLayoutTests {
         #expect(LampBookTableLayout.columnWeights(rows: [], columnCount: 3) == [third, third, third])
     }
 }
+
+/// A section's searchable words are the words its readers draw, block by
+/// block, as `BookModuleView` and `BookModulesView` draw them.
+struct LampBookDrawnTextTests {
+    private func text(_ json: String) -> String { LampBookDrawnText.text(ofContentJSON: json) }
+
+    @Test func eachBlockGivesTheWordsItsTypeDraws() {
+        #expect(text(#"""
+        [
+          {"type": "heading", "level": 2, "content": {"text": "Heading words"}},
+          {"type": "paragraph", "content": {"text": "Paragraph words"}},
+          {"type": "blockquote", "content": {"text": "Quoted words"}},
+          {"type": "list", "listType": "bullet", "items": [
+            {"content": {"text": "First item"}, "children": [{"content": {"text": "Nested item"}}]},
+            {"content": {"text": "Second item"}}
+          ]},
+          {"type": "image", "mediaId": "m1", "caption": "Picture caption"},
+          {"type": "audio", "mediaId": "m2", "caption": {"text": "Recording caption"}},
+          {"type": "thematic-break"},
+          {"type": "callout", "content": {"text": "Unknown kind's words"}}
+        ]
+        """#) == "Heading words Paragraph words Quoted words First item Nested item Second item Picture caption Recording caption Unknown kind's words")
+    }
+
+    /// What a block carries but its type does not draw is not searched: rows
+    /// on a paragraph, items on a heading, a caption on a quotation.
+    @Test func whatABlocksTypeDoesNotDrawIsNotSearched() {
+        #expect(text(#"""
+        [
+          {"type": "paragraph", "content": {"text": "Shown"},
+           "rows": [{"cells": [{"column": 0, "content": {"text": "Stray cell"}}]}],
+           "items": [{"content": {"text": "Stray item"}}], "caption": "Stray caption"}
+        ]
+        """#) == "Shown")
+    }
+
+    /// A block the readers cannot decode, and so leave out, is not searched
+    /// either.
+    @Test func ablockTheReadersCannotReadIsNotSearched() {
+        #expect(text(#"""
+        [
+          {"type": "paragraph", "content": {"text": "Kept"}},
+          {"type": "table", "rows": [{"cells": [{"column": 0, "colSpan": 1.5, "content": {"text": "Unreadable"}}]}]},
+          {"content": {"text": "No type"}}
+        ]
+        """#) == "Kept")
+    }
+}
+

@@ -612,16 +612,12 @@ struct LampModuleCompilerTests {
     /// it — and only as the reader shows it.
     ///
     /// A table's rows hold their words in `cells`, which the search text's
-    /// walk does not take, so a word that appears only in a table is found
-    /// nowhere. A study Bible's charts are tables. Adding `cells` to that
-    /// raw-JSON walk was tried and taken back out: it made the index a second
-    /// reading of the table beside `LampBookTableLayout`, and four review
-    /// rounds each found one more place the two disagreed — cell order, a
-    /// second cell at one column, a cell under a span, a missing column, an
-    /// overflowing span, cells on a block not drawn as a table. The search
-    /// text is to be built from the decoded blocks through the reader's own
-    /// layout (step 3 of Documentation/RichModulesPlan.md). Until then this
-    /// is a known issue, and the test fails when it stops being one.
+    /// raw-JSON walk did not take, so a word only in a table was found
+    /// nowhere; and adding `cells` to that walk made the index a second
+    /// reading of the table, which four review rounds each found disagreeing
+    /// with the reader somewhere else. The search text is the words the
+    /// readers draw, decoded and laid out as they lay them out
+    /// (`LampBookDrawnText`).
     @Test func awordInABookTableIsSearchable() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }
@@ -683,21 +679,41 @@ struct LampModuleCompilerTests {
             )
         }
         // A cell the reader hides — a second naming one column, or one under
-        // another's span — is not searched, now or once cells are: outside the
-        // known issue, so a partial fix that indexed it would fail here.
+        // another's span — is not searched.
         #expect(searchText?.lowercased().contains("hidden") == false, "search text: \(searchText ?? "none")")
         #expect(hiddenMatches == 0)
-        // An expected failure, stated plainly: no table cell is in the search
-        // text yet. Step 3 of Documentation/RichModulesPlan.md removes this
-        // wrapper, and with it adds the strict checks — the phrase in the
-        // reader's column order, every shown cell present, the full-text
-        // match — so a later regression fails here. Found by Codex.
-        withKnownIssue("A book's table cells are not in its search text until step 3") {
-            // What a reader searches: the full-text index, not the column
-            // it is built from. Found by Codex.
-            #expect(matches == 1, "search text: \(searchText ?? "none")")
+        // Every shown cell, in the reader's column order, in the index.
+        #expect(searchText?.contains("Jehoshaphat") == true, "search text: \(searchText ?? "none")")
+        #expect(matches == 1)
+        #expect(phrase == 1, "search text: \(searchText ?? "none")")
+        #expect(searchText?.contains("Divided kingdom") == true)
+        // A cell naming no column is the first column's, and shown; a span
+        // past the bound is the rest of the row, not a crash.
+        #expect(searchText?.contains("Unnumbered Asa") == true, "search text: \(searchText ?? "none")")
+        #expect(searchText?.contains("Overreaching") == true)
+    }
+
+    /// A NUL in a section's words does not end its search text: the words
+    /// after it are found too. Found by Codex.
+    @Test func anulInASectionsWordsDoesNotEndItsSearchText() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("nul_book.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {"meta": {"schemaVersion": "1.0", "id": "nul_book", "type": "book", "title": "Nul", "language": "en"},
+             "sections": [{"id": "s", "type": "chapter", "title": "Before\u0000the title's end", "content": [
+               {"type": "table", "columnCount": 1, "rows": [{"cells": [{"column": 0, "content": {"text": "before\u0000after"}}]}]},
+               {"type": "paragraph", "content": {"text": "Zerubbabel rebuilt."}}
+             ]}]}
+            """#.utf8),
+            sourceFilename: "nul_book.json",
+            destinationURL: outputURL
+        )
+        let matches = try fixture.openLamp(outputURL).read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM book_sections_fts WHERE book_sections_fts MATCH 'zerubbabel'")
         }
-        _ = phrase
+        #expect(matches == 1)
     }
 
     @Test func bookTableColumnsAreDeclared() throws {

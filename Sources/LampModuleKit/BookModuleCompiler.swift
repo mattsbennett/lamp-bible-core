@@ -77,10 +77,16 @@ extension LampModuleCompiler {
                     let number = JSONSupport.string(section["number"])
                         ?? JSONSupport.integer(section["number"]).map(String.init)
                     let subtitle = JSONSupport.string(section["subtitle"])
-                    let searchText = [sectionTitle, subtitle, JSONSupport.plainText(content)]
+                    let contentJSON = try JSONSupport.jsonString(content) ?? "[]"
+                    // The words the readers draw, from the blocks as they
+                    // decode them (`LampBookDrawnText`).
+                    // A NUL anywhere in it, title or body, is a space: bound,
+                    // it ended the text there. Found by Codex.
+                    let searchText = [sectionTitle, subtitle, LampBookDrawnText.text(ofContentJSON: contentJSON)]
                         .compactMap { $0 }
                         .filter { !$0.isEmpty }
                         .joined(separator: " ")
+                        .replacingOccurrences(of: "\0", with: " ")
 
                     try db.execute(sql: """
                         INSERT INTO book_sections (
@@ -100,7 +106,7 @@ extension LampModuleCompiler {
                             depth,
                             JSONSupport.integer(section["order"]) ?? arrayIndex,
                             try JSONSupport.jsonString(section["keyScriptures"]),
-                            try JSONSupport.jsonString(content) ?? "[]",
+                            contentJSON,
                             searchText,
                         ])
                     sectionCount += 1
