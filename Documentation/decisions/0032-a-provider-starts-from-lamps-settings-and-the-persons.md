@@ -85,10 +85,11 @@ Built:
    counts every entry it can't vouch for. Vouched for: its own files as it
    writes them, its skills as it installs them (a built-in equal to the
    bundle's, a custom one as plain as Lamp writes one), and in
-   `.claude/settings.local.json` the settings Claude writes there itself,
-   with an allow rule or extra folder vouched for only if it was there when
-   the last Terminal session ended (taken as they stand at the first
-   check). Everything else counts, a setting no one has seen yet included;
+   `.claude/settings.local.json` the settings Claude writes there itself
+   but for an allow rule or extra folder, which the person keeps by
+   approving it, all saved since the last answer shown together as a
+   confirmation ("Keep the permissions saved for Claude?"); a rule that
+   only restricts passes. Everything else counts, a setting no one has seen yet included;
    a link is counted and never followed. Each counted entry is shown, a
    small file whole, and fingerprinted by its bytes; the answer holds for
    exactly those, and the check runs again after it, so anything changed
@@ -101,11 +102,28 @@ Built:
    answer held to the warning's words rather than the bytes. Fable's
    allow-list replaced it.
 
+   While the Terminal starts, the writing is held: no chat begins a turn
+   there, from any pane or the phone, and the Terminal doesn't open while
+   one is under way. Each launch owns its hold, released when the CLI first
+   reports in (Claude's and OpenCode's start, which means it has read its
+   settings), after 30 seconds for one that reports nothing until asked
+   (Codex), or when the launch is given up.
+
+   Rules were at first vouched for by when they appeared, as those present
+   when the last Claude Terminal session ended. Five review rounds broke
+   that guess five ways (a restart after exit, an exit with no status, a
+   closed pane, a chat beside the Terminal), each time letting an agent's
+   rule pass as Claude's; who wrote a rule can't be told from when. Fable:
+   ask the person instead, once per rule.
+
 ## What follows
 
 - The check does not follow what an approved entry points at: an approved
   hook that runs `./x.sh` does not bind `x.sh`. Nor does it see a change made
-  while the Terminal runs; Claude Code reloads its settings then.
+  while the Terminal runs: Claude Code reloads its settings then, so a rule
+  a chat's agent writes beside an open Claude Terminal applies there at
+  once. Holding every chat while a Claude Terminal is open would close that,
+  at the cost of not chatting meanwhile; left open, for the owner.
 
 - A Claude writing chat no longer shows the workspace's skills in its own
   list; it reads them through `read_skill`.
