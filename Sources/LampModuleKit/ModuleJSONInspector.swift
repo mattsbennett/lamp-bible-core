@@ -6,6 +6,10 @@ import Foundation
 /// adds checks that JSON Schema cannot express well, such as BBCCCVVV consistency
 /// and duplicate entry keys.
 public struct ModuleJSONInspector: Sendable {
+    /// The commentary versions this build compiles: `meta.schemaVersion`'s
+    /// enum in `Schemas/commentary_schema.json`, as far as it is supported.
+    static let commentaryVersions: Set<String> = ["1.0", "2.0", "2.1", "2.2"]
+
     public init() {}
 
     /// `sourceFilename` is the file the JSON came from, where there is one.
@@ -101,6 +105,18 @@ public struct ModuleJSONInspector: Sendable {
             requireArray(root, key: "entries", issues: &issues)
         case .commentary:
             requireStrings(meta, keys: ["schemaVersion", "seriesAbbrev", "seriesFull"], issues: &issues)
+            // A version this compiler does not know is refused, not read as
+            // the nearest one it does: a 2.3 note given as `blocks` alone
+            // compiled to an empty unit that looked valid. Found by the
+            // converter's run of today's tools.
+            if let version = string(meta["schemaVersion"]),
+               !Self.commentaryVersions.contains(version) {
+                issues.append(.init(
+                    severity: .error,
+                    path: "/meta/schemaVersion",
+                    message: "Commentary version \(version) is not one this build reads (\(Self.commentaryVersions.sorted().joined(separator: ", "))); building it would lose what it adds."
+                ))
+            }
             if (string(meta["title"]) ?? string(meta["name"]))?.isEmpty != false {
                 issues.append(.init(
                     severity: .error,
@@ -111,6 +127,7 @@ public struct ModuleJSONInspector: Sendable {
             requireInteger(root, key: "bookNumber", issues: &issues)
             requireString(root, key: "book", basePath: "", issues: &issues)
             requireArray(root, key: "chapters", issues: &issues)
+            warnAboutMixedSourceOrder(root: root, issues: &issues)
         case .book:
             requireStrings(meta, keys: ["schemaVersion", "id", "type", "title", "language"], issues: &issues)
             requireArray(root, key: "sections", issues: &issues)
@@ -210,6 +227,32 @@ public struct ModuleJSONInspector: Sendable {
         case .commentary:
             break
         }
+    }
+
+    /// A warning for a source-tracked commentary whose pericopae give a
+    /// `sourceOrder` some of the time: one without is read at its place among
+    /// all of them, where the modules repository's Python read it as 0, so
+    /// the two writers ordered such a volume differently. No volume there
+    /// mixes them; the warning says where one does. Found by Codex,
+    /// reviewing the series compiler.
+    private func warnAboutMixedSourceOrder(root: [String: Any], issues: inout [ModuleValidationIssue]) {
+        guard object(root["extraction"])?["sourceTracked"] as? Bool == true else { return }
+        var given = 0
+        var omitted = 0
+        for chapter in array(root["chapters"]) ?? [] {
+            for pericope in array(object(chapter)?["pericopae"]) ?? [] {
+                // An order the builder can use; one that is null, or a
+                // string, is read at its place like none at all. Found by
+                // Codex.
+                if JSONSupport.integer(object(pericope)?["sourceOrder"]) == nil { omitted += 1 } else { given += 1 }
+            }
+        }
+        guard given > 0, omitted > 0 else { return }
+        issues.append(.init(
+            severity: .warning,
+            path: "/chapters",
+            message: "\(omitted) of \(given + omitted) pericopae give no sourceOrder, and are read at their place among the rest; give every one an order, or none."
+        ))
     }
 
     /// A warning for a table wider than readers lay out, or with a cell at a

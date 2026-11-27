@@ -264,6 +264,42 @@ struct LampLibraryTests {
         #expect(found.count == 1, "found \(found)")
     }
 
+    /// A series compiled in core installs, reads volume by volume and is
+    /// found by search, as one the modules repository's Python wrote is.
+    @Test func aseriesCompiledInCoreInstallsAndReads() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-core-series-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("volumes"), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(#"""
+        {"meta":{"schemaVersion":"1.0","id":"PAIR","type":"commentary-series","name":"Paired Notes","abbreviation":"PR"},
+         "volumes":[{"id":"PR_Gen","book":"Gen","bookNumber":1},{"id":"PR_Exod","book":"Exod","bookNumber":2}]}
+        """#.utf8).write(to: root.appendingPathComponent("series.json"))
+        for (id, book, number, words) in [
+            ("PR_Gen", "Gen", 1, "The firmament divides the waters."),
+            ("PR_Exod", "Exod", 2, "The bush burned and was not consumed."),
+        ] {
+            try Data(#"""
+            {"meta":{"schemaVersion":"2.2","id":"\#(id)","type":"commentary","seriesAbbrev":"PR","seriesFull":"Paired Notes","title":"Notes on \#(book)"},
+             "book":"\#(book)","bookNumber":\#(number),"chapters":[{"chapter":1,"verses":[{"sv":\#(number * 1_000_000 + 1_001),"commentary":{"text":"\#(words)"}}]}]}
+            """#.utf8).write(to: root.appendingPathComponent("volumes/\(id).json"))
+        }
+        let built = try LampModuleCompiler().compileSeries(
+            seriesURL: root.appendingPathComponent("series.json"),
+            volumesDirectory: root.appendingPathComponent("volumes", isDirectory: true)
+        )
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let module = try await library.install(from: built.outputURL)
+        #expect(module.id == "PAIR")
+        #expect(module.kind == .commentary)
+        #expect(module.name == "Paired Notes")
+        #expect(try await library.commentary(bookNumber: 1, chapterNumber: 1).first?.commentary?.contains("firmament") == true)
+        #expect(try await library.commentary(bookNumber: 2, chapterNumber: 1).first?.commentary?.contains("bush") == true)
+        #expect(try await library.searchModules(query: "consumed", kinds: [.commentary]).count == 1)
+    }
+
     @Test func installsLegacyCompactHighlightsWithoutUsingSetIDAsModuleID() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-legacy-highlight-install-\(UUID().uuidString)", isDirectory: true)

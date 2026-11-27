@@ -18,6 +18,11 @@ enum LampModuleCLI {
             succeeded = inspect(paths: Array(arguments.dropFirst()))
         case "build" where arguments.count == 2 || arguments.count == 3:
             succeeded = build(sourcePath: arguments[1], outputPath: arguments.count == 3 ? arguments[2] : nil)
+        case "build-series" where arguments.count == 3 || arguments.count == 4:
+            succeeded = buildSeries(
+                seriesPath: arguments[1], volumesPath: arguments[2],
+                outputPath: arguments.count == 4 ? arguments[3] : nil
+            )
         case "verify" where arguments.count == 2:
             succeeded = await verify(path: arguments[1])
         case "search-words" where arguments.count == 2:
@@ -73,11 +78,26 @@ enum LampModuleCLI {
     private static func build(sourcePath: String, outputPath: String?) -> Bool {
         let sourceURL = URL(fileURLWithPath: sourcePath)
         let outputURL = outputPath.map { URL(fileURLWithPath: $0) }
-        do {
-            let result = try LampModuleCompiler().compile(
-                sourceURL: sourceURL,
-                destinationURL: outputURL
+        return report {
+            try LampModuleCompiler().compile(sourceURL: sourceURL, destinationURL: outputURL)
+        }
+    }
+
+    /// A commentary series: its `commentary-series` file, and the folder
+    /// holding each volume it lists as `<volume id>.json`.
+    private static func buildSeries(seriesPath: String, volumesPath: String, outputPath: String?) -> Bool {
+        report {
+            try LampModuleCompiler().compileSeries(
+                seriesURL: URL(fileURLWithPath: seriesPath),
+                volumesDirectory: URL(fileURLWithPath: volumesPath, isDirectory: true),
+                destinationURL: outputPath.map { URL(fileURLWithPath: $0) }
             )
+        }
+    }
+
+    private static func report(_ compile: () throws -> ModuleCompilationResult) -> Bool {
+        do {
+            let result = try compile()
             print("Built \(result.outputURL.path)")
             print("  type: \(result.kind.rawValue)")
             print("  module: \(result.moduleID)")
@@ -88,6 +108,9 @@ enum LampModuleCLI {
                 .map { "\($0.key)=\($0.value)" }
                 .joined(separator: ", ")
             print("  contents: \(counts)")
+            for warning in result.warnings {
+                print("  warning \(warning.path): \(warning.message)")
+            }
             return true
         } catch {
             writeError("Build failed: \(error.localizedDescription)")
@@ -343,6 +366,7 @@ enum LampModuleCLI {
             Usage:
               lamp-module inspect <module.json> [module.json ...]
               lamp-module build <module.json> [output.lamp]
+              lamp-module build-series <series.json> <volumes folder> [output.lamp]
               lamp-module verify <module.lamp>
               lamp-module search-words <database.sqlite>
               lamp-module import <bible file, folder or zip> <output folder> [--name NAME] [--abbreviation ABBR] [--language CODE] [--key UNLOCK-KEY] [--septuagint]

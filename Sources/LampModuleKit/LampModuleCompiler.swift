@@ -113,6 +113,44 @@ public struct LampModuleCompiler: Sendable {
                 .deletingLastPathComponent()
                 .appendingPathComponent(moduleID)
                 .appendingPathExtension("lamp")
+        // What the module was warned about goes out with it, as a series'
+        // does. Found by Codex.
+        return try writeModule(
+            kind: kind, moduleID: moduleID, destinationURL: destinationURL,
+            warnings: inspection.issues.filter { $0.severity == .warning }
+        ) { databaseURL in
+            switch kind {
+            case .translation:
+                return try compileTranslation(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .dictionary:
+                return try compileDictionary(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .commentary:
+                return try compileCommentary(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .book:
+                return try compileBook(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .devotional:
+                return try compileDevotional(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .notes:
+                return try compileNotes(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .plan:
+                return try compilePlan(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .highlights:
+                return try compileHighlights(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            case .quiz:
+                return try compileQuiz(root: root, databaseURL: databaseURL, moduleID: moduleID)
+            }
+        }
+    }
+
+    /// Builds a module's database with `build`, then checks, compresses and
+    /// writes it to `destinationURL`, which must be named for `moduleID`.
+    func writeModule(
+        kind: LampModuleKind,
+        moduleID: String,
+        destinationURL: URL,
+        warnings: @autoclosure () -> [ModuleValidationIssue] = [],
+        build: (URL) throws -> [String: Int]
+    ) throws -> ModuleCompilationResult {
         try validateOutputURL(destinationURL, moduleID: moduleID)
 
         let fileManager = FileManager.default
@@ -130,26 +168,7 @@ public struct LampModuleCompiler: Sendable {
         let databaseURL = temporaryDirectory.appendingPathComponent("module.sqlite")
         let tableCounts: [String: Int]
         do {
-            switch kind {
-            case .translation:
-                tableCounts = try compileTranslation(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .dictionary:
-                tableCounts = try compileDictionary(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .commentary:
-                tableCounts = try compileCommentary(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .book:
-                tableCounts = try compileBook(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .devotional:
-                tableCounts = try compileDevotional(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .notes:
-                tableCounts = try compileNotes(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .plan:
-                tableCounts = try compilePlan(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .highlights:
-                tableCounts = try compileHighlights(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            case .quiz:
-                tableCounts = try compileQuiz(root: root, databaseURL: databaseURL, moduleID: moduleID)
-            }
+            tableCounts = try build(databaseURL)
         } catch let error as ModuleCompilationError {
             throw error
         } catch {
@@ -180,7 +199,8 @@ public struct LampModuleCompiler: Sendable {
             tableCounts: tableCounts,
             uncompressedByteCount: databaseData.count,
             compressedByteCount: compressedData.count,
-            sha256: digest
+            sha256: digest,
+            warnings: warnings()
         )
     }
 

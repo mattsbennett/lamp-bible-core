@@ -2,7 +2,8 @@
 
 Status: **Proposed; the schema signed off by the owner on 2026-11-26.**
 Revised once (below) for the owner's decisions and the converter's
-measurements. Steps 1 (068cf57) and 2a are in the code; the rest is not yet.
+measurements. Steps 1 (068cf57), 2 and 2a (5e3049f) are in the code; the
+rest is not yet.
 Planned 2026-11-26 (Fable), every load-bearing claim checked
 against the code before this was written (see "Verified").
 
@@ -362,10 +363,33 @@ and a search for a chart's words finds it in both modules.
    was itself the defect: it made the index a second reading of a table
    beside `LampBookTableLayout`, and four Codex rounds each found another
    place they disagreed. Taken back out; see step 3.)
-2. Series compilation in core with no format change, held row by row to the
-   Python writer. The two join search text differently (newlines in
-   `commentary_units.py:63`, spaces in `CommentaryModuleCompiler.swift:515`);
-   choose one here.
+2. **Done.** Series compilation in core with no format change:
+   `LampModuleCompiler.compileSeries`, and `lamp-module build-series
+   <series.json> <volumes folder> [output.lamp]`, each listed volume read
+   from `<volume id>.json`, in canonical order. Held row by row to
+   `commentary_series_to_sqlite.py` on a two-volume series (one
+   source-tracked): every table, column and row matched but three, each the
+   Python port having fallen behind core's builder, and each core's now —
+   verse and chapter-introduction IDs (no reader stores a unit's ID), a
+   pericope's own `commentary` (not in the schema; no volume in the modules
+   repository uses it), and search text joined with spaces rather than
+   newlines (the index reads both the same). Pinned in
+   `CommentarySeriesCompilerTests`. Then held to it on real data: NIC from
+   today's sources, 57 volumes and 86,333 units, matched in every column but
+   search-text whitespace; XRef and TSKe build as well. A series' `volumes`
+   entries name the files only when they give an `id` (the converter's);
+   otherwise the list describes the printed volumes, as the schema says, and
+   every commentary volume in the folder and its subfolders is built, as the
+   Python built them — NIC lists Hamilton's Genesis as two volumes in one
+   file. Volumes are read one at a time; the peak is producing the `.lamp`
+   itself (1 GB for NIC's 375 MB database, compressed and verified), as for
+   any large module. The manifest is checked in one pass before it chooses
+   anything (`seriesManifestIssues`), and a volume's issues carry its file's
+   name, its warnings reaching the build's result: four review rounds had
+   each found another field read as absent when malformed. The refusal of
+   an unsupported commentary
+   `schemaVersion` landed here rather than in step 4: with a series command,
+   a 2.3 volume could otherwise have been built and lost its blocks.
 2a. **Done.** Bound the table layout, its own commit before step 3: saturating
    `column + span`, a capped column count (a named constant, at least twice
    the widest real table: 64, measured against the widest of 691 bundled
@@ -389,9 +413,9 @@ and a search for a chart's words finds it in both modules.
    back to a picture's `alt`, the phone to its media caption). Then the
    shared model: figure, row and cell additions, `smallcaps`, `link` and its
    target, resolver cases, `rowSpan`, the link forms.
-4. Commentary 2.3 in the compiler, volume and series. First, refuse an
-   unsupported `schemaVersion`; last, declare the shape, landed with the
-   phone's migration. Requirements found reviewing step 1, for the schema
+4. Commentary 2.3 in the compiler, volume and series (an unsupported
+   `schemaVersion` is refused already, from step 2; 2.3 joins the supported
+   set here). Last, declare the shape, landed with the phone's migration. Requirements found reviewing step 1, for the schema
    files and the compiler written here:
    - `linkTarget`'s schema and the compiler's check of a link against the
      module it is in agree: a same-module `{ section }` inside a book is a

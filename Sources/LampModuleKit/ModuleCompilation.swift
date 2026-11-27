@@ -9,6 +9,9 @@ public struct ModuleCompilationResult: Equatable, Sendable {
     public let uncompressedByteCount: Int
     public let compressedByteCount: Int
     public let sha256: String
+    /// What the inputs were warned about, for a build that went ahead anyway:
+    /// a series' volumes', each path prefixed with its file.
+    public let warnings: [ModuleValidationIssue]
 
     public init(
         outputURL: URL,
@@ -18,7 +21,8 @@ public struct ModuleCompilationResult: Equatable, Sendable {
         tableCounts: [String: Int],
         uncompressedByteCount: Int,
         compressedByteCount: Int,
-        sha256: String
+        sha256: String,
+        warnings: [ModuleValidationIssue] = []
     ) {
         self.outputURL = outputURL
         self.moduleID = moduleID
@@ -28,6 +32,7 @@ public struct ModuleCompilationResult: Equatable, Sendable {
         self.uncompressedByteCount = uncompressedByteCount
         self.compressedByteCount = compressedByteCount
         self.sha256 = sha256
+        self.warnings = warnings
     }
 }
 
@@ -47,7 +52,11 @@ public enum ModuleCompilationError: Error, LocalizedError, Sendable {
         switch self {
         case .validationFailed(let issues):
             let errors = issues.filter { $0.severity == .error }
-            return "Module validation failed with \(errors.count) error\(errors.count == 1 ? "" : "s")."
+            // Each error where it is, so a build that stops says why, and of
+            // a series' volumes which file. Found by Codex.
+            let listed = errors.prefix(5).map { "\($0.path): \($0.message)" }.joined(separator: "; ")
+            let more = errors.count > 5 ? "; and \(errors.count - 5) more" : ""
+            return "Module validation failed with \(errors.count) error\(errors.count == 1 ? "" : "s"): \(listed)\(more)."
         case .unsupportedModuleType(let kind):
             return "Building \(kind.rawValue) modules is not supported yet."
         case .missingValue(let path):

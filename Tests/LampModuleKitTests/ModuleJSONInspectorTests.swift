@@ -259,6 +259,36 @@ struct ModuleJSONInspectorTests {
         #expect(book.issues.allSatisfy { $0.severity != .error })
     }
 
+    /// A commentary in a version this build does not read is an error, not
+    /// read as the nearest it does: a note given only as 2.3 `blocks`
+    /// compiled to an empty unit that looked valid.
+    @Test func acommentaryInAnUnreadVersionIsRefused() throws {
+        func inspect(_ version: String) throws -> ModuleInspection {
+            try inspector.inspect(Data(#"""
+            {"meta":{"schemaVersion":"\#(version)","seriesAbbrev":"V","seriesFull":"V","title":"Genesis"},
+             "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,"verses":[{"sv":1001001,"commentary":{"text":"A note."}}]}]}
+            """#.utf8))
+        }
+        for version in ["1.0", "2.0", "2.1", "2.2"] {
+            #expect(try inspect(version).canCompile, "\(version)")
+        }
+        let unread = try inspect("2.3")
+        #expect(!unread.canCompile)
+        #expect(unread.issues.contains { $0.path == "/meta/schemaVersion" && $0.severity == .error })
+    }
+
+    /// A source-tracked commentary whose pericopae give a sourceOrder only
+    /// some of the time is warned about: the two writers ordered it apart.
+    @Test func amixedSourceOrderIsAWarning() throws {
+        let mixed = try inspector.inspect(Data(#"""
+        {"meta":{"schemaVersion":"2.2","seriesAbbrev":"M","seriesFull":"M","title":"Genesis"},
+         "book":"Gen","bookNumber":1,"extraction":{"sourceTracked":true},"chapters":[
+           {"chapter":1,"pericopae":[{"id":"a","sourceOrder":1,"sv":1001001,"content":[]},{"id":"b","sv":1001002,"content":[]}]}]}
+        """#.utf8))
+        #expect(mixed.canCompile)
+        #expect(mixed.issues.contains { $0.severity == .warning && $0.path == "/chapters" }, "\(mixed.issues)")
+    }
+
     @Test func validatesHierarchicalBookSections() throws {
         let book = try inspector.inspect(Data(#"""
         {

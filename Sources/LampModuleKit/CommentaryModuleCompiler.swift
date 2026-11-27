@@ -152,7 +152,7 @@ extension LampModuleCompiler {
     }
 }
 
-private struct CommentaryUnitRow {
+struct CommentaryUnitRow {
     let id: String
     let chapter: Int
     let startVerse: Int
@@ -171,10 +171,11 @@ private struct CommentaryUnitRow {
     let orderIndex: Int
 }
 
-private struct CommentaryUnitBuilder {
+struct CommentaryUnitBuilder {
     let moduleID: String
     let bookNumber: Int
     private(set) var units: [CommentaryUnitRow] = []
+    private var introducedChapters: Set<Int> = []
     private var orderIndex = 0
     private let footnotesByID: [String: Any]
     /// Each note's place in the document's notes, which is their printed order.
@@ -220,8 +221,15 @@ private struct CommentaryUnitBuilder {
 
             if let introduction = meaningful(chapter["introduction"]) {
                 let title = "Chapter \(chapterNumber) Introduction"
+                // A chapter given twice, each with an introduction, keeps the
+                // first ID as it was and tells the next apart by its place:
+                // the same ID twice stopped the compile. Found by Codex.
+                var introductionID = "\(moduleID):\(bookNumber):chapter_intro:\(chapterNumber)"
+                if !introducedChapters.insert(chapterNumber).inserted {
+                    introductionID += ":\(orderIndex)"
+                }
                 appendRow(
-                    id: "\(moduleID):\(bookNumber):chapter_intro:\(chapterNumber)",
+                    id: introductionID,
                     chapter: chapterNumber,
                     startVerse: defaultStartVerse(chapter: chapterNumber),
                     unitType: "section",

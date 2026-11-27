@@ -105,6 +105,21 @@ struct CommentaryCompiledShapeTests {
     }
     """#
 
+    /// A chapter given twice, each with an introduction, compiles: the first
+    /// keeps the ID it always had, and the second is told apart by its place.
+    /// Found by Codex, reviewing the series compiler.
+    @Test func achapterIntroducedTwiceStillCompiles() throws {
+        let rows = try Self.compiledRows(data: Data(#"""
+        {"meta": {"schemaVersion": "2.2", "id": "TWICE_Gen", "seriesAbbrev": "TW", "seriesFull": "Twice", "title": "Genesis"},
+         "book": "Gen", "bookNumber": 1, "chapters": [
+           {"chapter": 1, "introduction": {"text": "First."}, "verses": [{"sv": 1001001, "commentary": {"text": "One."}}]},
+           {"chapter": 1, "introduction": {"text": "Again."}}
+         ]}
+        """#.utf8), name: "TWICE_Gen.json")
+        let ids = rows.filter { $0.contains("chapter_intro") }.map { $0.split(separator: "|")[0] }
+        #expect(ids == ["unit s:TWICE_Gen:1:chapter_intro:1", "unit s:TWICE_Gen:1:chapter_intro:1:2"], "\(ids)")
+    }
+
     // MARK: Compiling
 
     static func compiledRows(_ name: String) throws -> [String] {
