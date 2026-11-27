@@ -107,7 +107,7 @@ struct LampAgentRemoteApprovalTests {
         #expect(LampAgentRemoteApproval.canShowWhole(String(repeating: "a", count: LampAgentRemoteApproval.largestAllowedCommand)))
         // What doesn't draw: a right-to-left override, a zero-width space and
         // joiner, a carriage return, an escape, a line separator.
-        for hidden in ["\u{202E}", "\u{200B}", "\u{200D}", "\r", "\u{1B}", "\u{2028}", "\u{E000}"] {
+        for hidden in ["\u{202E}", "\u{200B}", "\u{200D}", "\r", "\u{1B}", "\u{2028}", "\u{E000}", "\u{034F}", "\u{FE0F}", "\u{115F}", "\u{3164}"] {
             #expect(!LampAgentRemoteApproval.canShowWhole("rm -rf ~/safe\(hidden)"), "\(hidden.unicodeScalars.first!.value)")
         }
     }
@@ -146,5 +146,28 @@ struct LampAgentRemoteApprovalTests {
         // It survives the wire.
         let decoded = try? JSONDecoder().decode(LampAgentRemoteMessage.self, from: JSONEncoder().encode(answer))
         #expect(decoded == answer)
+    }
+
+    /// However much a turn waits on, or however long a request, what a
+    /// device is sent stays far inside a frame, and what is cut is Deny-only.
+    @Test func whatADeviceIsSentIsBounded() throws {
+        var huge = request
+        huge.command = String(repeating: "x", count: 3_000_000)
+        huge.agentReason = String(repeating: "y", count: 3_000_000)
+        huge.note = String(repeating: "z", count: 3_000_000)
+        let many = (0..<500).map { index -> LampAgentRemoteApproval in
+            var each = huge
+            each.id = "codex-\(index)"
+            return each
+        }
+        let state = LampAgentRemoteChatState(messages: [question], isRunning: true, approvals: many)
+        #expect(state.approvals.count == LampAgentRemoteApproval.largestListed)
+        #expect(state.approvals.allSatisfy { !$0.canAllow && ($0.command?.count ?? 0) <= LampAgentRemoteApproval.largestAllowedCommand + 1 })
+        let snapshot = try JSONEncoder().encode(LampAgentRemoteChatUpdates.snapshot(summary: summary, state: state))
+        #expect(snapshot.count < 1_000_000, "\(snapshot.count) bytes")
+        let events = LampAgentRemoteChatUpdates.events(chatID: "chat", from: .init(messages: [question], isRunning: true), to: state)
+        #expect(try events.allSatisfy { try JSONEncoder().encode($0).count < 1_000_000 })
+        // A command that fits is left whole, and may still be allowed.
+        #expect(request.bounded() == request)
     }
 }

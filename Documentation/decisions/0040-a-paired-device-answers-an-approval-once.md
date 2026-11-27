@@ -44,11 +44,19 @@ one taken.**
 - **What a device may allow.** Only what it can show whole: a command within
   8,000 characters with nothing that doesn't draw (a control character but a
   line break or tab, a bidirectional override, a zero-width character, a
-  line separator, a private-use character). The host sets `canAllow` itself;
+  line separator, a private-use character, or anything Unicode lets be drawn
+  as nothing: Codex's review found a combining grapheme joiner passing a
+  check by category). The host sets `canAllow` itself;
   anything else, and every non-command tool call (Claude's file edits are
   excerpted even on the Mac, its other tools are raw JSON), is Deny-only on a
   device and answered on the Mac. Allow on a Deny-only request is refused as
   `not-allowed`, as is any decision but `allow-once` and `deny`.
+- **What a device is sent is bounded**: the first 16 requests, every other
+  field cut at 2,000 characters and a longer command at 8,000, which makes
+  it Deny-only. Cut in the chat's state, so the host judges an answer
+  against the same copy the device was sent; unbounded, a long request could
+  push a frame past what a connection seals, and it would be dropped
+  unsent.
 
 ## What follows
 

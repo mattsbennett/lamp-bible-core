@@ -21,7 +21,8 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
     public var kind: String
     /// What the card is headed with, as the Mac heads it.
     public var title: String
-    /// The command, whole.
+    /// The command, whole where a device may allow it; for any other tool
+    /// call, what the Mac's card shows of it.
     public var command: String?
     /// Where it runs.
     public var folder: String?
@@ -64,12 +65,42 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
     public static func canShowWhole(_ command: String) -> Bool {
         guard !command.isEmpty, command.count <= largestAllowedCommand else { return false }
         return command.unicodeScalars.allSatisfy { scalar in
-            switch scalar.properties.generalCategory {
+            // What Unicode says may be drawn as nothing at all, whatever its
+            // category: a combining grapheme joiner is a combining mark, and
+            // drew nothing.
+            if scalar.properties.isDefaultIgnorableCodePoint { return false }
+            return switch scalar.properties.generalCategory {
             case .control: scalar == "\n" || scalar == "\t"
             case .format, .lineSeparator, .paragraphSeparator, .surrogate, .unassigned, .privateUse: false
             default: true
             }
         }
+    }
+
+    /// The most requests a device is sent at once, and the longest any of
+    /// their other fields may be: with `largestAllowedCommand`, what keeps a
+    /// snapshot or an `approvals` event far inside the largest frame a
+    /// connection seals, which it would otherwise drop unsent.
+    public static let largestListed = 16
+    public static let largestField = 2_000
+
+    /// This request cut to what a device is sent: a command it may allow is
+    /// whole already; anything longer is cut, and can only be denied.
+    public func bounded() -> Self {
+        func cut(_ text: String?, _ limit: Int) -> String? {
+            guard let text, text.count > limit else { return text }
+            return String(text.prefix(limit)) + "…"
+        }
+        var copy = self
+        copy.title = cut(title, 200) ?? ""
+        if cut(command, Self.largestAllowedCommand) != command {
+            copy.command = cut(command, Self.largestAllowedCommand)
+            copy.canAllow = false
+        }
+        copy.folder = cut(folder, Self.largestField)
+        copy.agentReason = cut(agentReason, Self.largestField)
+        copy.note = cut(note, Self.largestField)
+        return copy
     }
 
     /// What a device answers with, and the host checks an answer against:

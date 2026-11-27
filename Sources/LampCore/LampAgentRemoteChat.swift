@@ -14,8 +14,16 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
     /// questions a device sent through this host: what lets that device know
     /// its own question from the same words sent elsewhere.
     public var askedBy: [UUID: UUID]
-    /// What the running turn waits on the person for, oldest first.
-    public var approvals: [LampAgentRemoteApproval]
+    /// What the running turn waits on the person for, oldest first, as a
+    /// device is sent it and the host judges an answer against it: the
+    /// first `LampAgentRemoteApproval.largestListed`, each `bounded()`.
+    public var approvals: [LampAgentRemoteApproval] {
+        didSet { if approvals != Self.sendable(approvals) { approvals = Self.sendable(approvals) } }
+    }
+
+    static func sendable(_ approvals: [LampAgentRemoteApproval]) -> [LampAgentRemoteApproval] {
+        approvals.prefix(LampAgentRemoteApproval.largestListed).map { $0.bounded() }
+    }
 
     public init(
         messages: [LampAgentRemoteChatMessage] = [],
@@ -32,7 +40,7 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
         self.isRunning = isRunning
         self.failure = failure
         self.askedBy = askedBy
-        self.approvals = approvals
+        self.approvals = Self.sendable(approvals)
     }
 
     /// The turn running, by the question it answers, as events name it and
