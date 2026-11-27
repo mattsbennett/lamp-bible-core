@@ -18,7 +18,10 @@ public struct LampAgentRemoteChatState: Equatable, Sendable {
     /// device is sent it and the host judges an answer against it: the
     /// first `LampAgentRemoteApproval.largestListed`, each `bounded()`.
     public var approvals: [LampAgentRemoteApproval] {
-        didSet { if approvals != Self.sendable(approvals) { approvals = Self.sendable(approvals) } }
+        didSet {
+            let sendable = Self.sendable(approvals)
+            if !LampAgentRemoteApproval.same(approvals, sendable) { approvals = sendable }
+        }
     }
 
     static func sendable(_ approvals: [LampAgentRemoteApproval]) -> [LampAgentRemoteApproval] {
@@ -163,7 +166,7 @@ public enum LampAgentRemoteChatUpdates {
             if copy.activity != target.activity {
                 send(LampAgentRemoteChatEvent.activity, open, activity: target.activity)
             }
-            if copy.approvals != (target.approvals ?? []) {
+            if !LampAgentRemoteApproval.same(copy.approvals, target.approvals ?? []) {
                 send(LampAgentRemoteChatEvent.approvals, open, approvals: target.approvals ?? [])
             }
         }
@@ -274,6 +277,6 @@ public struct LampAgentRemoteChatView: Equatable, Sendable {
             && activity == snapshot.activity
             && notice == snapshot.notice
             && isRunning == snapshot.summary.isRunning
-            && approvals == (snapshot.approvals ?? [])
+            && LampAgentRemoteApproval.same(approvals, snapshot.approvals ?? [])
     }
 }

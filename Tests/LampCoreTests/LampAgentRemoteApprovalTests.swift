@@ -101,13 +101,17 @@ struct LampAgentRemoteApprovalTests {
     @Test func onlyACommandThatCanBeShownWholeMayBeAllowed() {
         #expect(LampAgentRemoteApproval.canShowWhole("blender -b scene.blend -a"))
         #expect(LampAgentRemoteApproval.canShowWhole("for f in *.png; do\n\techo \"$f\"\ndone"))
-        #expect(LampAgentRemoteApproval.canShowWhole("echo 'Génesis' # ünïcödé"))
+        // Printable ASCII only: a letter from another script, or an accent,
+        // is Deny-only on a device.
+        #expect(!LampAgentRemoteApproval.canShowWhole("echo 'Génesis'"))
+        #expect(!LampAgentRemoteApproval.canShowWhole("rm -rf ~/\u{0430}pp"))
         #expect(!LampAgentRemoteApproval.canShowWhole(""))
         #expect(!LampAgentRemoteApproval.canShowWhole(String(repeating: "a", count: LampAgentRemoteApproval.largestAllowedCommand + 1)))
         #expect(LampAgentRemoteApproval.canShowWhole(String(repeating: "a", count: LampAgentRemoteApproval.largestAllowedCommand)))
         // What doesn't draw: a right-to-left override, a zero-width space and
         // joiner, a carriage return, an escape, a line separator.
-        for hidden in ["\u{202E}", "\u{200B}", "\u{200D}", "\r", "\u{1B}", "\u{2028}", "\u{E000}", "\u{034F}", "\u{FE0F}", "\u{115F}", "\u{3164}"] {
+        for hidden in ["\u{202E}", "\u{200B}", "\u{200D}", "\r", "\u{1B}", "\u{2028}", "\u{E000}", "\u{034F}", "\u{FE0F}", "\u{115F}",
+                       "\u{3164}", "\u{00A0}", "\u{2007}", "\u{202F}", "\u{3000}", "\u{7F}"] {
             #expect(!LampAgentRemoteApproval.canShowWhole("rm -rf ~/safe\(hidden)"), "\(hidden.unicodeScalars.first!.value)")
         }
     }
@@ -169,5 +173,40 @@ struct LampAgentRemoteApprovalTests {
         #expect(try events.allSatisfy { try JSONEncoder().encode($0).count < 1_000_000 })
         // A command that fits is left whole, and may still be allowed.
         #expect(request.bounded() == request)
+    }
+
+    /// A folder may hold any script's letters, but nothing that draws as
+    /// nothing or as a space it isn't.
+    @Test func aFolderMustReadAsItself() {
+        #expect(LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/Users/x/Génesis notes"))
+        #expect(LampAgentRemoteApproval.mayAllow(command: "ls", folder: nil))
+        #expect(!LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/Users/x/\u{202E}gpj.sh"))
+        #expect(!LampAgentRemoteApproval.mayAllow(command: "ls", folder: "/Users/x/a\u{00A0}b"))
+        #expect(!LampAgentRemoteApproval.mayAllow(command: nil, folder: "/w"))
+    }
+
+    /// A change between a precomposed accent and a combining one is told,
+    /// so the copy a device answers is the host's to the byte.
+    @Test func aChangeOnlyInNormalisationIsTold() {
+        let question = LampAgentRemoteChatMessage(role: LampAgentRemoteChatMessage.user, text: "Go", date: Date(timeIntervalSince1970: 1))
+        var precomposed = request
+        precomposed.folder = "/w/G\u{00E9}nesis"
+        var combining = request
+        combining.folder = "/w/Ge\u{0301}nesis"
+        #expect(precomposed == combining)
+        let from = LampAgentRemoteChatState(messages: [question], isRunning: true, approvals: [precomposed])
+        let to = LampAgentRemoteChatState(messages: [question], isRunning: true, approvals: [combining])
+        let events = LampAgentRemoteChatUpdates.events(chatID: "chat", from: from, to: to)
+        #expect(events.map(\.kind) == [LampAgentRemoteChatEvent.approvals])
+        #expect(events.first?.approvals?.first?.folder?.unicodeScalars.count == combining.folder?.unicodeScalars.count)
+    }
+
+    /// A field of marks on one letter, long by bytes but one character, is
+    /// cut by its bytes.
+    @Test func aFieldIsCutByItsBytes() {
+        var marked = request
+        marked.agentReason = "a" + String(repeating: "\u{0301}", count: 100_000)
+        let cut = marked.bounded()
+        #expect((cut.agentReason?.utf8.count ?? 0) <= LampAgentRemoteApproval.largestField + 3)
     }
 }

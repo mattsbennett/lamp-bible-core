@@ -40,20 +40,28 @@ one taken.**
   waits, so a request changed, answered, timed out or ended is
   `approval-gone`; an answer taken is acknowledged with `approval-answered`,
   without which a phone could not tell its Allow landing from the Mac's
-  answer arriving first.
-- **What a device may allow.** Only what it can show whole: a command within
-  8,000 characters with nothing that doesn't draw (a control character but a
-  line break or tab, a bidirectional override, a zero-width character, a
-  line separator, a private-use character, or anything Unicode lets be drawn
-  as nothing: Codex's review found a combining grapheme joiner passing a
-  check by category). The host sets `canAllow` itself;
+  answer arriving first. For Claude it is sent once the hook has read the
+  answer, which it may not before it gives up waiting; an answer after Stop
+  is `approval-gone`.
+- **What a device may allow.** Only what it can show whole: a command of at
+  most 8,000 characters, every one printable ASCII, a line break or a tab,
+  run in a folder that reads as itself (any script's letters, but nothing
+  that draws as nothing or as a space it isn't). A list of what doesn't draw
+  came first, and two review rounds each found a character it missed: a
+  combining grapheme joiner, a mark that draws nothing, and a no-break
+  space, which looks like a space but which the shell reads as part of a
+  word. Only what reads as itself is let through, so a command naming a
+  file in another script is Deny-only on a device and allowed on the Mac.
+  The host sets `canAllow` itself;
   anything else, and every non-command tool call (Claude's file edits are
   excerpted even on the Mac, its other tools are raw JSON), is Deny-only on a
   device and answered on the Mac. Allow on a Deny-only request is refused as
   `not-allowed`, as is any decision but `allow-once` and `deny`.
 - **What a device is sent is bounded**: the first 16 requests, every other
-  field cut at 2,000 characters and a longer command at 8,000, which makes
-  it Deny-only. Cut in the chat's state, so the host judges an answer
+  field cut at 2,000 bytes and a longer command at 8,000, which makes it
+  Deny-only; by bytes, since one character can carry any number of marks.
+  Two lists are compared byte for byte, as the digest reads them, so a
+  change between a precomposed accent and a combining one is told. Cut in the chat's state, so the host judges an answer
   against the same copy the device was sent; unbounded, a long request could
   push a frame past what a connection seals, and it would be dropped
   unsent.

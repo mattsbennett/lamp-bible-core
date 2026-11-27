@@ -57,24 +57,40 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
     public static let largestAllowedCommand = 8_000
 
     /// Whether `command` can be shown whole, so a device may allow it: within
-    /// `largestAllowedCommand` characters, and holding nothing that doesn't
-    /// draw — a control character but a line break or tab, a format
-    /// character (a bidirectional override, a zero-width space or joiner), a
-    /// line or paragraph separator — which could make what runs differ from
-    /// what is read.
+    /// `largestAllowedCommand` characters, every one printable ASCII, a line
+    /// break or a tab. Anything else can look like something it isn't — a
+    /// no-break space like a space, though the shell reads it as part of a
+    /// word; a letter from another script like a Latin one; a mark or
+    /// override that draws as nothing — and listing those kept missing one
+    /// (Codex's reviews, 0040), so only what reads as itself is let through.
+    /// A command with anything more is Deny-only on a device, and may still be
+    /// allowed on the Mac.
     public static func canShowWhole(_ command: String) -> Bool {
-        guard !command.isEmpty, command.count <= largestAllowedCommand else { return false }
+        guard !command.isEmpty, command.utf8.count <= largestAllowedCommand else { return false }
         return command.unicodeScalars.allSatisfy { scalar in
-            // What Unicode says may be drawn as nothing at all, whatever its
-            // category: a combining grapheme joiner is a combining mark, and
-            // drew nothing.
+            (0x20...0x7E).contains(scalar.value) || scalar == "\n" || scalar == "\t"
+        }
+    }
+
+    /// Whether a folder a command runs in reads as itself: a path may hold
+    /// any script's letters, but nothing that draws as nothing or as a space
+    /// it isn't.
+    public static func readsPlainly(_ text: String) -> Bool {
+        text.unicodeScalars.allSatisfy { scalar in
             if scalar.properties.isDefaultIgnorableCodePoint { return false }
             return switch scalar.properties.generalCategory {
-            case .control: scalar == "\n" || scalar == "\t"
-            case .format, .lineSeparator, .paragraphSeparator, .surrogate, .unassigned, .privateUse: false
+            case .spaceSeparator: scalar == " "
+            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .unassigned, .privateUse: false
             default: true
             }
         }
+    }
+
+    /// Whether a device may allow a command run in `folder`: one shown whole,
+    /// in a folder that reads as itself.
+    public static func mayAllow(command: String?, folder: String?) -> Bool {
+        guard let command, canShowWhole(command) else { return false }
+        return folder.map(readsPlainly) ?? true
     }
 
     /// The most requests a device is sent at once, and the longest any of
@@ -85,11 +101,20 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
     public static let largestField = 2_000
 
     /// This request cut to what a device is sent: a command it may allow is
-    /// whole already; anything longer is cut, and can only be denied.
+    /// whole already; anything longer is cut, and can only be denied. Cut by
+    /// bytes, not characters, since one character can hold any number of
+    /// marks.
     public func bounded() -> Self {
         func cut(_ text: String?, _ limit: Int) -> String? {
-            guard let text, text.count > limit else { return text }
-            return String(text.prefix(limit)) + "…"
+            guard let text, text.utf8.count > limit else { return text }
+            var kept = String.UnicodeScalarView()
+            var bytes = 0
+            for scalar in text.unicodeScalars {
+                bytes += String(scalar).utf8.count
+                if bytes > limit { break }
+                kept.append(scalar)
+            }
+            return String(kept) + "…"
         }
         var copy = self
         copy.title = cut(title, 200) ?? ""
@@ -128,6 +153,14 @@ public struct LampAgentRemoteApproval: Codable, Equatable, Identifiable, Sendabl
         add(approval.note)
         add(approval.canAllow ? "allow" : "deny-only")
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Whether two lists are the same to the byte, as the digest reads them:
+    /// Swift's `==` takes a precomposed accent and a combining one for the
+    /// same, so a change between them would go untold, and an answer to the
+    /// copy shown be refused.
+    public static func same(_ a: [Self], _ b: [Self]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { digest(chatID: "", turnID: nil, approval: $0) == digest(chatID: "", turnID: nil, approval: $1) }
     }
 }
 
