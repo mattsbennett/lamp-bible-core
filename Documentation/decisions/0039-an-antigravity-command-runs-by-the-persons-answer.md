@@ -1,4 +1,4 @@
-# 0033. An Antigravity command runs by the person's answer
+# 0039. An Antigravity command runs by the person's answer
 
 Status: Accepted, 2026-11-26. Built in `lamp-bible-macos`, held by
 `AgentACPCommandTests` (a request recorded from `agy acp` 1.5.14) and

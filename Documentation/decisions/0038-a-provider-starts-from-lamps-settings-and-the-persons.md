@@ -1,4 +1,4 @@
-# 0032. A provider starts from Lamp's settings and the person's, never the workspace's
+# 0038. A provider starts from Lamp's settings and the person's, never the workspace's
 
 Status: Accepted, 2026-11-26. Built (`lamp-bible-macos`: `aClaudeWritingRunReadsNoneOfTheWorkspacesSettings`,
 `aClaudeWritingRunIsToldLampsInstructionsNotTheFiles`,
