@@ -895,7 +895,11 @@ contains `columnCount` and ordered `rows`; each row contains cells with
 annotated `content`, a zero-based `column`, optional `header`, and optional
 `colSpan`/`rowSpan`. Empty and spanning cells therefore retain the source
 layout, while scripture and footnote annotations remain attached to the text
-inside each cell.
+inside each cell. A cell's `rowSpan` reaches down over its columns in
+the rows below, which leave those columns out or hold a blank cell there: no
+text, and nothing but `column`, `colSpan` and `rowSpan`. Any other cell there
+— with words, a footnote, a `label`, `header` — stops the span above it, and
+the inspector warns of it: a span never hides what a cell holds.
 
 ```json
 {

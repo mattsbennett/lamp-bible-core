@@ -344,6 +344,195 @@ struct LampBookTableLayoutTests {
         #expect(placements.map { $0.cell?.content.text } == [nil, "Campbell", "wide"])
     }
 
+    private func spanning(_ text: String, _ column: Int, span: Int = 1, rows: Int) -> LampBookTableCell {
+        LampBookTableCell(content: LampBookAnnotatedText(text: text), column: column, columnSpan: span, rowSpan: rows)
+    }
+
+    /// A row's placements as (column, span, text or "·" for a gap or "↑n"
+    /// for a slot row n's cell covers, rows reached).
+    private func shape(_ row: [LampBookTableLayout.Placement]) -> [String] {
+        row.map { placement in
+            let what = placement.cell?.content.text ?? placement.coveringRow.map { "↑\($0)" } ?? "·"
+            return "\(placement.column)+\(placement.span) \(what) \(placement.rowSpan)"
+        }
+    }
+
+    /// A cell reaches down the rows it says, over its column in each, so a
+    /// reader draws it once and the rows below keep their other cells.
+    @Test func aCellReachesDownOverTheRowsBelowIt() {
+        let rows = [
+            LampBookTableRow(cells: [spanning("king", 0, rows: 3), cell("Judah", 1), cell("Israel", 2)]),
+            LampBookTableRow(cells: [cell("Asa", 1), cell("Baasha", 2)]),
+            LampBookTableRow(cells: [cell("Jehoshaphat", 1), cell("Ahab", 2)]),
+        ]
+        let grid = LampBookTableLayout.grid(of: rows, columnCount: 3)
+        #expect(grid.map(shape) == [
+            ["0+1 king 3", "1+1 Judah 1", "2+1 Israel 1"],
+            ["0+1 ↑0 1", "1+1 Asa 1", "2+1 Baasha 1"],
+            ["0+1 ↑0 1", "1+1 Jehoshaphat 1", "2+1 Ahab 1"],
+        ])
+
+        // Across columns and down rows at once.
+        let block = LampBookTableLayout.grid(of: [
+            LampBookTableRow(cells: [spanning("both", 0, span: 2, rows: 2), cell("c", 2)]),
+            LampBookTableRow(cells: [cell("d", 2)]),
+            LampBookTableRow(cells: [cell("e", 2)]),
+        ], columnCount: 3)
+        // And no further than it says, with nothing below to stop it.
+        #expect(block.map(shape) == [
+            ["0+2 both 2", "2+1 c 1"],
+            ["0+2 ↑0 1", "2+1 d 1"],
+            ["0+1 · 1", "1+1 · 1", "2+1 e 1"],
+        ])
+
+        // Laid out alone, a row knows nothing of the cell above.
+        #expect(shape(LampBookTableLayout.placements(of: rows[1], columnCount: 3))
+            == ["0+1 · 1", "1+1 Asa 1", "2+1 Baasha 1"])
+    }
+
+    /// A blank cell under a span is the placeholder a converter leaves there,
+    /// and is covered; a cell with words, or with an annotation, stops the
+    /// span above it, so no words are hidden. Both happen in the bundled
+    /// books.
+    @Test func aSpanCoversBlankCellsAndStopsAboveWords() {
+        // A header across seven columns and two rows, with a blank cell left
+        // at the last column of the second.
+        let header = LampBookTableLayout.grid(of: [
+            LampBookTableRow(cells: [spanning("Witnesses", 0, span: 7, rows: 2)]),
+            LampBookTableRow(cells: [cell(" ", 6)]),
+            LampBookTableRow(cells: [cell("a", 0)]),
+        ], columnCount: 7)
+        #expect(header.map(shape)[0...1] == [["0+7 Witnesses 2"], ["0+7 ↑0 1"]])
+
+        // A blank cell reaching past the span: covered where the span is, a
+        // gap where it is not.
+        let past = LampBookTableLayout.grid(of: [
+            LampBookTableRow(cells: [spanning("two", 0, span: 2, rows: 2)]),
+            LampBookTableRow(cells: [cell("", 1, span: 2)]),
+        ], columnCount: 3)
+        #expect(past.map(shape) == [["0+2 two 2", "2+1 · 1"], ["0+2 ↑0 1", "2+1 · 1"]])
+
+        // Words under the span: the span stops above them.
+        let worded = LampBookTableLayout.grid(of: [
+            LampBookTableRow(cells: [spanning("merged", 0, span: 2, rows: 2), cell("x", 2)]),
+            LampBookTableRow(cells: [cell("own words", 1), cell("y", 2)]),
+        ], columnCount: 3)
+        #expect(worded.map(shape) == [
+            ["0+2 merged 1", "2+1 x 1"],
+            ["0+1 · 1", "1+1 own words 1", "2+1 y 1"],
+        ])
+
+        // A cell with no words but a footnote is no placeholder: its marker
+        // is drawn.
+        let marked = LampBookTableCell(
+            content: LampBookAnnotatedText(text: "", annotations: [
+                LampBookAnnotation(type: "footnote", start: 0, end: 0, data: nil),
+            ]),
+            column: 0
+        )
+        let footnoted = LampBookTableLayout.grid(of: [
+            LampBookTableRow(cells: [spanning("merged", 0, rows: 2)]),
+            LampBookTableRow(cells: [marked]),
+        ], columnCount: 1)
+        #expect(footnoted[0][0].rowSpan == 1)
+        #expect(footnoted[1][0].cell == marked)
+
+        // Nor is one whose marker is a footnote reference rather than an
+        // annotation: the resolver draws both. Found by Codex.
+        let referenced = LampBookTableCell(
+            content: LampBookAnnotatedText(text: " ", footnoteReferences: [LampBookFootnoteReference(id: "1", offset: 0)]),
+            column: 0
+        )
+        let byReference = LampBookTableLayout.grid(of: [
+            LampBookTableRow(cells: [spanning("merged", 0, rows: 2)]),
+            LampBookTableRow(cells: [referenced]),
+        ], columnCount: 1)
+        #expect(byReference[0][0].rowSpan == 1)
+        #expect(byReference[1][0].cell == referenced)
+
+        // Nor one with no text that a legend names, nor an empty header:
+        // each is drawn as more than its place. Found by Codex.
+        for held in [
+            LampBookTableCell(content: LampBookAnnotatedText(text: ""), column: 0, label: "good-king"),
+            LampBookTableCell(content: LampBookAnnotatedText(text: ""), column: 0, isHeader: true),
+            // A vowel point alone, on a space: one character, whitespace by
+            // its first scalar, and drawn. Found by Codex.
+            LampBookTableCell(content: LampBookAnnotatedText(text: " \u{05B8}"), column: 0),
+        ] {
+            let grid = LampBookTableLayout.grid(of: [
+                LampBookTableRow(cells: [spanning("merged", 0, rows: 2)]),
+                LampBookTableRow(cells: [held]),
+            ], columnCount: 1)
+            #expect(grid[0][0].rowSpan == 1)
+            #expect(grid[1][0].cell == held)
+        }
+    }
+
+    /// A span stops at the table's end, however many rows it says: one of
+    /// the largest integer, below the first row, overflowed counting its last.
+    @Test func aSpanStopsAtTheTablesEnd() {
+        let grid = LampBookTableLayout.grid(of: [
+            LampBookTableRow(cells: [cell("a", 0)]),
+            LampBookTableRow(cells: [spanning("all", 0, rows: .max), cell("b", 1)]),
+            LampBookTableRow(cells: [cell("c", 1), spanning("last", 2, rows: 5)]),
+        ], columnCount: 3)
+        #expect(grid.map(shape) == [
+            ["0+1 a 1", "1+1 · 1", "2+1 · 1"],
+            ["0+1 all 2", "1+1 b 1", "2+1 · 1"],
+            ["0+1 ↑1 1", "1+1 c 1", "2+1 last 1"],
+        ])
+        #expect(LampBookTableLayout.grid(of: [], columnCount: 3).isEmpty)
+    }
+
+    /// Over tables made at random: each row covers every column once; a
+    /// covered slot sits under the cell that reaches it; and the cells with
+    /// words are those each row laid out alone holds, where it holds them —
+    /// which search and the section index are built from.
+    @Test func theGridKeepsEveryRowsWordsWhereTheRowAlonePutsThem() {
+        var seed: UInt64 = 0x5DEECE66D
+        func next(_ bound: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 33) % UInt64(bound))
+        }
+        for _ in 0..<2_000 {
+            let columnCount = 1 + next(6)
+            let rows = (0..<(1 + next(6))).map { _ in
+                LampBookTableRow(cells: (0..<next(5)).map { _ in
+                    LampBookTableCell(
+                        content: LampBookAnnotatedText(text: next(3) == 0 ? "" : "w\(next(100))"),
+                        column: next(columnCount + 1) - (next(10) == 0 ? 2 : 0),
+                        columnSpan: 1 + next(3),
+                        rowSpan: 1 + next(4)
+                    )
+                })
+            }
+            let grid = LampBookTableLayout.grid(of: rows, columnCount: columnCount)
+            #expect(grid.count == rows.count)
+            for (index, line) in grid.enumerated() {
+                #expect(line.map(\.column) == line.map(\.column).sorted())
+                #expect(line.map(\.span).reduce(0, +) == columnCount, "\(rows)")
+                for (placement, nextPlacement) in zip(line, line.dropFirst()) {
+                    #expect(placement.column + placement.span == nextPlacement.column, "\(rows)")
+                }
+                for placement in line {
+                    guard let from = placement.coveringRow else { continue }
+                    let origin = grid[from].first { $0.column == placement.column && $0.cell != nil }
+                    #expect(origin?.span == placement.span)
+                    #expect((origin?.rowSpan ?? 0) > index - from, "\(rows)")
+                }
+                let worded = { (placements: [LampBookTableLayout.Placement]) in
+                    placements.compactMap { placement in
+                        placement.cell.flatMap { LampBookTableLayout.isBlank($0) ? nil : "\(placement.column)+\(placement.span) \($0.content.text)" }
+                    }
+                }
+                #expect(
+                    worded(line) == worded(LampBookTableLayout.placements(of: rows[index], columnCount: columnCount)),
+                    "\(rows)"
+                )
+            }
+        }
+    }
+
     @Test func aColumnOfTermsBesideOneOfDefinitionsTakesLessOfTheWidth() throws {
         let rows = [
             LampBookTableRow(cells: [cell("Formal Definitions", 0, span: 2, header: true)]),

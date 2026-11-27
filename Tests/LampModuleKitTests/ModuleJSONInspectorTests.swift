@@ -319,6 +319,32 @@ struct ModuleJSONInspectorTests {
         }
         """#.utf8))
         #expect(unreadable.issues.map(\.message) == ["Readers cannot read this table, and leave it out."])
+
+        // A rowSpan cut short — above a cell with words, or at the table's
+        // end — is said; one reaching over a blank placeholder is not.
+        let spans = try inspector.inspect(Data(#"""
+        {"meta": {"schemaVersion": "1.0", "id": "span-book", "type": "book", "title": "S", "language": "en"},
+         "sections": [{"id": "c", "type": "chapter", "title": "C", "content": [
+           {"type": "table", "columnCount": 2, "rows": [
+             {"cells": [{"column": 0, "rowSpan": 2, "content": {"text": "merged"}}, {"column": 1, "content": {"text": "a"}}]},
+             {"cells": [{"column": 0, "content": {"text": ""}}, {"column": 1, "content": {"text": "b"}}]}
+           ]},
+           {"type": "table", "columnCount": 2, "rows": [
+             {"cells": [{"column": 0, "rowSpan": 2, "content": {"text": "merged"}}, {"column": 1, "rowSpan": 3, "content": {"text": "long"}}]},
+             {"cells": [{"column": 0, "content": {"text": "words"}}]}
+           ]},
+           {"type": "table", "columnCount": 2, "rows": [
+             {"cells": [{"column": 0, "rowSpan": 3, "content": {"text": "merged"}}, {"column": 1, "content": {"text": "a"}}]},
+             {"cells": [{"column": 0, "rowSpan": 2, "content": {"text": ""}}, {"column": 1, "content": {"text": "b"}}]},
+             {"cells": [{"column": 1, "content": {"text": "c"}}]}
+           ]}
+         ]}]}
+        """#.utf8))
+        let spanWarnings = spans.issues.filter { $0.severity == .warning }
+        #expect(spanWarnings.map(\.path) == ["/sections/0/content/1", "/sections/0/content/2"], "\(spans.issues)")
+        #expect(spanWarnings.first?.message.hasPrefix("2 cells in this table reach down fewer rows") == true, "\(spans.issues)")
+        // A blank cell's own span, dropped under another's. Found by Codex.
+        #expect(spanWarnings.last?.message.hasPrefix("1 cell in this table reaches down fewer rows") == true, "\(spans.issues)")
         #expect(book.issues.allSatisfy { $0.severity != .error })
     }
 

@@ -414,7 +414,7 @@ and a search for a chart's words finds it in both modules.
    projection all use it; `plainText` stays for annotated text and footnote
    lists. Media metadata is not indexed (the readers disagree: the Mac falls
    back to a picture's `alt`, the phone to its media caption). Then the
-   shared model — **done but for `rowSpan` and the link routes**:
+   shared model — **done but for the link routes**:
    `LampBookContentBlock` reads `id`, `role`, `title`, `subtitle`,
    `children`, `notes` and `legend`, a row and a cell their `label` and a
    cell its `align`, each field read on its own so a malformed one is absent
@@ -431,7 +431,18 @@ and a search for a chart's words finds it in both modules.
    that paired one annotation's target with another's address or passage.
    The resolver judges a target in the kind of module the text is in
    (`containingKind`, a book's by default), and one naming no place there is
-   no target. The planned list:
+   no target. `rowSpan`: `LampBookTableLayout.grid` lays a table's rows
+   out together, each first alone by `placements(of:columnCount:)`; a cell
+   reaches down over the gaps and blank cells below it (nothing but their
+   place: no words, every field but column and spans at its default; judged
+   whole, since two reviews in turn found a listed check missing a drawn
+   field), as one covered slot per row, and stops above any other cell and
+   at the table's end. So a span never hides what a cell holds, and every
+   cell with words is where the row alone puts it — search and the section
+   index stay on the per-row walk. The bundled books hold 151 such cells in 36 tables,
+   the study Bible 73 in 22; one bundled cell stops above words, and the
+   inspector warns of a span cut short. Readers draw it in step 6 (both lay
+   tables out with SwiftUI `Grid`, which spans no rows). The planned list:
    figure, row and cell additions, `smallcaps`, `link` and its
    target, resolver cases, `rowSpan`, the link forms.
 4. Commentary 2.3 in the compiler, volume and series (an unsupported

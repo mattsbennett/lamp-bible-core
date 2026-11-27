@@ -309,15 +309,16 @@ public struct ModuleJSONInspector: Sendable {
         ))
     }
 
-    /// A warning for a table wider than readers lay out, or with a cell at a
-    /// column no reader shows.
+    /// A warning for a table wider than readers lay out, with a cell at a
+    /// column no reader shows, or with a cell reaching down fewer rows than
+    /// it says.
     ///
     /// A warning, not an error: the module can be stored, and readers show it
     /// clipped to `LampBookTableLayout.maximumColumnCount`. Refusing it would
     /// make a book that opens on one device open on none, which the
     /// repository has already tried for IDs and undone
     /// (`LampModuleCompiler.compile`).
-    private func warnAboutTableWidth(
+    private func warnAboutTableLayout(
         _ block: [String: Any]?, path: String, issues: inout [ModuleValidationIssue]
     ) {
         guard let block, string(block["type"]) == "table" else { return }
@@ -353,6 +354,23 @@ public struct ModuleJSONInspector: Sendable {
                 severity: .warning,
                 path: path,
                 message: "A cell in this table names a negative column; readers leave it out."
+            ))
+        }
+        // A rowSpan the grid cuts short: a cell with words below, kept
+        // rather than hidden, the table's end, or a blank cell's own span
+        // under another's. Not laid out at all for a table spanning no rows.
+        // Found by Codex.
+        let shortened = cells.contains { $0.rowSpan > 1 }
+            ? LampBookTableLayout.shortenedSpans(
+                of: table.rows,
+                columnCount: LampBookTableLayout.resolvedColumnCount(declared: table.columnCount, rows: table.rows)
+            )
+            : 0
+        if shortened > 0 {
+            issues.append(.init(
+                severity: .warning,
+                path: path,
+                message: "\(shortened) cell\(shortened == 1 ? "" : "s") in this table reach\(shortened == 1 ? "es" : "") down fewer rows than \(shortened == 1 ? "its" : "their") rowSpan: laid out by rows, a span stops above a cell that holds anything and at the table's end, and a blank cell under another's span is left out."
             ))
         }
     }
@@ -446,14 +464,14 @@ public struct ModuleJSONInspector: Sendable {
                 }
                 for (blockIndex, block) in (content ?? []).enumerated() {
                     let blockPath = "\(sectionPath)/content/\(blockIndex)"
-                    warnAboutTableWidth(object(block), path: blockPath, issues: &issues)
+                    warnAboutTableLayout(object(block), path: blockPath, issues: &issues)
                     warnAboutDeadLinks(object(block), path: blockPath, issues: &issues)
                     // And a figure's tables, laid out within the same bound —
                     // a figure's only: another block's `children` is never
                     // drawn. Found by Codex.
                     if string(object(block)?["type"]) == "figure" {
                         for (childIndex, child) in (array(object(block)?["children"]) ?? []).enumerated() {
-                            warnAboutTableWidth(
+                            warnAboutTableLayout(
                                 object(child), path: "\(blockPath)/children/\(childIndex)", issues: &issues
                             )
                         }
