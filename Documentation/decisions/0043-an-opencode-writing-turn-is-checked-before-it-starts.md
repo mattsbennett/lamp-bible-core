@@ -43,10 +43,21 @@ library) are looked in too; a file there is shown and asked about, and a
 folder or link there can't be vouched for and stops the turn.
 
 - **Bound to the turn.** A clear check is noted against the turns begun on
-  the writing so far, and the chat model's send, the last line for every
-  caller, runs an OpenCode writing turn only if one was noted with no turn
-  begun since, from any pane, the phone or a Terminal; once only. Between
-  the check and the send nothing is awaited.
+  the writing when it began, and the chat model's send, the last line for
+  every caller, runs an OpenCode writing turn only if one was noted with no
+  turn begun since, from any pane, the phone or a Terminal; once only.
+  Between the check and the send nothing is awaited.
+- **Run alone.** Since OpenCode rereads its settings at each request, a check
+  binds only if nothing else writes while it runs: an OpenCode writing turn
+  doesn't start while another provider's chat runs in the writing or any
+  provider's Terminal is open in it, and while it runs no other chat there
+  starts (the Terminal already doesn't, 0038).
+- **Answers are kept per scope.** Each check lets go of the answers for what
+  it looked at and found gone, and only those: OpenCode's leaves Claude's
+  settings alone, the Terminal's leaves the folders above the writing alone.
+- Only what OpenCode reads is walked, so a large folder of Claude's neither
+  shows nor spends the scan's limit. A file above the writing is opened
+  following no link and without blocking.
 - **On a paired device,** a turn that needs an answer is refused as
   `needs-setup` with words ("…Look at them by sending from the writing on
   your Mac."): the answer is given on the Mac.
@@ -54,14 +65,15 @@ folder or link there can't be vouched for and stops the turn.
 
 ## What follows
 
-- What runs while a turn runs isn't bound: OpenCode rereads its settings at
-  each request, so a change during the turn applies. No Terminal opens while
-  it runs (0038) and the phone starts no turn in the writing then; the
-  writers left are OpenCode's own agent, whose own settings it can change
-  anyway, another provider's chat started from the Mac in the same writing,
-  a Codex or OpenCode Terminal already open in it, and sync. All but sync
-  are started by the person on this Mac, and the next OpenCode turn checks
-  again.
+- What is left writing while a turn runs is OpenCode's own agent, whose own
+  settings it can change anyway, and sync bringing a change from another
+  Mac; the next OpenCode turn checks again.
+- The boundary 0038 drew for the Terminal holds here: the check doesn't
+  follow what an approved entry points at. A link is shown as a link, and a
+  setting naming a plugin folder or a file elsewhere is shown as that
+  setting; approving it approves what it points at, which can change
+  afterwards unasked. Codex's review raised it as a P1 (round 1); it is the
+  boundary the owner accepted for the Terminal, not a fault of this check.
 - OpenCode's own agent may write its settings; this guards against the other
   providers' agents and Lamp's sync, not against OpenCode.
 - Above the library is the person's own, and isn't looked at.
@@ -72,8 +84,9 @@ folder or link there can't be vouched for and stops the turn.
 
 - `OPENCODE_DISABLE_PROJECT_CONFIG` and the V1 environment variables: not
   documented for the OpenCode installed.
-- Holding every chat while an OpenCode turn runs: OpenCode rereads its
-  settings at each request, so it would have to hold for the whole turn, and
-  the writers it would stop are ones the person starts on this Mac.
 - Running OpenCode from a folder of Lamp's: the session would no longer be
   the writing's, and relative paths would land elsewhere.
+- Letting other chats run beside an OpenCode turn, which the first version
+  did, reasoning that the writers it would stop were ones the person starts:
+  Codex's first round showed the check then binds nothing, since OpenCode
+  rereads its settings at each request. Fable had planned the hold.
