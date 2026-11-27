@@ -581,21 +581,7 @@ extension LampModuleCompiler {
             throw ModuleCompilationError.invalidValue(path: "\(url.lastPathComponent): \(path)", expected: expected)
         }
         for row in builder.units {
-            try db.execute(
-                sql: """
-                    INSERT INTO commentary_units (
-                        id, book, chapter, sv, ev, unit_type, level, parent_id,
-                        title, suffix, introduction_json, translation_json, commentary_json,
-                        footnotes_json, search_text, order_index, footnotes_text
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                arguments: [
-                    row.id, bookNumber, row.chapter, row.startVerse, row.endVerse,
-                    row.unitType, row.level, row.parentID, row.title, row.suffix,
-                    row.introductionJSON, row.translationJSON, row.commentaryJSON,
-                    row.footnotesJSON, row.searchText, row.orderIndex, row.footnotesText,
-                ]
-            )
+            try CommentaryUnitTable.insert(row, moduleID: nil, book: bookNumber, in: db)
         }
         return builder.units.count
     }
@@ -634,25 +620,7 @@ extension LampModuleCompiler {
                 indices_json TEXT
             );
             CREATE INDEX idx_books_number ON commentary_books(book_number);
-            CREATE TABLE commentary_units (
-                id TEXT PRIMARY KEY,
-                book INTEGER NOT NULL,
-                chapter INTEGER,
-                sv INTEGER NOT NULL,
-                ev INTEGER,
-                unit_type TEXT NOT NULL,
-                level INTEGER NOT NULL DEFAULT 1,
-                parent_id TEXT,
-                title TEXT,
-                suffix TEXT,
-                introduction_json TEXT,
-                translation_json TEXT,
-                commentary_json TEXT,
-                footnotes_json TEXT,
-                search_text TEXT NOT NULL DEFAULT '',
-                order_index INTEGER NOT NULL DEFAULT 0,
-                footnotes_text TEXT NOT NULL DEFAULT ''
-            );
+            \(CommentaryUnitTable.createSQL(withModule: false));
             CREATE INDEX idx_units_verse ON commentary_units(sv, ev);
             CREATE INDEX idx_units_book_chapter ON commentary_units(book, chapter);
             CREATE INDEX idx_units_parent ON commentary_units(parent_id);

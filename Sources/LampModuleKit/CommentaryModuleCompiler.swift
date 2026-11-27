@@ -58,35 +58,7 @@ extension LampModuleCompiler {
             )
 
             for row in builder.units {
-                try db.execute(
-                    sql: """
-                        INSERT INTO commentary_units (
-                            id, module_id, book, chapter, sv, ev, unit_type, level,
-                            parent_id, title, suffix, introduction_json, translation_json,
-                            commentary_json, footnotes_json, search_text, order_index, footnotes_text
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                    arguments: [
-                        row.id,
-                        moduleID,
-                        bookNumber,
-                        row.chapter,
-                        row.startVerse,
-                        row.endVerse,
-                        row.unitType,
-                        row.level,
-                        row.parentID,
-                        row.title,
-                        row.suffix,
-                        row.introductionJSON,
-                        row.translationJSON,
-                        row.commentaryJSON,
-                        row.footnotesJSON,
-                        row.searchText,
-                        row.orderIndex,
-                        row.footnotesText,
-                    ]
-                )
+                try CommentaryUnitTable.insert(row, moduleID: moduleID, book: bookNumber, in: db)
             }
             try db.execute(sql: "INSERT INTO commentary_units_fts(commentary_units_fts) VALUES('rebuild')")
         }
@@ -116,28 +88,7 @@ extension LampModuleCompiler {
             """)
         try db.execute(sql: "CREATE INDEX idx_comm_books_module ON commentary_books(module_id)")
         try db.execute(sql: "CREATE INDEX idx_comm_books_book ON commentary_books(book_number)")
-        try db.execute(sql: """
-            CREATE TABLE commentary_units (
-                id TEXT PRIMARY KEY,
-                module_id TEXT NOT NULL,
-                book INTEGER NOT NULL,
-                chapter INTEGER,
-                sv INTEGER NOT NULL,
-                ev INTEGER,
-                unit_type TEXT NOT NULL,
-                level INTEGER NOT NULL DEFAULT 1,
-                parent_id TEXT,
-                title TEXT,
-                suffix TEXT,
-                introduction_json TEXT,
-                translation_json TEXT,
-                commentary_json TEXT,
-                footnotes_json TEXT,
-                search_text TEXT NOT NULL DEFAULT '',
-                order_index INTEGER NOT NULL DEFAULT 0,
-                footnotes_text TEXT NOT NULL DEFAULT ''
-            )
-            """)
+        try db.execute(sql: CommentaryUnitTable.createSQL(withModule: true))
         try db.execute(sql: "CREATE INDEX idx_comm_units_module ON commentary_units(module_id)")
         try db.execute(sql: "CREATE INDEX idx_comm_units_verse ON commentary_units(sv, ev)")
         try db.execute(sql: "CREATE INDEX idx_comm_units_book_chapter ON commentary_units(book, chapter)")
@@ -149,6 +100,72 @@ extension LampModuleCompiler {
                 content='commentary_units', content_rowid='rowid'
             )
             """)
+    }
+}
+
+/// A commentary's unit rows as both files hold them — a volume compiled
+/// alone, and each volume of a series — in one place, so a column added
+/// reaches both: their columns are the same, in the same order, but for the
+/// volume's own `module_id`, which a series file leaves to the phone to
+/// fill. Written twice, the two had a DDL and an INSERT each (step 4).
+/// Each file names its own indexes, the series as its Python writer did.
+enum CommentaryUnitTable {
+    /// Every column, in order, with its declaration.
+    static let columns: [(name: String, declaration: String)] = [
+        ("id", "TEXT PRIMARY KEY"),
+        ("module_id", "TEXT NOT NULL"),
+        ("book", "INTEGER NOT NULL"),
+        ("chapter", "INTEGER"),
+        ("sv", "INTEGER NOT NULL"),
+        ("ev", "INTEGER"),
+        ("unit_type", "TEXT NOT NULL"),
+        ("level", "INTEGER NOT NULL DEFAULT 1"),
+        ("parent_id", "TEXT"),
+        ("title", "TEXT"),
+        ("suffix", "TEXT"),
+        ("introduction_json", "TEXT"),
+        ("translation_json", "TEXT"),
+        ("commentary_json", "TEXT"),
+        ("footnotes_json", "TEXT"),
+        ("search_text", "TEXT NOT NULL DEFAULT ''"),
+        ("order_index", "INTEGER NOT NULL DEFAULT 0"),
+        ("footnotes_text", "TEXT NOT NULL DEFAULT ''"),
+    ]
+
+    /// The columns a file holds: a series file's lack only `module_id`.
+    static func columns(withModule: Bool) -> [(name: String, declaration: String)] {
+        withModule ? columns : columns.filter { $0.name != "module_id" }
+    }
+
+    static func createSQL(withModule: Bool) -> String {
+        "CREATE TABLE commentary_units (\n"
+            + columns(withModule: withModule).map { "    \($0.name) \($0.declaration)" }.joined(separator: ",\n")
+            + "\n)"
+    }
+
+    /// A row, its module given where the file holds one.
+    static func insert(_ row: CommentaryUnitRow, moduleID: String?, book: Int, in db: Database) throws {
+        let names = columns(withModule: moduleID != nil).map(\.name)
+        let values: [String: DatabaseValueConvertible?] = [
+            "id": row.id, "module_id": moduleID, "book": book, "chapter": row.chapter,
+            "sv": row.startVerse, "ev": row.endVerse, "unit_type": row.unitType, "level": row.level,
+            "parent_id": row.parentID, "title": row.title, "suffix": row.suffix,
+            "introduction_json": row.introductionJSON, "translation_json": row.translationJSON,
+            "commentary_json": row.commentaryJSON, "footnotes_json": row.footnotesJSON,
+            "search_text": row.searchText, "order_index": row.orderIndex, "footnotes_text": row.footnotesText,
+        ]
+        // Every column given a value, or none is written: a column added
+        // here without one is a failure, not a NULL.
+        let arguments = try names.map { name -> DatabaseValueConvertible? in
+            guard let value = values[name] else {
+                throw ModuleCompilationError.invalidValue(path: "commentary_units.\(name)", expected: "a value from the row")
+            }
+            return value
+        }
+        try db.execute(
+            sql: "INSERT INTO commentary_units (\(names.joined(separator: ", "))) VALUES (\(names.map { _ in "?" }.joined(separator: ", ")))",
+            arguments: StatementArguments(arguments)
+        )
     }
 }
 

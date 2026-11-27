@@ -76,6 +76,46 @@ struct CommentarySeriesCompilerTests {
         #expect(rows == Self.expected, "compiled:\n\(rows.map { "\"\($0)\"," }.joined(separator: "\n"))")
     }
 
+    /// A series file's tables are a volume's, less what names its module —
+    /// a unit's `module_id`; a book's `module_id`, series names and
+    /// description, which the Python writer never stored — so a column
+    /// added to one file is added to both, or this fails. Each column as
+    /// declared: name, type, constraint, default, in order.
+    @Test func aseriesHoldsAVolumesColumnsLessItsModules() throws {
+        let folder = try fixture()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let result = try compile(folder)
+        let seriesDatabase = folder.appendingPathComponent("TWO.sqlite")
+        try ((Data(contentsOf: result.outputURL) as NSData).decompressed(using: .zlib) as Data).write(to: seriesDatabase)
+        let volumeURL = folder.appendingPathComponent("TWO_Gen.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(Self.genesis.utf8), sourceFilename: "TWO_Gen.json", destinationURL: volumeURL
+        )
+        let volumeDatabase = folder.appendingPathComponent("TWO_Gen.sqlite")
+        try ((Data(contentsOf: volumeURL) as NSData).decompressed(using: .zlib) as Data).write(to: volumeDatabase)
+
+        func columns(_ url: URL, _ table: String) throws -> [String] {
+            try DatabaseQueue(path: url.path).read { db in
+                try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))").map { row in
+                    let name: String = row["name"], type: String = row["type"]
+                    let notNull: Int = row["notnull"], primary: Int = row["pk"]
+                    let fallback: String? = row["dflt_value"]
+                    return "\(name) \(type) \(notNull) \(primary) \(fallback ?? "-")"
+                }
+            }
+        }
+        let named: [String: Set<String>] = [
+            "commentary_units": ["module_id"],
+            "commentary_books": ["module_id", "series_full", "series_abbrev", "description"],
+        ]
+        for (table, modules) in named {
+            let volume = try columns(volumeDatabase, table)
+            let series = try columns(seriesDatabase, table)
+            #expect(!volume.isEmpty)
+            #expect(series == volume.filter { !modules.contains(String($0.prefix { $0 != " " })) }, "\(table)")
+        }
+    }
+
     @Test func avolumeTheSeriesListsMustBeThere() throws {
         let folder = try fixture(volumes: ["TWO_Gen": Self.genesis])
         defer { try? FileManager.default.removeItem(at: folder) }
