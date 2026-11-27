@@ -107,8 +107,15 @@ chats, so nothing there syncs and no sync rule changed for it.
 - The answer also says what sound came in and was kept, shows a clip's last
   frame, takes the still at `still_at` where asked, and lists files named as
   the video's, from earlier prepares, which Lamp leaves.
-- A folder of numbered frames with a frame rate is planned as a second input,
-  since frames are what every program can write.
+- A folder of numbered frames with a frame rate is a second input, since
+  frames are what every program can write (`frames` and `fps`, held by
+  `LampVideoFramesTests`). The folder is reached as a video is, holds one run
+  of PNG, JPEG or TIFF pictures counting up by one and nothing else but
+  hidden files, every frame the first's size; a gap, a frame written twice, a
+  stray file, a link or a frame of another size is refused by name. Each
+  frame is cloned or copied before it is read, and encoded straight to HEVC
+  with the video's settings, laid on black, silent, then taken through the
+  same 1080p step, still, samples and seam.
 - An encode is not stopped part way when the call is cancelled; it runs to its
   end and its result is dropped before anything is written. One cancelled
   while it waits its turn gives the turn up unused.
