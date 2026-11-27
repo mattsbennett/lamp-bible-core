@@ -120,9 +120,23 @@ opinions. For each, decide and say which:
 
 Then review again, against the **pre-change base**: re-running `--commit` on
 the original sha misses the fixes, and `--uncommitted` misses the original
-change. The loop closes when a completed review of the final diff has every
-finding dispositioned and the checks pass after the last fix. A review that
-failed or was cut short is an outstanding review, not a pass.
+change.
+
+**Keep going round until a completed review of the final diff finds no P0 or
+P1, and what it still finds is only rare edge cases**: input or state that
+real use seldom reaches. A P2 that ordinary use hits is not an edge case. Fix
+it and review again. The edge cases that remain still get dispositioned: fix
+the cheap ones, and name the rest in the plan or the record so leaving them
+is a decision, not an oversight. The checks must pass after the last fix. A
+review that failed or was cut short is an outstanding review, not a pass.
+
+The P-levels are Codex's: it tags each finding P0 (drop everything) through
+P3 (nice to have). Take the tag as its opinion, not the rule: judge how often
+real use hits the finding yourself, and a P1 that is truly unreachable is a
+finding to disposition as not a defect, not one to fix.
+
+If the rounds stop converging, with each one turning up the same class of
+defect, go to step 5. Another round won't fix it.
 
 ## 5. When the evidence contradicts the plan — back to Fable
 
