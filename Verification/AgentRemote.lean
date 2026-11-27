@@ -396,6 +396,31 @@ theorem onlyTheShownRequestIsAllowed (d : Decision) (t w u c : Bool) (h : decide
 theorem anUnknownDecisionNeverAllows (t w u c : Bool) : decide .other t w u c = .notAllowed := by
   simp [decide]
 
+/-! ## Whether a host takes a device's turn
+
+A turn is refused with AI features off, then while a Terminal session runs in
+the writing, then while a reply is already arriving; otherwise it is taken
+(`LampAgentRemoteTurnAdmission.refusal`). -/
+
+inductive TurnAnswer where
+  | take | aiOff | terminalOpen | busy
+  deriving DecidableEq, Repr
+
+def admitTurn (aiOn terminalOpen running : Bool) : TurnAnswer :=
+  if !aiOn then .aiOff
+  else if terminalOpen then .terminalOpen
+  else if running then .busy
+  else .take
+
+/-- No turn is taken while a Terminal session runs in the writing. -/
+theorem aLiveTerminalAdmitsNoTurn (a r : Bool) : admitTurn a true r ≠ .take := by
+  cases a <;> cases r <;> simp [admitTurn]
+
+/-- With AI on, an open Terminal is what the device is told, a reply arriving
+or not: ending the Terminal, not waiting, is what lets the turn go. -/
+theorem terminalOpenIsSaidBeforeBusy (r : Bool) : admitTurn true true r = .terminalOpen := by
+  cases r <;> simp [admitTurn]
+
 /-! ## Conformance tables
 
 Each line names a decision, its inputs and the model's answer. Swift's
@@ -493,5 +518,13 @@ def states (msgLists : List (List Msg)) : List State := Id.run do
             let answer := match decide d t w u c with
               | .allowOnce => "allowOnce" | .deny => "deny" | .gone => "gone" | .notAllowed => "notAllowed"
             IO.println <| conformanceLine "approvalAnswer" [name, toString t, toString w, toString u, toString c, answer]
+
+#eval show IO Unit from do
+  for a in [false, true] do
+    for t in [false, true] do
+      for r in [false, true] do
+        let answer := match admitTurn a t r with
+          | .take => "take" | .aiOff => "aiOff" | .terminalOpen => "terminalOpen" | .busy => "busy"
+        IO.println <| conformanceLine "turnAdmission" [toString a, toString t, toString r, answer]
 
 end LampAgentRemoteVerification

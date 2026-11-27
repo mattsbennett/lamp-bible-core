@@ -3,7 +3,7 @@ import Foundation
 
 /// A request a running turn is waiting on the person for, as a paired device
 /// shows it: a command an agent asks to run, or another tool call, on the
-/// host's approval card (`decisions/0037`).
+/// host's approval card (`decisions/0040`).
 ///
 /// A device may answer Allow Once or Deny, never a remembered rule. It may
 /// allow only what it can show whole (`canAllow`): a command the host could

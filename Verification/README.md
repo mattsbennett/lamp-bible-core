@@ -661,8 +661,8 @@ LampCore). It
 models the decisions, not CryptoKit, the network or the apps. It is checked
 with the core suite by `AgentRemoteModelConformanceTests`, in the same way as
 the sync model: the proofs must check with nothing else printed, and the
-shipped Swift is asked every question in its tables (27,440 cases across
-five decisions).
+shipped Swift is asked every question in its tables (27,448 cases across
+six decisions).
 
 What it proves:
 
@@ -693,6 +693,10 @@ What it proves:
   allowed (`onlyTheShownRequestIsAllowed`); a decision the host doesn't know
   allows nothing (`anUnknownDecisionNeverAllows`). Its table holds every
   combination.
+- **Whether a host takes a device's turn**: never while a Terminal session
+  runs in the writing (`aLiveTerminalAdmitsNoTurn`), and with AI on that is
+  what the device is told, a reply arriving or not
+  (`terminalOpenIsSaidBeforeBusy`). Its table holds every combination.
 
 Not modelled: the handshake's cryptography (CryptoKit's X25519, HKDF and
 ChaCha20-Poly1305 are taken as given), the network, the host's keychain, and

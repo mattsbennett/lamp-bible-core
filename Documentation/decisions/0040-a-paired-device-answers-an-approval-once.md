@@ -1,10 +1,11 @@
 # 0040. A paired device answers an approval once
 
-Status: Proposed, 2026-11-27. Core's half is built (`LampAgentRemoteApproval`,
+Status: Accepted, 2026-11-27. Built in core (`LampAgentRemoteApproval`,
 `LampAgentRemoteApprovalAnswer`, the `approvals` event and `answer-approval`,
 held by `LampAgentRemoteApprovalTests` and the `approvalAnswer` and
-`chatPlan` tables in `Verification/AgentRemote.lean`); the Mac host and the
-iOS card are to come. Planned by Fable; the owner asked for it ("we need to
+`chatPlan` tables in `Verification/AgentRemote.lean`), the Mac host
+(`AgentRemoteHost.answerApproval`, `LampAgentRemoteApprovalHostingTests`)
+and the phone's card (`lamp-bible-ios`). Planned by Fable; the owner asked for it ("we need to
 do codex approvals for phone too") and decided on 2026-11-26 that the phone
 answers once only.
 

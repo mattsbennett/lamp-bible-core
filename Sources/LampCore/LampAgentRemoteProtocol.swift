@@ -313,6 +313,28 @@ public enum LampAgentRemoteFailure {
     /// The request answered no longer waits as it was shown: answered on the
     /// Mac or another device, unanswered too long, its turn over, or changed.
     public static let approvalGone = "approval-gone"
+    /// A Claude session is running in the writing's Terminal on the Mac, and
+    /// the writing's chats wait until it ends (`decisions/0042`): the turn
+    /// wasn't taken, and may be asked again at any time. No event says the
+    /// session ended.
+    public static let terminalOpen = "terminal-open"
+}
+
+/// Whether a host takes a device's turn, and if not, the failure it answers
+/// with (`decisions/0042`): AI features off first, then a Terminal session
+/// running in the writing, then a reply already arriving.
+public enum LampAgentRemoteTurnAdmission {
+    public static func refusal(aiOn: Bool, terminalOpen: Bool, running: Bool) -> String? {
+        if !aiOn { return LampAgentRemoteFailure.aiOff }
+        if terminalOpen { return LampAgentRemoteFailure.terminalOpen }
+        if running { return LampAgentRemoteFailure.busy }
+        return nil
+    }
+
+    /// What the device is told for a turn refused while a Terminal session
+    /// runs in the writing.
+    public static let terminalOpenMessage =
+        "Claude is open in this writing's Terminal on your Mac. End that session there, then send again."
 }
 
 /// Where the device is reading, sent with a message so the host can tell the

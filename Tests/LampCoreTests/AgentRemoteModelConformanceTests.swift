@@ -62,7 +62,7 @@ enum AgentRemoteModel {
 
 @Suite(.disabled(if: SyncModel.skipped, "LAMP_SKIP_LEAN=1"))
 struct AgentRemoteModelConformanceTests {
-    static let checkedRules: Set<String> = ["pairingWindow", "channelOpens", "admit", "chatPlan", "approvalAnswer"]
+    static let checkedRules: Set<String> = ["pairingWindow", "channelOpens", "admit", "chatPlan", "approvalAnswer", "turnAdmission"]
 
     @Test func theModelChecks() {
         let run = AgentRemoteModel.run
@@ -254,6 +254,19 @@ struct AgentRemoteModelConformanceTests {
                 waiting: waiting ? [request] : [Self.approval(9)]
             )
             return outcome.rawValue == f[5]
+        }
+    }
+
+    // MARK: - Whether a host takes a device's turn
+
+    @Test func turnAdmission() {
+        conform("turnAdmission") { f in
+            let names = [
+                LampAgentRemoteFailure.aiOff: "aiOff", LampAgentRemoteFailure.terminalOpen: "terminalOpen",
+                LampAgentRemoteFailure.busy: "busy",
+            ]
+            let refusal = LampAgentRemoteTurnAdmission.refusal(aiOn: f[0] == "true", terminalOpen: f[1] == "true", running: f[2] == "true")
+            return (refusal.map { names[$0] ?? $0 } ?? "take") == f[3]
         }
     }
 }
