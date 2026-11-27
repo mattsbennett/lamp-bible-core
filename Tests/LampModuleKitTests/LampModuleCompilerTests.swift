@@ -608,6 +608,98 @@ struct LampModuleCompilerTests {
     /// declared nowhere reaches the Mac — which installs the file whole —
     /// and is lost on the phone, which is how `genre` went missing. This
     /// fails in core's suite instead.
+    /// A word in a book's table can be found by search, as the reader shows
+    /// it — and only as the reader shows it.
+    ///
+    /// A table's rows hold their words in `cells`, which the search text's
+    /// walk does not take, so a word that appears only in a table is found
+    /// nowhere. A study Bible's charts are tables. Adding `cells` to that
+    /// raw-JSON walk was tried and taken back out: it made the index a second
+    /// reading of the table beside `LampBookTableLayout`, and four review
+    /// rounds each found one more place the two disagreed — cell order, a
+    /// second cell at one column, a cell under a span, a missing column, an
+    /// overflowing span, cells on a block not drawn as a table. The search
+    /// text is to be built from the decoded blocks through the reader's own
+    /// layout (step 3 of Documentation/RichModulesPlan.md). Until then this
+    /// is a known issue, and the test fails when it stops being one.
+    @Test func awordInABookTableIsSearchable() throws {
+        let fixture = try FixtureDirectory()
+        defer { fixture.remove() }
+        let outputURL = fixture.url.appendingPathComponent("table_book.lamp")
+        _ = try LampModuleCompiler().compile(
+            data: Data(#"""
+            {
+              "meta": {"schemaVersion": "1.0", "id": "table_book", "type": "book", "title": "Charts", "language": "en"},
+              "sections": [{
+                "id": "kings", "type": "chapter", "title": "The Kings",
+                "content": [
+                  {"type": "paragraph", "content": {"text": "A chart of the kings."}},
+                  {"type": "table", "columnCount": 2, "rows": [
+                    {"cells": [
+                      {"column": 0, "header": true, "content": {"text": "King"}},
+                      {"column": 1, "header": true, "content": {"text": "Reign"}}
+                    ]},
+                    {"cells": [
+                      {"column": 1, "content": {"text": "25 years"}},
+                      {"column": 0, "content": {"text": "Jehoshaphat"}},
+                      {"column": 0, "content": {"text": "Hiddenfirst"}}
+                    ]},
+                    {"cells": [
+                      {"column": 0, "colSpan": 2, "content": {"text": "Divided kingdom"}},
+                      {"column": 1, "content": {"text": "Hiddenspanned"}}
+                    ]},
+                    {"cells": [
+                      {"column": 1, "content": {"text": "Asa"}},
+                      {"content": {"text": "Unnumbered"}}
+                    ]},
+                    {"cells": [
+                      {"column": 1, "colSpan": 9223372036854775807, "content": {"text": "Overreaching"}}
+                    ]}
+                  ]}
+                ]
+              }]
+            }
+            """#.utf8),
+            sourceFilename: "table_book.json",
+            destinationURL: outputURL
+        )
+        let queue = try fixture.openLamp(outputURL)
+        let (searchText, matches, phrase, hiddenMatches) = try queue.read { db in
+            (
+                try String.fetchOne(db, sql: "SELECT search_text FROM book_sections"),
+                try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM book_sections_fts WHERE book_sections_fts MATCH 'jehoshaphat'"
+                ),
+                // The row lists its second column first; a reader draws
+                // "Jehoshaphat" then "25 years", and a phrase is found so.
+                try Int.fetchOne(
+                    db,
+                    sql: #"SELECT COUNT(*) FROM book_sections_fts WHERE book_sections_fts MATCH '"jehoshaphat 25 years"'"#
+                ),
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM book_sections_fts WHERE book_sections_fts MATCH 'hiddenfirst OR hiddenspanned'"
+                )
+            )
+        }
+        // A cell the reader hides — a second naming one column, or one under
+        // another's span — is not searched, now or once cells are: outside the
+        // known issue, so a partial fix that indexed it would fail here.
+        #expect(searchText?.lowercased().contains("hidden") == false, "search text: \(searchText ?? "none")")
+        #expect(hiddenMatches == 0)
+        // An expected failure, stated plainly: no table cell is in the search
+        // text yet. Step 3 of Documentation/RichModulesPlan.md removes this
+        // wrapper, and with it adds the strict checks — the phrase in the
+        // reader's column order, every shown cell present, the full-text
+        // match — so a later regression fails here. Found by Codex.
+        withKnownIssue("A book's table cells are not in its search text until step 3") {
+            // What a reader searches: the full-text index, not the column
+            // it is built from. Found by Codex.
+            #expect(matches == 1, "search text: \(searchText ?? "none")")
+        }
+        _ = phrase
+    }
+
     @Test func bookTableColumnsAreDeclared() throws {
         let fixture = try FixtureDirectory()
         defer { fixture.remove() }

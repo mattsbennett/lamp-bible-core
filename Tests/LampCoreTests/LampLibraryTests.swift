@@ -185,6 +185,85 @@ struct LampLibraryTests {
         #expect(try await library.commentary(bookNumber: 1, chapterNumber: 1).count == 1)
     }
 
+    /// A commentary carrying the columns and the table a richer format adds
+    /// is still installed, read and found by what reads commentary today.
+    ///
+    /// The richer format (Documentation/RichModulesPlan.md) adds
+    /// `commentary_units.blocks_json` and `declared_id`,
+    /// `commentary_books.media_json` and a `commentary_front_matter` table, and keeps a text projection in the
+    /// columns that are read now. That only works if a reader that knows none
+    /// of them is unbothered by them: the import check must not refuse them,
+    /// and the read and the search must not trip on them.
+    @Test func acommentaryWithTheRicherFormatsAdditionsStillReads() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-rich-commentary-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("RICH_Gen.lamp")
+        _ = try LampModuleCompiler().compile(data: Data(#"""
+        {"meta":{"schemaVersion":"2.2","id":"RICH_Gen","seriesAbbrev":"RICH","seriesFull":"Rich Notes","title":"Notes on Genesis"},
+         "book":"Gen","bookNumber":1,"chapters":[{"chapter":1,
+           "sections":[{"id":"creation","title":"Creation","sv":1001001,"ev":1001031}],
+           "verses":[{"sv":1001001,"commentary":{"text":"The firmament divides the waters."}}]}]}
+        """#.utf8), sourceFilename: "RICH_Gen.json", destinationURL: archiveURL)
+        let databaseURL = root.appendingPathComponent("source.sqlite")
+        try ((Data(contentsOf: archiveURL) as NSData).decompressed(using: .zlib) as Data).write(to: databaseURL)
+        let queue = try DatabaseQueue(path: databaseURL.path)
+        try await queue.write { db in
+            // Added only where the compiler has not made them already, so the
+            // check is of reading them, not of what the compiler writes.
+            // Found by Codex.
+            if try !db.columns(in: "commentary_units").contains(where: { $0.name == "blocks_json" }) {
+                try db.execute(sql: "ALTER TABLE commentary_units ADD COLUMN blocks_json TEXT")
+            }
+            if try !db.columns(in: "commentary_books").contains(where: { $0.name == "media_json" }) {
+                try db.execute(sql: "ALTER TABLE commentary_books ADD COLUMN media_json TEXT")
+            }
+            if try !db.columns(in: "commentary_units").contains(where: { $0.name == "declared_id" }) {
+                try db.execute(sql: "ALTER TABLE commentary_units ADD COLUMN declared_id TEXT")
+            }
+            try db.execute(sql: "UPDATE commentary_units SET declared_id = 'creation' WHERE unit_type = 'section'")
+            try db.execute(sql: """
+                UPDATE commentary_units SET blocks_json = '[{"type":"paragraph","content":{"text":"The firmament divides the waters."}}]'
+                    WHERE unit_type = 'verse';
+                UPDATE commentary_books SET media_json = '[{"id":"m1","type":"image","filename":"gen/m1.jpg"}]';
+                CREATE TABLE IF NOT EXISTS commentary_front_matter (
+                    id TEXT PRIMARY KEY, module_id TEXT NOT NULL, book_number INTEGER NOT NULL,
+                    section_id TEXT NOT NULL, parent_id TEXT, title TEXT NOT NULL,
+                    depth INTEGER NOT NULL, order_index INTEGER NOT NULL,
+                    blocks_json TEXT NOT NULL, search_text TEXT NOT NULL DEFAULT ''
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS commentary_front_matter_fts USING fts5(
+                    title, search_text, content='commentary_front_matter', content_rowid='rowid'
+                );
+                """)
+        }
+        try queue.close()
+        try ((Data(contentsOf: databaseURL) as NSData).compressed(using: .zlib) as Data).write(to: archiveURL)
+
+        _ = try LampPortableModuleInspector.inspect(
+            compressedData: try Data(contentsOf: archiveURL), requireImportSchema: true
+        )
+        let library = LampLibrary(rootURL: root.appendingPathComponent("Library"))
+        let module = try await library.install(from: archiveURL)
+        #expect(module.kind == .commentary)
+        let read = try await library.commentary(bookNumber: 1, chapterNumber: 1)
+        // The section that carries a declared id comes back too: a reader
+        // that dropped it would pass every check on the note. Found by Codex.
+        #expect(read.contains { $0.unitType == "section" && $0.title == "Creation" }, "read \(read.map(\.unitType))")
+        let entries = read.filter { $0.unitType == "verse" }
+        #expect(entries.count == 1)
+        // Which column a reader that knows `blocks_json` takes its words from
+        // is step 6's to test; this one holds a reader that knows neither.
+        // The note's words, from the projection kept in `commentary_json`:
+        // a unit read back blank would still be counted, and still found by
+        // its separate search text. Found by Codex, reviewing the test.
+        #expect(entries.first?.commentary?.contains("The firmament divides the waters.") == true,
+                "read \(entries.first?.commentary ?? "nothing")")
+        let found = try await library.searchModules(query: "firmament", kinds: [.commentary])
+        #expect(found.count == 1, "found \(found)")
+    }
+
     @Test func installsLegacyCompactHighlightsWithoutUsingSetIDAsModuleID() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-legacy-highlight-install-\(UUID().uuidString)", isDirectory: true)
