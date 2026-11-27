@@ -40,3 +40,5 @@ Records 0001–0017 come out of the scalability pass of 2026-11-24, and 0018–0
 (`../ScalabilityPlan.md`), which holds the measurements and the sequencing.
 0025 on comes out of the animation runtime pass of 2026-11-26
 (`../AnimationRuntimePlan.md`).
+0035 and 0036 come out of the review marks performance pass of 2026-11-27
+(`../ReviewMarksPerformancePlan.md`).

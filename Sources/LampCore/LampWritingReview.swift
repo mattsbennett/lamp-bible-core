@@ -335,11 +335,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// With `strictly`, a piece is found only with its context on both
     /// sides. A piece anchored in this very text is found where it says,
     /// and only there.
-    func located(in text: String, strictly: Bool) -> [Located] {
-        let source = text as NSString
+    func located(in text: String, strictly: Bool, search: LampTextSearch? = nil) -> [Located] {
+        let search = search ?? LampTextSearch(text as NSString)
+        let source = search.text
         let here = Self.digest(of: text)
         func find(_ piece: Piece) -> NSRange? {
-            piece.anchoredIn == here ? Self.exact(piece, in: source) : Self.find(piece, in: source, strictly: strictly)
+            piece.anchoredIn == here ? Self.exact(piece, in: source) : Self.find(piece, in: search, strictly: strictly)
         }
         var cleared: [UUID: [NSRange]] = [:]
         for clearance in clearances {
@@ -351,7 +352,15 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         }
         return marks.compactMap { mark -> Located? in
             var ranges = mark.pieces.compactMap { find($0) }
-            for range in cleared[mark.id] ?? [] {
+            for (step, range) in (cleared[mark.id] ?? []).enumerated() {
+                // The first step trims every range, touched or not, and
+                // after it each is what `remainder` leaves it as. So a
+                // later clearance that touches none of them changes
+                // nothing, and is not worked through. Most touch nothing:
+                // a clear rewrites the mark's own pieces, so what it
+                // cleared is only still there in a copy of the mark
+                // another device carried (0036).
+                if step > 0, !ranges.contains(where: { Self.touches($0, range) }) { continue }
                 ranges = ranges.flatMap { Self.subtracting(range, from: $0) }.compactMap { Self.remainder($0, in: source) }
             }
             ranges = Self.coalesced(ranges, joiningAcross: nil)
@@ -364,9 +373,12 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// words are there.
     static func exact(_ piece: Piece, in text: NSString) -> NSRange? {
         let range = NSRange(location: piece.hint, length: (piece.text as NSString).length)
-        guard range.location >= 0, NSMaxRange(range) <= text.length,
-              text.substring(with: range) == piece.text else { return nil }
-        return range
+        guard range.location >= 0, NSMaxRange(range) <= text.length else { return nil }
+        // The same units are the same words, and saying so makes no string.
+        // Units that differ can still be the same words to Swift, which
+        // compares canonically, so that is asked as it always was.
+        if text.compare(piece.text, options: .literal, range: range) == .orderedSame { return range }
+        return text.substring(with: range) == piece.text ? range : nil
     }
 
     /// Everything a surface draws from the record for `text`, worked out from
@@ -386,8 +398,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// is placed at a look. Without the marked Markdown or the changes when
     /// the surface takes no marks to place.
     public func drawing(in text: String, forPlacing: Bool = true) -> Drawing {
-        let review = anchored(in: text)
-        let found = review.located(in: text)
+        let search = LampTextSearch(text as NSString)
+        let review = anchored(in: text, search: search)
+        let found = review.located(in: text, strictly: false, search: search)
         let ranges = Self.coalesced(found.flatMap(\.ranges), joiningAcross: nil)
         let restorable = review.restorable(in: text, located: found)
         return Drawing(
@@ -418,11 +431,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// Not for saving: a save keeps an untouched piece as it was, so one
     /// that changed nothing writes nothing.
     public func anchored(in text: String) -> LampWritingReview {
-        let source = text as NSString
+        anchored(in: text, search: LampTextSearch(text as NSString))
+    }
+
+    func anchored(in text: String, search: LampTextSearch) -> LampWritingReview {
         let here = Self.digest(of: text)
         func anchor(_ piece: Piece) -> Piece {
             if piece.anchoredIn == here { return piece }
-            guard let range = Self.find(piece, in: source) else { return piece }
+            guard let range = Self.find(piece, in: search) else { return piece }
             return Piece(text: piece.text, before: piece.before, after: piece.after, hint: range.location, anchoredIn: here)
         }
         var copy = self
@@ -1904,6 +1920,14 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         let targetText = target as NSString
         let here = Self.digest(of: target)
         let digests = sources.map(Self.digest(of:))
+        let targetSearch = LampTextSearch(targetText)
+        var searches: [Int: LampTextSearch] = [:]
+        func search(_ index: Int) -> LampTextSearch {
+            if let made = searches[index] { return made }
+            let made = LampTextSearch(sources[index] as NSString)
+            searches[index] = made
+            return made
+        }
         var alignments: [Int: LampTextAlignment] = [:]
         func alignment(_ index: Int) -> LampTextAlignment {
             if let known = alignments[index] { return known }
@@ -1916,7 +1940,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 return Self.exact(piece, in: sources[index] as NSString).map { (index, $0) }
             }
             for index in sources.indices.reversed() {
-                if let range = Self.unique(piece, in: sources[index] as NSString) { return (index, range) }
+                if let range = Self.unique(piece, in: search(index)) { return (index, range) }
             }
             return nil
         }
@@ -1953,7 +1977,7 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
                 // A piece of a repeated passage is anchored here every time,
                 // so it is placed exactly, never guessed among its copies.
                 if moved.count == 1, moved[0].sameWords(as: piece), moved[0].hint == piece.hint,
-                   Self.unique(moved[0], in: targetText) != nil {
+                   Self.unique(moved[0], in: targetSearch) != nil {
                     result.append(piece)
                 } else {
                     result += moved
@@ -2046,7 +2070,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
 
     /// A piece whole with its context, where that stands exactly once.
     static func unique(_ piece: Piece, in text: NSString) -> NSRange? {
-        guard let found = only(piece.before + piece.text + piece.after, in: text) else { return nil }
+        unique(piece, in: LampTextSearch(text, indexing: false))
+    }
+
+    static func unique(_ piece: Piece, in search: LampTextSearch) -> NSRange? {
+        guard let found = search.only(piece.before + piece.text + piece.after) else { return nil }
         return NSRange(location: found.location + (piece.before as NSString).length, length: (piece.text as NSString).length)
     }
 
@@ -2134,6 +2162,13 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     /// at a word's end only at an end. Without that, a cleared "a" whose
     /// context had been rewritten was found inside "lamp", and cut the word.
     static func find(_ piece: Piece, in text: NSString, strictly: Bool = false) -> NSRange? {
+        find(piece, in: LampTextSearch(text, indexing: false), strictly: strictly)
+    }
+
+    /// `find`, with the text's copies found through `search`, which a
+    /// caller placing many pieces in one text shares between them.
+    static func find(_ piece: Piece, in search: LampTextSearch, strictly: Bool = false) -> NSRange? {
+        let text = search.text
         let length = (piece.text as NSString).length
         let offset = (piece.before as NSString).length
         // Whole, with its context, where it stands once. Not at its hint, nor
@@ -2142,20 +2177,20 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         // piece in its own text is placed exactly before this is asked, and
         // a carry anchors every piece of a repeated passage in the text it
         // carries to, so a repeated piece is only ever placed that way.
-        if let found = unique(piece, in: text) { return found }
+        if let found = unique(piece, in: search) { return found }
         if strictly { return nil }
         let edges = Edges(of: piece)
-        if !piece.before.isEmpty, let found = only(piece.before + piece.text, in: text, where: {
+        if !piece.before.isEmpty, let found = search.only(piece.before + piece.text, where: {
             edges.hold(at: NSRange(location: $0.location + offset, length: length), in: text)
         }) {
             return NSRange(location: found.location + offset, length: length)
         }
-        if !piece.after.isEmpty, let found = only(piece.text + piece.after, in: text, where: {
+        if !piece.after.isEmpty, let found = search.only(piece.text + piece.after, where: {
             edges.hold(at: NSRange(location: $0.location, length: length), in: text)
         }) {
             return NSRange(location: found.location, length: length)
         }
-        if length > 0, let found = only(piece.text, in: text, where: { edges.hold(at: $0, in: text) }) {
+        if length > 0, let found = search.only(piece.text, where: { edges.hold(at: $0, in: text) }) {
             return found
         }
         return nil
@@ -2188,26 +2223,6 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         private static func isWord(_ scalar: Unicode.Scalar?) -> Bool {
             scalar.map(CharacterSet.alphanumerics.contains) ?? false
         }
-    }
-
-    /// The one copy of `needle` in `text` that `accepts`, or nil where there
-    /// is none or more than one.
-    private static func only(_ needle: String, in text: NSString, where accepts: (NSRange) -> Bool = { _ in true }) -> NSRange? {
-        guard !needle.isEmpty else { return nil }
-        var match: NSRange?
-        var search = NSRange(location: 0, length: text.length)
-        while true {
-            let found = text.range(of: needle, options: .literal, range: search)
-            if found.location == NSNotFound { break }
-            if accepts(found) {
-                if match != nil { return nil }
-                match = found
-            }
-            let next = found.location + 1
-            guard next <= text.length else { break }
-            search = NSRange(location: next, length: text.length - next)
-        }
-        return match
     }
 
     private static func start(ofCharacters count: Int, endingAt end: Int, in text: NSString) -> Int {

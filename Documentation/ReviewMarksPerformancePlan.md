@@ -95,6 +95,34 @@ before and after.
 **R3. Measure again**, and make an item of any stage still over 100 ms off
 the main thread or 16 ms on it.
 
+## Measured
+
+R0 to R2 landed on 2026-11-27 (0035, 0036). These are the owner's writing,
+Release, the median of five, before and after:
+
+| Stage | Before | After R1 | After R2 |
+| --- | ---: | ---: | ---: |
+| `anchored` | 1,290 ms | 4.8 ms | 5.1 ms |
+| `located`, anchored | 183 ms | 147 ms | 2.0 ms |
+| `drawing` | 1,627 ms | 173 ms | 19 ms |
+| ✓ clear, big passage | 1,276 ms | 168 ms | 12 ms |
+| carry after a word typed | 1,716–2,533 ms | 65–70 ms | 69–75 ms |
+| carry from 24 held texts | 1,648 ms | 195 ms | 201 ms |
+| a save's carry, with its file | 2,038 ms | 110 ms | 111 ms |
+| restoring a range | 1,178 ms | 169 ms | 10 ms |
+| `drawable` | 106 ms | 78 ms | 83 ms |
+
+Instructions retired fell in step: a draw went from 23.5 billion to 0.4
+billion. The private record's 256 answers matched the hashes taken before,
+after each item.
+
+Still over R3's line, for R3 to place on or off the main thread:
+
+- **The carry.** It takes 70 ms after typing, 110 ms for a save under the
+  file's lock, and 200 ms from 24 held texts. That is the text alignment and
+  an index per held text.
+- **`drawable`**, at 83 ms.
+
 **R4. The Mac's ✓ path.** Signposts first, then fixes only where they
 point. Candidates:
 
