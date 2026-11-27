@@ -42,3 +42,4 @@ Records 0001–0017 come out of the scalability pass of 2026-11-24, and 0018–0
 (`../AnimationRuntimePlan.md`).
 0035 to 0037 come out of the review marks performance pass of 2026-11-27
 (`../ReviewMarksPerformancePlan.md`).
+0041 is the review record's prune (`../ReviewPrunePlan.md`).

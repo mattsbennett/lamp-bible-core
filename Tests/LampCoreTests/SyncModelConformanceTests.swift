@@ -112,7 +112,7 @@ struct SyncModelConformanceTests {
         "formatFourPath", "formatFourEntry", "formatFourMoveStep", "formatFourCopy", "fetchedForMerge",
         "planMark", "planStamp", "planApply", "planVersionMerge", "planContribution",
         "readingPosition", "readingStamp", "readingVersionMerge", "readingContribution",
-        "reviewMerge", "documentMerge", "documentDeletion", "mergedRecord", "asksRevision",
+        "reviewMerge", "reviewFollow", "documentMerge", "documentDeletion", "mergedRecord", "asksRevision",
         "documentSwept", "documentDeletionStamp", "queuedDeletionStamp", "defersDeletion",
     ]
 
@@ -1188,6 +1188,43 @@ struct SyncModelConformanceTests {
             let clearance = merged.retired.contains { $0.id == id(1) }
                 ? 0 : merged.clearances.first { $0.id == id(10) }?.version ?? 0
             return code(merged, 1) == f[6] && code(merged, 2) == f[7] && String(clearance) == f[8]
+        }
+    }
+
+    /// Taking in a copy of one mark, its retirement past its lifetime or
+    /// not, through the store: what is left of the mark, and whether its
+    /// retirement is then what the incoming copy holds. A pass decides
+    /// whether to send a record by its bytes, so following must only ever
+    /// move the file toward the copy it took in.
+    @Test func reviewFollow() throws {
+        func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let lifetime = LampWritingReviewStore.retirementLifetime
+        func copy(_ code: String, old: Bool) -> LampWritingReview {
+            var review = LampWritingReview(writingID: "w")
+            if code == "r" {
+                let when = now.addingTimeInterval(old ? -lifetime - 60 : -60)
+                review.retired.append(.init(id: id(1), retiredAt: when))
+            } else if let version = Int(code), version > 0 {
+                review.marks.append(.init(
+                    id: id(1), pieces: [.init(text: "m1v\(version)", before: "", after: "", hint: 0)],
+                    version: version, markedAt: now, turnID: nil
+                ))
+            }
+            return review
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try conform("reviewFollow") { f in
+            let store = LampWritingReviewStore(rootURL: root.appendingPathComponent(f.joined(separator: "-")))
+            let old = f[2] == "true"
+            try store.save(copy(f[0], old: old))
+            let incoming = copy(f[1], old: old)
+            try store.takeIn(downloaded: incoming.encoded(), writingID: "w", now: now)
+            let followed = try store.review(writingID: "w")
+            let retired = followed.retired.contains { $0.id == id(1) }
+            let code = retired ? "r" : followed.marks.first { $0.id == id(1) }.map { String($0.version) } ?? "0"
+            return code == f[3] && String(retired == incoming.retired.contains { $0.id == id(1) }) == f[4]
         }
     }
 

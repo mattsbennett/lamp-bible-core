@@ -31,7 +31,7 @@ the code it describes:
   any error or warning.
 - **The model and Swift answer alike.** The model's last section prints a table
   for each decision that has a Swift counterpart: its inputs and the model's
-  answer, 4,593 cases across 69 decisions. `SyncModelConformanceTests` asks the
+  answer, 10,469 cases across 84 decisions. `SyncModelConformanceTests` asks the
   shipped Swift decision every one of those questions. A decision changed on one
   side and not the other fails the suite and names the case that differs. So
   does a table with no Swift check, or a check with no table.

@@ -112,13 +112,24 @@ public struct LampWritingReviewStore: Sendable {
     /// over a copy read before the other wrote would lose a mark or a clear.
     @discardableResult
     public func update(
-        writingID: String, document: String? = nil,
+        writingID: String, document: String? = nil, now: Date = Date(),
         _ change: (LampWritingReview) throws -> LampWritingReview
     ) throws -> LampWritingReview {
         try Self.locks.holding(try url(writingID: writingID, document: document)) {
-            let next = try change(review(writingID: writingID, document: document))
+            let url = try url(writingID: writingID, document: document)
+            let held = try? Data(contentsOf: url)
+            var next = try change(review(writingID: writingID, document: document))
             guard next.writingID == writingID, next.document == document else {
                 throw StoreError.notThisDocument
+            }
+            // What is past its time goes with a change that is being
+            // written anyway, and never makes one: a carry that moves
+            // nothing still writes nothing (`ReviewPrunePlan.md`). The
+            // copies this goes to let it go too, as they take it in.
+            // Judged by the bytes, as `save` judges whether to write: a
+            // change that only reorders writes nothing, and must not prune.
+            if try next.encoded() != held {
+                next = next.pruning(before: now.addingTimeInterval(-Self.retirementLifetime))
             }
             try save(next)
             return next
@@ -144,7 +155,7 @@ public struct LampWritingReviewStore: Sendable {
     /// else to start one.
     @discardableResult
     public func takeIn(
-        downloaded data: Data, writingID: String, document: String? = nil
+        downloaded data: Data, writingID: String, document: String? = nil, now: Date = Date()
     ) throws -> Bool {
         let incoming = try LampWritingReview.decoded(from: data)
         // A record that says it is another place's is refused, not
@@ -157,7 +168,11 @@ public struct LampWritingReviewStore: Sendable {
         }
         let url = try url(writingID: writingID, document: document)
         return try Self.locks.holding(url) {
-            let merged = try review(writingID: writingID, document: document).merged(with: incoming)
+            let merged = try review(writingID: writingID, document: document).merged(
+                with: incoming,
+                lettingGoOfRetiredBefore: now.addingTimeInterval(-Self.retirementLifetime),
+                restoredBefore: now.addingTimeInterval(-LampWritingReview.restorationWindow)
+            )
             let wrote = try save(merged)
             let differs = try merged.encoded() != incoming.encoded()
             if differs, !wrote {
@@ -297,9 +312,13 @@ public struct LampWritingReviewStore: Sendable {
 
     private static let locks = FileLocks()
 
-    /// How long a retirement is kept before it is pruned. A device away
-    /// from sync for longer than this could show a passage it last saw
-    /// marked as marked again; nothing else depends on it.
+    /// How long a retirement is kept before it is pruned: by `update`, on a
+    /// write that changes the record, and by `takeIn` where the incoming
+    /// copy has pruned it already. A device away from sync for longer than
+    /// this could show a passage it last saw marked as marked again. So
+    /// could a restore recorded again after its re-mark's retirement went
+    /// (`remarkID(restoring:)`), which waits on a device keeping a restore
+    /// owed for that long.
     public static let retirementLifetime: TimeInterval = 60 * 60 * 24 * 90
 }
 

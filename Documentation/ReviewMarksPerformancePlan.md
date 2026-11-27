@@ -42,7 +42,8 @@ Findings:
   meanwhile waits on it.
 - **The 90-day prune of retired marks has no caller in either app.** This
   was checked. `pruning(before:)` and `retirementLifetime` are used only by
-  tests.
+  tests. The owner asked for it on 2026-11-27, and it landed as 0041
+  (`ReviewPrunePlan.md`).
 
 ## Order
 

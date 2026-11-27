@@ -21,7 +21,8 @@ import Foundation
 /// **It merges, and a clear made anywhere holds.**
 /// - A mark keeps its id for as long as it lasts. Carried through an edit,
 ///   it gets a higher version; two copies of one mark merge to the higher.
-/// - Clearing a whole mark retires its id, and a retired id never returns.
+/// - Clearing a whole mark retires its id, and a retired id never returns
+///   while its retirement is kept: 90 days, then it is pruned.
 /// - Clearing part of one records what was cleared, which is taken out of
 ///   the mark wherever it is drawn, whichever copy of the mark won. So two
 ///   devices clearing different parts of one passage leave only the part
@@ -42,9 +43,9 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     ///
     /// They are kept to be told to the assistant, so that it does not make
     /// again a change the writer has just put back. That is a thing of the
-    /// next turns, not of for ever, and nothing prunes this record on a
-    /// schedule — so a restore drops the ones that have had their day rather
-    /// than letting the file, and the note built from it, only grow.
+    /// next turns, not of for ever — so a restore drops the ones that have
+    /// had their day rather than letting the file, and the note built from
+    /// it, only grow, and a copy taking that restore in drops them too.
     public static let restorationsKept = 20
     public static let restorationWindow: TimeInterval = 7 * 24 * 60 * 60
 
@@ -1705,6 +1706,48 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         return best
     }
 
+    /// `merged(with:)`, letting go of what this copy kept past its time
+    /// that `incoming` has already let go of.
+    ///
+    /// A device that writes a change prunes the retirements and
+    /// restorations past their time (`LampWritingReviewStore.update`), and
+    /// the record it sends lacks them. A merge is a union, so every other
+    /// copy would hand them straight back, and the pruning device would
+    /// send them away again, each pass. Following lets each copy settle on
+    /// the bytes it was sent instead.
+    ///
+    /// Three conditions on a retirement:
+    /// - **Past `retiredBefore`.** A young one is news, however the other
+    ///   copy came to lack it.
+    /// - **`incoming` lacks it.** Only that can move this file toward the
+    ///   bytes it was sent. A copy that still holds it keeps it.
+    /// - **Neither copy holds its mark.** A clear made long ago and never
+    ///   sent, meeting a copy that still shows the mark, is the one thing
+    ///   that can take the mark away there. Let go, it would come back
+    ///   everywhere.
+    ///
+    /// Restorations are let go past `restoredBefore` where `incoming` has
+    /// none of their mark: a restore drops the ones past their week, which
+    /// the other copy handed back. Nothing is tidied here, since tidying
+    /// could make a difference of its own to send.
+    public func merged(
+        with incoming: LampWritingReview, lettingGoOfRetiredBefore retiredBefore: Date,
+        restoredBefore: Date
+    ) -> LampWritingReview {
+        // Let go of before the merge, not after: the merge keeps only the
+        // newest restorations, and one of this copy's that is about to go
+        // would otherwise push out one the incoming copy holds.
+        var mine = self
+        let theirs = Set(incoming.retired.map(\.id))
+        let held = Set(marks.map(\.id)).union(incoming.marks.map(\.id))
+        mine.retired.removeAll {
+            $0.retiredAt < retiredBefore && !theirs.contains($0.id) && !held.contains($0.id)
+        }
+        let restoredThere = Set(incoming.restorations.map(\.markID))
+        mine.restorations.removeAll { $0.restoredAt < restoredBefore && !restoredThere.contains($0.markID) }
+        return mine.merged(with: incoming)
+    }
+
     /// The record with what another copy of it knows. Each mark either has,
     /// at the higher version of the two; less every mark either retired;
     /// with every part either cleared. The same whichever side merges.
@@ -1745,10 +1788,10 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
             restorationsByMark[restoration.markID] = restorationsByMark[restoration.markID]
                 .map { Self.later($0, restoration) } ?? restoration
         }
-        // The newest only. A device that merely syncs never restores, so
-        // it never prunes, and it would hand back every restoration the
-        // restoring device had dropped — the list, holding both wordings
-        // of each, would grow for ever between them. Keeping the newest
+        // The newest only, which bounds the list however the devices
+        // between them prune it: each holds both wordings of a passage put
+        // back, and a copy from a build that does not let go of the ones a
+        // restore dropped would hand them all back. Keeping the newest
         // of a union is the same set whichever side merges and in
         // whatever grouping, so the merge's own laws are untouched.
         let newest = restorationsByMark.values
@@ -1775,9 +1818,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
     ///
     /// A retirement is kept so that a copy which still has the mark cannot
     /// bring it back in a merge. Once every device has merged since, it
-    /// guards nothing, so the caller drops old ones rather than letting the
-    /// record only grow. A device away for longer than that could show a
-    /// cleared passage marked again, which is the whole of the risk.
+    /// guards nothing, so a write drops old ones rather than letting the
+    /// record only grow (`LampWritingReviewStore.update`), and a copy taking
+    /// that write in drops them too (`merged(with:lettingGoOfRetiredBefore:)`).
+    /// A device away for longer than that could show a cleared passage
+    /// marked again, which is the whole of the risk.
     ///
     /// Clearances are not pruned by age: what they cleared may still stand
     /// in the winning copy of their mark, which would show it again. They go
@@ -1789,10 +1834,11 @@ public struct LampWritingReview: Codable, Equatable, Sendable {
         // on the turns just after it. Past the same window as a retirement
         // it is only size, and a record that only grows is resent for ever.
         result.restorations.removeAll { $0.restoredAt < date }
-        // A merge is a union, so it can leave the wording of a mark the
-        // other copy had retired. Nothing offers it — a restore needs the
-        // mark — and this is where it goes.
-        return result.tidied()
+        // Nothing else: not the wordings a merge can leave of a mark the
+        // other copy retired. Every copy holds those alike, and dropping
+        // them on one device's write had the other hand them back, an
+        // upload more for every write (Codex's review of 0041).
+        return result
     }
 
     /// Without the clearances and wordings of marks no longer held, and

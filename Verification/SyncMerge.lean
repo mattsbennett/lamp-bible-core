@@ -3775,7 +3775,11 @@ as the Swift keeps them:
   that the writer can have the assistant's change put back; it is made once
   and never changed, and merges by union,
 - putting one back retires its mark and records a restoration, which the
-  assistant is told of and which therefore outlives the mark.
+  assistant is told of and which therefore outlives the mark,
+- a retirement past its lifetime is let go: by a device writing a change,
+  and by a device taking in a copy that has already let it go, so long as
+  neither copy still holds the mark. A retired id is never shown again
+  while its retirement is kept.
 A version of 0 is no mark, or no clearance. How a mark is found in the text, and what its
 pieces are, is outside the model: which copy's pieces are drawn is decided
 by the version, and a tie between two copies of one version by their bytes,
@@ -3798,6 +3802,32 @@ def mergeReview (a b : Review) : Review :=
     wording := fun i => a.wording i || b.wording i,
     restored := fun i => a.restored i || b.restored i }
 
+/-- A write's prune (`LampWritingReviewStore.update`): the retirements past
+their lifetime let go. Which those are is `old`, the age being outside the
+model as `pruneTombstone`'s clock is. Restorations are pruned too, and held
+by Swift tests: whether one is held changes nothing the merge shows. -/
+def leadReview (old : Nat → Bool) (a : Review) : Review :=
+  { a with retired := fun i => a.retired i && !old i }
+
+/-- Taking a copy in (`merged(with:lettingGoOfRetiredBefore:)`): the merge,
+less a retirement past its lifetime that the incoming copy has let go of,
+where neither copy holds the mark.
+
+The merge alone is a union, so a copy pruned on one device was handed back
+by every other, and pruned and sent again, each pass. Following moves this
+copy only toward the one it was sent, so the two settle. A retirement the
+incoming copy still holds is kept, and so is one whose mark that copy still
+shows: a clear made long ago and never sent is what takes the mark away
+there.
+
+What is kept holds no mark that is retired, as the record a store saves
+holds none: the merge drops a retired mark's copies. So a retirement let go
+later, by a write, cannot show again a mark that this taking-in hid. -/
+def followReview (old : Nat → Bool) (a b : Review) : Review :=
+  let m := mergeReview a b
+  let retired := fun i => m.retired i && !(old i && !b.retired i && m.version i == 0)
+  { m with retired := retired, version := fun i => if retired i then 0 else m.version i }
+
 /-- Which writing, and which of its documents, a record's marks are in.
 A document of 0 is the writing's own prose, whose record is the only kind
 there was before marks reached the documents beside it.
@@ -3812,25 +3842,81 @@ structure ReviewTarget where
   document : Nat
   deriving DecidableEq
 
-/-- Taking in a copy a pass downloaded: merged where it is a record of
-this very document, and refused where it is not. -/
-def takeInReview (here there : ReviewTarget) (a b : Review) : Option Review :=
-  if here = there then some (mergeReview a b) else none
+/-- Taking in a copy a pass downloaded: merged and followed where it is a
+record of this very document, and refused where it is not. -/
+def takeInReview (here there : ReviewTarget) (old : Nat → Bool) (a b : Review) : Option Review :=
+  if here = there then some (followReview old a b) else none
 
 /-- A record of another document, or of another writing, is refused. The
 file's name says where it belongs and the record says so itself; where
 those disagree, one of them is wrong and neither can say which. -/
 theorem arecordOfAnotherPlaceIsNeverMerged
-    (here there : ReviewTarget) (a b : Review) (h : here ≠ there) :
-    takeInReview here there a b = none := by
+    (here there : ReviewTarget) (old : Nat → Bool) (a b : Review) (h : here ≠ there) :
+    takeInReview here there old a b = none := by
   simp [takeInReview, h]
 
-/-- And a record of this place merges exactly as it always did: the
-document a record is for changes nothing about how two copies of it are
-brought together. -/
-theorem arecordOfThisPlaceMergesAsBefore (here : ReviewTarget) (a b : Review) :
-    takeInReview here here a b = some (mergeReview a b) := by
+/-- And a record of this place is followed: the document a record is for
+changes nothing about how two copies of it are brought together. -/
+theorem arecordOfThisPlaceMergesAsBefore (here : ReviewTarget) (old : Nat → Bool) (a b : Review) :
+    takeInReview here here old a b = some (followReview old a b) := by
   simp [takeInReview]
+
+/-- Where nothing is past its lifetime, following retires exactly what the
+merge retires. -/
+theorem withNothingOldFollowingRetiresAsTheMergeDoes (a b : Review) (i : Nat) :
+    (followReview (fun _ => false) a b).retired i = (mergeReview a b).retired i := by
+  simp [followReview]
+
+/-- A mark taken away on taking a copy in stays away when its retirement is
+let go later by a write. -/
+theorem aMarkTakenAwayStaysAwayWhenItsRetirementGoes (old later : Nat → Bool) (a b : Review) (i : Nat)
+    (h : (followReview old a b).retired i = true) :
+    (leadReview later (followReview old a b)).version i = 0 := by
+  simp [leadReview, followReview] at *
+  simp [h]
+
+/-- Following changes a retirement only where the result is then what the
+incoming copy holds: it can only move this copy toward the bytes it was
+sent, so a pass that follows finds nothing new to send. -/
+theorem followingOnlyMovesTowardTheIncomingCopy (old : Nat → Bool) (a b : Review) (i : Nat)
+    (h : (followReview old a b).retired i ≠ (mergeReview a b).retired i) :
+    (followReview old a b).retired i = b.retired i := by
+  simp [followReview, mergeReview] at *
+  grind
+
+/-- A retirement is kept while the incoming copy still shows its mark: an
+old clear never sent still takes the mark away there. -/
+theorem aRetirementIsKeptWhileTheIncomingCopyHoldsItsMark (old : Nat → Bool) (a b : Review) (i : Nat)
+    (h : 0 < b.version i) :
+    (followReview old a b).retired i = (mergeReview a b).retired i := by
+  simp [followReview, mergeReview]
+  grind
+
+/-- A retirement inside its lifetime is never let go, whatever the other
+copy holds. -/
+theorem aYoungRetirementIsNeverLetGo (old : Nat → Bool) (a b : Review) (i : Nat) (h : old i = false) :
+    (followReview old a b).retired i = (mergeReview a b).retired i := by
+  simp [followReview, h]
+
+/-- A copy whose retired marks it no longer holds, as every copy a store
+writes is. -/
+def Review.clean (r : Review) : Prop := ∀ i, r.retired i = true → r.version i = 0
+
+/-- A device that has not pruned, taking in the copy a device that has
+pruned sent, settles on it. -/
+theorem anUnprunedCopyFollowsAPrunedOne (old : Nat → Bool) (u : Review) (hu : u.clean) (i : Nat) :
+    (followReview old u (leadReview old u)).retired i = (leadReview old u).retired i := by
+  have := hu i
+  simp [followReview, leadReview, mergeReview]
+  cases hr : u.retired i <;> cases ho : old i <;> simp_all
+
+/-- And the device that pruned, handed back an unpruned copy by a build that
+does not prune, takes the entries back and then has nothing to send. -/
+theorem aPrunedCopyTakesBackWhatAnOlderBuildHolds (old : Nat → Bool) (u : Review) (i : Nat) :
+    (followReview old (leadReview old u) u).retired i = u.retired i := by
+  simp [followReview, leadReview, mergeReview]
+  cases hr : u.retired i <;> cases ho : old i <;> simp
+
 
 /-- What a pass does with a document's review record.
 
@@ -4082,6 +4168,27 @@ def Review.shows (r : Review) (i : Nat) : Bool := Decidable.decide (0 < r.versio
 /-- Whether the writer can be offered the assistant's wording back: only
 while the mark still stands, and only where what stood there is held. -/
 def Review.offers (r : Review) (i : Nat) : Bool := r.shows i && r.wording i
+
+/-- Following shows exactly what the merge shows: it lets go only of
+retirements whose mark neither copy holds, so nothing comes back on the
+device that follows. -/
+theorem followingShowsWhatTheMergeShows (old : Nat → Bool) (a b : Review) (i : Nat) :
+    (followReview old a b).shows i = (mergeReview a b).shows i := by
+  simp [Review.shows, followReview, mergeReview]
+  grind
+
+/-- The cost accepted with the lifetime: a device away for longer still
+holds the mark, and once the others have let its retirement go, merging
+with it shows the mark again. -/
+theorem retirementLifetimeCost :
+    let retiredLongAgo : Review :=
+      { version := fun _ => 0, retired := fun i => i == 1, cleared := fun _ => 0,
+        wording := fun _ => false, restored := fun _ => false }
+    let away : Review :=
+      { version := fun i => if i == 1 then 1 else 0, retired := fun _ => false, cleared := fun _ => 0,
+        wording := fun _ => false, restored := fun _ => false }
+    (mergeReview (leadReview (fun _ => true) retiredLongAgo) away).shows 1 = true := by
+  decide
 
 -- A clear on any device holds, whatever the other copy still shows.
 theorem aRetiredMarkNeverReturns (a b : Review) (i : Nat) (h : a.retired i = true ∨ b.retired i = true) :
@@ -6040,11 +6147,25 @@ def reviewMarkCode (r : Review) (i : Nat) : String :=
     for (tw, td) in places do
       let here : ReviewTarget := { writing := hw, document := hd }
       let there : ReviewTarget := { writing := tw, document := td }
-      let taken := takeInReview here there (reviewCopy "0" "0" 0) (reviewCopy "1" "0" 0)
+      let taken := takeInReview here there (fun _ => false) (reviewCopy "0" "0" 0) (reviewCopy "1" "0" 0)
       IO.println <| conformanceLine "reviewRouting"
         [toString hw, toString hd, toString tw, toString td,
          toString taken.isSome,
          toString (match taken with | some r => r.shows 1 | none => false)]
+
+#eval show IO Unit from do
+  -- Every pair of copies of mark 1, its retirement past its lifetime or
+  -- not: what taking the second in leaves of the mark, and whether its
+  -- retirement is then what the incoming copy holds.
+  let codes := ["0", "1", "2", "r"]
+  for a1 in codes do
+    for b1 in codes do
+      for old in [false, true] do
+        let incoming := reviewCopy b1 "0" 0
+        let followed := followReview (fun i => old && i == 1) (reviewCopy a1 "0" 0) incoming
+        IO.println <| conformanceLine "reviewFollow"
+          [a1, b1, toString old, reviewMarkCode followed 1,
+           toString (followed.retired 1 == incoming.retired 1)]
 
 def reviewFateName : ReviewFate → String
   | .deleted at_ => s!"deleted:{at_}"
