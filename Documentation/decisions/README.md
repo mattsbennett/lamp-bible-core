@@ -45,3 +45,5 @@ Records 0001–0017 come out of the scalability pass of 2026-11-24, and 0018–0
 0041 is the review record's prune (`../ReviewPrunePlan.md`).
 0042 to 0045 come out of the agent holds and approvals pass of 2026-11-27
 (`../AgentHoldsAndApprovalsPlan.md`).
+0046 on come out of the skills management pass of 2026-11-28
+(`../SkillsManagementPlan.md`).
