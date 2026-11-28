@@ -3,7 +3,9 @@
 Planned by Fable on 2026-11-28, against Mac `e26683e` and core `90bc79e`.
 The coordinator checked the load-bearing claims against the code the same
 day. The owner approved the shape on 2026-11-28 and replaced the per-chat
-reader control with a "writings only" choice in Settings.
+reader control with a "writings only" choice in Settings. All seven steps
+were built the same day, Mac f79bae7 and core e868dda, recorded in
+0046–0052.
 
 ## What was asked
 
