@@ -44,7 +44,13 @@ record for that phone, once per wait, and takes it away once nothing waits.
 
 The phone's contract: tell it from an end by the record name; never count it
 as hearing the turn; hide it while the chat is on screen and connected; a tap
-opens the chat; no Allow or Deny on the alert.
+opens the chat; no Allow or Deny on the alert. The phone takes a delivered
+alert away only once it finds the record gone (asked of CloudKit when the
+Mac says nothing waits, and when Lamp comes to the front), so **the Mac's
+delete is part of the contract**: never a record left for a wait that ended.
+Two can linger until the Mac's next launch sweeps records a day old: a
+delete that failed (offline, signed out; logged, not retried), and one
+queued as Lamp quit.
 
 ## What follows
 
