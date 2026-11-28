@@ -35,7 +35,10 @@ and `/api/mcp`):
 every OpenCode writing turn, from a pane or a paired device, Lamp writes its
 own `opencode.json` again whole, then looks at everything else OpenCode would
 read in the writing and in the three Lamp-owned folders above it
-(`<library>/AgentWorkspaces/Writing`, `AgentWorkspaces`, the library). If
+(`<library>/AgentWorkspaces/Writing`, `AgentWorkspaces`, the library),
+walked from the writing as it resolves up to the library as it resolves, so
+a linked parent can't shorten or lead the walk elsewhere; a writing that
+resolves outside the library stops the turn. If
 anything is there that Lamp can't vouch for, the turn doesn't start, and
 nothing is asked and no answer kept:
 
@@ -44,8 +47,13 @@ nothing is asked and no answer kept:
 > Lamp's settings and your own in ~/.config/opencode. Remove these from the
 > writing's folder, or use the Terminal, which asks about them.
 
-with Show in Finder beside it on the Mac; a paired device is told the same
-words as `needs-setup`. What passes names no program an agent can write:
+with Show in Finder beside it on the Mac, selecting them; where some are
+above the writing, the Terminal, which looks only in the writing, isn't
+offered, and the words say those are in Lamp's library folder. A paired
+device is told the same words under a code of its own,
+`writing-settings` (`LampAgentRemoteFailure.writingSettings`), so a phone
+that doesn't know it shows them; `needs-setup` would show the phone's own
+words for setting OpenCode up. What passes names no program an agent can write:
 Lamp's own `opencode.json`, byte-equal; a built-in skill, by its tree's
 digest against the bundle, with no link or hidden entry; a custom skill as
 plain as Lamp writes one (`SKILL.md` alone, prose). A `.claude` folder above
@@ -62,7 +70,8 @@ the writing counts only for a `skills` folder in it.
   own from another pane included) or any provider's Terminal is open in it,
   and while it runs no other chat there starts.
 - A refused message waits on the chat, held, with Send Them, rather than in a
-  pane's field that may have gone.
+  pane's field that may have gone; refused by the send itself (a check gone
+  stale) too. No turn's end lets that hold go: only the person's Send.
 - Only OpenCode's own file is written before the check, so another
   provider's file Lamp can't write doesn't stop an OpenCode turn.
 

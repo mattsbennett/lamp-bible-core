@@ -318,6 +318,10 @@ public enum LampAgentRemoteFailure {
     /// wasn't taken, and may be asked again at any time. No event says the
     /// session ended.
     public static let terminalOpen = "terminal-open"
+    /// The writing holds settings for OpenCode that Lamp didn't put there,
+    /// which an OpenCode chat doesn't start beside (`decisions/0043`); the
+    /// words name them, for the person to remove on the Mac.
+    public static let writingSettings = "writing-settings"
 }
 
 /// Whether a host takes a device's turn, and if not, the failure it answers
