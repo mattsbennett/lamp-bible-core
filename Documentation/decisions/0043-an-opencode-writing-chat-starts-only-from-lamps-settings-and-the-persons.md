@@ -72,7 +72,9 @@ the writing counts only for a `skills` folder in it.
   and while it runs no other chat there starts.
 - A refused message waits on the chat, held, with Send Them, rather than in a
   pane's field that may have gone; refused by the send itself (a check gone
-  stale) too. No turn's end lets that hold go: only the person's Send.
+  stale) too. No turn's end lets that hold go, nor a quit (0042): only the
+  person's Send. A writing reached through a link out of the library is
+  written nothing, its message left in the field.
 - Nothing is written into a writing that resolves outside the library: that
   is looked at first, since a linked parent would lead the write elsewhere.
   The boundary: a writing's workspace is prepared for every turn, by any
@@ -99,11 +101,6 @@ the writing counts only for a `skills` folder in it.
   agent in another writing could change them after the check. No agent may
   write there unasked (Codex's sandbox is its own writing; Claude and
   Antigravity ask for anything outside it). Raised by Codex as a P2.
-- **Left, an edge case:** a refused message's hold is in memory, as 0042's
-  is; quit and reopened, it goes as the chat loads, without a new Send. It is
-  checked again as it goes, so it runs only if nothing is in the way by then,
-  and it is the person's own message. Raised by Codex as a P2 for 0042 and
-  again here.
 - **Left, an edge case:** a first message refused before the chat has a
   conversation waits with none, and if another Mac's conversation for the
   writing syncs in before Send Them, it goes into that one. Rare, and it is

@@ -86,11 +86,11 @@ later one.
   until its daily sweep. Raised by Codex as a P3.
 - A wait in a chat its pane keeps drawn behind the Terminal is told as
   unwatched: the card can't be seen there.
-- A click on a wait's notice shows the writing's assistant as it was left;
-  in Terminal mode the person switches to Chat to see the card. Switching it
-  for them was built and taken out: the Chat or Terminal setting is one for
-  every writing, so a click would hide a Terminal being watched in another
-  window (Codex, P2).
+- A click on a wait's notice shows that writing's chat, where the card is,
+  though its pane was on Terminal, in that pane alone, until the person picks
+  a mode. Switching the Chat or Terminal setting was built first and taken
+  out: it is one for every writing, so a click hid a Terminal being watched
+  in another window (Codex, P2).
 - Taking a wait's notice back removes one not yet shown too.
 - **Left, an edge case:** with one writing open in several windows, a click
   shows the assistant in each that has it closed, not only the window
