@@ -78,6 +78,20 @@ So a skill deleted on one Mac came back from the server on the next pass.
     comes back once.
 
   Both cost a skill showing again, and removing it again sticks.
+- **A surviving edit is recovered by making the skill again.** When one Mac
+  edits only a reference while another removes the skill, the edit outlives
+  the removal and SKILL.md does not. The folder is then no skill and shows
+  nowhere. A new skill under that name takes those files in, and its window
+  shows them. A guard that refused the name instead was tried and taken
+  out: it held the name for ever, since no pass clears an edit that won.
+- **Left as they are, from Codex's closing review, each rare:**
+  - On a library volume that tells Unicode spellings apart, a reference
+    stored decomposed is missed by a removal from another Mac and goes back
+    up once. Lamp's library is on APFS, which does not tell them apart.
+  - A removal queued offline and first sent more than 180 days later can be
+    pruned in the same write that records it, as any unlisted tombstone is.
+  - A reader chat opened on the Mac while a phone's turn runs in it takes a
+    changed choice mid-turn.
 
 - **A published write loses to a later removal; an unsent one does not.**
   If another Mac uploaded an edit and this one then removes the skill
