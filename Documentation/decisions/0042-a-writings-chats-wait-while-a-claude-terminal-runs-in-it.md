@@ -73,7 +73,8 @@ starts a turn: no pane on the Mac, and no paired device.
   writing's chats, from the phone too, until it is ended on the Mac.
 - A hold for the person's word outlasts a quit: kept in this Mac's
   preferences by provider and writing, not in the queue file every Mac
-  syncs, and let go only by their Send. Codex raised its loss at a quit six
+  syncs, and let go only by their Send; for a chat not loaded, kept the
+  moment the Terminal begins, where it has messages waiting on disk. Codex raised its loss at a quit six
   rounds running; it was first left as an edge case, then closed.
 - The converse is unchanged: the Terminal doesn't open while a chat in the
   writing is busy (0038), so a hold can't begin under a turn being prepared.

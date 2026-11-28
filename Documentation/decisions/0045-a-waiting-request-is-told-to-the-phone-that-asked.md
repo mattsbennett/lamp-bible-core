@@ -88,7 +88,8 @@ later one.
   unwatched: the card can't be seen there.
 - A click on a wait's notice shows that writing's chat, where the card is,
   though its pane was on Terminal, in that pane alone, until the person picks
-  a mode. Switching the Chat or Terminal setting was built first and taken
+  a mode; asked of a pane the click is opening, it is kept until that pane
+  appears. Switching the Chat or Terminal setting was built first and taken
   out: it is one for every writing, so a click hid a Terminal being watched
   in another window (Codex, P2).
 - Taking a wait's notice back removes one not yet shown too.
