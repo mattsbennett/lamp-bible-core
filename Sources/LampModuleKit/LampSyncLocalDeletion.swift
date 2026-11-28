@@ -48,12 +48,19 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     /// it, and while absence was read as intent this would have let a
     /// tidy-up remove a reader's sources from every device.
     case contextFile(folder: String, relativePath: String)
+    /// One file of one of the reader's own skills, by the skill's name and
+    /// its path inside the skill's folder. Deleted everywhere when the
+    /// reader removes the skill, one file at a time, so a skill removed on
+    /// one Mac does not come back from another's copy. As with a source, a
+    /// skill that is merely missing is not a deletion: only the removal
+    /// records one.
+    case skillFile(name: String, relativePath: String)
     /// The notes or writing collection, refused.
     case collection
     /// Nothing a pass deletes locally: media goes with the module that shows
     /// it, any *other* workspace file's removal travels inside its tree — a
-    /// conversation, a skill, the ledger itself — and a path outside the
-    /// layout is never acted on.
+    /// conversation, the ledger itself — and a path outside the layout is
+    /// never acted on.
     case unsupported
 
     /// The module ID of the collection every note is published in.
@@ -82,8 +89,11 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
         case .writingDocument:
             return LampWritingWorkspaceLayout.document(ofPath: path).map(Self.writingDocument) ?? .unsupported
         case .workspaceFile:
-            return LampWritingWorkspaceLayout.contextFile(ofPath: path)
-                .map(Self.contextFile) ?? .unsupported
+            if let source = LampWritingWorkspaceLayout.contextFile(ofPath: path) {
+                return .contextFile(folder: source.folder, relativePath: source.relativePath)
+            }
+            return LampWritingWorkspaceLayout.skillFile(ofPath: path)
+                .map(Self.skillFile) ?? .unsupported
         case .devotionalMedia, .noteMedia, .bookMedia:
             return .unsupported
         }
@@ -95,7 +105,7 @@ public enum LampSyncLocalDeletion: Equatable, Sendable {
     /// copy going back up (`thePlanNeverAsksForARefusedDeletion`).
     public var isAllowed: Bool {
         switch self {
-        case .module, .deck, .deckAsset, .writingReview, .writingDocument, .contextFile: true
+        case .module, .deck, .deckAsset, .writingReview, .writingDocument, .contextFile, .skillFile: true
         case .collection, .unsupported: false
         }
     }

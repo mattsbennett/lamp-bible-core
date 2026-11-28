@@ -3703,12 +3703,12 @@ highlight set: one file per set, so deleting a set deletes it everywhere. -/
 
 inductive LocalKind where
   | module | collection | deck | deckAsset | media | workspaceFile | writingReview | writingDocument
-  | contextFile | outside
+  | contextFile | skillFile | outside
   deriving DecidableEq, Repr
 
 inductive LocalDeletion where
   | module (id : Nat) | deck | deckAsset | writingReview | writingDocument | contextFile
-  | collection | unsupported
+  | skillFile | collection | unsupported
   deriving DecidableEq, Repr
 
 def deleteTarget : LocalKind → Option Nat → LocalDeletion
@@ -3720,11 +3720,12 @@ def deleteTarget : LocalKind → Option Nat → LocalDeletion
   | .writingReview, _ => .writingReview
   | .writingDocument, _ => .writingDocument
   | .contextFile, _ => .contextFile
+  | .skillFile, _ => .skillFile
   | .media, _ | .workspaceFile, _ | .outside, _ => .unsupported
 
 def deleteAllowed : LocalDeletion → Bool
   | .module _ | .deck | .deckAsset | .writingReview | .writingDocument
-  | .contextFile => true
+  | .contextFile | .skillFile => true
   | .collection | .unsupported => false
 
 -- A writing's review marks go with the writing, everywhere: a file removed
@@ -3753,8 +3754,19 @@ tidy-up remove a reader's sources everywhere. -/
 theorem areadersSourceIsDeletedEverywhere (id : Option Nat) :
     deleteAllowed (deleteTarget .contextFile id) = true := rfl
 
+/-- And so does a file of one of the reader's own skills.
+
+A skill is a folder of files under `Workspaces/Skills/<name>`, published one
+file at a time. Removing one deleted it on this Mac only, and the next pass
+fetched it back from the server's copy, so a skill could never be removed.
+Each of its files is now recorded as a deletion when the reader removes the
+skill, and only then: as with a source, a skill merely missing — deleted in
+the Finder, say — is not a deletion (`decisions/0049`). -/
+theorem areadersSkillIsDeletedEverywhere (id : Option Nat) :
+    deleteAllowed (deleteTarget .skillFile id) = true := rfl
+
 /-- Every *other* file in a Mac workspace still travels with its tree and is
-never deleted as a file: a conversation, a skill, the ledger itself. -/
+never deleted as a file: a conversation, the ledger itself. -/
 theorem anyOtherWorkspaceFileIsNotDeletedAsAFile (id : Option Nat) :
     deleteAllowed (deleteTarget .workspaceFile id) = false := rfl
 
@@ -6068,18 +6080,18 @@ def localKindName : LocalKind → String
   | .module => "module" | .collection => "collection" | .deck => "deck"
   | .deckAsset => "deckAsset" | .media => "media" | .workspaceFile => "workspaceFile"
   | .writingReview => "writingReview" | .writingDocument => "writingDocument"
-  | .contextFile => "contextFile" | .outside => "outside"
+  | .contextFile => "contextFile" | .skillFile => "skillFile" | .outside => "outside"
 
 -- A module removal is checked to name the path's own ID, 7 here.
 def localDeletionName : LocalDeletion → String
   | .module id => if id == 7 then "module:own" else "module:other"
   | .deck => "deck" | .deckAsset => "deckAsset" | .writingReview => "writingReview"
-  | .writingDocument => "writingDocument" | .contextFile => "contextFile"
+  | .writingDocument => "writingDocument" | .contextFile => "contextFile" | .skillFile => "skillFile"
   | .collection => "collection" | .unsupported => "unsupported"
 
 #eval show IO Unit from do
   for kind in [LocalKind.module, .collection, .deck, .deckAsset, .media, .workspaceFile,
-               .writingReview, .writingDocument, .contextFile, .outside] do
+               .writingReview, .writingDocument, .contextFile, .skillFile, .outside] do
     IO.println <| conformanceLine "deleteTarget"
       [localKindName kind, localDeletionName (deleteTarget kind (some 7)),
        toString (mayRecordRemoval kind (some 7))]

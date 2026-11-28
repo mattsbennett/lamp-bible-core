@@ -138,6 +138,43 @@ public enum LampWritingWorkspaceLayout {
         return path
     }
 
+    /// Where the reader's own skills are published, one folder per skill.
+    public static let skillsDirectory = "\(LampSyncFolderLayout.workspacesDirectory)/Skills"
+
+    /// A skill's name as the Mac makes one: lowercase letters and digits,
+    /// in runs joined by single hyphens, at most 64 characters.
+    public static func isSkillName(_ name: String) -> Bool {
+        (1...64).contains(name.count)
+            && name.range(of: "^[a-z0-9]+(?:-[a-z0-9]+)*$", options: .regularExpression) != nil
+    }
+
+    /// One file of one of the reader's own skills, by the skill's name and
+    /// the file's path inside the skill's folder: `SKILL.md`, a reference,
+    /// anything the skill holds. Deleting a skill deletes each of them
+    /// (`Documentation/decisions` on removing a skill everywhere).
+    public static func skillFile(ofPath path: String) -> (name: String, relativePath: String)? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let skills = skillsDirectory.split(separator: "/").map(String.init)
+        guard components.count >= skills.count + 2,
+              Array(components.prefix(skills.count)) == skills
+        else { return nil }
+        let name = components[skills.count]
+        let rest = Array(components[(skills.count + 1)...])
+        guard isSkillName(name), !rest.isEmpty,
+              !rest.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("\u{0}") })
+        else { return nil }
+        return (name, rest.joined(separator: "/").precomposedStringWithCanonicalMapping)
+    }
+
+    /// The published path of one file of one of the reader's own skills.
+    public static func skillPath(name: String, relativePath: String) throws -> String {
+        let path = [skillsDirectory, name, relativePath].joined(separator: "/")
+        guard skillFile(ofPath: path) != nil else {
+            throw LampSyncFolderLayout.PathError.unsafe(relativePath)
+        }
+        return path
+    }
+
     /// One of a writing's **sources**, by its workspace folder and its
     /// relative path inside `Context/`.
     ///

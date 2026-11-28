@@ -1009,6 +1009,14 @@ struct SyncModelConformanceTests {
                 "Workspaces/Writing/w-1/Documents/draft.md",
                 "Workspaces/Writing/w-1/DeletedFiles.json",
                 "Workspaces/Writing/w-1/Conversations/claude.json",
+                // Not a skill's name: a skill folder is the Mac's lowercase
+                // name, and anything else under Skills travels with its tree.
+                "Workspaces/Skills/My Skill/SKILL.md",
+                "Workspaces/Skills/.hidden/SKILL.md",
+            ],
+            "skillFile": [
+                "Workspaces/Skills/my-skill/SKILL.md",
+                "Workspaces/Skills/my-skill/references/a.md",
                 // A custom skill's own `Context` tree is the skill's, not a
                 // reader's source.
                 "Workspaces/Skills/my-skill/Context/index.json",
@@ -1042,6 +1050,9 @@ struct SyncModelConformanceTests {
                 let source = LampWritingWorkspaceLayout.contextFile(ofPath: path)
                 return source?.folder == folder && source?.relativePath == relativePath
                     ? "contextFile" : "contextFile:other"
+            case .skillFile(let name, let relativePath):
+                let file = LampWritingWorkspaceLayout.skillFile(ofPath: path)
+                return file?.name == name && file?.relativePath == relativePath ? "skillFile" : "skillFile:other"
             case .collection: return "collection"
             case .unsupported: return "unsupported"
             }
