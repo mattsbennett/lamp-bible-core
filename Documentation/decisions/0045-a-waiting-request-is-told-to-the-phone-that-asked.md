@@ -49,8 +49,8 @@ alert away only once it finds the record gone (asked of CloudKit when the
 Mac says nothing waits, and when Lamp comes to the front), so **the Mac's
 delete is part of the contract**: never a record left for a wait that ended.
 A delete that fails (offline, signed out) or is cut short by a quit is kept
-on a list across launches and tried again with every push and as remote
-chats start; one already gone counts as done. A wait is put on that list before
+on a list across launches and tried again, in batches, with every push and
+as remote chats start; one already gone counts as done. A wait is put on that list before
 it is saved, so one saved just before a crash is deleted on the next launch;
 the retries leave alone a wait still lasting in this launch, so an older
 delete can't take a new record of the same name. Each wait's `turnID` is
@@ -80,7 +80,11 @@ later one.
   ran shows its card only once the pane is moved back to it. Raised by Codex
   as a P2; rare, and choosing for the person on a click would change the
   writing's provider.
-- A click on a wait's notice opens the writing's pane on Chat, where the
+- A wait in a chat its pane keeps drawn behind the Terminal is told as
+  unwatched: the card can't be seen there.
+- A click on a wait's notice opens the writing's pane on Chat (the pane's
+  one Chat or Terminal setting, shared by every writing, as the person's own
+  switch is), where the
   card is, though a Terminal was showing; taking it back removes one not yet
   shown too.
 - On the Mac, a wait's notice has a name of its own, so taking it back leaves

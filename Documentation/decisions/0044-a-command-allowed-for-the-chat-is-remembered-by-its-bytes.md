@@ -48,8 +48,8 @@ whoever started the turn, the phone included.
   naming further permissions (`additionalPermissions`) could ask for more
   next time under the same command, so it is asked about each time; and a
   grant holds only in the environment Codex named (`environmentId`). The card
-  shows the command exactly as remembered where that isn't what it shows
-  above (Codex's shell wrapper).
+  shows the command exactly as remembered, whole, where that isn't what it
+  shows above (Codex's shell wrapper).
 - **Kept as the answer is written,** before the bytes go, so a provider asking
   again the moment it reads it finds it, and taken back if the write fails;
   and looked at again as an unasked answer is written, under the writer's
