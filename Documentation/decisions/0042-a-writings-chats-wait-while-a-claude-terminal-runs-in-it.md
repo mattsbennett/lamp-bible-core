@@ -43,11 +43,13 @@ starts a turn: no pane on the Mac, and no paired device.
 - **On the Mac,** over the composer of every chat on the writing: "Claude is
   running in this writing's Terminal. Chats here wait until that session
   ends.", with End Terminal Session and Show Terminal. Typing goes on; Send
-  doesn't. Ending asks the process to stop and kills it if it is still the
+  doesn't. Ending asks the Claude Terminal's process to stop (another
+  provider's Terminal in the writing is left) and kills it if it is still the
   same process three seconds on; its exit collects its last turns as any exit
-  does. **Ending sends nothing:** the Terminal's last turns come into the chat
+  does, and a shell that ignored the request isn't given Claude's command. **Ending sends nothing:** the Terminal's last turns come into the chat
   first, for the person to read before their message goes on top, and a
-  queued message goes with their next Send.
+  queued message goes with their next Send: every chat's waiting messages in
+  the writing are held from the hand-over, a chat not yet loaded as it loads.
 - **To a device,** a turn on a held writing (`send`, `start-chat`) is answered
   `failed`, code `terminal-open`, with the request and chat ids, before the
   turn is taken, and always with the words "Claude is open in this writing's

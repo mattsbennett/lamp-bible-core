@@ -42,6 +42,18 @@ whoever started the turn, the phone included.
   it is written, so a Stop pressed meanwhile still declines; and the network
   decline (0028) comes before any grant is looked at. Remembered only once the
   answer went as given, so one pressed as Stop refused it remembers nothing.
+  Codex's first review found the grant kept late (after a poll, so an
+  immediate repeat was asked again) and blind to `additionalPermissions`.
+- **Only a request to leave the sandbox and nothing more.** A Codex request
+  naming further permissions (`additionalPermissions`) could ask for more
+  next time under the same command, so it is asked about each time; and a
+  grant holds only in the environment Codex named (`environmentId`). The card
+  shows the command exactly as remembered where that isn't what it shows
+  above (Codex's shell wrapper).
+- **Kept as the answer is written,** before the bytes go, so a provider asking
+  again the moment it reads it finds it, and taken back if the write fails.
+- A conversation saved before conversations had ids is given one for its
+  grants alone, in memory, a new chat another.
 - The answer sent is the provider's once-only one: Codex's `accept`,
   Antigravity's `allow_once`, never a session, rule or `allow_always` answer.
 - **The phone** still answers once only (0040): a device can't remember a
