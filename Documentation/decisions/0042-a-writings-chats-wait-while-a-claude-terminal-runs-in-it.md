@@ -69,6 +69,13 @@ starts a turn: no pane on the Mac, and no paired device.
   writing's folder, is not seen.
 - A Claude Terminal left running in a writing that isn't on screen holds that
   writing's chats, from the phone too, until it is ended on the Mac.
+- **Left, an edge case:** a quit while a Claude Terminal holds a chat's
+  waiting messages loses the hold, which is in memory; on reopening, those
+  messages go as the chat loads, before the person has read the Terminal's
+  last turns. Rare (waiting messages, a Claude Terminal and a quit together),
+  and what goes is the person's own message, written to be sent; keeping the
+  hold would mean a new field in the queue file every Mac syncs. Raised by
+  Codex as a P2 and left so.
 - The converse is unchanged: the Terminal doesn't open while a chat in the
   writing is busy (0038), so a hold can't begin under a turn being prepared.
 

@@ -261,12 +261,11 @@ struct AgentRemoteModelConformanceTests {
 
     @Test func turnAdmission() {
         conform("turnAdmission") { f in
-            let names = [
-                LampAgentRemoteFailure.aiOff: "aiOff", LampAgentRemoteFailure.terminalOpen: "terminalOpen",
-                LampAgentRemoteFailure.busy: "busy",
-            ]
-            let refusal = LampAgentRemoteTurnAdmission.refusal(aiOn: f[0] == "true", terminalOpen: f[1] == "true", running: f[2] == "true")
-            return (refusal.map { names[$0] ?? $0 } ?? "take") == f[3]
+            // The codes as a device reads them, written out: the contract is
+            // the words on the wire, not the constants' names.
+            let wire: [String: String?] = ["take": nil, "aiOff": "ai-off", "terminalOpen": "terminal-open", "busy": "busy"]
+            guard let expected = wire[f[3]] else { return false }
+            return LampAgentRemoteTurnAdmission.refusal(aiOn: f[0] == "true", terminalOpen: f[1] == "true", running: f[2] == "true") == expected
         }
     }
 }

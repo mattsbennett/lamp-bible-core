@@ -49,8 +49,8 @@ folder or link there can't be vouched for and stops the turn.
   Between the check and the send nothing is awaited.
 - **Run alone.** Since OpenCode rereads its settings at each request, a check
   binds only if nothing else writes while it runs: an OpenCode writing turn
-  isn't checked, nor started, while another provider's chat runs in the
-  writing or any provider's Terminal is open in it, and while it runs no
+  isn't checked, nor started, while any chat runs in the writing (OpenCode's
+  own from another pane included) or any provider's Terminal is open in it, and while it runs no
   other chat there starts (the Terminal already doesn't, 0038). A message
   queued behind that waits for the person's word.
 - **Answers are kept per scope.** Each check lets go of the answers for what

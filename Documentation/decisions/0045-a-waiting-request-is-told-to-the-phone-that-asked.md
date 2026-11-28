@@ -32,8 +32,9 @@ record for that phone, once per wait, and takes it away once nothing waits.
   are left out, since an alert can show on a locked phone. The phone shows
   them on the card once the chat is open.
 - **Only the phone that asked,** for a turn it started; any waiting request,
-  Deny-only included. Saved only if something still waits, and the device may
-  still be told, when its turn comes in the line every push is written in.
+  Deny-only included. Saved only if that wait, and not a later one, still
+  lasts, and the device may still be told, when its turn comes in the line
+  every push is written in.
   Deleted when nothing waits, or the turn ends; a delivered alert can't be
   recalled, and the phone removes it when it next sees the chat.
 - **On the Mac,** a turn started there whose pane isn't watched as the wait
