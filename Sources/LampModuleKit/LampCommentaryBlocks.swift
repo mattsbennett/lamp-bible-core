@@ -350,7 +350,8 @@ enum LampCommentaryBlocks {
             // Codex.
             // An offset no text reaches, which the phone's reading of an
             // encoded span moves by adding to it, past `Int.max`: the phone
-            // traps (`readOffset`, iOS `ModuleModels.swift`). Found by Codex.
+            // traps, in its offset reader in iOS ModuleModels.swift. Found
+            // by Codex.
             if [annotation["start"], annotation["end"]].contains(where: { (wholeNumber($0) ?? 0) > Int(Int32.max) }) {
                 issues.append(.init(
                     severity: .error, path: path,
