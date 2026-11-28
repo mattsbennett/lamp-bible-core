@@ -594,7 +594,37 @@ and a search for a chart's words finds it in both modules.
       Held by a model of the older phone in the tests — its decode and open
       rules — over every place a note can be cited, in every form.
    6. **A 2.3 unit is filed and ordered by its own verse** — 2.3 only, so no
-      2.2 volume reorders or renumbers; two verse notes on one passage, and
+      2.2 volume reorders or renumbers. Each row is filed under its own
+      verse's chapter and keeps its parent by `parent_id`; `order_index` is
+      then one numbering of the whole volume, as a reader lists a chapter:
+      filed chapter, its introduction first, verse, heading before passage
+      before note, then the order given — the stored columns and nothing
+      else, held by a property test over generated volumes. Numbered
+      beneath its section, a subsection starting in a later chapter (1,194
+      in the study Bible) came before every note of its own chapter (found
+      by Codex). So a 2.3 section or pericope placed by verse gives its
+      `sv`, and `content` entries belong to a source-tracked volume alone:
+      every rule that guessed an unplaced unit's place from its parent left
+      the guess unstored, where a reader looks a unit up by its `sv`, or put
+      one more child above its parent, five review rounds running. Replaced
+      on the planner's advice, with the owner's agreement (2026-11-28); the
+      study Bible has no section without `sv` and no pericope. Recorded
+      edges: a section inside its previous sibling's range at one printed
+      level (4 in the study Bible) has that sibling's later children listed
+      after its heading, since a reader lists by verse, and their
+      `parent_id` still names the sibling; a note printed before an earlier
+      verse's (1 in the study Bible's other series, Gen 44:33 before 44:29)
+      is listed in verse order. A unit placed by verse starts no earlier
+      than the one it is written under, as every subsection in the study
+      Bible does: listed by verse, one starting earlier came before its
+      parent, and each of three review rounds found a reader's outline
+      misled by it (found by Codex). Recorded edge: two sibling sections at
+      one verse, the first holding a unit at that verse, are listed
+      heading, heading, unit, and an app panel folding adjacent headings
+      (iOS `ToolPanelView.commentaryItems`, Mac `CommentaryPiece.pieces`)
+      shows them as one outline trail — none in the study Bible, whose
+      siblings never share a verse and which has no pericopae; the apps'
+      readers check `parent_id` before folding (step 6); two verse notes on one passage, and
       two units at one `sv` with one declared id, refused. And **each unit
       read whole**, as a block is: a field a 2.3 chapter, section, pericope,
       verse or entry gives that the builder does not read is refused where
@@ -604,7 +634,13 @@ and a search for a chart's words finds it in both modules.
       name; a check of the whole unit ends the class. Each unit's `sv` and
       `ev`, where given, a whole verse number at its own path: an entry's
       fractional `sv` was truncated and taken as its own verse, a string one
-      passed over for its passage's (found reviewing commit 5).
+      passed over for its passage's (found reviewing commit 5). A 2.3
+      conversion of a source-tracked volume drops a split heading's
+      `remainder` and `textEnd`, which the builder cannot tell from a
+      paragraph's only copy (found by Codex). One verse note on a passage
+      means a `verses` note: a source-tracked entry's rows on one verse are
+      paragraphs of one printed note, and a passage link opens the lowest
+      `order_index`, where that note begins.
    7. **Front matter and media, planned as rows**, in memory: `section_id`
       unique within its book; media read whole, its filename a safe relative
       path with no scheme (`safeRelativeMediaPath` keeps `https:/host/…`);
@@ -641,7 +677,16 @@ and a search for a chart's words finds it in both modules.
    `DevotionalBlockRenderer` parses link strings itself): if not, this does
    not end the question.
 6. Core readers: blocks, media, front matter, front-matter search, link
-   resolution. The resolver reads a footnote span's note by
+   resolution. A 2.3 row is filed by its own verse, so its parent may be in
+   another chapter (step 4, commit 6): a reader's outline above a note
+   (`LampCommentaryOutline.sections(above:)`) fetches an ancestor missing
+   from the chapter's rows by `parent_id`, without adding it to the page;
+   and `LampCommentaryOutline.isHeading` judges a row a heading by whether
+   it has children anywhere in the volume, not among the chapter's rows,
+   or a passage whose only child is in a later chapter is read as a heading
+   over unrelated notes (both found by Codex). The apps' commentary panels
+   fold adjacent title-only rows into an outline trail only where one is
+   the other's ancestor by `parent_id` (found by Codex, step 4 commit 6). The resolver reads a footnote span's note by
    `data.footnoteId` only; a plain 2.3 text may give it as the span's
    `id` (Rule A), which the newer reader must read too. Link resolution takes over what both apps do for a
    `.commentaryPassage` until then, so the rule has one copy: a verse-0

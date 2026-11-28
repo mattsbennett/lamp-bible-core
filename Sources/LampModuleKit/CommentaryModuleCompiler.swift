@@ -198,7 +198,7 @@ struct CommentaryUnitRow {
     let footnotesJSON: String?
     let searchText: String
     let footnotesText: String
-    let orderIndex: Int
+    var orderIndex: Int
     /// A 2.3 unit's blocks as written; nil where its body is today's form.
     var blocksJSON: String? = nil
     /// The id a 2.3 section or pericope declares, which a link names it by.
@@ -223,6 +223,19 @@ struct CommentaryUnitBuilder {
     /// inspector to report and the compile to refuse on an error.
     private(set) var issues: [ModuleValidationIssue] = []
     private var blockIDs: Set<String> = []
+    /// Each 2.3 verse note's passage, and each declared id at its verse,
+    /// so neither is given twice.
+    /// Compared byte for byte, as SQLite compares them and a link names
+    /// them: as strings, `é` and `e\u{301}` were one. Found by Codex.
+    private var versePassages: Set<[UInt8]> = []
+    private var declaredAtVerse: Set<[UInt8]> = []
+    /// The passages a source-tracked volume's entries give verse rows on,
+    /// which are paragraphs of one printed note, many to a verse.
+    private var entryPassages: Set<[UInt8]> = []
+    /// Each 2.3 row's own start, for its units to start no earlier.
+    private var startByRowID: [String: Int] = [:]
+    /// The chapter whose units are being read, as the volume writes it.
+    private var writtenChapter = 0
     /// The volume's notes as written, for Rule A's checks.
     private let rawFootnotes: [Any]
     /// The notes some 2.3 row cites.
@@ -265,6 +278,48 @@ struct CommentaryUnitBuilder {
         }
         try appendUnits(chapters: chapters)
         if rich { checkFootnotesCited() }
+        if rich, !sourceOrdered { orderAsReaders() }
+    }
+
+    /// A 2.3 volume's rows in the order a reader shows a chapter's: by the
+    /// chapter each is filed in, its introduction first, then by verse, a
+    /// heading (section) before a passage (pericope) before a verse note at
+    /// one verse, and rows at one verse of one kind in the order the volume
+    /// gives them, a unit before its own units. `ev` is no part of it. Each
+    /// row keeps its parent by `parent_id`, wherever it falls: a reader
+    /// lists a chapter's rows by `order_index`, and a subsection filed in a
+    /// later chapter than its section (1,195 in the study Bible), numbered
+    /// beneath that section, came before every note of its own chapter.
+    /// Found by Codex. Written list by list, a section on 1:20 came before
+    /// the note on 1:2. A 2.2 volume is numbered as written, as it always
+    /// was, and a source-tracked one in its printed order, which may return
+    /// to an earlier passage.
+    private mutating func orderAsReaders() {
+        func rank(_ row: CommentaryUnitRow) -> Int {
+            if row.level == 0 { return 0 }
+            switch row.unitType {
+            case "section": return 1
+            case "pericope": return 2
+            default: return 3
+            }
+        }
+        // By what each row stores, and nothing else: every row a 2.3 volume
+        // places by verse gives its own (`refuseUnplaced`), so a unit's own
+        // units at its verse follow it by kind and the order written, and
+        // one naming another verse goes there. Each rule that guessed an
+        // unplaced row's place from its parent's left the guess unstored, or
+        // let one more child above its parent — five review rounds running.
+        // Found by Codex; the rule replaced on the planner's advice.
+        let numbered = units.enumerated().sorted { first, second in
+            let a = first.element, b = second.element
+            return (a.chapter, a.level == 0 ? 0 : 1, a.startVerse, rank(a), first.offset)
+                < (b.chapter, b.level == 0 ? 0 : 1, b.startVerse, rank(b), second.offset)
+        }
+        units = numbered.enumerated().map { place, row in
+            var row = row.element
+            row.orderIndex = place
+            return row
+        }
     }
 
     private mutating func appendUnits(chapters: [Any]) throws {
@@ -272,21 +327,30 @@ struct CommentaryUnitBuilder {
             var ordered: [(order: Int, chapter: Int, pericope: [String: Any], path: String)] = []
             for (chapterIndex, value) in chapters.enumerated() {
                 let chapter = try JSONSupport.requiredObject(value, path: "/chapters")
-                let number = try JSONSupport.requiredInteger(chapter["chapter"], path: "/chapters/chapter")
+                let number = try chapterNumber(of: chapter, path: "/chapters/\(chapterIndex)/chapter", legacyPath: "/chapters/chapter")
                 // A source-tracked volume is built from its pericopae alone:
                 // anything else a 2.3 chapter
                 // gives — a section, a verse, an introduction — would be left
                 // out unseen. Judged by what is built, not a list of what is
                 // not, which review found one more of twice. Found by Codex.
-                for key in chapter.keys.sorted() where rich && !["chapter", "pericopae"].contains(key) {
-                    guard let value = chapter[key], JSONSupport.isMeaningful(value) else { continue }
+                // Any such field, given empty or not, as any 2.3 unit's; its
+                // notes are Rule A's to refuse. Found by Codex.
+                for key in chapter.keys.sorted() where rich && !["chapter", "pericopae", "footnotes", "footnoteIds"].contains(key) {
                     issues.append(.init(
-                        severity: .error, path: "/chapters/\(chapterIndex)/\(key)",
+                        severity: .error, path: "/chapters/\(chapterIndex)/\(LampBookUnread.escaped(key))",
                         message: "A source-tracked volume is built from its pericopae, in printed order; its \(key) would be left out."
                     ))
                 }
                 for (index, value) in units(chapter, "pericopae", at: "/chapters/\(chapterIndex)").enumerated() {
                     let pericope = try JSONSupport.requiredObject(value, path: "/chapters/pericopae")
+                    // A printed place is a whole number: quoted it was read as
+                    // none, a fraction as the whole below it. Found by Codex.
+                    if rich, let given = pericope["sourceOrder"], !(given is NSNull), LampCommentaryBlocks.wholeNumber(given) == nil {
+                        issues.append(.init(
+                            severity: .error, path: "/chapters/\(chapterIndex)/pericopae/\(index)/sourceOrder",
+                            message: "A printed order is a whole number."
+                        ))
+                    }
                     ordered.append((
                         JSONSupport.integer(pericope["sourceOrder"]) ?? ordered.count, number, pericope,
                         "/chapters/\(chapterIndex)/pericopae/\(index)"
@@ -294,6 +358,7 @@ struct CommentaryUnitBuilder {
                 }
             }
             for item in ordered.sorted(by: { $0.order < $1.order }) {
+                writtenChapter = item.chapter
                 try appendPericope(item.pericope, chapter: item.chapter, parentID: nil, path: item.path)
             }
             return
@@ -301,58 +366,234 @@ struct CommentaryUnitBuilder {
         for (chapterIndex, chapterValue) in chapters.enumerated() {
             let path = "/chapters/\(chapterIndex)"
             let chapter = try JSONSupport.requiredObject(chapterValue, path: path)
-            let chapterNumber = try JSONSupport.requiredInteger(chapter["chapter"], path: "\(path)/chapter")
+            let chapterNumber = try chapterNumber(of: chapter, path: "\(path)/chapter", legacyPath: "\(path)/chapter")
             // A chapter's body is its introduction: blocks given to it were
-            // read by nothing, and lost. Found by Codex. (Each unit's fields
-            // read whole is step 4, commit 6.)
-            if rich, chapter["blocks"] != nil {
-                issues.append(.init(
-                    severity: .error, path: "\(path)/blocks",
-                    message: "A chapter's body is its introduction; blocks here are read by nothing."
-                ))
-            }
+            // read by nothing, and lost. Found by Codex. Its fields read
+            // whole, as every 2.3 unit's are.
+            readWhole(chapter, as: "chapter", allowed: Self.chapterKeys, path: path)
+            writtenChapter = chapterNumber
+            try appendIntroduction(of: chapter, chapter: chapterNumber, path: path)
+            try appendChildren(
+                of: chapter,
+                [("sections", .section, "\(path)/sections"), ("pericopae", .pericope, "\(path)/pericopae"), ("verses", .verse, "\(path)/verses")],
+                chapter: chapterNumber, parentID: nil, sectionLevel: 1, parentFootnotes: meaningful(chapter["footnotes"]), path: path
+            )
+        }
+    }
 
-            if let introduction = meaningfulText(chapter["introduction"], path: path) {
-                let title = "Chapter \(chapterNumber) Introduction"
-                // A chapter given twice, each with an introduction, keeps the
-                // first ID as it was and tells the next apart by its place:
-                // the same ID twice stopped the compile. Found by Codex.
-                var introductionID = "\(moduleID):\(bookNumber):chapter_intro:\(chapterNumber)"
-                if !introducedChapters.insert(chapterNumber).inserted {
-                    introductionID += ":\(orderIndex)"
+    /// A chapter's number: in 2.3 a whole one, where `0.5` was read as
+    /// chapter 0 and let its units' verses sit in no chapter. Found by Codex.
+    /// A 2.2 chapter is read as it was.
+    private func chapterNumber(of chapter: [String: Any], path: String, legacyPath: String) throws -> Int {
+        guard rich else { return try JSONSupport.requiredInteger(chapter["chapter"], path: legacyPath) }
+        guard let number = LampCommentaryBlocks.wholeNumber(chapter["chapter"]) else {
+            throw ModuleCompilationError.invalidValue(path: path, expected: "a whole chapter number")
+        }
+        // One its book has, or 0: a verse made from chapter 22 of John, for
+        // an introduction or a passage given none, was filed where no reader
+        // looks. Found by Codex.
+        if (1...66).contains(bookNumber), !(0...LampCanonicalBooks.verseCounts[bookNumber - 1].count).contains(number) {
+            throw ModuleCompilationError.invalidValue(
+                path: path, expected: "a chapter of book \(bookNumber), from 0 to \(LampCanonicalBooks.verseCounts[bookNumber - 1].count)"
+            )
+        }
+        return number
+    }
+
+    private enum UnitKind { case section, pericope, verse }
+
+    /// A container's units, list by list, each unit's own beneath it and
+    /// each read as it is written; a 2.3 volume's are then numbered as a
+    /// reader shows them (`orderAsReaders`).
+    private mutating func appendChildren(
+        of container: [String: Any],
+        _ lists: [(key: String, kind: UnitKind, legacyPath: String)],
+        chapter: Int,
+        parentID: String?,
+        sectionLevel: Int,
+        parentFootnotes: Any?,
+        path: String
+    ) throws {
+        for list in lists {
+            for (index, value) in units(container, list.key, at: path).enumerated() {
+                let unitPath = "\(path)/\(list.key)/\(index)"
+                let unit = try JSONSupport.requiredObject(value, path: rich ? unitPath : list.legacyPath)
+                switch list.kind {
+                case .section:
+                    try appendSection(unit, chapter: chapter, parentID: parentID, level: sectionLevel, path: unitPath)
+                case .pericope:
+                    try appendPericope(unit, chapter: chapter, parentID: parentID, path: unitPath)
+                case .verse:
+                    try appendVerse(unit, chapter: chapter, parentID: parentID, parentFootnotes: parentFootnotes, path: unitPath)
                 }
-                appendRow(
-                    id: introductionID,
-                    chapter: chapterNumber,
-                    startVerse: try defaultStartVerse(chapter: chapterNumber),
-                    unitType: "section",
-                    level: 0,
-                    title: title,
-                    introduction: introduction,
-                    path: "\(path)/introduction",
-                    searchText: makeSearchText(title, introduction, nil, nil)
-                )
-            }
-
-            for (index, sectionValue) in units(chapter, "sections", at: path).enumerated() {
-                let section = try JSONSupport.requiredObject(sectionValue, path: "\(path)/sections")
-                try appendSection(section, chapter: chapterNumber, parentID: nil, level: 1, path: "\(path)/sections/\(index)")
-            }
-            for (index, pericopeValue) in units(chapter, "pericopae", at: path).enumerated() {
-                let pericope = try JSONSupport.requiredObject(pericopeValue, path: "\(path)/pericopae")
-                try appendPericope(pericope, chapter: chapterNumber, parentID: nil, path: "\(path)/pericopae/\(index)")
-            }
-            for (index, verseValue) in units(chapter, "verses", at: path).enumerated() {
-                let verse = try JSONSupport.requiredObject(verseValue, path: "\(path)/verses")
-                try appendVerse(
-                    verse,
-                    chapter: chapterNumber,
-                    parentID: nil,
-                    parentFootnotes: meaningful(chapter["footnotes"]),
-                    path: "\(path)/verses/\(index)"
-                )
             }
         }
+    }
+
+    private mutating func appendIntroduction(of chapter: [String: Any], chapter chapterNumber: Int, path: String) throws {
+        guard let introduction = meaningfulText(chapter["introduction"], path: path) else { return }
+        let title = "Chapter \(chapterNumber) Introduction"
+        // A chapter given twice, each with an introduction, keeps the
+        // first ID as it was and tells the next apart by its place:
+        // the same ID twice stopped the compile. Found by Codex.
+        var introductionID = "\(moduleID):\(bookNumber):chapter_intro:\(chapterNumber)"
+        if !introducedChapters.insert(chapterNumber).inserted {
+            introductionID += ":\(orderIndex)"
+        }
+        appendRow(
+            id: introductionID,
+            chapter: chapterNumber,
+            startVerse: try defaultStartVerse(chapter: chapterNumber),
+            unitType: "section",
+            level: 0,
+            title: title,
+            introduction: introduction,
+            path: "\(path)/introduction",
+            searchText: makeSearchText(title, introduction, nil, nil)
+        )
+    }
+
+    /// The fields each 2.3 unit may give, all of them read: one the builder
+    /// does not read is refused where written, not left out unseen.
+    /// Reviewing commit 5 found one such field after another; a check of the
+    /// whole unit ends the class. `footnotes` and `footnoteIds` are Rule A's
+    /// to refuse; `source`, `sourceChapter`, `classification` and a heading
+    /// pericope's `basis` (the NIC extractor's, found by Codex) say where a
+    /// printed volume's text came from, which no reader shows. A split
+    /// heading's `remainder` and `textEnd` are not among them: whether they
+    /// repeat what an entry holds cannot be told here, and kept they were
+    /// once the only copy of a paragraph. A 2.3 conversion drops them.
+    /// Found by Codex. A section's `level` is the depth it was
+    /// printed at; its nesting is the depth it is shown at, so a top-level
+    /// section printed at level 2 (5 in the study Bible) is shown at the top.
+    /// Refused, it would refuse the study Bible (found by Codex; kept).
+    private static let chapterKeys: Set<String> = ["chapter", "introduction", "sections", "pericopae", "verses", "footnotes", "footnoteIds"]
+    private static let sectionKeys: Set<String> = [
+        "id", "title", "sv", "ev", "level", "introduction", "blocks", "subsections", "pericopae", "footnotes", "footnoteIds",
+    ]
+    private static let pericopeKeys: Set<String> = [
+        "id", "title", "sv", "ev", "introduction", "translation", "commentary", "blocks", "content", "verses",
+        "source", "sourceOrder", "sourceChapter", "basis", "footnotes", "footnoteIds",
+    ]
+    private static let verseKeys: Set<String> = [
+        "sv", "ev", "suffix", "title", "translation", "commentary", "blocks", "footnotes", "footnoteIds",
+    ]
+    private static let entryKeys: Set<String> = [
+        "type", "sv", "ev", "content", "blocks", "displayPrefixLength", "source", "sourceChapter", "classification",
+        "footnotes", "footnoteIds",
+    ]
+
+    /// The id a 2.3 section or pericope declares: words, or refused where
+    /// written. A number was read as none, and a link naming it found
+    /// nothing. Found by Codex.
+    private mutating func declaredID(of unit: [String: Any], path: String) -> String? {
+        guard let given = unit["id"], !(given is NSNull) else { return nil }
+        guard let id = given as? String else {
+            issues.append(.init(severity: .error, path: "\(path)/id", message: "An id is a string."))
+            return nil
+        }
+        return id
+    }
+
+    private mutating func readWhole(_ unit: [String: Any], as kind: String, allowed: Set<String>, path: String) {
+        guard rich else { return }
+        for key in unit.keys.sorted() where !allowed.contains(key) {
+            issues.append(.init(
+                severity: .error, path: "\(path)/\(LampBookUnread.escaped(key))",
+                message: "A 2.3 \(kind) gives no `\(key)`: nothing reads it, so it would be left out."
+            ))
+        }
+    }
+
+    /// A 2.3 unit's own verse and end, where given: whole verse numbers in
+    /// a chapter of this book, the end no earlier than the start the row
+    /// keeps — its own, or the one it takes from `inherited`. A fractional
+    /// `sv` was truncated and taken as the unit's own, a string one passed
+    /// over for its passage's (found reviewing commit 5). Chapter 0 only for
+    /// a unit written in chapter 0, at any depth: elsewhere a verse there was
+    /// filed out of its chapter, and no link names it. Found by Codex.
+    private mutating func checkOwnVerse(_ unit: [String: Any], path: String, inherited: Int?) {
+        guard rich else { return }
+        var start = inherited
+        for key in ["sv", "ev"] {
+            guard let given = unit[key], !(given is NSNull) else { continue }
+            guard let verse = LampCommentaryBlocks.wholeNumber(given), verse > 0 else {
+                issues.append(.init(
+                    severity: .error, path: "\(path)/\(key)",
+                    message: "A verse is a whole number: book × 1,000,000 + chapter × 1,000 + verse."
+                ))
+                if key == "sv" { start = nil }
+                continue
+            }
+            // An end may run into a later book, as an outline over the end of
+            // one book and the start of the next does. Found by Codex.
+            let book = verse / 1_000_000
+            if key == "ev", book > bookNumber, book <= 66 {
+                if verse / 1_000 % 1_000 == 0 {
+                    issues.append(.init(severity: .error, path: "\(path)/ev", message: "A unit's verse is in a chapter; \(verse) names none."))
+                }
+            } else if book != bookNumber {
+                issues.append(.init(
+                    severity: .error, path: "\(path)/\(key)",
+                    message: "A unit's verse is in its own book (\(bookNumber)); \(verse) is not."
+                ))
+            } else if verse / 1_000 % 1_000 == 0, writtenChapter != 0 {
+                issues.append(.init(
+                    severity: .error, path: "\(path)/\(key)",
+                    message: "A unit's verse is in a chapter; \(verse) names none."
+                ))
+            }
+            // In a chapter its book has, by the grid every Lamp translation
+            // shares: filed in one it has not, a unit was in no chapter a
+            // reader opens. Found by Codex.
+            if (1...66).contains(book), verse / 1_000 % 1_000 > LampCanonicalBooks.verseCounts[book - 1].count {
+                issues.append(.init(
+                    severity: .error, path: "\(path)/\(key)",
+                    message: "Book \(book) has \(LampCanonicalBooks.verseCounts[book - 1].count) chapters; \(verse) is past them."
+                ))
+            }
+            if key == "sv" {
+                start = verse
+            } else if let start, verse < start {
+                issues.append(.init(severity: .error, path: "\(path)/ev", message: "A passage ends no earlier than it starts."))
+            }
+        }
+    }
+
+    /// A 2.3 section or pericope, in a volume placed by verse, gives the verse
+    /// it is placed at: given none, it was placed at its chapter's first
+    /// verse or its parent's, a guess no reader could look it up by.
+    private mutating func refuseUnplaced(_ unit: [String: Any], as kind: String, path: String) {
+        guard rich, !sourceOrdered, unit["sv"] == nil || unit["sv"] is NSNull else { return }
+        issues.append(.init(
+            severity: .error, path: "\(path)/sv",
+            message: "A 2.3 \(kind) gives the verse it starts at, `sv`, which is where it is placed and found."
+        ))
+    }
+
+    /// A 2.3 unit placed by verse starts no earlier than the unit it is
+    /// written under, as every subsection in the study Bible does. Listed
+    /// by verse, one that started earlier came before its parent, and a
+    /// reader's outline above it found the parent in another chapter, read
+    /// a passage as a heading, or took a later heading as its own — three
+    /// review rounds running. Found by Codex.
+    private mutating func refuseStartBeforeParent(_ unit: [String: Any], parentID: String?, path: String) {
+        guard rich, !sourceOrdered, let parentID, let parentStart = startByRowID[parentID],
+              let start = LampCommentaryBlocks.wholeNumber(unit["sv"]), start < parentStart else { return }
+        issues.append(.init(
+            severity: .error, path: "\(path)/sv",
+            message: "A unit starts no earlier than the one it is written under (\(parentStart)); \(start) is before it."
+        ))
+    }
+
+    /// The chapter a 2.3 unit is filed under: its own verse's, where it
+    /// gives one in this book, so a reader looking up that chapter finds it
+    /// wherever the volume wrote it. A 2.2 unit keeps the chapter it is in.
+    private func filed(_ unit: [String: Any], in chapter: Int) -> Int {
+        guard rich, let verse = LampCommentaryBlocks.wholeNumber(unit["sv"]), verse > 0, verse / 1_000_000 == bookNumber else {
+            return chapter
+        }
+        return verse / 1_000 % 1_000
     }
 
     private mutating func appendSection(
@@ -362,7 +603,12 @@ struct CommentaryUnitBuilder {
         level: Int,
         path: String
     ) throws {
+        readWhole(section, as: "section", allowed: Self.sectionKeys, path: path)
+        checkOwnVerse(section, path: path, inherited: rich ? try defaultStartVerse(chapter: chapter) : nil)
+        let chapter = filed(section, in: chapter)
         let id = "\(moduleID):\(bookNumber):section:\(chapter):\(orderIndex)"
+        refuseUnplaced(section, as: "section", path: path)
+        refuseStartBeforeParent(section, parentID: parentID, path: path)
         // A 2.3 section's body may be its blocks, then shown where its
         // introduction is today: an older reader shows a section by it.
         let body = richBody(of: section, path: path, replacing: ["introduction"])
@@ -380,17 +626,14 @@ struct CommentaryUnitBuilder {
             path: path,
             searchText: makeSearchText(JSONSupport.string(section["title"]), body?.searchText ?? introduction, nil, nil),
             blocksJSON: body?.blocksJSON,
-            declaredID: rich ? JSONSupport.string(section["id"]) : nil
+            declaredID: rich ? declaredID(of: section, path: path) : nil
         )
 
-        for (index, subsectionValue) in units(section, "subsections", at: path).enumerated() {
-            let subsection = try JSONSupport.requiredObject(subsectionValue, path: "/chapters/sections/subsections")
-            try appendSection(subsection, chapter: chapter, parentID: id, level: level + 1, path: "\(path)/subsections/\(index)")
-        }
-        for (index, pericopeValue) in units(section, "pericopae", at: path).enumerated() {
-            let pericope = try JSONSupport.requiredObject(pericopeValue, path: "/chapters/sections/pericopae")
-            try appendPericope(pericope, chapter: chapter, parentID: id, path: "\(path)/pericopae/\(index)")
-        }
+        try appendChildren(
+            of: section,
+            [("subsections", UnitKind.section, "/chapters/sections/subsections"), ("pericopae", .pericope, "/chapters/sections/pericopae")],
+            chapter: chapter, parentID: id, sectionLevel: level + 1, parentFootnotes: nil, path: path
+        )
     }
 
     private mutating func appendPericope(
@@ -399,7 +642,30 @@ struct CommentaryUnitBuilder {
         parentID: String?,
         path: String
     ) throws {
+        readWhole(pericope, as: "pericope", allowed: Self.pericopeKeys, path: path)
+        checkOwnVerse(pericope, path: path, inherited: rich ? try defaultStartVerse(chapter: chapter) : nil)
+        let chapter = filed(pericope, in: chapter)
+        // Read only in printed order, which a volume that is not
+        // source-tracked does not keep: there its passages are numbered by
+        // verse. Found by Codex.
+        if rich, !sourceOrdered, pericope["sourceOrder"] != nil {
+            issues.append(.init(
+                severity: .error, path: "\(path)/sourceOrder",
+                message: "Only a source-tracked volume keeps a printed order; here passages are ordered by verse."
+            ))
+        }
         let id = "\(moduleID):\(bookNumber):pericope:\(chapter):\(orderIndex)"
+        refuseUnplaced(pericope, as: "pericope", path: path)
+        refuseStartBeforeParent(pericope, parentID: parentID, path: path)
+        // Content entries are a source-tracked volume's, in printed order;
+        // here a passage's rows are placed by verse, and an entry's place
+        // would be a guess. Found planning step 4, commit 6.
+        if rich, !sourceOrdered, pericope["content"] != nil, !(pericope["content"] is NSNull) {
+            issues.append(.init(
+                severity: .error, path: "\(path)/content",
+                message: "Content entries belong to a source-tracked volume; give this passage's body as blocks or commentary."
+            ))
+        }
         // A 2.3 pericope's own body as blocks, in place of a source-tracked
         // pericope's `content`, which carries its blocks on each entry.
         // In a source-tracked volume, never on the pericope: each entry keeps
@@ -410,12 +676,13 @@ struct CommentaryUnitBuilder {
                 message: "In a source-tracked volume, blocks go on the pericope's content entries, each with its own passage."
             ))
         }
-        let body = sourceOrdered ? nil : richBody(of: pericope, path: path, replacing: ["content", "commentary"])
+        // Its entries are refused here by themselves, so not told again.
+        let body = sourceOrdered ? nil : richBody(of: pericope, path: path, replacing: ["commentary"])
         // One body: a 2.3 pericope's `commentary` beside the entries it is
         // built from is refused, as its `blocks` there are. Found by Codex.
         // In a source-tracked volume, the body goes on the entries, given
         // or not. Found by Codex.
-        if rich, pericope["content"] is [Any] || sourceOrdered, pericope["commentary"] != nil, !(pericope["commentary"] is NSNull),
+        if rich, sourceOrdered, pericope["commentary"] != nil, !(pericope["commentary"] is NSNull),
            pericope["blocks"] == nil {
             issues.append(.init(
                 severity: .error, path: "\(path)/commentary",
@@ -427,10 +694,14 @@ struct CommentaryUnitBuilder {
         var entryBodies: [Int: LampCommentaryBlocks.Body] = [:]
         // Entries are a list: one written as an object was walked by
         // nothing, and lost. Found by Codex.
-        if rich, let content = pericope["content"], !(content is NSNull), !(content is [Any]) {
+        if rich, sourceOrdered, let content = pericope["content"], !(content is NSNull), !(content is [Any]) {
             issues.append(.init(severity: .error, path: "\(path)/content", message: "A pericope's content entries are a list."))
         }
-        if rich, let content = JSONSupport.array(pericope["content"]) {
+        // Entries refused outside a source-tracked volume are not built as
+        // well: their faults, and their passages, would be told beside the
+        // one fault that matters. Found by Codex.
+        let readsEntries = !rich || sourceOrdered
+        if rich, readsEntries, let content = JSONSupport.array(pericope["content"]) {
             for (index, value) in content.enumerated() {
                 guard let entry = JSONSupport.object(value), entry["blocks"] != nil else { continue }
                 let entryPath = "\(path)/content/\(index)"
@@ -534,14 +805,14 @@ struct CommentaryUnitBuilder {
                 body?.searchText ?? (rich && !sourceOrdered ? meaningful(pericope["commentary"]) : nil)
             ),
             blocksJSON: body?.blocksJSON,
-            declaredID: rich ? JSONSupport.string(pericope["id"]) : nil
+            declaredID: rich ? declaredID(of: pericope, path: path) : nil
         )
 
         // Read as a list first, so one given as an object is told too.
         // Found by Codex.
         // Content entries the builder uses, a list; a `null` is none. Found
         // by Codex.
-        let entries = pericope["content"] is [Any]
+        let entries = readsEntries && pericope["content"] is [Any]
         if rich, entries, pericope["verses"] != nil, !(pericope["verses"] is [Any]) {
             _ = units(pericope, "verses", at: path)
         }
@@ -553,13 +824,25 @@ struct CommentaryUnitBuilder {
                 message: "A pericope given as content entries is built from them; its verses would be left out."
             ))
         }
-        if let content = JSONSupport.array(pericope["content"]) {
+        if readsEntries, let content = JSONSupport.array(pericope["content"]) {
             let parentStart = try JSONSupport.integer(pericope["sv"]) ?? defaultStartVerse(chapter: chapter)
             for (index, value) in content.enumerated() {
                 let block = try JSONSupport.requiredObject(value, path: rich ? "\(path)/content/\(index)" : "/pericopae/content/\(index)")
                 let role = try JSONSupport.requiredString(block["type"], path: rich ? "\(path)/content/\(index)/type" : "/pericopae/content/type")
+                readWhole(block, as: "content entry", allowed: Self.entryKeys, path: "\(path)/content/\(index)")
+                checkOwnVerse(block, path: "\(path)/content/\(index)", inherited: parentStart)
                 // Printed indexes belong to indices_json, not the last passage.
-                if role == "index" { continue }
+                if role == "index" {
+                    // A 2.3 index is the volume's `indices`: an entry here was
+                    // passed over, its text written nowhere. Found by Codex.
+                    if rich {
+                        issues.append(.init(
+                            severity: .error, path: "\(path)/content/\(index)",
+                            message: "A printed index is given in the volume's indices, not as a passage's entry."
+                        ))
+                    }
+                    continue
+                }
                 let entryBody = entryBodies[index]
                 // An entry whose blocks were refused is not written: the
                 // issue says why, and the compile stops on it.
@@ -632,6 +915,19 @@ struct CommentaryUnitBuilder {
                     && (JSONSupport.array(text["footnote_refs"]) ?? []).isEmpty
                 let isTranslation = role == "translation"
                 let kind = heading ? "section" : (role == "commentary" && JSONSupport.integer(block["sv"]) != nil ? "verse" : "pericope")
+                // A verse row here is one more paragraph of a printed note, so
+                // others on its verse are welcome; a verse note there is not.
+                // Found by Codex.
+                if rich, kind == "verse" {
+                    let passage = Array("\(start)|\(end ?? start)|".utf8)
+                    entryPassages.insert(passage)
+                    if versePassages.contains(passage) {
+                        issues.append(.init(
+                            severity: .error, path: "\(path)/content/\(index)",
+                            message: "A verse note on this passage is given already; an entry's note and a verse note would answer one lookup."
+                        ))
+                    }
+                }
                 appendRow(
                     id: "\(moduleID):\(bookNumber):\(kind):\(blockChapter):\(orderIndex)",
                     chapter: blockChapter,
@@ -653,10 +949,10 @@ struct CommentaryUnitBuilder {
             return
         }
 
-        for (index, verseValue) in units(pericope, "verses", at: path).enumerated() {
-            let verse = try JSONSupport.requiredObject(verseValue, path: "/chapters/pericopae/verses")
-            try appendVerse(verse, chapter: chapter, parentID: id, parentFootnotes: footnotes, path: "\(path)/verses/\(index)")
-        }
+        try appendChildren(
+            of: pericope, [("verses", .verse, "/chapters/pericopae/verses")],
+            chapter: chapter, parentID: id, sectionLevel: 1, parentFootnotes: footnotes, path: path
+        )
     }
 
     /// Canonical blocks retain printed verse labels for source verification.
@@ -714,7 +1010,33 @@ struct CommentaryUnitBuilder {
         // At the verse's own path in 2.3, which an author can find. Found by
         // Codex.
         let startVerse = try JSONSupport.requiredInteger(verse["sv"], path: rich ? "\(path)/sv" : "/chapters/verses/sv")
+        readWhole(verse, as: "verse", allowed: Self.verseKeys, path: path)
+        checkOwnVerse(verse, path: path, inherited: nil)
+        refuseStartBeforeParent(verse, parentID: parentID, path: path)
+        let chapter = filed(verse, in: chapter)
         let suffix = JSONSupport.string(verse["suffix"]) ?? ""
+        // A suffix is words: given otherwise, the note was stored as one with
+        // none. Found by Codex.
+        if rich, let given = verse["suffix"], !(given is NSNull), !(given is String) {
+            issues.append(.init(severity: .error, path: "\(path)/suffix", message: "A suffix is a string, such as \"b\"."))
+        }
+        // A NUL ends a stored suffix there, so `a` and `a\0b` would be one.
+        // Found by Codex.
+        if rich, suffix.contains("\0") {
+            issues.append(.init(severity: .error, path: "\(path)/suffix", message: "A suffix holds no NUL character."))
+        }
+        // One verse note on a passage: a second at the same verses and
+        // suffix would be a second answer to one lookup, in no set order.
+        // No `ev` is an end at `sv`, as a lookup reads it. Found by Codex.
+        // An entry's verse rows count too: a passage link opened whichever
+        // came first. Found by Codex.
+        let passage = Array("\(startVerse)|\(LampCommentaryBlocks.wholeNumber(verse["ev"]) ?? startVerse)|\(suffix)".utf8)
+        if rich, !versePassages.insert(passage).inserted || entryPassages.contains(passage) {
+            issues.append(.init(
+                severity: .error, path: path,
+                message: "A verse note on this passage is given already; give one note, or tell them apart by `suffix`."
+            ))
+        }
         let translation = meaningfulText(verse["translation"], path: path)
         let body = richBody(of: verse, path: path, replacing: ["commentary"])
         let commentary = body?.legacy ?? meaningfulText(verse["commentary"], path: path)
@@ -943,6 +1265,25 @@ struct CommentaryUnitBuilder {
         blocksJSON: String? = nil,
         declaredID: String? = nil
     ) {
+        if rich { startByRowID[id] = startVerse }
+        // A link names a unit by its verse and declared id, so one id twice
+        // at one verse names two. Found planning step 4.
+        // A NUL ends a stored id there, so `a` and `a\0b` would be one.
+        // Found by Codex.
+        if rich, let declaredID, declaredID.contains("\0") {
+            issues.append(.init(severity: .error, path: "\(path)/id", message: "An id holds no NUL character."))
+        }
+        // An empty id names nothing: a link's `unit` is refused empty.
+        // Found by Codex.
+        if rich, declaredID?.isEmpty == true {
+            issues.append(.init(severity: .error, path: "\(path)/id", message: "An id is not empty."))
+        }
+        if rich, let declaredID, !declaredAtVerse.insert(Array("\(startVerse)|\(declaredID)".utf8)).inserted {
+            issues.append(.init(
+                severity: .error, path: "\(path)/id",
+                message: "Another unit at this verse declares the id \"\(declaredID)\"; a link would name both."
+            ))
+        }
         // A 2.3 row carries the notes its own texts cite (Rule A), its texts
         // and those notes written as an older reader opens them (Rule B1). A
         // row of an earlier version carries what its caller gives, as it

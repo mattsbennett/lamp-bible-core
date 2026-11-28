@@ -243,7 +243,11 @@ struct CommentaryRichUnitTests {
 
         // A pericope given as entries does not hide verses beside them.
         let beside = try build(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "content": [], "verses": [{"sv": 43001001, "blocks": []}]}]}]"#, rich: true)
-        #expect(beside.issues.map(\.path) == ["/chapters/0/pericopae/0/verses"])
+        // Content entries refused too, outside a source-tracked volume.
+        #expect(beside.issues.map(\.path) == ["/chapters/0/pericopae/0/content"])
+        // In a source-tracked volume, the verses beside its entries.
+        let besideTracked = try build(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "content": [], "verses": [{"sv": 43001001, "blocks": []}]}]}]"#, rich: true, sourceOrdered: true)
+        #expect(besideTracked.issues.map(\.path) == ["/chapters/0/pericopae/0/verses"])
 
         // A chapter no reference can hold, and a span ending before it starts
         // in a label's trim: told, not a trap.
@@ -331,7 +335,10 @@ struct CommentaryRichUnitTests {
         let trimmedMarker = try build(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "content": [{"type": "commentary", "displayPrefixLength": 2, "source": {}, "content": {"text": "1 words", "footnote_refs": [{"id": "n", "offset": 3.5}]}}]}]}]"#, rich: true, footnotes: "[\(note)]", sourceOrdered: true)
         #expect(trimmedMarker.issues.contains { $0.path == "/chapters/0/pericopae/0/content/0" && $0.message.contains("whole-number offset") }, "\(trimmedMarker.issues)")
         let beside = try build(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "commentary": {"text": "own"}, "content": []}]}]"#, rich: true)
-        #expect(beside.issues.map(\.path) == ["/chapters/0/pericopae/0/commentary"])
+        // Content entries refused too, outside a source-tracked volume.
+        #expect(beside.issues.map(\.path) == ["/chapters/0/pericopae/0/content"])
+        let besideEntries = try build(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "commentary": {"text": "own"}, "content": []}]}]"#, rich: true, sourceOrdered: true)
+        #expect(besideEntries.issues.map(\.path) == ["/chapters/0/pericopae/0/commentary"])
         let badNote = try build(#"[{"chapter": 1, "verses": [{"sv": 43001001, "commentary": \#(cite)}, {"sv": 43001002, "commentary": \#(cite)}]}]"#, rich: true,
                                 footnotes: #"[{"id": "n", "content": {"text": "x", "footnote_refs": [{"id": 3, "offset": 0}]}}]"#)
         #expect(Set(badNote.issues.map(\.path)) == ["/footnotes/0/content"], "\(badNote.issues)")
@@ -383,7 +390,8 @@ struct CommentaryRichUnitTests {
         // Verses beside entries given as one object; a note span naming no
         // note in words. Found by Codex.
         let verseObject = try build(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "content": [], "verses": {"sv": 43001001, "blocks": []}}]}]"#, rich: true)
-        #expect(verseObject.issues.map(\.path) == ["/chapters/0/pericopae/0/verses"], "\(verseObject.issues)")
+        // Content entries refused too, outside a source-tracked volume.
+        #expect(verseObject.issues.map(\.path) == ["/chapters/0/pericopae/0/content", "/chapters/0/pericopae/0/verses"], "\(verseObject.issues)")
         let noName = try build(#"[{"chapter": 1, "verses": [{"sv": 43001001, "commentary": {"text": "x", "annotations": [{"type": "footnote", "start": 0, "end": 1, "data": {"footnoteId": 4}}]}}]}]"#, rich: true)
         #expect(noName.issues.map(\.path) == ["/chapters/0/verses/0"], "\(noName.issues)")
         // An end with no start, refused, not replaced; a marker outside its
@@ -612,6 +620,313 @@ struct CommentaryRichUnitTests {
         let orderedTypes = ((ordered["annotations"] as? [[String: Any]]) ?? []).map { "\($0["type"]!) \($0["start"]!)" }
         #expect(orderedTypes == ["scripture 0", "scripture 12", "page 5", "footnote 14"], "\(orderedTypes)")
         #expect((legacy["footnote_refs"] as? [[String: Any]])?.map { $0["offset"] as? Int } == [4, 23])
+    }
+
+    /// A 2.3 unit is filed and ordered by its own verse, each unit's units
+    /// beneath it; a 2.2 volume is written list by list, as it was.
+    @Test func aUnitIsFiledAndOrderedByItsOwnVerse() throws {
+        let chapters = #"""
+        [{"chapter": 1,
+          "sections": [{"title": "Late", "sv": 43001020, "pericopae": [{"title": "Under late", "sv": 43001021}]},
+                       {"title": "At five", "sv": 43001005}],
+          "pericopae": [{"title": "Passage at five", "sv": 43001005, "verses": [{"sv": 43001007, "commentary": {"text": "seven"}}, {"sv": 43001006, "commentary": {"text": "six"}}]}],
+          "verses": [{"sv": 43001005, "commentary": {"text": "five"}}, {"sv": 43001002, "commentary": {"text": "two"}},
+                     {"sv": 43002003, "commentary": {"text": "in chapter two"}}]}]
+        """#
+        func order(_ builder: CommentaryUnitBuilder) -> [String] {
+            builder.units.map { "\($0.unitType) \($0.startVerse % 1_000_000) \($0.title ?? JSONSupport.plainText(object($0.commentaryJSON)))" }
+        }
+        let rich = try build(chapters, rich: true)
+        #expect(rich.issues.isEmpty, "\(rich.issues)")
+        #expect(order(rich) == [
+            "verse 1002 two",
+            "section 1005 At five", "pericope 1005 Passage at five", "verse 1005 five", "verse 1006 six", "verse 1007 seven",
+            "section 1020 Late", "pericope 1021 Under late",
+            "verse 2003 in chapter two",
+        ], "\(order(rich))")
+        #expect(rich.units.last?.chapter == 2)
+        #expect(rich.units.map(\.orderIndex) == Array(rich.units.indices))
+        // Each keeps its parent wherever it falls.
+        let passage = rich.units.first { $0.title == "Passage at five" }?.id
+        #expect(rich.units.filter { $0.parentID == passage && passage != nil }.count == 2)
+        // A subsection starting in a later chapter than its section is
+        // filed and ordered in its own chapter, among that chapter's notes,
+        // as the study Bible's outline is; a heading before a note at one
+        // verse though the note is written first. Found by Codex.
+        let outline = try build(#"""
+        [{"chapter": 1, "sections": [{"title": "Whole", "sv": 43001001, "ev": 43002025,
+                                       "subsections": [{"title": "Second half", "sv": 43002012}, {"title": "At two one", "sv": 43002001}]}],
+          "verses": [{"sv": 43002001, "commentary": {"text": "note at two one"}}]},
+         {"chapter": 2, "verses": [{"sv": 43002005, "commentary": {"text": "five"}}, {"sv": 43002015, "commentary": {"text": "fifteen"}}]}]
+        """#, rich: true)
+        #expect(outline.issues.isEmpty, "\(outline.issues)")
+        #expect(order(outline) == [
+            "section 1001 Whole",
+            "section 2001 At two one", "verse 2001 note at two one", "verse 2005 five", "section 2012 Second half", "verse 2015 fifteen",
+        ], "\(order(outline))")
+        // A unit placed by verse gives its verse, and content entries are a
+        // source-tracked volume's: a place guessed from a parent was left
+        // unstored, or put a child above its parent. Found by Codex; refused
+        // on the planner's advice.
+        let unanchored = try build(#"[{"chapter": 1, "sections": [{"title": "Late", "sv": 43001020, "subsections": [{"title": "Inner"}]}], "verses": [{"sv": 43001005, "commentary": {"text": "five"}}]}]"#, rich: true)
+        #expect(unanchored.issues.map(\.path) == ["/chapters/0/sections/0/subsections/0/sv"], "\(unanchored.issues)")
+        // A child starting before its parent, in its chapter or an earlier
+        // one: refused, after three rounds of outlines it misled. Found by
+        // Codex.
+        let earlier = try build(#"[{"chapter": 1, "pericopae": [{"title": "Later", "sv": 43002001, "verses": [{"sv": 43001002, "commentary": {"text": "two"}}]}]}]"#, rich: true)
+        #expect(earlier.issues.map(\.path) == ["/chapters/0/pericopae/0/verses/0/sv"], "\(earlier.issues)")
+        let anchored = try build(#"[{"chapter": 1, "sections": [{"title": "Later", "sv": 43001020, "subsections": [{"title": "Inner", "sv": 43001002}]}]}]"#, rich: true)
+        #expect(anchored.issues.map(\.path) == ["/chapters/0/sections/0/subsections/0/sv"], "\(anchored.issues)")
+        let nestedHeading = try build(#"[{"chapter": 1, "sections": [{"title": "S", "sv": 43001020, "pericopae": [{"title": "P", "content": [{"type": "heading", "content": {"text": "H"}}]}]}]}]"#, rich: true)
+        #expect(nestedHeading.issues.map(\.path) == ["/chapters/0/sections/0/pericopae/0/sv", "/chapters/0/sections/0/pericopae/0/content"], "\(nestedHeading.issues)")
+        let explicitUnderMoved = try build(#"[{"chapter": 1, "verses": [{"sv": 43001022, "commentary": {"text": "twenty-two"}}], "sections": [{"title": "S", "sv": 43001020, "pericopae": [{"title": "P", "sv": 43001020, "verses": [{"sv": 43001025, "commentary": {"text": "twenty-five"}}]}]}]}]"#, rich: true)
+        #expect(order(explicitUnderMoved) == ["section 1020 S", "pericope 1020 P", "verse 1022 twenty-two", "verse 1025 twenty-five"], "\(order(explicitUnderMoved))")
+        let headingEntry = try build(#"[{"chapter": 1, "pericopae": [{"title": "Passage", "sv": 43001003, "content": [{"type": "heading", "content": {"text": "Heading"}}]}]}]"#, rich: true)
+        #expect(headingEntry.issues.map(\.path) == ["/chapters/0/pericopae/0/content"], "\(headingEntry.issues)")
+        let noteFirst = try build(#"[{"chapter": 1, "verses": [{"sv": 43002001, "commentary": {"text": "note"}}]}, {"chapter": 2, "sections": [{"title": "Heading", "sv": 43002001}]}]"#, rich: true)
+        #expect(order(noteFirst) == ["section 2001 Heading", "verse 2001 note"], "\(order(noteFirst))")
+        #expect(outline.units.filter { $0.unitType == "section" && $0.level == 2 }.allSatisfy { $0.chapter == 2 && $0.parentID == outline.units.first?.id })
+        let older = try build(chapters, rich: false)
+        #expect(order(older) == [
+            "section 1020 Late", "pericope 1021 Under late", "section 1005 At five",
+            "pericope 1005 Passage at five", "verse 1007 seven", "verse 1006 six",
+            "verse 1005 five", "verse 1002 two", "verse 2003 in chapter two",
+        ], "\(order(older))")
+        #expect(older.units.last?.chapter == 1)
+        // A source-tracked volume keeps its printed order, returning to an
+        // earlier passage.
+        let printed = try build(#"[{"chapter": 1, "pericopae": [{"id": "b", "sv": 43001009, "content": []}, {"id": "a", "sv": 43001001, "content": []}]}]"#, rich: true, sourceOrdered: true)
+        #expect(printed.units.map(\.startVerse) == [43001009, 43001001])
+        // Every chapter's units together: a note on 2:20 written in chapter
+        // 1 after the note on 2:2 in chapter 2, a chapter's introduction
+        // before its units; a source-tracked pericope's verses as printed.
+        // Found by Codex.
+        let across = try build(#"[{"chapter": 1, "verses": [{"sv": 43002020, "commentary": {"text": "a"}}]}, {"chapter": 2, "introduction": {"text": "i"}, "verses": [{"sv": 43002002, "commentary": {"text": "b"}}]}]"#, rich: true)
+        #expect(across.units.map { $0.startVerse % 1_000_000 } == [2001, 2002, 2020], "\(order(across))")
+        let printedVerses = try build(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "verses": [{"sv": 43001009, "commentary": {"text": "a"}}, {"sv": 43001001, "commentary": {"text": "b"}}]}]}]"#, rich: true, sourceOrdered: true)
+        #expect(printedVerses.units.map { $0.startVerse % 1_000_000 } == [1001, 1009, 1001], "\(order(printedVerses))")
+        // A 2.2 volume's first fault is the one it was: a section's inner
+        // fault before a later verse that is no object.
+        do {
+            _ = try build(#"[{"chapter": 1, "sections": [{"title": "t", "subsections": [5]}], "verses": [7]}]"#, rich: false)
+            Issue.record("built")
+        } catch ModuleCompilationError.invalidValue(let path, _) {
+            #expect(path == "/chapters/sections/subsections")
+        }
+    }
+
+    /// The order of a 2.3 volume's rows, over generated volumes: sections
+    /// nested three deep, passages and notes, children at and after their
+    /// parents' verses and in later chapters, and ties of verse and
+    /// kind. Held to: the rows sorted by (chapter, introduction first,
+    /// verse, kind) and otherwise as written; each filed in its verse's
+    /// chapter; each under the parent it is written under.
+    @Test func everyVolumesRowsAreInTheOrderAReaderShows() throws {
+        var seed: UInt64 = 0x5EED_0006
+        func next(_ bound: Int) -> Int {
+            seed &+= 0x9E37_79B9_7F4A_7C15
+            var z = seed
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return Int((z ^ (z >> 31)) % UInt64(bound))
+        }
+        for _ in 0..<500 {
+            // What each written unit is, in the order written: its label, its
+            // parent's, its place.
+            var written: [(label: String, parent: String?, chapter: Int, introduction: Int, verse: Int, rank: Int)] = []
+            var count = 0
+            // Every verse of the grid, in order; a child's at or after its
+            // parent's.
+            let grid = (1...3).flatMap { chapter in (0..<4).map { 43_000_000 + chapter * 1_000 + $0 } }
+            func verse(from least: Int?) -> Int {
+                let first = least.flatMap { grid.firstIndex(of: $0) } ?? 0
+                return grid[first + next(grid.count - first)]
+            }
+            var startOf: [String: Int] = [:]
+            func note(_ parent: String?) -> [String: Any] {
+                count += 1
+                let label = "n\(count)", sv = verse(from: parent.flatMap { startOf[$0] })
+                written.append((label, parent, sv / 1_000 % 1_000, 1, sv, 3))
+                return ["sv": sv, "suffix": label, "commentary": ["text": label]]
+            }
+            func passage(_ parent: String?) -> [String: Any] {
+                count += 1
+                let label = "p\(count)", sv = verse(from: parent.flatMap { startOf[$0] })
+                startOf[label] = sv
+                written.append((label, parent, sv / 1_000 % 1_000, 1, sv, 2))
+                return ["sv": sv, "title": label, "verses": (0..<next(3)).map { _ in note(label) }]
+            }
+            func section(_ parent: String?, depth: Int) -> [String: Any] {
+                count += 1
+                let label = "s\(count)", sv = verse(from: parent.flatMap { startOf[$0] })
+                startOf[label] = sv
+                written.append((label, parent, sv / 1_000 % 1_000, 1, sv, 1))
+                return [
+                    "sv": sv, "title": label,
+                    "subsections": depth < 3 ? (0..<next(3)).map { _ in section(label, depth: depth + 1) } : [],
+                    "pericopae": (0..<next(2)).map { _ in passage(label) },
+                ]
+            }
+            var chapters: [[String: Any]] = []
+            for number in 1...3 {
+                var chapter: [String: Any] = ["chapter": number]
+                if next(3) == 0 {
+                    count += 1
+                    written.append(("i\(count)", nil, number, 0, 43_000_000 + number * 1_000 + 1, 0))
+                    chapter["introduction"] = ["text": "i\(count)"]
+                }
+                chapter["sections"] = (0..<next(3)).map { _ in section(nil, depth: 1) }
+                chapter["pericopae"] = (0..<next(2)).map { _ in passage(nil) }
+                chapter["verses"] = (0..<next(4)).map { _ in note(nil) }
+                chapters.append(chapter)
+            }
+            var builder = CommentaryUnitBuilder(moduleID: "M", bookNumber: 43, rich: true)
+            try builder.append(chapters: chapters)
+            #expect(builder.issues.isEmpty, "\(builder.issues)")
+            func label(_ row: CommentaryUnitRow) -> String {
+                row.unitType == "verse" ? (row.suffix ?? "") : row.level == 0 ? JSONSupport.plainText(object(row.introductionJSON)) : (row.title ?? "")
+            }
+            let expected = written.enumerated().sorted {
+                ($0.element.chapter, $0.element.introduction, $0.element.verse, $0.element.rank, $0.offset)
+                    < ($1.element.chapter, $1.element.introduction, $1.element.verse, $1.element.rank, $1.offset)
+            }.map(\.element.label)
+            let rows = builder.units
+            #expect(rows.map(label) == expected)
+            #expect(rows.map(\.orderIndex) == Array(rows.indices))
+            let labelByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, label($0)) })
+            let parentByLabel = Dictionary(uniqueKeysWithValues: written.map { ($0.label, $0.parent) })
+            for row in rows {
+                #expect(row.level == 0 || row.chapter == row.startVerse / 1_000 % 1_000)
+                #expect(row.parentID.flatMap { labelByID[$0] } == parentByLabel[label(row)] ?? nil)
+            }
+        }
+    }
+
+    /// What a 2.3 unit gives is read whole: a verse a whole number in its
+    /// book, a passage that does not end before it starts, one note on a
+    /// passage, one id at a verse, and no field nothing reads.
+    @Test func aUnitIsReadWhole() throws {
+        func paths(_ chapters: String, sourceOrdered: Bool = false) throws -> [String] {
+            try build(chapters, rich: true, sourceOrdered: sourceOrdered).issues.filter { $0.severity == .error }.map(\.path)
+        }
+        let text = #"{"text": "x"}"#
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001.5, "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/0/sv"])
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"sv": "John 1", "title": "t"}]}]"#) == ["/chapters/0/sections/0/sv"])
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 44001001, "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/0/sv"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"sv": 43001005, "ev": 43001002, "title": "t"}]}]"#) == ["/chapters/0/pericopae/0/ev"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "content": [{"type": "commentary", "sv": 43001002.5, "source": {}, "content": \#(text)}]}]}]"#, sourceOrdered: true)
+            == ["/chapters/0/pericopae/0/content/0/sv"])
+        // A verse in no chapter, outside chapter 0; an end before the start
+        // the row takes; a source-tracked chapter's unread field, given
+        // empty. Found by Codex.
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43000001, "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/0/sv"])
+        #expect(try paths(#"[{"chapter": 0, "verses": [{"sv": 43000001, "commentary": \#(text)}]}]"#).isEmpty)
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001009, "content": [{"type": "commentary", "ev": 43001002, "source": {}, "content": \#(text)}]}]}]"#, sourceOrdered: true)
+            == ["/chapters/0/pericopae/0/content/0/ev"])
+        #expect(Set(try paths(#"[{"chapter": 2, "sections": [{"title": "t", "ev": 43001005}]}]"#)) == ["/chapters/0/sections/0/sv", "/chapters/0/sections/0/ev"])
+        #expect(try paths(#"[{"chapter": 1, "blocks": [], "pericopae": []}]"#, sourceOrdered: true) == ["/chapters/0/blocks"])
+        // A suffix with a NUL, stored as the shorter one; an entry in chapter
+        // 0 of a pericope written there and filed in chapter 1. Found by
+        // Codex.
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001, "suffix": "a\u0000b", "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/0/suffix"])
+        #expect(try paths(#"[{"chapter": 0, "pericopae": [{"id": "p", "sv": 43001001, "content": [{"type": "commentary", "sv": 43000001, "source": {}, "content": \#(text)}]}]}]"#, sourceOrdered: true).isEmpty)
+        // Its verses too; a printed order where none is kept; a unit's
+        // fault told before a later sibling stops the build. Found by Codex.
+        #expect(try paths(#"[{"chapter": 0, "pericopae": [{"title": "p", "sv": 43000001, "verses": [{"sv": 43000002, "commentary": \#(text)}]}]}]"#).isEmpty)
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"title": "p", "sv": 43001001, "sourceOrder": 3}]}]"#) == ["/chapters/0/pericopae/0/sourceOrder"])
+        // An end in a later book; not an earlier one, nor chapter 0 of the
+        // later; a heading pericope's provenance. Found by Codex.
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"title": "t", "sv": 43001001, "ev": 44009031}]}]"#).isEmpty)
+        #expect(Set(try paths(#"[{"chapter": 1, "sections": [{"title": "t", "sv": 43001001, "ev": 42009031}]}]"#)) == ["/chapters/0/sections/0/ev"])
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"title": "t", "sv": 43001001, "ev": 44000031}]}]"#) == ["/chapters/0/sections/0/ev"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "sourceChapter": 1, "basis": "chapter-heading", "content": []}]}]"#, sourceOrdered: true).isEmpty)
+        // A split heading's prose and offset, which may be its only copy.
+        // Found by Codex.
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "remainder": "r", "textEnd": 4, "content": []}]}]"#, sourceOrdered: true)
+            == ["/chapters/0/pericopae/0/remainder", "/chapters/0/pericopae/0/textEnd"])
+        // A key told at the path that names it; one fault for entries
+        // outside a source-tracked volume. Found by Codex.
+        #expect(try paths(#"[{"chapter": 1, "notes/extra~": 1}]"#) == ["/chapters/0/notes~1extra~0"])
+        #expect(try paths(#"[{"chapter": 1, "notes/x": 1}]"#, sourceOrdered: true) == ["/chapters/0/notes~1x"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"title": "t", "sv": 43001001, "commentary": \#(text), "content": []}]}]"#) == ["/chapters/0/pericopae/0/content"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"title": "t", "sv": 43001001, "content": {}}]}]"#) == ["/chapters/0/pericopae/0/content"])
+        // A chapter that is no whole number, either way a volume is built;
+        // a section printed at another level than its nesting is kept.
+        // Found by Codex.
+        for sourceOrdered in [false, true] {
+            do {
+                _ = try build(#"[{"chapter": 0.5, "pericopae": []}]"#, rich: true, sourceOrdered: sourceOrdered)
+                Issue.record("chapter 0.5 built")
+            } catch ModuleCompilationError.invalidValue(let path, _) {
+                #expect(path == "/chapters/0/chapter")
+            }
+        }
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"title": "t", "sv": 43001001, "level": 2}]}]"#).isEmpty)
+        // A chapter its book has not, which an introduction's verse is made
+        // from. Found by Codex.
+        do {
+            _ = try build(#"[{"chapter": 22, "introduction": \#(text)}]"#, rich: true)
+            Issue.record("chapter 22 of John built")
+        } catch ModuleCompilationError.invalidValue(let path, _) {
+            #expect(path == "/chapters/0/chapter")
+        }
+        #expect(try paths(#"[{"chapter": 21, "introduction": \#(text)}]"#).isEmpty)
+        // A chapter the book has not; a split heading's prose outside a
+        // source-tracked volume. Found by Codex.
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43022001, "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/0/sv"])
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43021025, "commentary": \#(text)}]}]"#).isEmpty)
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"title": "t", "sv": 43001001, "remainder": "lost"}]}]"#) == ["/chapters/0/pericopae/0/remainder"])
+        // An entry's note and a verse note on one passage, either written
+        // first; entries on one verse, as one printed note. Found by Codex.
+        let entry = #"{"id": "p", "sv": 43001001, "content": [{"type": "commentary", "sv": 43001002, "source": {}, "content": \#(text)}, {"type": "commentary", "sv": 43001002, "source": {}, "content": \#(text)}]}"#
+        let verses = #"{"id": "q", "sv": 43001001, "verses": [{"sv": 43001002, "commentary": \#(text)}]}"#
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [\#(entry), \#(verses)]}]"#, sourceOrdered: true) == ["/chapters/0/pericopae/1/verses/0"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [\#(verses), \#(entry)]}]"#, sourceOrdered: true)
+            == ["/chapters/0/pericopae/1/content/0", "/chapters/0/pericopae/1/content/1"])
+        // Outside a source-tracked volume, the entries alone are told.
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [\#(entry), \#(verses)]}]"#) == ["/chapters/0/pericopae/0/content"])
+        // An index entry, a suffix that is no string, a printed order that is
+        // no whole number. Found by Codex.
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "content": [{"type": "index", "source": {}, "content": \#(text)}]}]}]"#, sourceOrdered: true) == ["/chapters/0/pericopae/0/content/0"])
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001, "suffix": 1, "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/0/suffix"])
+        // Suffixes and ids compared byte for byte; an id with a NUL. Found by
+        // Codex.
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001, "suffix": "\u00e9", "commentary": \#(text)}, {"sv": 43001001, "suffix": "e\u0301", "commentary": \#(text)}]}]"#).isEmpty)
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"id": "\u00e9", "sv": 43001001, "title": "a"}, {"id": "e\u0301", "sv": 43001001, "title": "b"}]}]"#).isEmpty)
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"id": "a\u0000b", "sv": 43001001, "title": "a"}]}]"#) == ["/chapters/0/sections/0/id"])
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"id": "", "sv": 43001001, "title": "a"}]}]"#) == ["/chapters/0/sections/0/id"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": 123, "sv": 43001001, "title": "a"}]}]"#) == ["/chapters/0/pericopae/0/id"])
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001, "commentary": \#(text)}, {"sv": 43001001, "ev": 43001001, "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/1"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "sourceOrder": "2", "content": []}, {"id": "q", "sv": 43001002, "sourceOrder": 1.5, "content": []}]}]"#, sourceOrdered: true)
+            == ["/chapters/0/pericopae/0/sourceOrder", "/chapters/0/pericopae/1/sourceOrder"])
+        var stopped = CommentaryUnitBuilder(moduleID: "M", bookNumber: 43, rich: true)
+        #expect(throws: ModuleCompilationError.self) {
+            try stopped.append(chapters: try json(#"[{"chapter": 1, "sections": [{"title": "t", "sv": 43001001, "introduction": \#(text), "blocks": []}], "verses": [7]}]"#))
+        }
+        #expect(stopped.issues.contains { $0.path.hasPrefix("/chapters/0/sections/0") }, "\(stopped.issues)")
+        // One note on a passage; a suffix tells two apart.
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001, "commentary": \#(text)}, {"sv": 43001001, "commentary": \#(text)}]}]"#) == ["/chapters/0/verses/1"])
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001, "commentary": \#(text)}, {"sv": 43001001, "suffix": "b", "commentary": \#(text)}, {"sv": 43001001, "ev": 43001002, "commentary": \#(text)}]}]"#).isEmpty)
+        // One id at a verse; the same id at another verse is another unit.
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"id": "s", "sv": 43001001, "title": "a"}], "pericopae": [{"id": "s", "sv": 43001001, "title": "b"}]}]"#) == ["/chapters/0/pericopae/0/id"])
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"id": "s", "sv": 43001001, "title": "a"}, {"id": "s", "sv": 43001009, "title": "b"}]}]"#).isEmpty)
+        // A field nothing reads, in each kind of unit.
+        #expect(try paths(#"[{"chapter": 1, "blocks": [], "notes": 1}]"#) == ["/chapters/0/blocks", "/chapters/0/notes"])
+        #expect(try paths(#"[{"chapter": 1, "sections": [{"title": "t", "sv": 43001001, "verses": []}]}]"#) == ["/chapters/0/sections/0/verses"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"title": "t", "sv": 43001001, "subtitle": "u"}]}]"#) == ["/chapters/0/pericopae/0/subtitle"])
+        #expect(try paths(#"[{"chapter": 1, "verses": [{"sv": 43001001, "commentary": \#(text), "id": "v"}]}]"#) == ["/chapters/0/verses/0/id"])
+        #expect(try paths(#"[{"chapter": 1, "pericopae": [{"id": "p", "sv": 43001001, "content": [{"type": "commentary", "source": {}, "content": \#(text), "note": "x"}]}]}]"#, sourceOrdered: true)
+            == ["/chapters/0/pericopae/0/content/0/note"])
+        // What a section, pericope, verse and entry may give, all read.
+        #expect(try paths(#"""
+        [{"chapter": 1, "introduction": \#(text),
+          "sections": [{"id": "s", "title": "t", "sv": 43001001, "ev": 43001009, "level": 1, "introduction": \#(text),
+                        "subsections": [{"title": "u", "sv": 43001002}], "pericopae": [{"title": "p", "sv": 43001003}]}],
+          "pericopae": [{"id": "p", "title": "t", "sv": 43001004, "introduction": \#(text), "translation": \#(text), "commentary": \#(text),
+                         "verses": [{"sv": 43001004, "suffix": "a", "title": "1:4a", "translation": \#(text), "commentary": \#(text)}]}]}]
+        """#).isEmpty)
+        // A 2.2 volume is built as it was, its unread fields unread.
+        #expect(try build(#"[{"chapter": 1, "verses": [{"sv": 43001001.5, "id": "v", "commentary": \#(text)}, {"sv": 43001001, "commentary": \#(text)}]}]"#, rich: false).issues.isEmpty)
     }
 
     /// A unit the builder refused stops the compile, and the inspection of

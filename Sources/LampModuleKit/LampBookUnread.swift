@@ -104,7 +104,7 @@ public enum LampBookUnread {
     }
 
     /// A key as a JSON pointer writes it (RFC 6901).
-    private static func escaped(_ key: String) -> String {
+    static func escaped(_ key: String) -> String {
         // Literally: compared as Characters, a `/` before a combining mark
         // was not found, and the pointer split the key. Found by Codex.
         key.replacingOccurrences(of: "~", with: "~0", options: .literal)
