@@ -72,7 +72,7 @@ Info has. It opens from Settings and from a workspace's Edit.
 | Place | What it shows | Default |
 |---|---|---|
 | Settings ▸ AI & Agents ▸ **Skills** (only with AI on) | Built-in skills: a "Use in" menu and View each. The menu reads "Writings and reader chats", "Writings only" or "Off" for a study skill, and "Writings" or "Off" for build-lamp-deck, which reader chats never get. "Off takes a skill away from every writing, reader chat and connected app. Lamp's own copy is never changed." | Writings and reader chats |
-| Same section | Your skills: Edit…, Remove…, New Skill… Remove confirms that the skill leaves every writing on every Mac. | — |
+| Same section | Your skills: a "Use in" menu, Edit…, Remove…, New Skill… The menu reads "Writings only" or "Writings and reader chats". A row set to reader chats is captioned: "Reader chats can't write files. When this skill would save something, the chat offers to start a writing instead." Remove confirms that the skill leaves every writing on every Mac. | Writings only |
 | Writing workspace, "Skills" | One list of toggles: built-ins and your skills. A built-in that is off in Settings is greyed: "Off in Settings". The menu has New Skill… and Manage Skills…. | Built-ins on, yours off |
 
 - `import-lamp-writing` is never listed. Turning it off would break Add to
@@ -83,6 +83,23 @@ Info has. It opens from Settings and from a workspace's Edit.
   writing chats but not reader chats. "Writings only" in Settings says that
   once. A menu in each reader chat would have to be set again in every new
   chat. Fable's plan had one; the owner's case replaced it on 2026-11-28.
+- **Your skills can reach reader chats** (owner, 2026-11-28), chosen in
+  Settings and off by default. Lamp cannot tell whether a skill writes
+  files, so it does not guess. The choice is not in the editor window,
+  which saves the skill's content, not where it is used.
+- A writing still gets one of your skills only when ticked there, and
+  outside apps get none.
+
+**When a reader chat is asked for something to keep.** A reader chat
+cannot write files. When the reader, or a skill's step, asks for a file or
+a finished piece, the chat says it cannot save it here and offers to start
+a writing with `start_writing`, which copies the conversation into a new
+writing whose chat can carry the work on. It calls `start_writing` only
+once the reader says yes, as its instructions already require. If that
+tool is turned off, the chat gives the result in the conversation and says
+where in Settings a writing can be started from a chat. This instruction
+is in every reader chat, not only those with one of your skills, because
+the reader can ask for output without any skill.
 
 ## Data model
 
@@ -100,6 +117,33 @@ Settings.
   boolean, and an older Mac without the reader key still syncs the other.
 - The MCP helper learns the set through its descriptor.
 
+**Your skills in reader chats**: one list-valued key in `syncedKeys`,
+`agent.skills.readerNames`, a sorted array as `modules.hiddenIDs` is.
+- Absent means none, so an older Mac's settings are no news. No Lean
+  change.
+- A name with no skill in the catalog is ignored. Remove strips the name,
+  so a skill re-created under it does not return to reader chats.
+- Cost: two Macs marking different skills offline keep one Mac's whole
+  list.
+- Rejected: a field in front matter. An older Mac's `saveSkill` writes name
+  and description only, so one edit there strips it. It would also make
+  the skill not plain, and other agents' loaders read front matter.
+- Rejected: a sidecar file. At the catalog root it needs new export and
+  import code for the same whole-file merge. Inside each skill's folder an
+  older Mac copies it into writings, where the plain-skill check flags it.
+
+**Getting one into a chat.** `read_skill` in a reader chat serves only the
+chat folder's `.claude/skills` and `.agents/skills`
+(`LampMCPToolHandler.readSkill`), so prepare copies each marked skill
+there.
+- Markdown only: SKILL.md and its `.md` reference files.
+- Prepare sweeps any folder not in the chat's set; today it removes only
+  bundled names.
+- The catalog read runs on `WritingWorkspaceFiles`, so it cannot copy a
+  skill mid-save. Reader prepare's two callers become async.
+- A chat already open re-prepares between turns when the setting or the
+  catalog changes. A turn in flight keeps what it started with.
+
 **For a writing**, a sibling file, `.lamp/disabled-builtin-skills.json`,
 published as `DisabledBuiltInSkills.json`.
 - A key in `enabled-skills.json` was rejected: an older Mac re-encodes only
@@ -112,8 +156,8 @@ absence.
 
 ## Order
 
-1. **One function says which bundled skills a surface gets.**
-   `WorkspaceSkillStore.bundledSkills(for:libraryOff:surfaceOff:)`. The
+1. **One function says which skills a surface gets**, bundled and yours.
+   `WorkspaceSkillStore.skills(for:libraryOff:surfaceOff:)`. The
    table gains `title` and `canBeTurnedOff`. Every consumer goes through it
    with nothing off, and behaves exactly as before:
    - writing install and sync;
@@ -127,18 +171,21 @@ absence.
    five `syncedKeys`.
 3. **Your skills in Settings.** The editor sheet moves to its own file; New
    and Edit appear in Settings.
-4. **Remove everywhere.**
+4. **Your skills in reader chats.** The menu, the key (a sixth in core),
+   the copy and sweep, the re-prepare trigger, and the reader instruction
+   that offers a writing for output. Mac plus one core key.
+5. **Remove everywhere.** It also strips the name from the reader list.
    - Core: `LampSyncLocalDeletion.skillFile`, the layout classifier,
      `LocalKind.skillFile` in the Lean model with a theorem and conformance
      rows, and `coverage.json`.
    - Mac: `deleteSkill` and the pass's dispatch.
    - iOS: a core bump and one test row.
-5. **Per-writing toggles.** The sibling file, with its export and import,
+6. **Per-writing toggles.** The sibling file, with its export and import,
    and both selection files added to the local-work fingerprint. Before it
    ships, test what an older exporter does with an unknown
    `DisabledBuiltInSkills.json`. If it re-fetches every pass, keep the
    choice local.
-6. **The editor window with reference files.** `isPlainSkill` accepts
+7. **The editor window with reference files.** `isPlainSkill` accepts
    regular `.md` files under `references/`. It still refuses:
    - links;
    - hidden files;
@@ -155,8 +202,24 @@ absence.
 - 0050: a skill has its own editor and is not a writing; no workspace file
   tree.
 - 0051: Markdown references are part of a plain skill.
+- 0052: your skill reaches reader chats by a Settings list, off by default,
+  Markdown only; a reader chat asked for output offers a writing.
 
 ## Tests that must bite
+
+- **Your skills, default.** An unmarked skill is in no reader chat's
+  folders, instructions or `read_skill` listing.
+- **Your skills, marked.** Both folders hold SKILL.md and
+  `references/a.md`, and not a script. AGENTS.md, CLAUDE.md and the
+  OpenCode prompt name it. `read_skill` returns both files through the
+  chat's real configuration.
+- **Unmarked or removed.** The next prepare sweeps it and stops naming it.
+  A link in the folder is not followed.
+- **Edited.** A same-length edit replaces the copy.
+- **Reader list.** An older Mac's settings leave it alone, a name with no
+  skill is ignored, and Remove strips the name. Marking ticks no writing.
+- **Output.** Every reader chat's instructions offer a writing for output,
+  and say to call `start_writing` only after the reader agrees.
 
 - **Writings only.** With sola-scriptura set to writings only, a reader
   chat's files and instructions do not name it, and a writing still holds
