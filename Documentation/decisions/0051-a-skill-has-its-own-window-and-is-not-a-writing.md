@@ -28,25 +28,30 @@ edited in a 650 × 480 sheet holding only SKILL.md.
 
 ## Consequences
 
-Codex's last review, which found nothing at P1, left these, each rare:
+The window's save is one call on the workspace files' owner, so nothing
+lands between its checks and its writes. In that one call it:
 
-- **Checks and writes are separate calls to the files' owner.** A sync
-  landing between the window's check that SKILL.md is unchanged and its
-  write can be written over. A reference a sync adds at a path the window
-  is about to create is refused only after SKILL.md is written. The post-save
-  read can take up a synced copy the window never showed.
-- **A save whose catalog write succeeded but whose update of the writings
-  failed** is reported as failed. A retry of a new reference is then
-  refused as already on disk; reopening the window shows it saved.
+- checks the folders from the library down, a save touching only
+  references too;
+- checks that SKILL.md is the copy the window read;
+- checks every reference's folders, file and name;
+- writes SKILL.md, or leaves it byte for byte on a save that changes only
+  references;
+- ticks a new skill in its writing, then updates each other writing on its
+  own;
+- reports any writing it could not update beside the save, not as its
+  failure.
+
+Codex's later reviews, none at P1, left these, each rare:
+
+- **A reader turn already waiting** with a reader-chat opt-in for a removed
+  skill can install a new skill made under that name, once.
+- **A writing whose selection can't be read** is not given a new skill made
+  from it. The window says so; tick the skill there once the writing opens.
+- **A new skill saved with such a warning** keeps its window, so New Skill…
+  can bring that window forward and Edit… can open a second one.
 - **A skill over 64 references**, from an older import or additions synced
-  together, can't be saved in the window until some are removed, since the
-  limit is checked against the whole skill.
-- **Making a skill under a removed one's name** takes in its leftover files,
-  and an undecodable SKILL.md left there is written over.
-- **A reader-chat opt-in made on one Mac while another removed the skill**
-  can come back with the settings, and a skill made later under that name
-  is then in reader chats. Removing a skill writes the list only when the
-  skill was in it, so an unrelated choice is never published over.
+  together, saves edits to what it has, but takes no more.
 
 ## Rejected
 
