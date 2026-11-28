@@ -62,6 +62,9 @@ opens the chat; no Allow or Deny on the alert.
   handed the alert, as with a turn's end: a subscription's predicate chooses
   records, not devices. What it shows is the chat's title and the
   provider's name.
+- **Left, an edge case:** a click on a wait's notice shows the writing's
+  assistant in whichever mode it was left in; left in Terminal mode, the
+  person switches to Chat to see the card. Raised by Codex as a P3.
 - On the Mac, a wait's notice has a name of its own, so taking it back leaves
   an end's notice alone; and a click on either shows the writing's
   assistant, in a window already open too.

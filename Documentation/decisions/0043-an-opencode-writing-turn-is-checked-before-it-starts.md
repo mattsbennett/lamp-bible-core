@@ -84,6 +84,12 @@ folder or link there can't be vouched for and stops the turn.
   write there unasked (Codex's sandbox is its own writing, Claude and
   Antigravity ask for anything outside it), so it takes the person allowing
   such an edit. Raised by Codex as a P2 and left so.
+- Above the writing, the walk starts from where OpenCode runs, links
+  resolved, and a file there that can't be shown whole (too long, or not
+  text) stops the turn rather than be approved by its size.
+- A message the check holds waits on the chat, not in a pane's field; Don't
+  Send puts it back in the field where there is room; Send Anyway sends that
+  message, wherever it waits.
 - Only OpenCode's own file is written before the check, so another
   provider's Lamp can't write doesn't stop an OpenCode turn.
 - OpenCode's own agent may write its settings; this guards against the other
