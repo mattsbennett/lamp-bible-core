@@ -53,7 +53,8 @@ offered, and the words say those are in Lamp's library folder. A paired
 device is told the same words under a code of its own,
 `writing-settings` (`LampAgentRemoteFailure.writingSettings`), so a phone
 that doesn't know it shows them; `needs-setup` would show the phone's own
-words for setting OpenCode up. What passes names no program an agent can write:
+words for setting OpenCode up. For the same reason a Terminal open in the
+writing is told as `terminal-open`, and another chat answering as `busy`. What passes names no program an agent can write:
 Lamp's own `opencode.json`, byte-equal; a built-in skill, by its tree's
 digest against the bundle, with no link or hidden entry; a custom skill as
 plain as Lamp writes one (`SKILL.md` alone, prose). A `.claude` folder above
