@@ -29,7 +29,8 @@ starts a turn: no pane on the Mac, and no paired device.
 - **Let go only when the process Lamp started is gone:** by its exit, which
   the Terminal's watch reports even once its view is taken down, or found gone
   when asked (the kernel's record of the pid, by its start time, so a reused
-  pid doesn't hold). Never by time, by the capture files (an agent could write
+  pid doesn't hold; a lookup that fails is never taken for an exit, the
+  process held while it can still be signalled). Never by time, by the capture files (an agent could write
   them), by the pane being hidden or by the mode. One that never started is
   dropped when its view goes, a newer launch replaces it, or it is ended.
 - **Claude's only.** Codex and OpenCode read their settings as they start, so

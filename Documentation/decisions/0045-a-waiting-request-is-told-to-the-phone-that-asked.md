@@ -93,6 +93,11 @@ later one.
   out: it is one for every writing, so a click hid a Terminal being watched
   in another window (Codex, P2).
 - Taking a wait's notice back removes one not yet shown too.
+- **Left, an edge case:** the host tells a wait from the chat's list of
+  requests waiting, which the card's own answer shortens a moment before the
+  run's next list arrives; a second request asked just as the first is
+  answered can make that list go empty and fill again, and the phone be told
+  twice for what was one wait. Raised by Codex as a P3.
 - **Left, an edge case:** with one writing open in several windows, a click
   shows the assistant in each that has it closed, not only the window
   brought forward. Raised by Codex as a P3.
