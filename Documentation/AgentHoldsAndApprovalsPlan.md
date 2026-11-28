@@ -94,6 +94,14 @@ sees. The hold covers the process Lamp started, and the record says so.
 
 ## 2. OpenCode's settings (0043)
 
+**Revised after review (Fable, 2026-11-27):** the approval sheet below was
+built and taken out. Four Codex rounds found an approval of a setting's bytes
+doesn't bind what the setting names, while OpenCode rereads it at every
+request. An OpenCode writing chat now starts only from Lamp's settings and
+the person's: anything else OpenCode would read stops the turn, named, and
+nothing is asked. The Terminal keeps its sheet. The rest of this section is
+the first plan, kept as history.
+
 OpenCode 2's documentation names no `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`
 or `OPENCODE_CONFIG_DIR` (only the V1 pages do); `opencode run` has no `--dir`;
 V2 runs one shared background server per account that owns configuration and
