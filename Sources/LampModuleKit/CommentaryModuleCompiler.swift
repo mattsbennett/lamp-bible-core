@@ -9,6 +9,10 @@ extension LampModuleCompiler {
     ) throws -> [String: Int] {
         let meta = try JSONSupport.requiredObject(root["meta"], path: "/meta")
         let bookNumber = try JSONSupport.requiredInteger(root["bookNumber"], path: "/bookNumber")
+        // A 2.3 book a whole number: `43.5` was read as 43. Found by Codex.
+        if JSONSupport.string(meta["schemaVersion"]) == "2.3", LampCommentaryBlocks.wholeNumber(root["bookNumber"]) == nil {
+            throw ModuleCompilationError.invalidValue(path: "/bookNumber", expected: "a whole book number, 1 to 66")
+        }
         let chapters = try JSONSupport.requiredArray(root["chapters"], path: "/chapters")
         let title = try JSONSupport.requiredString(
             JSONSupport.firstValue(in: meta, keys: ["title", "name"]),
@@ -26,6 +30,7 @@ extension LampModuleCompiler {
             throw ModuleCompilationError.invalidValue(path: "/footnotes", expected: "a list of notes")
         }
         try builder.append(chapters: chapters)
+        builder.append(frontMatter: root["frontMatter"], media: root["media"])
         // A unit the builder refused would be lost or misread: none is
         // written, as an inspection of the same volume says.
         if let refused = builder.issues.first(where: { $0.severity == .error }) {
@@ -205,6 +210,39 @@ struct CommentaryUnitRow {
     var declaredID: String? = nil
 }
 
+/// A 2.3 volume's front-matter section, a row of its own: not a unit, which
+/// an old phone lists across the module, and not inside `front_matter_json`,
+/// which no index reads and no link lands in.
+struct CommentaryFrontMatterRow: Equatable {
+    let id: String
+    /// The id it declares, which a link and a search hit name it by.
+    let sectionID: String
+    let parentID: String?
+    let title: String
+    let depth: Int
+    let orderIndex: Int
+    let blocksJSON: String
+    let searchText: String
+}
+
+/// The files a module's media folder holds, each once as a Mac's or
+/// phone's volume tells names apart. A 2.3 media file is a bare name
+/// (`isPlainMediaPath`), so no file is another's folder and no folder is
+/// spelled two ways: each review round that allowed folders found one more
+/// way two names could not be installed together (`maps` beside
+/// `Maps/one.png`; `maps/a.png` beside `Maps/b.png`). Found by Codex.
+struct LampMediaPaths {
+    private var files: Set<String> = []
+
+    /// Why `filename` cannot join the folder's files, or nil once it has.
+    mutating func insert(_ filename: String) -> String? {
+        guard files.insert(LampBookMediaFiles.fileSystemKey(filename)).inserted else {
+            return "Another media entry names this file, as a Mac or phone tells names apart."
+        }
+        return nil
+    }
+}
+
 struct CommentaryUnitBuilder {
     let moduleID: String
     let bookNumber: Int
@@ -234,6 +272,29 @@ struct CommentaryUnitBuilder {
     private var entryPassages: Set<[UInt8]> = []
     /// Each 2.3 row's own start, for its units to start no earlier.
     private var startByRowID: [String: Int] = [:]
+    /// A 2.3 volume's front-matter sections, in reading order.
+    private(set) var frontMatterRows: [CommentaryFrontMatterRow] = []
+    private var frontMatterSectionIDs: Set<[UInt8]> = []
+    /// A 2.3 volume's media, each entry read whole, as written.
+    private(set) var media: [[String: Any]] = []
+    /// Each media id a block names, where it names it.
+    private var namedMedia: [MediaReference] = []
+
+    /// A picture or sound a block or annotation names, the kind it needs,
+    /// and where it is named.
+    struct MediaReference {
+        let id: String?
+        let type: String?
+        let path: String
+        /// An annotation a reader cannot decode, so it shows nothing.
+        var unreadable = false
+        /// A `mediaId` on a block that draws no media.
+        var misplaced = false
+        /// Placed outside its text, so drawn nowhere.
+        var outside = false
+        /// Where its kind is written, to be told at if it is no kind.
+        var typePath: String? = nil
+    }
     /// The chapter whose units are being read, as the volume writes it.
     private var writtenChapter = 0
     /// The volume's notes as written, for Rule A's checks.
@@ -266,6 +327,11 @@ struct CommentaryUnitBuilder {
     }
 
     mutating func append(chapters: [Any]) throws {
+        // A Bible book: a link names a 2.3 volume's units and front matter by
+        // it, and refuses any other. Found by Codex.
+        if rich, !(1...66).contains(bookNumber) {
+            issues.append(.init(severity: .error, path: "/bookNumber", message: "A 2.3 volume is a Bible book's, numbered 1 to 66."))
+        }
         if rich {
             checkFootnoteDefinitions()
             refuseScopedFootnotes(chapters, path: "/chapters")
@@ -495,6 +561,338 @@ struct CommentaryUnitBuilder {
         return id
     }
 
+    // MARK: Front matter and media (2.3)
+
+    /// A 2.3 volume's front-matter sections and media, read whole. Called
+    /// after the units, so a picture any of them names is checked against
+    /// the volume's media.
+    mutating func append(frontMatter: Any?, media mediaValue: Any?) {
+        guard rich else { return }
+        if let given = frontMatter, !(given is NSNull) {
+            if let object = given as? [String: Any] {
+                readWhole(object, as: "front matter", allowed: Self.frontMatterKeys, path: "/frontMatter")
+                if let sections = object["sections"], !(sections is NSNull) {
+                    appendFrontMatterSections(sections, parentID: nil, depth: 0, path: "/frontMatter/sections")
+                }
+            } else {
+                issues.append(.init(severity: .error, path: "/frontMatter", message: "A volume's front matter is an object."))
+            }
+        }
+        appendMedia(mediaValue)
+        // A picture no media entry lists is drawn as nothing: told, as a
+        // dead link is.
+        // And one naming an entry of another kind: an image block on a
+        // sound. Found by Codex.
+        var typeByID: [[UInt8]: String] = [:]
+        for entry in media {
+            if let id = entry["id"] as? String { typeByID[Array(id.utf8)] = entry["type"] as? String ?? "" }
+        }
+        for named in namedMedia {
+            if named.outside {
+                issues.append(.init(severity: .warning, path: named.path, message: "A media annotation lies outside its text, so nothing is drawn or played here."))
+                continue
+            }
+            if named.misplaced {
+                issues.append(.init(severity: .error, path: named.path, message: "Only an image or audio block draws media; give the picture as an image block, a figure's as its child."))
+                continue
+            }
+            if named.unreadable {
+                issues.append(.init(severity: .error, path: named.path, message: "A media annotation a reader cannot read: its offsets, and its data's fields, are of the kinds the schema says."))
+                continue
+            }
+            guard let id = named.id, !id.isEmpty else {
+                issues.append(.init(severity: .error, path: named.path, message: "An image or audio block, or a media annotation, names its media by `mediaId`."))
+                continue
+            }
+            if named.type == "" {
+                issues.append(.init(severity: .error, path: named.typePath ?? named.path, message: "A media annotation's kind is image or audio."))
+                continue
+            }
+            guard let type = typeByID[Array(id.utf8)] else {
+                issues.append(.init(
+                    severity: .warning, path: named.path,
+                    message: "No media entry has the id \"\(id)\", so nothing is drawn or played here."
+                ))
+                continue
+            }
+            if let wanted = named.type, wanted != type {
+                issues.append(.init(
+                    severity: .warning, path: named.path,
+                    message: "The media \"\(id)\" is \(type), where \(wanted) is wanted, so nothing is drawn or played here."
+                ))
+            }
+        }
+    }
+
+    /// A 2.3 volume's front matter is its `sections`, rows a reader lists,
+    /// searches and links to. The fields a 2.2 volume gives — a preface, an
+    /// introduction, a bibliography, content entries — are refused, not
+    /// kept in `front_matter_json`: four review rounds found one more way
+    /// each could hide the rest, cite a note nothing defines, or name a
+    /// picture nothing draws, and no 2.3 volume gives them. Found by Codex.
+    private static let frontMatterKeys: Set<String> = ["sections"]
+    private static let frontMatterSectionKeys: Set<String> = ["id", "title", "blocks", "sections"]
+
+    private mutating func appendFrontMatterSections(_ value: Any, parentID: String?, depth: Int, path: String) {
+        guard let sections = value as? [Any] else {
+            issues.append(.init(severity: .error, path: path, message: "Expected a list of sections."))
+            return
+        }
+        for (index, value) in sections.enumerated() {
+            let sectionPath = "\(path)/\(index)"
+            guard let section = value as? [String: Any] else {
+                issues.append(.init(severity: .error, path: sectionPath, message: "A front-matter section is an object."))
+                continue
+            }
+            readWhole(section, as: "front-matter section", allowed: Self.frontMatterSectionKeys, path: sectionPath)
+            // Its id names it to a link and a search hit, within its book,
+            // nested sections too: words, once, byte for byte as SQLite and a
+            // link compare them; a NUL would end it where it is stored.
+            var sectionID = ""
+            if let id = section["id"] as? String, !id.isEmpty, !id.contains("\0") {
+                sectionID = id
+                if !frontMatterSectionIDs.insert(Array(id.utf8)).inserted {
+                    issues.append(.init(
+                        severity: .error, path: "\(sectionPath)/id",
+                        message: "Another front-matter section in this book has the id \"\(id)\"; a link would name both."
+                    ))
+                }
+            } else {
+                issues.append(.init(
+                    severity: .error, path: "\(sectionPath)/id",
+                    message: "A front-matter section has an id: words, with no NUL."
+                ))
+            }
+            // A title is shown in its list, and stored whole.
+            let title = (section["title"] as? String)?.replacingOccurrences(of: "\0", with: " ") ?? ""
+            if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                issues.append(.init(severity: .error, path: "\(sectionPath)/title", message: "A front-matter section has a title."))
+            }
+            // No notes column: a note cited here would open nothing (Rule A).
+            // A null is none, as for a unit. Found by Codex.
+            let blocks = section["blocks"].flatMap { $0 is NSNull ? nil : $0 } ?? [Any]()
+            if Self.citesNotes(blocks) {
+                issues.append(.init(
+                    severity: .error, path: "\(sectionPath)/blocks",
+                    message: "Front matter carries no notes, so a note cited here would open nothing."
+                ))
+            }
+            Self.collectMediaIDs(inBlocks: blocks, path: "\(sectionPath)/blocks", into: &namedMedia)
+            let body = LampCommentaryBlocks.body(blocks, path: "\(sectionPath)/blocks", blockIDs: &blockIDs, issues: &issues, olderReaders: false)
+            let id = "\(moduleID):\(bookNumber):front:\(frontMatterRows.count)"
+            frontMatterRows.append(CommentaryFrontMatterRow(
+                id: id,
+                sectionID: sectionID,
+                parentID: parentID,
+                title: title,
+                depth: depth,
+                orderIndex: frontMatterRows.count,
+                blocksJSON: body?.blocksJSON ?? "[]",
+                searchText: makeSearchText(title, body?.searchText).replacingOccurrences(of: "\0", with: " ")
+            ))
+            if let children = section["sections"], !(children is NSNull) {
+                appendFrontMatterSections(children, parentID: id, depth: depth + 1, path: "\(sectionPath)/sections")
+            }
+        }
+    }
+
+    /// Whether blocks cite a note anywhere: a footnote span in some text's
+    /// annotations, or a marker.
+    private static func citesNotes(_ value: Any) -> Bool {
+        if let list = value as? [Any] { return list.contains(where: citesNotes) }
+        guard let object = value as? [String: Any] else { return false }
+        if let markers = object["footnote_refs"] as? [Any], !markers.isEmpty { return true }
+        if let annotations = object["annotations"] as? [Any],
+           annotations.contains(where: { ($0 as? [String: Any])?["type"] as? String == "footnote" }) {
+            return true
+        }
+        return object.values.contains(where: citesNotes)
+    }
+
+    /// The media a 2.3 text or block names, in the two forms the book
+    /// schema gives: an `image` or `audio` block's `mediaId`, of the block's
+    /// own kind, and a `media` annotation's `data.mediaId`, of its
+    /// `data.mediaType` where it says. Read from blocks as the model reads
+    /// them, and from a plain text's own annotations: walked as loose JSON,
+    /// every looser reading found one more reference it misread — a block
+    /// naming none, a text's, one of the wrong kind, an id on a passage, a
+    /// footnote marker with a stray `type` read as a picture — four rounds
+    /// running. Found by Codex.
+    static func collectMediaIDs(inBlocks value: Any, path: String, into named: inout [MediaReference]) {
+        // Each block alone: decoded together, one that would not decode hid
+        // every sibling's pictures. Found by Codex.
+        guard let list = value as? [Any] else { return }
+        let blocks = list.map { item -> LampBookContentBlock? in
+            guard JSONSerialization.isValidJSONObject(item), let data = try? JSONSerialization.data(withJSONObject: item) else { return nil }
+            return try? JSONDecoder().decode(LampBookContentBlock.self, from: data)
+        }
+        // Block positions as written, a figure's children included: the
+        // model drops a child it does not draw, and its indices then named
+        // the wrong one. Found by Codex.
+        func visit(_ raw: Any, at path: String) {
+            guard let object = raw as? [String: Any] else { return }
+            if let type = object["type"] as? String, ["image", "audio"].contains(type) {
+                named.append(MediaReference(id: object["mediaId"] as? String, type: type, path: path))
+            } else if let id = object["mediaId"] as? String, !id.isEmpty {
+                // Kept by the model, drawn by nothing: a figure's picture is
+                // its image child's. Found by Codex. An empty one names none.
+                named.append(MediaReference(id: nil, type: nil, path: "\(path)/mediaId", misplaced: true))
+            }
+            for (index, child) in ((object["children"] as? [Any]) ?? []).enumerated() { visit(child, at: "\(path)/children/\(index)") }
+        }
+        for (index, block) in blocks.enumerated() {
+            let blockPath = "\(path)/\(index)"
+            visit(list[index], at: blockPath)
+            guard let block else { continue }
+            for field in LampBookDrawnText.lines(of: block, figures: .asParts).joined() {
+                let length = field.text.text.unicodeScalars.count
+                for annotation in field.text.annotations where annotation.type == "media" {
+                    // Within the text it is in, by the projection's rule: a
+                    // span starting within it is clipped to it, not lost; a
+                    // point anywhere up to its end is kept. Found by Codex.
+                    let start = annotation.start, end = annotation.end
+                    if !(start >= 0 && end >= start && (start == end ? start <= length : start < length)) {
+                        named.append(MediaReference(id: nil, type: nil, path: blockPath, outside: true))
+                    }
+                    // Told at the block: the model keeps no path within it.
+                    named.append(MediaReference(id: annotation.data?.mediaID, type: mediaKind(annotation.data?.mediaType), path: blockPath, typePath: blockPath))
+                }
+            }
+        }
+    }
+
+    /// The media a plain annotated text's own annotations name. Where Rule
+    /// B1 holds the text to the older reader (`olderReaderChecked`), an
+    /// annotation it refuses is not told again here.
+    static func collectMediaIDs(inText value: Any, path: String, into named: inout [MediaReference], olderReaderChecked: Bool = false) {
+        guard let annotations = (value as? [String: Any])?["annotations"] as? [Any] else { return }
+        let length = ((value as? [String: Any])?["text"] as? String)?.unicodeScalars.count ?? 0
+        for (index, value) in annotations.enumerated() {
+            guard let annotation = value as? [String: Any], annotation["type"] as? String == "media" else { continue }
+            // Read as a reader reads it, before its media is looked for:
+            // one without its offsets was skipped there, and its media was
+            // still found here. Found by Codex.
+            let readable = JSONSerialization.isValidJSONObject(annotation)
+                && (try? JSONSerialization.data(withJSONObject: annotation)).flatMap { try? JSONDecoder().decode(LampBookAnnotation.self, from: $0) } != nil
+            if olderReaderChecked, !LampCommentaryBlocks.phoneReads(annotation) { continue }
+            if !readable {
+                named.append(MediaReference(id: nil, type: nil, path: "\(path)/annotations/\(index)", unreadable: true))
+                continue
+            }
+            // Within its text, a point or a span: past it, a reader draws it
+            // nowhere. Found by Codex.
+            let start = LampCommentaryBlocks.wholeNumber(annotation["start"]) ?? 0, end = LampCommentaryBlocks.wholeNumber(annotation["end"]) ?? 0
+            // Told beside its payload's faults, not in place of them. Found
+            // by Codex.
+            if !(0 <= start && start <= end && end <= length) {
+                named.append(MediaReference(id: nil, type: nil, path: "\(path)/annotations/\(index)", outside: true))
+            }
+            let data = annotation["data"] as? [String: Any]
+            // A kind given as no string is no kind: read as none, it passed
+            // any entry. Found by Codex.
+            let wanted = data?["mediaType"]
+            named.append(MediaReference(
+                id: data?["mediaId"] as? String,
+                type: wanted == nil || wanted is NSNull ? nil : mediaKind((wanted as? String) ?? "\u{0}"),
+                path: "\(path)/annotations/\(index)/data",
+                typePath: "\(path)/annotations/\(index)/data/mediaType"
+            ))
+        }
+    }
+
+    /// A media annotation's kind: `image` or `audio`, nil for none given,
+    /// and "" for any other, which is refused.
+    private static func mediaKind(_ given: String?) -> String? {
+        guard let given else { return nil }
+        return ["image", "audio"].contains(given) ? given : ""
+    }
+
+    /// A 2.3 media filename: one name of ASCII letters, digits, `.`, `_` and
+    /// `-`, not starting with `.`, 255 bytes at most — no folders, as none
+    /// of the study Bible's has.
+    /// Each looser rule review found one more name that escaped it — a
+    /// scheme kept as a folder, a percent escape, a part too long, a `/`
+    /// before a combining mark read as no boundary, a path past `PATH_MAX`
+    /// once a library's folder is before it — three rounds running. Found
+    /// by Codex. The study Bible's 314 names, the longest 61 bytes, all
+    /// keep to it.
+    static func isPlainMediaPath(_ filename: String) -> Bool {
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-".utf8)
+        let bytes = Array(filename.utf8)
+        guard (1...255).contains(bytes.count) else { return false }
+        return bytes.first != UInt8(ascii: ".") && bytes.allSatisfy(allowed.contains)
+    }
+
+    /// The book schema's `mediaReference`, each field of the kind it says.
+    private static let mediaKeys: Set<String> = [
+        "id", "type", "filename", "mimeType", "size", "width", "height", "duration", "waveform", "transcription", "alt", "created",
+    ]
+
+    /// A 2.3 volume's media, each entry read whole: an id once; a filename
+    /// plain (`isPlainMediaPath`) and one sync carries, once, and no folder
+    /// of another, as the Mac's and the phone's volumes tell names apart.
+    private mutating func appendMedia(_ value: Any?) {
+        guard let value, !(value is NSNull) else { return }
+        guard let list = value as? [Any] else {
+            issues.append(.init(severity: .error, path: "/media", message: "A volume's media is a list."))
+            return
+        }
+        var ids: Set<[UInt8]> = []
+        var files = LampMediaPaths()
+        for (index, value) in list.enumerated() {
+            let path = "/media/\(index)"
+            guard let entry = value as? [String: Any] else {
+                issues.append(.init(severity: .error, path: path, message: "A media entry is an object."))
+                continue
+            }
+            readWhole(entry, as: "media entry", allowed: Self.mediaKeys, path: path)
+            func refuse(_ key: String, _ message: String) {
+                issues.append(.init(severity: .error, path: "\(path)/\(key)", message: message))
+            }
+            // Plain, as a filename is: a reader keys media by `String`, for
+            // which `é` and `e\u{301}` are one id where bytes are two. The
+            // study Bible's ids keep to it. Found by Codex.
+            if let id = entry["id"] as? String, Self.isPlainMediaPath(id) {
+                if !ids.insert(Array(id.utf8)).inserted { refuse("id", "Another media entry has the id \"\(id)\".") }
+            } else {
+                refuse("id", "A media entry's id is ASCII letters, digits, `.`, `_` and `-`, not starting with `.`, 255 bytes at most.")
+            }
+            if !["image", "audio"].contains(entry["type"] as? String ?? "") { refuse("type", "A media entry is an image or audio.") }
+            if let filename = entry["filename"] as? String, Self.isPlainMediaPath(filename),
+               LampBookMediaFiles.relativePath(forFilename: filename) == filename {
+                if let clash = files.insert(filename) {
+                    refuse("filename", clash)
+                }
+            } else {
+                refuse("filename", "A media file is one name of ASCII letters, digits, `.`, `_` and `-`, not starting with `.`, 255 bytes at most, in no folder.")
+            }
+            if (entry["mimeType"] as? String)?.isEmpty != false { refuse("mimeType", "A media entry gives its MIME type.") }
+            let number = { (key: String) -> Double? in
+                guard let given = entry[key] as? NSNumber, CFGetTypeID(given) != CFBooleanGetTypeID() else { return nil }
+                return given.doubleValue.isFinite ? given.doubleValue : nil
+            }
+            for (key, least) in [("size", 0), ("width", 1), ("height", 1), ("created", Int.min)] where entry[key] != nil {
+                guard let whole = LampCommentaryBlocks.wholeNumber(entry[key]), whole >= least else {
+                    refuse(key, "A media entry's \(key) is a whole number\(least == Int.min ? "" : " of at least \(least)").")
+                    continue
+                }
+            }
+            if entry["duration"] != nil, (number("duration") ?? -1) < 0 { refuse("duration", "A duration is a number of seconds.") }
+            if let waveform = entry["waveform"] {
+                let samples = waveform as? [Any]
+                let readable = samples?.allSatisfy { sample in
+                    guard let value = sample as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() else { return false }
+                    return (0...1).contains(value.doubleValue)
+                } ?? false
+                if !readable { refuse("waveform", "A waveform is a list of numbers from 0 to 1.") }
+            }
+            for key in ["transcription", "alt"] where entry[key] != nil && !(entry[key] is String) {
+                refuse(key, "A media entry's \(key) is words.")
+            }
+            media.append(entry)
+        }
+    }
+
     private mutating func readWhole(_ unit: [String: Any], as kind: String, allowed: Set<String>, path: String) {
         guard rich else { return }
         for key in unit.keys.sorted() where !allowed.contains(key) {
@@ -703,7 +1101,9 @@ struct CommentaryUnitBuilder {
         let readsEntries = !rich || sourceOrdered
         if rich, readsEntries, let content = JSONSupport.array(pericope["content"]) {
             for (index, value) in content.enumerated() {
-                guard let entry = JSONSupport.object(value), entry["blocks"] != nil else { continue }
+                // A null is no blocks, here as in `richBody`: the entry keeps
+                // its content. Found by Codex.
+                guard let entry = JSONSupport.object(value), entry["blocks"] != nil, !(entry["blocks"] is NSNull) else { continue }
                 let entryPath = "\(path)/content/\(index)"
                 let role = JSONSupport.string(entry["type"])
                 // Each role whose body is the row's commentary: a paragraph's
@@ -846,7 +1246,7 @@ struct CommentaryUnitBuilder {
                 let entryBody = entryBodies[index]
                 // An entry whose blocks were refused is not written: the
                 // issue says why, and the compile stops on it.
-                if rich, block["blocks"] != nil, entryBody == nil { continue }
+                if rich, block["blocks"] != nil, !(block["blocks"] is NSNull), entryBody == nil { continue }
                 let text: [String: Any]
                 if let entryBody {
                     text = entryBody.legacy
@@ -865,6 +1265,7 @@ struct CommentaryUnitBuilder {
                         let titleOnly = role == "heading"
                             && (JSONSupport.array(sourceText["annotations"]) ?? []).isEmpty
                             && (JSONSupport.array(sourceText["footnote_refs"]) ?? []).isEmpty
+                        Self.collectMediaIDs(inText: sourceText, path: "\(path)/content/\(index)/content", into: &namedMedia, olderReaderChecked: true)
                         if (JSONSupport.integer(block["displayPrefixLength"]) ?? 0) > 0 || titleOnly {
                             _ = writtenForOlderReaders(sourceText, path: "\(path)/content/\(index)")
                         }
@@ -876,13 +1277,28 @@ struct CommentaryUnitBuilder {
                             if let count = LampCommentaryBlocks.wholeNumber(given), count >= 0, count <= length {
                                 // A note span within the label is trimmed with
                                 // it, its citation lost. Found by Codex.
-                                for value in (sourceText["annotations"] as? [Any]) ?? [] {
-                                    guard let annotation = value as? [String: Any], annotation["type"] as? String == "footnote",
-                                          let end = LampCommentaryBlocks.wholeNumber(annotation["end"]), end <= count else { continue }
-                                    issues.append(.init(
-                                        severity: .error, path: "\(path)/content/\(index)",
-                                        message: "A footnote span lies within the label to be trimmed, and would be lost with it."
-                                    ))
+                                for (spanIndex, value) in ((sourceText["annotations"] as? [Any]) ?? []).enumerated() {
+                                    // Only what the trim drops, by `displayContent`'s
+                                    // own rule: a point at its boundary is kept,
+                                    // anything else ending within it is not.
+                                    // Found by Codex.
+                                    guard let annotation = value as? [String: Any], let type = annotation["type"] as? String,
+                                          let end = LampCommentaryBlocks.wholeNumber(annotation["end"]),
+                                          !(end > count || (LampCommentaryBlocks.wholeNumber(annotation["start"]) == count && end == count))
+                                    else { continue }
+                                    if type == "footnote" {
+                                        issues.append(.init(
+                                            severity: .error, path: "\(path)/content/\(index)",
+                                            message: "A footnote span lies within the label to be trimmed, and would be lost with it."
+                                        ))
+                                    } else if type == "media" {
+                                        // A picture too, which is drawn nowhere. Found
+                                        // by Codex.
+                                        issues.append(.init(
+                                            severity: .warning, path: "\(path)/content/\(index)/content/annotations/\(spanIndex)",
+                                            message: "A media annotation lies within the label to be trimmed, and would be lost with it."
+                                        ))
+                                    }
                                 }
                             } else {
                                 issues.append(.init(
@@ -1185,6 +1601,8 @@ struct CommentaryUnitBuilder {
                 // told at each row citing it, the note itself went unnamed.
                 // Found by Codex.
                 warnAboutDeadLinks(in: [readable["content"]], path: "\(path)/content")
+                // Its pictures, against the volume's media. Found by Codex.
+                if let content = readable["content"] { Self.collectMediaIDs(inText: content, path: "\(path)/content", into: &namedMedia, olderReaderChecked: true) }
                 if !JSONSerialization.isValidJSONObject(readable) {
                     issues.append(.init(severity: .error, path: path, message: "This note holds a value JSON cannot store, such as an infinite number."))
                 }
@@ -1235,7 +1653,8 @@ struct CommentaryUnitBuilder {
     private mutating func richBody(
         of unit: [String: Any], path: String, replacing legacyKeys: [String]
     ) -> LampCommentaryBlocks.Body? {
-        guard rich, let blocks = unit["blocks"] else { return nil }
+        // A null is no body: beside `commentary`, it was told as a second.
+        guard rich, let blocks = unit["blocks"], !(blocks is NSNull) else { return nil }
         for key in legacyKeys where unit[key] != nil {
             issues.append(.init(
                 severity: .error, path: "\(path)/\(key)",
@@ -1243,6 +1662,7 @@ struct CommentaryUnitBuilder {
             ))
             return nil
         }
+        Self.collectMediaIDs(inBlocks: blocks, path: "\(path)/blocks", into: &namedMedia)
         return LampCommentaryBlocks.body(blocks, path: "\(path)/blocks", blockIDs: &blockIDs, issues: &issues)
     }
 
@@ -1302,6 +1722,19 @@ struct CommentaryUnitBuilder {
                 in: [projected == "introduction" ? nil : introduction, translation, projected == "commentary" ? nil : commentary],
                 path: path
             )
+            // And the pictures they name, against the volume's media, as a
+            // block's are. Found by Codex.
+            // Each at the field it was written in: a source-tracked entry's
+            // text is its `content`. Found by Codex.
+            // A chapter's introduction is told at its own path already.
+            // Found by Codex.
+            // An entry's are read from its text as written, before a label
+            // is trimmed and its annotations numbered again. Found by Codex.
+            let entry = path.range(of: "/content/[0-9]+$", options: .regularExpression) != nil
+            for (key, text) in [("introduction", projected == "introduction" ? nil : introduction), ("translation", translation),
+                                ("commentary", projected == "commentary" ? nil : commentary)] where !entry {
+                if let text { Self.collectMediaIDs(inText: text, path: path.hasSuffix("/\(key)") ? path : "\(path)/\(key)", into: &namedMedia, olderReaderChecked: true) }
+            }
             footnotes = notes(citedBy: [introduction, translation, commentary], path: path)
         }
         // A 2.3 row's text that cannot be stored as JSON is told, not stored

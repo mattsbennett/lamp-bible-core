@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 
@@ -453,6 +454,7 @@ extension LampModuleCompiler {
         let meta = try JSONSupport.requiredObject(series["meta"], path: "/meta")
         let queue = try makeDatabaseQueue(at: databaseURL)
         var unitCount = 0
+        var media = SeriesMedia()
         try queue.write { db in
             try createSeriesSchema(in: db)
             try createFormatMetadata(in: db, kind: .commentary, moduleID: seriesID)
@@ -485,7 +487,7 @@ extension LampModuleCompiler {
 
             for volume in volumes {
                 unitCount += try autoreleasepool {
-                    try writeVolume(volume, in: db, warnings: &warnings)
+                    try writeVolume(volume, in: db, media: &media, warnings: &warnings)
                 }
             }
             try db.execute(sql: "INSERT INTO commentary_units_fts(commentary_units_fts) VALUES('rebuild')")
@@ -496,8 +498,48 @@ extension LampModuleCompiler {
 
     /// One volume's book and units, read from its file, checked as a volume
     /// on its own is, and let go when written.
+    /// A series' media, which is one folder: each id one entry, and each
+    /// file one id's, whichever volume names it.
+    struct SeriesMedia {
+        /// Each entry by a digest of its bytes, so a series keeps a fixed
+        /// size per media, not its waveform and transcription. Found by Codex.
+        private var entryByID: [[UInt8]: (entry: Data, volume: String)] = [:]
+        private var idByFile: [String: (id: String, volume: String)] = [:]
+        private var paths = LampMediaPaths()
+
+        /// Refuses an id or a file a volume gives other than an earlier
+        /// volume did.
+        mutating func add(_ entries: [[String: Any]], from volume: String) throws {
+            for (index, entry) in entries.enumerated() {
+                guard let id = entry["id"] as? String, let filename = entry["filename"] as? String else { continue }
+                // Compared as bytes: as strings, `é` and `e\u{301}` were one
+                // spelling, though a server keeps two files. Found by Codex.
+                let written = Data(SHA256.hash(data: (try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])) ?? Data()))
+                if let earlier = entryByID[Array(id.utf8)], earlier.entry != written {
+                    throw ModuleCompilationError.invalidValue(
+                        path: "\(volume): /media/\(index)",
+                        expected: "the media \"\(id)\" as \(earlier.volume) gives it, since a series' volumes share one media folder"
+                    )
+                }
+                let file = LampBookMediaFiles.fileSystemKey(filename)
+                if let earlier = idByFile[file], earlier.id.utf8.elementsEqual(id.utf8) == false {
+                    throw ModuleCompilationError.invalidValue(
+                        path: "\(volume): /media/\(index)/filename",
+                        expected: "a file no other media uses: \(earlier.volume) names it for \"\(earlier.id)\""
+                    )
+                }
+                // A new file, beside every earlier volume's. Found by Codex.
+                if idByFile[file] == nil, let clash = paths.insert(filename) {
+                    throw ModuleCompilationError.invalidValue(path: "\(volume): /media/\(index)/filename", expected: "a file beside the series' others: \(clash)")
+                }
+                entryByID[Array(id.utf8)] = (written, volume)
+                idByFile[file] = (id, volume)
+            }
+        }
+    }
+
     private func writeVolume(
-        _ volume: Volume, in db: Database, warnings: inout [ModuleValidationIssue]
+        _ volume: Volume, in db: Database, media: inout SeriesMedia, warnings: inout [ModuleValidationIssue]
     ) throws -> Int {
         let url = volume.url
         try Self.requireInside(url, volume.folder)
@@ -577,6 +619,7 @@ extension LampModuleCompiler {
         // says where a verse lacks its `sv`. Found by Codex.
         do {
             try builder.append(chapters: try JSONSupport.requiredArray(root["chapters"], path: "/chapters"))
+            builder.append(frontMatter: root["frontMatter"], media: root["media"])
         } catch ModuleCompilationError.missingValue(let path) {
             throw ModuleCompilationError.missingValue(path: "\(url.lastPathComponent): \(path)")
         } catch ModuleCompilationError.invalidValue(let path, let expected) {
@@ -587,6 +630,11 @@ extension LampModuleCompiler {
                 path: "\(url.lastPathComponent): \(refused.path)", expected: refused.message
             )
         }
+        // Named by its path in the series' folder: found at any depth, two
+        // volumes may both be `volume.json`. Found by Codex.
+        let folderPath = volume.folder.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        try media.add(builder.media, from: filePath.hasPrefix(folderPath + "/") ? String(filePath.dropFirst(folderPath.count + 1)) : url.lastPathComponent)
         for row in builder.units {
             try CommentaryUnitTable.insert(row, moduleID: nil, book: bookNumber, in: db)
         }

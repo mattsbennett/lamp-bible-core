@@ -642,11 +642,32 @@ and a search for a chart's words finds it in both modules.
       paragraphs of one printed note, and a passage link opens the lowest
       `order_index`, where that note begins.
    7. **Front matter and media, planned as rows**, in memory: `section_id`
-      unique within its book; media read whole, its filename a safe relative
-      path with no scheme (`safeRelativeMediaPath` keeps `https:/host/…`);
+      unique within its book; media read whole, its filename one plain
+      name — ASCII letters, digits, `.`, `_` and `-`, not starting with `.`,
+      255 bytes at most, in no folder — and its id the same, after review
+      rounds each found one more name a looser rule let through
+      (`safeRelativeMediaPath` keeps `https:/host/…`; a `/` before a
+      combining mark; `PATH_MAX`; a file where another's folder is; one
+      folder spelled two ways; `é` and `e\u{301}` one id to a reader); the
+      study Bible's 314 names, bare and the longest 61 bytes, keep to it;
       a series refusing one id or filename given two ways. A front-matter
       section has no notes column, so a citation in its blocks is refused
-      (Rule A).
+      (Rule A). A 2.3 volume's front matter is its `sections` alone: the
+      2.2 fields (a preface, introduction, bibliography, content entries)
+      are refused, not kept in `front_matter_json`, after four review
+      rounds each found one more way they could hide the rest, cite a note
+      nothing defines, or name a picture nothing draws; the study Bible
+      gives none. A picture or sound over no words is warned of with the
+      dead links — not so: a media annotation at a point is the schema's
+      inline form, drawn by its id, and the warning called a working
+      picture dead (found by Codex). Recorded edge: an older phone's copy
+      of a blocks body drops a point media annotation, as it drops any span
+      over no words; the blocks keep it for the newer reader. Recorded edges
+      (review round 22): with a book number no reader can use, or no
+      `meta.type`, an inspection tells some faults of the notes, front
+      matter or media only once the first is fixed — rare, and each is told
+      in turn; and a block's media are read from blocks decoded a second
+      time, twice the decoding for no change in how it grows.
    8. **Store a commentary's blocks, media and front matter** — the
       cross-repo landing, 2.3 still refused: `media_json`, `blocks_json`,
       `declared_id`, `commentary_front_matter` and its FTS, in volume and

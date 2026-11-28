@@ -235,13 +235,23 @@ public struct ModuleJSONInspector: Sendable {
     /// unit no way the compiler does not. A volume of an earlier version is
     /// built as it always was, and finds nothing new.
     private func validateRichCommentary(root: [String: Any], issues: inout [ModuleValidationIssue]) {
-        guard object(root["meta"]).flatMap({ string($0["schemaVersion"]) }) == "2.3",
-              let chapters = array(root["chapters"]),
-              let bookNumber = JSONSupport.integer(root["bookNumber"])
-        else { return }
+        // Read without its chapters too, where they are no list: its front
+        // matter and media are apart from them. Found by Codex.
+        // And without a book number it can use, whose fault is told where
+        // the volume's fields are. Found by Codex.
+        guard object(root["meta"]).flatMap({ string($0["schemaVersion"]) }) == "2.3" else { return }
+        // A whole book number, 1 to 66, told once, and only such a number
+        // used: `43.5` was read as 43, and 67.5 told twice. Found by Codex.
+        let given = JSONSupport.integer(root["bookNumber"])
+        let whole = LampCommentaryBlocks.wholeNumber(root["bookNumber"])
+        let bookNumber = whole.flatMap { (1...66).contains($0) ? $0 : nil }
+        if given != nil, bookNumber == nil {
+            issues.append(.init(severity: .error, path: "/bookNumber", message: "A 2.3 volume's book is a whole number, 1 to 66."))
+        }
+        let chapters = bookNumber == nil ? nil : array(root["chapters"])
         var builder = CommentaryUnitBuilder(
             moduleID: "inspect",
-            bookNumber: bookNumber,
+            bookNumber: bookNumber ?? 0,
             footnotes: array(root["footnotes"]) ?? [],
             sourceOrdered: object(root["extraction"])?["sourceTracked"] as? Bool == true,
             rich: true
@@ -252,7 +262,7 @@ public struct ModuleJSONInspector: Sendable {
             issues.append(.init(severity: .error, path: "/footnotes", message: "Expected a list of notes."))
         }
         do {
-            try builder.append(chapters: chapters)
+            if let chapters { try builder.append(chapters: chapters) }
         } catch ModuleCompilationError.missingValue(let path) {
             issues.append(.init(severity: .error, path: path, message: "Expected a value here."))
         } catch ModuleCompilationError.invalidValue(let path, let expected) {
@@ -260,6 +270,9 @@ public struct ModuleJSONInspector: Sendable {
         } catch {
             issues.append(.init(severity: .error, path: "/chapters", message: "The volume's units cannot be built."))
         }
+        // Read whether or not the units could be: their faults and these are
+        // apart, and told in one inspection. Found by Codex.
+        builder.append(frontMatter: root["frontMatter"], media: root["media"])
         issues += builder.issues
     }
 
@@ -325,6 +338,10 @@ public struct ModuleJSONInspector: Sendable {
                         || !covers(annotation) || (passage && first != nil && deadPassage)
                 }
                 if passage { return !covers(annotation) || deadPassage }
+                // A media annotation is none of these: placed at a point, as
+                // the schema's inline form is, it is drawn by its id. Warned
+                // of as over no words, a working picture was called dead.
+                // Found by Codex.
                 return annotation.type == "link"
                     && (!covers(annotation) || annotation.data?.url.flatMap(URL.init(string:)).flatMap(\.scheme) == nil)
             }.count

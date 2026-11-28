@@ -87,8 +87,11 @@ enum LampCommentaryBlocks {
     /// block no reader draws them on, or an id another block of the volume
     /// holds. Links that open nothing and tables laid out short are
     /// warnings, by the rules a book's are judged by, in a commentary.
+    /// `olderReaders`: whether an older reader reads the blocks' copy, as a
+    /// unit's; front matter's blocks are read by the newer reader alone, so
+    /// are not held to the older one's rule (B1). Found by Codex.
     static func body(
-        _ value: Any, path: String, blockIDs: inout Set<String>, issues: inout [ModuleValidationIssue]
+        _ value: Any, path: String, blockIDs: inout Set<String>, issues: inout [ModuleValidationIssue], olderReaders: Bool = true
     ) -> Body? {
         guard let rawBlocks = value as? [Any] else {
             issues.append(.init(severity: .error, path: path, message: "Expected an array of blocks."))
@@ -146,7 +149,7 @@ enum LampCommentaryBlocks {
             // to (Rule B1), as written, before the projection clips it: a
             // note span or marker outside its text was dropped there, unseen,
             // where in plain text it is refused. Found by Codex.
-            for line in LampBookDrawnText.lines(of: block, figures: .asParts) {
+            for line in LampBookDrawnText.lines(of: block, figures: .asParts) where olderReaders {
                 for field in line {
                     guard let encoded = try? JSONEncoder().encode(field.text),
                           let written = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any]
@@ -169,7 +172,10 @@ enum LampCommentaryBlocks {
         let projection = LampBookDrawnText.projection(of: blocks, figures: .asParts, keeping: keptByOlderReaders)
         return Body(
             blocksJSON: blocksJSON,
-            legacy: olderReadersCopy(of: projection),
+            // None for blocks no older reader reads: built, the copy split
+            // every span at every page it crossed, for nothing. Found by
+            // Codex.
+            legacy: olderReaders ? olderReadersCopy(of: projection) : [:],
             searchText: projection.text.replacingOccurrences(of: "\0", with: " ")
         )
     }
@@ -358,7 +364,9 @@ enum LampCommentaryBlocks {
                     message: "An annotation's offset is past any text's length (\(Int32.max)); an older reader cannot move it."
                 ))
             }
-            let tapping: Set<String> = ["footnote", "scripture", "crossref", "strongs", "lexicon-ref", "greek", "hebrew"]
+            // A picture or sound too: given a field the phone does not read, as
+            // a caption that is a number, it showed nothing. Found by Codex.
+            let tapping: Set<String> = ["footnote", "scripture", "crossref", "strongs", "lexicon-ref", "greek", "hebrew", "media"]
             if let type = annotation["type"] as? String, tapping.contains(type), type != "footnote", !phoneReads(annotation) {
                 issues.append(.init(
                     severity: .error, path: path,
