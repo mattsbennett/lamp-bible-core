@@ -57,6 +57,14 @@ Codex's later reviews, none at P1, left these, each rare:
   that skill, under any reader-chat choice the skill already has.
 - **The test for updating each writing on its own** does not separate the
   old loop from the new one; the code reads plainly, and the case is narrow.
+- **A library on a volume that limits names in bytes**, such as ext4 over
+  NFS, can take a reference name that fits APFS's 255 UTF-16 units but not
+  its own bytes. SKILL.md is then written before the reference fails.
+  Lamp's library lives on APFS.
+- **A writings folder that is a link, or can't be listed,** gives the save
+  no writings to update and no warning. **One writing that vanishes while it
+  is listed** costs the rest their update. The next preparation of each
+  writing copies the skill either way.
 
 ## Rejected
 
