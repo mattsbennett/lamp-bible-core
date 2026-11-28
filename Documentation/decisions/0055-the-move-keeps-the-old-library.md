@@ -76,3 +76,13 @@ refused the same way: a copy cut short by an earlier attempt, and, on a
 server that answers 428 to any conditional write, a path where nothing is
 yet. Either way the Move would have replaced the only good copy. Since that
 round the Move reads back what is there and fails closed.
+
+The fifth round found no P0 to P2. Its two P3s:
+- **A retry can't get past a different file at the kept path.** It meets
+  the same refusal every time, so the error now names the path, to be moved
+  aside.
+- **The Move's follow-up pass can replace the error.** The follow-up runs
+  only when an offload is waiting, and it replaces the backup error with the
+  older-layout message. A waiting offload before a library has moved is rare,
+  because offloads run only on moved libraries. The follow-up rule went round
+  two review rounds already (`decisions/0024`), so this one is left.
