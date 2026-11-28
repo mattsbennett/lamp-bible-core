@@ -81,7 +81,11 @@ the writing counts only for a `skills` folder in it.
   provider, before this check, as it always has been, through the library's
   own folders; no agent may relink those unasked, being outside every
   writing. Codex raised preparation through a relinked parent as a P1 against
-  this check; it is not this check's, and was not changed here.
+  this check; it is not this check's, and was not changed here. So too a
+  writing's own `.lamp` folder, where every chat's queue and transcript have
+  always been written: one linked out of the library would lead those writes
+  with it, for every provider, and no agent may make that link unasked in a
+  folder Lamp guards (0038).
   A write of Lamp's file that fails is told to a phone as
   `writing-settings` too, its words naming the writing on the Mac.
 - Only OpenCode's own file is written before the check, so another

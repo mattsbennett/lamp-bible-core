@@ -35,7 +35,8 @@ record for that phone, once per wait, and takes it away once nothing waits.
   Deny-only included. Saved only if that wait, and not a later one, still
   lasts, and the device may still be told, when its turn comes in the line
   every push is written in.
-  Deleted when nothing waits, or the turn ends; a delivered alert can't be
+  Deleted when nothing waits, or the turn ends, unless another turn of the
+  phone's in the same chat still waits under the same name; a delivered alert can't be
   recalled, and the phone removes it when it next sees the chat.
 - **On the Mac,** a turn started there whose pane isn't watched as the wait
   begins posts a notification under the same setting, in the chat's place, so

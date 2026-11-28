@@ -34,7 +34,8 @@ whoever started the turn, the phone included.
 - **Not for Claude.** A `Bash(…)` rule can't bind a folder, and matching the
   hook's input here would be that second matcher. Claude keeps Always Allow.
 - **The chat ends** at a new conversation (New Chat, or one arriving from
-  another Mac), and at a quit: grants are held in memory by provider,
+  another Mac; its grants go at once, so the old conversation coming back
+  later through sync brings none back), and at a quit: grants are held in memory by provider,
   workspace and conversation, and written nowhere. Stop, a turn's end or a
   closed pane don't end it. They can be seen and removed from the chat's
   header.

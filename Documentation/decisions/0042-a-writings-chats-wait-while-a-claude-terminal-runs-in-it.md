@@ -44,7 +44,8 @@ starts a turn: no pane on the Mac, and no paired device.
 - **On the Mac,** over the composer of every chat on the writing: "Claude is
   running in this writing's Terminal. Chats here wait until that session
   ends.", with End Terminal Session and Show Terminal. Typing goes on; Send
-  doesn't. Ending asks the Claude Terminal's process to stop (another
+  doesn't. Ending asks the Claude Terminal's process to stop, killing it only
+  as the same process, known by its start time, (another
   provider's Terminal in the writing is left) and kills it if it is still the
   same process three seconds on; its exit collects its last turns as any exit
   does, and a shell that ignored the request isn't given Claude's command.
