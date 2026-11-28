@@ -46,7 +46,9 @@ starts a turn: no pane on the Mac, and no paired device.
   doesn't. Ending asks the Claude Terminal's process to stop (another
   provider's Terminal in the writing is left) and kills it if it is still the
   same process three seconds on; its exit collects its last turns as any exit
-  does, and a shell that ignored the request isn't given Claude's command. **Ending sends nothing:** the Terminal's last turns come into the chat
+  does, and a shell that ignored the request isn't given Claude's command.
+  An exit End caused is never taken for a resume that failed, which would
+  start the Terminal again in its place. **Ending sends nothing:** the Terminal's last turns come into the chat
   first, for the person to read before their message goes on top, and a
   queued message goes with their next Send: every chat's waiting messages in
   the writing are held from the hand-over, a chat not yet loaded as it loads.

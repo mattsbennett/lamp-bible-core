@@ -92,6 +92,9 @@ later one.
   every writing, so a click would hide a Terminal being watched in another
   window (Codex, P2).
 - Taking a wait's notice back removes one not yet shown too.
+- **Left, an edge case:** with one writing open in several windows, a click
+  shows the assistant in each that has it closed, not only the window
+  brought forward. Raised by Codex as a P3.
 - On the Mac, a wait's notice has a name of its own, so taking it back leaves
   an end's notice alone; and a click on either shows the writing's
   assistant, in a window already open too.

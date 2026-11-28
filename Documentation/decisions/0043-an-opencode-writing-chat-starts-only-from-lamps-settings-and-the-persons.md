@@ -104,6 +104,10 @@ the writing counts only for a `skills` folder in it.
   checked again as it goes, so it runs only if nothing is in the way by then,
   and it is the person's own message. Raised by Codex as a P2 for 0042 and
   again here.
+- **Left, an edge case:** a first message refused before the chat has a
+  conversation waits with none, and if another Mac's conversation for the
+  writing syncs in before Send Them, it goes into that one. Rare, and it is
+  the person's message in the same writing's chat. Raised by Codex as a P2.
 - Reader chats aren't checked: each has a workspace of its own.
 - Still to try by hand: a real OpenCode turn and a Terminal session in a
   scratch writing leave nothing the next check refuses.
