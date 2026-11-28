@@ -90,6 +90,11 @@ the writing counts only for a `skills` folder in it.
   agent in another writing could change them after the check. No agent may
   write there unasked (Codex's sandbox is its own writing; Claude and
   Antigravity ask for anything outside it). Raised by Codex as a P2.
+- **Left, an edge case:** a refused message's hold is in memory, as 0042's
+  is; quit and reopened, it goes as the chat loads, without a new Send. It is
+  checked again as it goes, so it runs only if nothing is in the way by then,
+  and it is the person's own message. Raised by Codex as a P2 for 0042 and
+  again here.
 - Reader chats aren't checked: each has a workspace of its own.
 - Still to try by hand: a real OpenCode turn and a Terminal session in a
   scratch writing leave nothing the next check refuses.
