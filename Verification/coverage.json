@@ -1108,7 +1108,7 @@
       "boundary": "Modules removed on this Mac, written down as they go, for the engine's `Gathered.deletedLocally`. A module leaves no other trace, so without it a removed module is a member nobody holds and is fetched back. What a local deletion becomes, a tombstone and a reap, is the plan's."
     },
     "../lamp-bible-macos/Sources/LampBibleMacSupport/LampSyncSavedAt.swift": {
-      "boundary": "When the Mac last saved each collection it publishes, read from its library, for the engine's `Gathered.savedAt`. The decision it feeds, a file saved after its deletion survives, is the plan's (`filePlanAction`).",
+      "boundary": "When the Mac last saved each collection it publishes, read from its library, for the engine's `Gathered.savedAt`. The decision it feeds, a file saved after its deletion survives, is the plan's (`filePlanAction`). A file of one of the reader's skills has a save time only when its bytes differ from what the Mac last agreed with the server on, and then now, raised past its deletion (`WorkspaceSkillStore.skillFileSavedAt`): never its modification time, which a download sets.",
       "rules": [
         "anUnreportedSaveLosesToADeletion"
       ]

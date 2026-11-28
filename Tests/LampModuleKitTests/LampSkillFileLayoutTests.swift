@@ -48,5 +48,9 @@ struct LampSkillFileLayoutTests {
         ))
         #expect(marked.name == "word-study")
         #expect(LampWritingWorkspaceLayout.skillFile(ofPath: "Workspaces/Skills/word-study/a\\b.md") == nil)
+        #expect(LampWritingWorkspaceLayout.skillFile(ofPath: "Workspaces/Skills/word-study/a\\\u{0301}b.md") == nil)
+        #expect(throws: (any Error).self) {
+            try LampWritingWorkspaceLayout.skillPath(name: "word-study/references", relativePath: "a.md")
+        }
     }
 }

@@ -167,7 +167,7 @@ public enum LampWritingWorkspaceLayout {
         let rest = Array(components[(skills.count + 1)...])
         guard isSkillName(name), !rest.isEmpty,
               !rest.contains(where: {
-                  $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("\u{0}") || $0.contains("\\")
+                  $0.isEmpty || $0 == "." || $0 == ".." || $0.unicodeScalars.contains { $0 == "\u{0}" || $0 == "\\" }
               })
         else { return nil }
         return (name, rest.joined(separator: "/").precomposedStringWithCanonicalMapping)
@@ -176,7 +176,9 @@ public enum LampWritingWorkspaceLayout {
     /// The published path of one file of one of the reader's own skills.
     public static func skillPath(name: String, relativePath: String) throws -> String {
         let path = [skillsDirectory, name, relativePath].joined(separator: "/")
-        guard skillFile(ofPath: path) != nil else {
+        // The name on its own first: `word-study/references` joined would
+        // read as a file of `word-study`, another skill than the one named.
+        guard isSkillName(name), skillFile(ofPath: path)?.name == name else {
             throw LampSyncFolderLayout.PathError.unsafe(relativePath)
         }
         return path

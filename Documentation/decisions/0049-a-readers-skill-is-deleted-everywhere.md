@@ -42,8 +42,9 @@ So a skill deleted on one Mac came back from the server on the next pass.
   documents (`documentDeletionKeeps`):
   - a file edited here since it was last agreed with the server is kept, as
     checked against the live file on the owner;
-  - each file reports when it was saved here, so a later save outlives the
-    tombstone;
+  - a file changed here since it was last agreed is saved "now" for the plan,
+    raised past the deletion, so an edit the removal never saw outlives it
+    whatever the clocks say; the agreed copy has no save time and goes;
   - a queued removal is forgotten once a file is held there again, so a
     skill removed and made again under its name before the next pass is the
     new skill.
@@ -68,7 +69,24 @@ So a skill deleted on one Mac came back from the server on the next pass.
 - A skill file whose name sync cannot publish, with a backslash in it, is
   not queued, and does not stop the skill being removed here.
 
+- **A published write loses to a later removal; an unsent one does not.**
+  If another Mac uploaded an edit and this one then removes the skill
+  without having seen it, the skill goes on both. That is the rule for every
+  deletable kind (`filePlanAction`), and the Remove dialog says "on all your
+  Macs".
+
 ## Rejected
+
+- **A file's modification time as its save time.** Tried first. A download
+  dates a file when it arrives, so a Mac that had only fetched the old copy
+  outranked a removal made before the fetch, and published the removed
+  skill again. Codex's second review of step 5 found it.
+- **A record of when the editor saved each file.** It misses every edit made
+  outside Lamp's editor, in the Finder or another editor, and adds state to
+  keep out of the export.
+- **Keeping an edited file as a renamed copy, as documents are.** A skill
+  file's name is load-bearing: a renamed SKILL.md stops the folder being a
+  skill. The edit is kept in place and goes back up on the next pass.
 
 - **Deleting the folder and letting absence speak.** That is the inference
   0018 removed for sources: an agent tidying a folder, or a Finder slip,
