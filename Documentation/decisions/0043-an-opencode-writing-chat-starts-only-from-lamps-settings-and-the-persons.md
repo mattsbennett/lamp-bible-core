@@ -73,6 +73,10 @@ the writing counts only for a `skills` folder in it.
 - A refused message waits on the chat, held, with Send Them, rather than in a
   pane's field that may have gone; refused by the send itself (a check gone
   stale) too. No turn's end lets that hold go: only the person's Send.
+- Nothing is written into a writing that resolves outside the library: that
+  is looked at first, since a linked parent would lead the write elsewhere.
+  A write of Lamp's file that fails is told to a phone as
+  `writing-settings` too, its words naming the writing on the Mac.
 - Only OpenCode's own file is written before the check, so another
   provider's file Lamp can't write doesn't stop an OpenCode turn.
 

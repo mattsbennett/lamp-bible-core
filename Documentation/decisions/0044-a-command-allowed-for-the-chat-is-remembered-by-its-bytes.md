@@ -54,7 +54,7 @@ whoever started the turn, the phone included.
   again the moment it reads it finds it, and taken back if the write fails;
   and looked at again as an unasked answer is written, under the writer's
   lock, so a grant removed meanwhile puts the request on the card. The list shows each command and
-  folder whole.
+  folder whole, and scrolls, so every Remove stays reachable.
 - A conversation saved before conversations had ids is given one for its
   grants alone, in memory, a new chat another.
 - The answer sent is the provider's once-only one: Codex's `accept`,

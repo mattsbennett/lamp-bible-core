@@ -80,6 +80,10 @@ later one.
   ran shows its card only once the pane is moved back to it. Raised by Codex
   as a P2; rare, and choosing for the person on a click would change the
   writing's provider.
+- **Left, an edge case:** the list of deletes to retry isn't kept per iCloud
+  account; one left pending when the Mac changes account is tried in the new
+  account, found gone there, and dropped, leaving the record in the old one
+  until its daily sweep. Raised by Codex as a P3.
 - A wait in a chat its pane keeps drawn behind the Terminal is told as
   unwatched: the card can't be seen there.
 - A click on a wait's notice opens the writing's pane on Chat (the pane's
