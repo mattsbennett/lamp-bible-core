@@ -61,6 +61,9 @@ Codex's later reviews, none at P1, left these, each rare:
   NFS, can take a reference name that fits APFS's 255 UTF-16 units but not
   its own bytes. SKILL.md is then written before the reference fails.
   Lamp's library lives on APFS.
+- **A skill folder Lamp can't write to**, whose `references` folder it can,
+  refuses a save of two or more references. The volume is asked about their
+  names in a scratch folder inside the skill.
 - **A writings folder that is a link, or can't be listed,** gives the save
   no writings to update and no warning. **One writing that vanishes while it
   is listed** costs the rest their update. The next preparation of each
