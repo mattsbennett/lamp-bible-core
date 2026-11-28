@@ -26,6 +26,28 @@ edited in a 650 × 480 sheet holding only SKILL.md.
   and Remove sit beneath it.
 - **No file tree in a writing's workspace.**
 
+## Consequences
+
+Codex's last review, which found nothing at P1, left these, each rare:
+
+- **Checks and writes are separate calls to the files' owner.** A sync
+  landing between the window's check that SKILL.md is unchanged and its
+  write can be written over. A reference a sync adds at a path the window
+  is about to create is refused only after SKILL.md is written. The post-save
+  read can take up a synced copy the window never showed.
+- **A save whose catalog write succeeded but whose update of the writings
+  failed** is reported as failed. A retry of a new reference is then
+  refused as already on disk; reopening the window shows it saved.
+- **A skill over 64 references**, from an older import or additions synced
+  together, can't be saved in the window until some are removed, since the
+  limit is checked against the whole skill.
+- **Making a skill under a removed one's name** takes in its leftover files,
+  and an undecodable SKILL.md left there is written over.
+- **A reader-chat opt-in made on one Mac while another removed the skill**
+  can come back with the settings, and a skill made later under that name
+  is then in reader chats. Removing a skill writes the list only when the
+  skill was in it, so an unrelated choice is never published over.
+
 ## Rejected
 
 - **Skills as writings.** A skill has no category, review marks, deck or
