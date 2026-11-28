@@ -2,7 +2,8 @@
 
 Status: Accepted, 2026-11-28. Mac `LibrarySyncController.keepOldLibrary`,
 held by `movingKeepsTheOldLibraryBesideTheBundle`,
-`aMoveStopsIfTheOldLibraryCannotBeKept` and `aMoveRunAgainKeepsOneCopy`.
+`aMoveStopsIfTheOldLibraryCannotBeKept`, `aMoveRunAgainKeepsOneCopy` and
+`aMoveStopsIfWhatIsKeptIsNotTheArchive`.
 Recommended by Fable at the owner's request.
 
 ## Context
@@ -31,9 +32,12 @@ The owner's library had already moved.
 - **Keep the archive.** On WebDAV, before the migration, the Move writes the
   archive's bytes to `lamp-bible-before-move-<digest>.lampsync` at the root.
   - Nothing a pass lists looks there.
-  - The write is conditioned on the path being absent, so a refusal means the
-    archive is already kept, and a Move run again keeps one copy.
-  - Any other failure stops the Move before anything is replaced.
+  - The write is conditioned on the path being absent, so a Move run again
+    keeps one copy.
+  - A refusal is not taken as proof the archive is kept. What is at the path
+    is read back, and the Move goes on only if it holds the archive's exact
+    bytes.
+  - Any other result stops the Move before anything is replaced.
   - A folder's old tree stays where it is, as before.
 - **Say the truth.** The offer's text now reads: "The move publishes this
   Mac's library. The old library is kept on the server beside the new one,
@@ -63,3 +67,12 @@ someone recovers it by hand.
   renamed on 2026-11-16 (BSBs to BSB), so a legitimate Mac's names may no
   longer match an older archive's, and the check was dropped rather than
   refined.
+
+## Review
+
+Codex's fourth round found the first version taking any refusal of the
+kept write as proof the archive was already kept. Two other things are
+refused the same way: a copy cut short by an earlier attempt, and, on a
+server that answers 428 to any conditional write, a path where nothing is
+yet. Either way the Move would have replaced the only good copy. Since that
+round the Move reads back what is there and fails closed.
