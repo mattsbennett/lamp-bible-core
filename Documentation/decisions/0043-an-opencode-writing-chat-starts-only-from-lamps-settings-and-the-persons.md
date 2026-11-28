@@ -109,6 +109,13 @@ the writing counts only for a `skills` folder in it.
   conversation waits with none, and if another Mac's conversation for the
   writing syncs in before Send Them, it goes into that one. Rare, and it is
   the person's message in the same writing's chat. Raised by Codex as a P2.
+- **Left, edge cases** (Codex, P2, the last round): a refused message the
+  queue couldn't save, whose pane closed and was made again while the check
+  ran, is held on the chat after the new pane looked, and so isn't handed
+  back to it (three things at once; the words are lost only then). A
+  phone's start of an OpenCode chat it isn't following, beside a Codex or
+  OpenCode Terminal, writes Lamp's own provider files and the phone's choices
+  before it is refused (files Lamp owns and writes again anyway).
 - Reader chats aren't checked: each has a workspace of its own.
 - Still to try by hand: a real OpenCode turn and a Terminal session in a
   scratch writing leave nothing the next check refuses.

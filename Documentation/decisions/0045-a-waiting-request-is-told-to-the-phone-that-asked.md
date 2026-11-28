@@ -94,6 +94,11 @@ later one.
   out: it is one for every writing, so a click hid a Terminal being watched
   in another window (Codex, P2).
 - Taking a wait's notice back removes one not yet shown too.
+- **Left, an edge case:** two of the phone's turns waiting at once in one
+  writing (the Mac's provider changed mid-wait, and the phone asked again)
+  share one record, which the later saves over; if the later ends first, the
+  record stays for the earlier, naming the later's provider until it ends.
+  Raised by Codex as a P2 in the last round.
 - **Left, an edge case:** the host tells a wait from the chat's list of
   requests waiting, which the card's own answer shortens a moment before the
   run's next list arrives; a second request asked just as the first is
