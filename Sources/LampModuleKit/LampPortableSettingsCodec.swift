@@ -39,6 +39,9 @@ public enum LampPortableSettingsCodec {
         "agent.skills.off.build-lamp-deck",
         "agent.skills.off.original-languages", "agent.skills.readerOff.original-languages",
         "agent.skills.off.sola-scriptura", "agent.skills.readerOff.sola-scriptura",
+        // The reader's own skills a reader chat is given, as a sorted list of
+        // names; absent meaning none.
+        "agent.skills.readerNames",
     ]
 
     public static func encode(from defaults: UserDefaults) throws -> Data {
