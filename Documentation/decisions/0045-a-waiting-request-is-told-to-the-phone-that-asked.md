@@ -48,9 +48,10 @@ opens the chat; no Allow or Deny on the alert. The phone takes a delivered
 alert away only once it finds the record gone (asked of CloudKit when the
 Mac says nothing waits, and when Lamp comes to the front), so **the Mac's
 delete is part of the contract**: never a record left for a wait that ended.
-Two can linger until the Mac's next launch sweeps records a day old: a
-delete that failed (offline, signed out; logged, not retried), and one
-queued as Lamp quit.
+A delete that fails (offline, signed out) or is cut short by a quit is kept
+on a list across launches and tried again with every push and as remote
+chats start; one already gone counts as done. Telling a wait again takes its
+name off that list first, so an older delete can't take the new record.
 
 ## What follows
 
@@ -68,9 +69,9 @@ queued as Lamp quit.
   handed the alert, as with a turn's end: a subscription's predicate chooses
   records, not devices. What it shows is the chat's title and the
   provider's name.
-- **Left, an edge case:** a click on a wait's notice shows the writing's
-  assistant in whichever mode it was left in; left in Terminal mode, the
-  person switches to Chat to see the card. Raised by Codex as a P3.
+- A click on a wait's notice opens the writing's pane on Chat, where the
+  card is, though a Terminal was showing; taking it back removes one not yet
+  shown too.
 - On the Mac, a wait's notice has a name of its own, so taking it back leaves
   an end's notice alone; and a click on either shows the writing's
   assistant, in a window already open too.

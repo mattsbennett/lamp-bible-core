@@ -51,7 +51,10 @@ whoever started the turn, the phone included.
   shows the command exactly as remembered where that isn't what it shows
   above (Codex's shell wrapper).
 - **Kept as the answer is written,** before the bytes go, so a provider asking
-  again the moment it reads it finds it, and taken back if the write fails.
+  again the moment it reads it finds it, and taken back if the write fails;
+  and looked at again as an unasked answer is written, so a grant removed
+  meanwhile puts the request on the card. The list shows each command and
+  folder whole.
 - A conversation saved before conversations had ids is given one for its
   grants alone, in memory, a new chat another.
 - The answer sent is the provider's once-only one: Codex's `accept`,
