@@ -33,6 +33,12 @@ public enum LampPortableSettingsCodec {
         "books.fontSize", "books.lineSpacing", "books.typeface",
         LampPreferenceDefaults.aiFeaturesKey,
         LampPreferenceDefaults.writingReviewMarksKey,
+        // The Mac's Settings for Lamp's own skills, one boolean each, absent
+        // meaning on. Named by the Mac's `LampSkillChoices.keys`, which a Mac
+        // test holds to this list.
+        "agent.skills.off.build-lamp-deck",
+        "agent.skills.off.original-languages", "agent.skills.readerOff.original-languages",
+        "agent.skills.off.sola-scriptura", "agent.skills.readerOff.sola-scriptura",
     ]
 
     public static func encode(from defaults: UserDefaults) throws -> Data {
