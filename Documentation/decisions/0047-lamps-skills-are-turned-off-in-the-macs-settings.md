@@ -49,6 +49,14 @@ skills a surface is given; this is where the choice it reads is kept.
   phone neither sees nor needs these keys. Its turns run on the Mac.
 - A choice made while a turn runs reaches that turn's folder at once. The
   provider has already read its instructions.
+- **A Mac on an older build can let a stale choice win, during the
+  upgrade.** When it saves any setting it republishes the Mac settings
+  without these keys. An updated Mac that had not yet taken the latest
+  choice can then publish its own older one. Every key added to
+  `syncedKeys` has had this window, the AI switch and review marks among
+  them, and it closes once every Mac is updated. Codex's closing review
+  raised it, at P2. A representation older Macs preserve would mean moving
+  these settings out of `macSettings`, which was rejected above.
 
 ## Rejected
 
