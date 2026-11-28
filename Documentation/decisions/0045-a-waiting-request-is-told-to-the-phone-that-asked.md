@@ -50,8 +50,12 @@ Mac says nothing waits, and when Lamp comes to the front), so **the Mac's
 delete is part of the contract**: never a record left for a wait that ended.
 A delete that fails (offline, signed out) or is cut short by a quit is kept
 on a list across launches and tried again with every push and as remote
-chats start; one already gone counts as done. Telling a wait again takes its
-name off that list first, so an older delete can't take the new record.
+chats start; one already gone counts as done. A wait is put on that list before
+it is saved, so one saved just before a crash is deleted on the next launch;
+the retries leave alone a wait still lasting in this launch, so an older
+delete can't take a new record of the same name. Each wait's `turnID` is
+fresh, which the phone also uses to clear an answered wait's alert behind a
+later one.
 
 ## What follows
 
