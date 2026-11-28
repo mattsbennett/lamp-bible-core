@@ -71,12 +71,21 @@ folder or link there can't be vouched for and stops the turn.
 - What is left writing while a turn runs is OpenCode's own agent, whose own
   settings it can change anyway, and sync bringing a change from another
   Mac; the next OpenCode turn checks again.
-- The boundary 0038 drew for the Terminal holds here: the check doesn't
-  follow what an approved entry points at. A link is shown as a link, and a
-  setting naming a plugin folder or a file elsewhere is shown as that
-  setting; approving it approves what it points at, which can change
-  afterwards unasked. Codex's review raised it as a P1 (round 1); it is the
-  boundary the owner accepted for the Terminal, not a fault of this check.
+- **A link stops the turn** rather than being put to the person: it is
+  fingerprinted by where it points, what it leads to can change unasked, and
+  OpenCode rereads it at every request. Codex raised it as a P1 twice; the
+  first time it was answered as 0038's boundary, the second it was closed.
+- The boundary 0038 drew for the Terminal still holds for a setting naming a
+  plugin folder or a file elsewhere: it is shown as that setting, and
+  approving it approves what it names, which can change afterwards unasked.
+- **Left, an edge case:** the folders above the writing are shared by every
+  writing in the library, and the check binds only this writing's turns; an
+  agent in another writing could change them after the check. No agent may
+  write there unasked (Codex's sandbox is its own writing, Claude and
+  Antigravity ask for anything outside it), so it takes the person allowing
+  such an edit. Raised by Codex as a P2 and left so.
+- Only OpenCode's own file is written before the check, so another
+  provider's Lamp can't write doesn't stop an OpenCode turn.
 - OpenCode's own agent may write its settings; this guards against the other
   providers' agents and Lamp's sync, not against OpenCode.
 - Above the library is the person's own, and isn't looked at.

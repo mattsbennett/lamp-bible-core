@@ -52,6 +52,19 @@ opens the chat; no Allow or Deny on the alert.
   had the chat open while it ran is the next step, left out of the first cut.
 - Not proved off a device: a CloudKit alert on a locked phone is tried by
   hand, and a shipped phone's reading of the record is from its code.
+- **On phones shipped before this** (checked by the iOS session against
+  `aa4ac5f`): a tap on a wait whose push CloudKit sent without its fields
+  opens the app but not the chat, since that phone reads only `turn.` names;
+  and a wait shown with the app in front is noted as heard, which can let a
+  late end push for an earlier turn show twice. Both are gone in the phone's
+  next build; neither shows the wrong chat or hides an end.
+- **Every device on the iCloud account,** not only the phone named, can be
+  handed the alert, as with a turn's end: a subscription's predicate chooses
+  records, not devices. What it shows is the chat's title and the
+  provider's name.
+- On the Mac, a wait's notice has a name of its own, so taking it back leaves
+  an end's notice alone; and a click on either shows the writing's
+  assistant, in a window already open too.
 
 ## Rejected
 
