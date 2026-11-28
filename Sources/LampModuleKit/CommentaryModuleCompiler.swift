@@ -50,8 +50,8 @@ extension LampModuleCompiler {
                     INSERT INTO commentary_books (
                         id, module_id, book_number, series_full, series_abbrev,
                         title, description, author, editor, publisher, year,
-                        abbreviations_json, front_matter_json, indices_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        abbreviations_json, front_matter_json, indices_json, media_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     "\(moduleID):\(bookNumber)",
@@ -70,19 +70,25 @@ extension LampModuleCompiler {
                     JSONSupport.string(meta["publisher"]),
                     JSONSupport.integer(meta["year"]),
                     try JSONSupport.jsonString(root["abbreviations"]),
-                    try JSONSupport.jsonString(root["frontMatter"]),
+                    // A 2.3 volume's front matter is its sections' rows.
+                    builder.rich ? nil : try JSONSupport.jsonString(root["frontMatter"]),
                     try JSONSupport.jsonString(root["indices"]),
+                    try builder.mediaJSON(),
                 ]
             )
 
             for row in builder.units {
                 try CommentaryUnitTable.insert(row, moduleID: moduleID, book: bookNumber, in: db)
             }
+            for row in builder.frontMatterRows {
+                try CommentaryFrontMatterTable.insert(row, moduleID: moduleID, book: bookNumber, in: db)
+            }
             try db.execute(sql: "INSERT INTO commentary_units_fts(commentary_units_fts) VALUES('rebuild')")
+            try db.execute(sql: "INSERT INTO commentary_front_matter_fts(commentary_front_matter_fts) VALUES('rebuild')")
         }
 
         try optimize(queue)
-        return ["commentary_books": 1, "commentary_units": builder.units.count]
+        return ["commentary_books": 1, "commentary_units": builder.units.count, "commentary_front_matter": builder.frontMatterRows.count]
     }
 
     private func createCommentarySchema(in db: Database) throws {
@@ -101,7 +107,8 @@ extension LampModuleCompiler {
                 year INTEGER,
                 abbreviations_json TEXT,
                 front_matter_json TEXT,
-                indices_json TEXT
+                indices_json TEXT,
+                media_json TEXT
             )
             """)
         try db.execute(sql: "CREATE INDEX idx_comm_books_module ON commentary_books(module_id)")
@@ -118,6 +125,7 @@ extension LampModuleCompiler {
                 content='commentary_units', content_rowid='rowid'
             )
             """)
+        for sql in CommentaryFrontMatterTable.createSQL(withModule: true) { try db.execute(sql: sql) }
     }
 }
 
@@ -148,6 +156,10 @@ enum CommentaryUnitTable {
         ("search_text", "TEXT NOT NULL DEFAULT ''"),
         ("order_index", "INTEGER NOT NULL DEFAULT 0"),
         ("footnotes_text", "TEXT NOT NULL DEFAULT ''"),
+        // A 2.3 unit's blocks as written, and the id it declares; NULL in a
+        // 2.2 volume, and absent from one built before step 4.
+        ("blocks_json", "TEXT"),
+        ("declared_id", "TEXT"),
     ]
 
     /// The columns a file holds: a series file's lack only `module_id`.
@@ -171,6 +183,7 @@ enum CommentaryUnitTable {
             "introduction_json": row.introductionJSON, "translation_json": row.translationJSON,
             "commentary_json": row.commentaryJSON, "footnotes_json": row.footnotesJSON,
             "search_text": row.searchText, "order_index": row.orderIndex, "footnotes_text": row.footnotesText,
+            "blocks_json": row.blocksJSON, "declared_id": row.declaredID,
         ]
         // Every column given a value, or none is written: a column added
         // here without one is a failure, not a NULL.
@@ -182,6 +195,67 @@ enum CommentaryUnitTable {
         }
         try db.execute(
             sql: "INSERT INTO commentary_units (\(names.joined(separator: ", "))) VALUES (\(names.map { _ in "?" }.joined(separator: ", ")))",
+            arguments: StatementArguments(arguments)
+        )
+    }
+}
+
+/// A 2.3 volume's front-matter sections as both files hold them, as
+/// `CommentaryUnitTable` holds its units: a series file's lack only
+/// `module_id`, which the phone fills. Created in every commentary file,
+/// empty where a volume has none; a file built before step 4 has no table.
+enum CommentaryFrontMatterTable {
+    static let columns: [(name: String, declaration: String)] = [
+        ("id", "TEXT PRIMARY KEY"),
+        ("module_id", "TEXT NOT NULL"),
+        ("book_number", "INTEGER NOT NULL"),
+        ("section_id", "TEXT NOT NULL"),
+        ("parent_id", "TEXT"),
+        ("title", "TEXT NOT NULL"),
+        ("depth", "INTEGER NOT NULL"),
+        ("order_index", "INTEGER NOT NULL"),
+        ("blocks_json", "TEXT NOT NULL"),
+        ("search_text", "TEXT NOT NULL DEFAULT ''"),
+    ]
+
+    static func columns(withModule: Bool) -> [(name: String, declaration: String)] {
+        withModule ? columns : columns.filter { $0.name != "module_id" }
+    }
+
+    /// The table, its indexes and its search index.
+    static func createSQL(withModule: Bool) -> [String] {
+        [
+            "CREATE TABLE commentary_front_matter (\n"
+                + columns(withModule: withModule).map { "    \($0.name) \($0.declaration)" }.joined(separator: ",\n")
+                + "\n)",
+            withModule
+                ? "CREATE UNIQUE INDEX idx_comm_front_section ON commentary_front_matter(module_id, book_number, section_id)"
+                : "CREATE UNIQUE INDEX idx_comm_front_section ON commentary_front_matter(book_number, section_id)",
+            "CREATE INDEX idx_comm_front_parent ON commentary_front_matter(parent_id, order_index)",
+            """
+            CREATE VIRTUAL TABLE commentary_front_matter_fts USING fts5(
+                title, search_text,
+                content='commentary_front_matter', content_rowid='rowid'
+            )
+            """,
+        ]
+    }
+
+    static func insert(_ row: CommentaryFrontMatterRow, moduleID: String?, book: Int, in db: Database) throws {
+        let names = columns(withModule: moduleID != nil).map(\.name)
+        let values: [String: DatabaseValueConvertible?] = [
+            "id": row.id, "module_id": moduleID, "book_number": book, "section_id": row.sectionID,
+            "parent_id": row.parentID, "title": row.title, "depth": row.depth, "order_index": row.orderIndex,
+            "blocks_json": row.blocksJSON, "search_text": row.searchText,
+        ]
+        let arguments = try names.map { name -> DatabaseValueConvertible? in
+            guard let value = values[name] else {
+                throw ModuleCompilationError.invalidValue(path: "commentary_front_matter.\(name)", expected: "a value from the row")
+            }
+            return value
+        }
+        try db.execute(
+            sql: "INSERT INTO commentary_front_matter (\(names.joined(separator: ", "))) VALUES (\(names.map { _ in "?" }.joined(separator: ", ")))",
             arguments: StatementArguments(arguments)
         )
     }
@@ -245,6 +319,11 @@ struct LampMediaPaths {
 
 struct CommentaryUnitBuilder {
     let moduleID: String
+    /// The module a front-matter row's id names, where it is not
+    /// `moduleID`: a series names its units by each volume's
+    /// `seriesAbbrev`, as its Python writer did, and its front matter, which
+    /// is new, by the series it is in. Found by Codex.
+    var frontMatterOwner: String?
     let bookNumber: Int
     private(set) var units: [CommentaryUnitRow] = []
     private var introducedChapters: Set<Int> = []
@@ -624,6 +703,12 @@ struct CommentaryUnitBuilder {
         }
     }
 
+    /// A 2.3 volume's media as `commentary_books.media_json` holds it: each
+    /// entry as written, or NULL for a volume that names none.
+    func mediaJSON() throws -> String? {
+        media.isEmpty ? nil : try JSONSupport.jsonString(media)
+    }
+
     /// A 2.3 volume's front matter is its `sections`, rows a reader lists,
     /// searches and links to. The fields a 2.2 volume gives — a preface, an
     /// introduction, a bibliography, content entries — are refused, not
@@ -679,7 +764,9 @@ struct CommentaryUnitBuilder {
             }
             Self.collectMediaIDs(inBlocks: blocks, path: "\(sectionPath)/blocks", into: &namedMedia)
             let body = LampCommentaryBlocks.body(blocks, path: "\(sectionPath)/blocks", blockIDs: &blockIDs, issues: &issues, olderReaders: false)
-            let id = "\(moduleID):\(bookNumber):front:\(frontMatterRows.count)"
+            // Named by its section's id, unique in its book: a link and a
+            // search hit name it so.
+            let id = "\(frontMatterOwner ?? moduleID):\(bookNumber):front:\(sectionID)"
             frontMatterRows.append(CommentaryFrontMatterRow(
                 id: id,
                 sectionID: sectionID,

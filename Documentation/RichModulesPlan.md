@@ -671,7 +671,11 @@ and a search for a chart's words finds it in both modules.
    8. **Store a commentary's blocks, media and front matter** — the
       cross-repo landing, 2.3 still refused: `media_json`, `blocks_json`,
       `declared_id`, `commentary_front_matter` and its FTS, in volume and
-      series (the series' tables without `module_id`, as its others are).
+      series (the series' tables without `module_id`, as its others are). A
+      2.3 volume's `front_matter_json` is NULL, its front matter being its
+      sections' rows; a front-matter row's `id` is
+      `<module>:<book>:front:<section_id>`, as agreed with the phone. A 2.2
+      volume gains the columns as NULL and the table empty.
    9. **Hold a schema's `linkTarget` to the target's own rule**, by a
       matrix through a small draft-07 evaluator in the tests: the book
       schema admits `sv` 2000001, which `destination(in:)` refuses.

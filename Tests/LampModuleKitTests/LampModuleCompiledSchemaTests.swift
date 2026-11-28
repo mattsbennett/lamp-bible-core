@@ -150,6 +150,9 @@ struct LampModuleCompiledSchemaTests {
                 // Which columns a module holding only the required fields
                 // leaves empty. A client must allow NULL in exactly these.
                 let rows = try Row.fetchAll(db, sql: "SELECT * FROM \(shape.table)")
+                // A table an older module may lack may be empty in a minimal
+                // one: its rows are held by the rich commentary's own test.
+                if rows.isEmpty, shape.tableMayBeAbsent { continue }
                 guard !rows.isEmpty else {
                     Issue.record("\(kind.rawValue)/\(shape.table): the fixture wrote no rows, so NULLs cannot be read")
                     continue
@@ -186,6 +189,69 @@ struct LampModuleCompiledSchemaTests {
                 )
             }
         }
+    }
+}
+
+extension LampModuleCompiledSchemaTests {
+    /// A 2.3 volume fills what a 2.2 one leaves empty: a unit's blocks and
+    /// declared id, the volume's media, its front-matter rows. Compiled by
+    /// the commentary compiler itself, since a 2.3 volume is not yet one the
+    /// module compiler takes. The columns are the declared ones, and those
+    /// left NULL are declared so.
+    @Test func aRichCommentaryFillsTheDeclaredShape() throws {
+        let volume = #"""
+        {"meta": {"schemaVersion": "2.3", "id": "R", "type": "commentary", "seriesAbbrev": "R", "seriesFull": "Rich", "title": "Rich"},
+         "book": "John", "bookNumber": 43,
+         "media": [{"id": "m1", "type": "image", "filename": "one.png", "mimeType": "image/png"}],
+         "frontMatter": {"sections": [{"id": "intro", "title": "Introduction", "blocks": [{"type": "image", "mediaId": "m1"}],
+                                       "sections": [{"id": "date", "title": "Date", "blocks": [{"type": "paragraph", "content": {"text": "Late."}}]}]}]},
+         "chapters": [{"chapter": 1, "sections": [{"id": "prologue", "title": "Prologue", "sv": 43001001,
+                                                   "blocks": [{"type": "paragraph", "content": {"text": "In the beginning."}}]}]}]}
+        """#
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(volume.utf8)) as? [String: Any])
+        let fixture = try ShapeFixture()
+        defer { fixture.remove() }
+        let url = fixture.url.appendingPathComponent("rich.sqlite")
+        _ = try LampModuleCompiler().compileCommentary(root: root, databaseURL: url, moduleID: "R")
+        let queue = try DatabaseQueue(path: url.path)
+        try queue.read { db in
+            for shape in LampModuleCompiledSchema.tables(for: .commentary) {
+                let actual = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(\(shape.table))").compactMap { $0["name"] as String? })
+                #expect(actual == Set(shape.columns), "\(shape.table): \(actual.sorted())")
+                let rows = try Row.fetchAll(db, sql: "SELECT * FROM \(shape.table)")
+                #expect(!rows.isEmpty, "\(shape.table) is empty")
+                let empty = Set(rows.flatMap { row in shape.columns.filter { row[$0] == nil } })
+                #expect(empty.isSubset(of: Set(shape.mayBeNull)), "\(shape.table) leaves \(empty.subtracting(shape.mayBeNull).sorted()) empty")
+            }
+            let book = try #require(try Row.fetchOne(db, sql: "SELECT media_json, front_matter_json FROM commentary_books"))
+            #expect((book["media_json"] as String?)?.contains("one.png") == true)
+            #expect((book["front_matter_json"] as String?) == nil)
+            let unit = try #require(try Row.fetchOne(db, sql: "SELECT blocks_json, declared_id FROM commentary_units WHERE declared_id IS NOT NULL"))
+            #expect((unit["declared_id"] as String?) == "prologue")
+            #expect((unit["blocks_json"] as String?)?.contains("In the beginning.") == true)
+            let front = try Row.fetchAll(db, sql: "SELECT id, section_id, parent_id, depth, order_index FROM commentary_front_matter ORDER BY order_index")
+            #expect(front.map { $0["id"] as String } == ["R:43:front:intro", "R:43:front:date"])
+            #expect(front.map { $0["parent_id"] as String? } == [nil, "R:43:front:intro"])
+            #expect(front.map { $0["depth"] as Int } == [0, 1])
+            // Its search index finds a section by its words.
+            let found = try String.fetchAll(db, sql: """
+                SELECT f.section_id FROM commentary_front_matter_fts JOIN commentary_front_matter f ON f.rowid = commentary_front_matter_fts.rowid
+                WHERE commentary_front_matter_fts MATCH 'late'
+                """)
+            #expect(found == ["date"])
+        }
+        // A front-matter row claiming another module is refused, as a
+        // unit's is. Found by Codex.
+        try queue.write { db in try db.execute(sql: "UPDATE commentary_front_matter SET module_id = 'OTHER' WHERE section_id = 'date'") }
+        #expect(throws: LampPortableModuleInspector.InspectionError.foreignRows("commentary_front_matter")) {
+            try LampPortableModuleInspector.validateOwnership(databaseURL: url, expectedID: "R", kind: .commentary, verifyIntegrity: false)
+        }
+        // A series names its front matter by the series, not each volume's
+        // abbreviation. Found by Codex.
+        var inSeries = CommentaryUnitBuilder(moduleID: "ABBR", bookNumber: 43, rich: true)
+        inSeries.frontMatterOwner = "SERIES"
+        inSeries.append(frontMatter: ["sections": [["id": "intro", "title": "I"]]], media: nil)
+        #expect(inSeries.frontMatterRows.map(\.id) == ["SERIES:43:front:intro"])
     }
 }
 

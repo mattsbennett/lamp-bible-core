@@ -60,7 +60,7 @@ struct CommentarySeriesCompilerTests {
         let result = try compile(folder)
         #expect(result.moduleID == "TWO")
         #expect(result.outputURL.lastPathComponent == "TWO.lamp")
-        #expect(result.tableCounts == ["series_meta": 1, "commentary_books": 2, "commentary_units": 15])
+        #expect(result.tableCounts == ["series_meta": 1, "commentary_books": 2, "commentary_units": 15, "commentary_front_matter": 0])
 
         let compressed = try Data(contentsOf: result.outputURL)
         // A series passes the check an app makes before it installs a file.
@@ -85,6 +85,9 @@ struct CommentarySeriesCompilerTests {
         let folder = try fixture()
         defer { try? FileManager.default.removeItem(at: folder) }
         let result = try compile(folder)
+        // Its front matter counted as a volume's is: none in a 2.2 series.
+        // Found by Codex.
+        #expect(result.tableCounts["commentary_front_matter"] == 0)
         let seriesDatabase = folder.appendingPathComponent("TWO.sqlite")
         try ((Data(contentsOf: result.outputURL) as NSData).decompressed(using: .zlib) as Data).write(to: seriesDatabase)
         let volumeURL = folder.appendingPathComponent("TWO_Gen.lamp")
@@ -107,6 +110,8 @@ struct CommentarySeriesCompilerTests {
         let named: [String: Set<String>] = [
             "commentary_units": ["module_id"],
             "commentary_books": ["module_id", "series_full", "series_abbrev", "description"],
+            // A 2.3 volume's front matter, as its units: less `module_id`.
+            "commentary_front_matter": ["module_id"],
         ]
         for (table, modules) in named {
             let volume = try columns(volumeDatabase, table)
@@ -533,22 +538,22 @@ struct CommentarySeriesCompilerTests {
     static let expected: [String] = [
         "module_format s:1.0|s:commentary|s:TWO",
         "series_meta s:TWO|s:Two Volume Notes|s:TWO|s:A test series|s:An Editor|s:A Press|s:OT|s:en|∅|f52a367b53c3|ff636009c987|49ca15ebb961|3ff1e7514f09|39cd88cf4683",
-        "commentary_books s:book_1|i:1|s:Notes on Genesis|s:An Author|s:An Editor|s:A Press|i:2001|f2326301ee1f|bc605df25e8a|7eb4384df2f2",
-        "commentary_books s:book_2|i:2|s:Exodus|∅|∅|∅|∅|∅|∅|∅",
-        "commentary_units s:TWO:1:chapter_intro:1|i:1|i:1|i:1001001|∅|s:section|i:0|∅|s:Chapter 1 Introduction|∅|10cd6ff47261|∅|∅|∅|37ab9060ed42|i:0|e3b0c44298fc",
-        "commentary_units s:TWO:1:section:1:1|i:1|i:1|i:1001001|i:1002003|s:section|i:1|∅|s:Creation|∅|b33b6a129469|∅|∅|∅|baf1ee4ce8a6|i:1|e3b0c44298fc",
-        "commentary_units s:TWO:1:section:1:2|i:1|i:1|i:1001001|i:1001031|s:section|i:2|s:TWO:1:section:1:1|s:The Days|∅|∅|∅|∅|∅|90726c8b1816|i:2|e3b0c44298fc",
-        "commentary_units s:TWO:1:pericope:1:3|i:1|i:1|i:1001001|i:1001031|s:pericope|i:1|s:TWO:1:section:1:2|s:Six Days|∅|d05c754ee75b|f0056835b4ee|∅|∅|4f0b5cbbaca5|i:3|e3b0c44298fc",
-        "commentary_units s:TWO:1:verse:1:4:1001001|i:1|i:1|i:1001001|∅|s:verse|i:1|s:TWO:1:pericope:1:3|∅|∅|∅|∅|ce301661ec96|∅|78459739779d|i:4|e3b0c44298fc",
-        "commentary_units s:TWO:1:verse:1:5:1001002a|i:1|i:1|i:1001002|i:1001005|s:verse|i:1|s:TWO:1:pericope:1:3|∅|s:a|∅|∅|697334e07414|∅|aaf027c09407|i:5|e3b0c44298fc",
-        "commentary_units s:TWO:1:verse:1:6:1001026|i:1|i:1|i:1001026|∅|s:verse|i:1|∅|∅|∅|∅|∅|0e6ef81f7b9b|038c0aa78df2|7503d8620d58|i:6|002bc44d2504",
-        "commentary_units s:TWO:1:pericope:2:7|i:1|i:2|i:1002001|i:1002003|s:pericope|i:1|∅|s:Rest|∅|∅|∅|∅|∅|05863ec2c378|i:7|e3b0c44298fc",
-        "commentary_units s:TWO:2:pericope:2:0|i:2|i:2|i:2002004|∅|s:pericope|i:1|∅|s:Birth|∅|∅|∅|∅|∅|32eaeb6f806a|i:0|e3b0c44298fc",
-        "commentary_units s:TWO:2:verse:2:1|i:2|i:2|i:2002008|∅|s:verse|i:1|s:TWO:2:pericope:2:0|∅|∅|∅|∅|058c5b25ea73|∅|8e4e9747a2af|i:1|e3b0c44298fc",
-        "commentary_units s:TWO:2:pericope:1:2|i:2|i:1|i:2001001|i:2002003|s:pericope|i:1|∅|s:The Names|∅|∅|∅|∅|∅|0cca31a9d4ee|i:2|e3b0c44298fc",
-        "commentary_units s:TWO:2:section:1:3|i:2|i:1|i:2001001|i:2002003|s:section|i:2|s:TWO:2:pericope:1:2|s:The Sons of Israel|∅|∅|∅|∅|∅|4de370cdca7b|i:3|e3b0c44298fc",
-        "commentary_units s:TWO:2:verse:1:4|i:2|i:1|i:2001003|i:2001005|s:verse|i:1|s:TWO:2:pericope:1:2|∅|∅|∅|∅|7476243f7b61|b100a743e8c4|356b51e24b80|i:4|0bb48801fa70",
-        "commentary_units s:TWO:2:pericope:1:5|i:2|i:1|i:2001001|i:2002003|s:pericope|i:1|s:TWO:2:pericope:1:2|∅|∅|∅|0deb49236a5b|∅|∅|005b46fe95b4|i:5|e3b0c44298fc",
-        "commentary_units s:TWO:2:verse:2:6|i:2|i:2|i:2002001|i:2002003|s:verse|i:1|s:TWO:2:pericope:1:2|∅|∅|∅|∅|c578c3c0f688|∅|216fa606937b|i:6|e3b0c44298fc",
+        "commentary_books s:book_1|i:1|s:Notes on Genesis|s:An Author|s:An Editor|s:A Press|i:2001|f2326301ee1f|bc605df25e8a|7eb4384df2f2|∅",
+        "commentary_books s:book_2|i:2|s:Exodus|∅|∅|∅|∅|∅|∅|∅|∅",
+        "commentary_units s:TWO:1:chapter_intro:1|i:1|i:1|i:1001001|∅|s:section|i:0|∅|s:Chapter 1 Introduction|∅|10cd6ff47261|∅|∅|∅|37ab9060ed42|i:0|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:1:section:1:1|i:1|i:1|i:1001001|i:1002003|s:section|i:1|∅|s:Creation|∅|b33b6a129469|∅|∅|∅|baf1ee4ce8a6|i:1|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:1:section:1:2|i:1|i:1|i:1001001|i:1001031|s:section|i:2|s:TWO:1:section:1:1|s:The Days|∅|∅|∅|∅|∅|90726c8b1816|i:2|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:1:pericope:1:3|i:1|i:1|i:1001001|i:1001031|s:pericope|i:1|s:TWO:1:section:1:2|s:Six Days|∅|d05c754ee75b|f0056835b4ee|∅|∅|4f0b5cbbaca5|i:3|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:1:verse:1:4:1001001|i:1|i:1|i:1001001|∅|s:verse|i:1|s:TWO:1:pericope:1:3|∅|∅|∅|∅|ce301661ec96|∅|78459739779d|i:4|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:1:verse:1:5:1001002a|i:1|i:1|i:1001002|i:1001005|s:verse|i:1|s:TWO:1:pericope:1:3|∅|s:a|∅|∅|697334e07414|∅|aaf027c09407|i:5|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:1:verse:1:6:1001026|i:1|i:1|i:1001026|∅|s:verse|i:1|∅|∅|∅|∅|∅|0e6ef81f7b9b|038c0aa78df2|7503d8620d58|i:6|002bc44d2504|∅|∅",
+        "commentary_units s:TWO:1:pericope:2:7|i:1|i:2|i:1002001|i:1002003|s:pericope|i:1|∅|s:Rest|∅|∅|∅|∅|∅|05863ec2c378|i:7|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:2:pericope:2:0|i:2|i:2|i:2002004|∅|s:pericope|i:1|∅|s:Birth|∅|∅|∅|∅|∅|32eaeb6f806a|i:0|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:2:verse:2:1|i:2|i:2|i:2002008|∅|s:verse|i:1|s:TWO:2:pericope:2:0|∅|∅|∅|∅|058c5b25ea73|∅|8e4e9747a2af|i:1|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:2:pericope:1:2|i:2|i:1|i:2001001|i:2002003|s:pericope|i:1|∅|s:The Names|∅|∅|∅|∅|∅|0cca31a9d4ee|i:2|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:2:section:1:3|i:2|i:1|i:2001001|i:2002003|s:section|i:2|s:TWO:2:pericope:1:2|s:The Sons of Israel|∅|∅|∅|∅|∅|4de370cdca7b|i:3|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:2:verse:1:4|i:2|i:1|i:2001003|i:2001005|s:verse|i:1|s:TWO:2:pericope:1:2|∅|∅|∅|∅|7476243f7b61|b100a743e8c4|356b51e24b80|i:4|0bb48801fa70|∅|∅",
+        "commentary_units s:TWO:2:pericope:1:5|i:2|i:1|i:2001001|i:2002003|s:pericope|i:1|s:TWO:2:pericope:1:2|∅|∅|∅|0deb49236a5b|∅|∅|005b46fe95b4|i:5|e3b0c44298fc|∅|∅",
+        "commentary_units s:TWO:2:verse:2:6|i:2|i:2|i:2002001|i:2002003|s:verse|i:1|s:TWO:2:pericope:1:2|∅|∅|∅|∅|c578c3c0f688|∅|216fa606937b|i:6|e3b0c44298fc|∅|∅",
     ]
 }

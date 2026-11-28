@@ -27,11 +27,19 @@ public struct LampModuleTableShape: Sendable, Equatable {
     /// and never names a column.
     public let mayBeNull: [String]
 
-    public init(table: String, columns: [String], mayBeAbsent: [String] = [], mayBeNull: [String] = []) {
+    /// Whether a module built by an older Lamp may lack the whole table, as
+    /// one built before step 4 lacks `commentary_front_matter`. Copy it only
+    /// where the source has it, and allow it to be empty.
+    public let tableMayBeAbsent: Bool
+
+    public init(
+        table: String, columns: [String], mayBeAbsent: [String] = [], mayBeNull: [String] = [], tableMayBeAbsent: Bool = false
+    ) {
         self.table = table
         self.columns = columns
         self.mayBeAbsent = mayBeAbsent
         self.mayBeNull = mayBeNull
+        self.tableMayBeAbsent = tableMayBeAbsent
     }
 }
 
@@ -96,13 +104,14 @@ public enum LampModuleCompiledSchema {
                 columns: [
                     "id", "module_id", "book_number", "series_full", "series_abbrev",
                     "title", "description", "author", "editor", "publisher", "year",
-                    "abbreviations_json", "front_matter_json", "indices_json",
+                    "abbreviations_json", "front_matter_json", "indices_json", "media_json",
                 ],
-                // Stored from 2026-11-11; a volume built before has none.
-                mayBeAbsent: ["description"],
+                // `description` stored from 2026-11-11, and a 2.3 volume's
+                // `media_json` from step 4; a volume built before has none.
+                mayBeAbsent: ["description", "media_json"],
                 mayBeNull: [
                     "description", "author", "editor", "publisher", "year",
-                    "abbreviations_json", "front_matter_json", "indices_json",
+                    "abbreviations_json", "front_matter_json", "indices_json", "media_json",
                 ]
             ),
             LampModuleTableShape(
@@ -111,15 +120,30 @@ public enum LampModuleCompiledSchema {
                     "id", "module_id", "book", "chapter", "sv", "ev", "unit_type",
                     "level", "parent_id", "title", "suffix", "introduction_json",
                     "translation_json", "commentary_json", "footnotes_json",
-                    "search_text", "order_index", "footnotes_text",
+                    "search_text", "order_index", "footnotes_text", "blocks_json", "declared_id",
                 ],
                 // The commentary's footnotes joined the search indexes in
-                // modules a2ea856; a volume built before that has no column.
-                mayBeAbsent: ["footnotes_text"],
+                // modules a2ea856, and a 2.3 unit's blocks and declared id in
+                // step 4; a volume built before has no such column.
+                mayBeAbsent: ["footnotes_text", "blocks_json", "declared_id"],
                 mayBeNull: [
                     "ev", "parent_id", "title", "suffix", "introduction_json",
                     "translation_json", "commentary_json", "footnotes_json",
+                    "blocks_json", "declared_id",
                 ]
+            ),
+            // A 2.3 volume's front-matter sections, one row each, with its
+            // own search index (`commentary_front_matter_fts`, over `title`
+            // and `search_text`). Created empty for a 2.2 volume; absent
+            // from one built before step 4.
+            LampModuleTableShape(
+                table: "commentary_front_matter",
+                columns: [
+                    "id", "module_id", "book_number", "section_id", "parent_id", "title",
+                    "depth", "order_index", "blocks_json", "search_text",
+                ],
+                mayBeNull: ["parent_id"],
+                tableMayBeAbsent: true
             ),
         ]
 

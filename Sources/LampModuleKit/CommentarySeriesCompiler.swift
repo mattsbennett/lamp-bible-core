@@ -454,6 +454,8 @@ extension LampModuleCompiler {
         let meta = try JSONSupport.requiredObject(series["meta"], path: "/meta")
         let queue = try makeDatabaseQueue(at: databaseURL)
         var unitCount = 0
+        // Its front matter counted as a volume's is. Found by Codex.
+        var frontMatterCount = 0
         var media = SeriesMedia()
         try queue.write { db in
             try createSeriesSchema(in: db)
@@ -486,14 +488,17 @@ extension LampModuleCompiler {
             )
 
             for volume in volumes {
-                unitCount += try autoreleasepool {
-                    try writeVolume(volume, in: db, media: &media, warnings: &warnings)
+                let written = try autoreleasepool {
+                    try writeVolume(volume, seriesID: seriesID, in: db, media: &media, warnings: &warnings)
                 }
+                unitCount += written.units
+                frontMatterCount += written.frontMatter
             }
             try db.execute(sql: "INSERT INTO commentary_units_fts(commentary_units_fts) VALUES('rebuild')")
+            try db.execute(sql: "INSERT INTO commentary_front_matter_fts(commentary_front_matter_fts) VALUES('rebuild')")
         }
         try optimize(queue)
-        return ["series_meta": 1, "commentary_books": volumes.count, "commentary_units": unitCount]
+        return ["series_meta": 1, "commentary_books": volumes.count, "commentary_units": unitCount, "commentary_front_matter": frontMatterCount]
     }
 
     /// One volume's book and units, read from its file, checked as a volume
@@ -539,8 +544,8 @@ extension LampModuleCompiler {
     }
 
     private func writeVolume(
-        _ volume: Volume, in db: Database, media: inout SeriesMedia, warnings: inout [ModuleValidationIssue]
-    ) throws -> Int {
+        _ volume: Volume, seriesID: String, in db: Database, media: inout SeriesMedia, warnings: inout [ModuleValidationIssue]
+    ) throws -> (units: Int, frontMatter: Int) {
         let url = volume.url
         try Self.requireInside(url, volume.folder)
         let root = try Self.object(at: url)
@@ -579,32 +584,6 @@ extension LampModuleCompiler {
                 expected: "\(volume.bookNumber), as when the series was read"
             )
         }
-        try db.execute(
-            sql: """
-                INSERT INTO commentary_books (
-                    id, book_number, title, author, editor, publisher, year,
-                    abbreviations_json, front_matter_json, indices_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-            arguments: [
-                "book_\(bookNumber)",
-                bookNumber,
-                // A volume may give a name in place of a title, which the
-                // schema says to show: as a volume compiled alone keeps it.
-                // Found by Codex.
-                // The first of them that is words, as the inspector takes it:
-                // a mistyped title lost the name. Found by Codex.
-                JSONSupport.string(volumeMeta["title"]) ?? JSONSupport.string(volumeMeta["name"]),
-                JSONSupport.string(volumeMeta["author"]),
-                JSONSupport.string(volumeMeta["editor"]),
-                JSONSupport.string(volumeMeta["publisher"]),
-                JSONSupport.integer(volumeMeta["year"]),
-                try JSONSupport.jsonString(root["abbreviations"]),
-                try Self.annotatedJSON(root["frontMatter"]),
-                try JSONSupport.jsonString(root["indices"]),
-            ]
-        )
-
         // A unit is named for its volume's series abbreviation, as the
         // Python names it.
         var builder = CommentaryUnitBuilder(
@@ -615,6 +594,7 @@ extension LampModuleCompiler {
             rich: JSONSupport.string(volumeMeta["schemaVersion"]) == "2.3"
         )
         builder.hasTopLevelFootnoteIDs = root["footnoteIds"] != nil
+        builder.frontMatterOwner = seriesID
         // The builder's errors named for the volume too, so a series' build
         // says where a verse lacks its `sv`. Found by Codex.
         do {
@@ -634,11 +614,44 @@ extension LampModuleCompiler {
         // volumes may both be `volume.json`. Found by Codex.
         let folderPath = volume.folder.standardizedFileURL.path
         let filePath = url.standardizedFileURL.path
+        // Its book written once its units are known to build, with its
+        // media.
+        try db.execute(
+            sql: """
+                INSERT INTO commentary_books (
+                    id, book_number, title, author, editor, publisher, year,
+                    abbreviations_json, front_matter_json, indices_json, media_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            arguments: [
+                "book_\(bookNumber)",
+                bookNumber,
+                // A volume may give a name in place of a title, which the
+                // schema says to show: as a volume compiled alone keeps it.
+                // Found by Codex.
+                // The first of them that is words, as the inspector takes it:
+                // a mistyped title lost the name. Found by Codex.
+                JSONSupport.string(volumeMeta["title"]) ?? JSONSupport.string(volumeMeta["name"]),
+                JSONSupport.string(volumeMeta["author"]),
+                JSONSupport.string(volumeMeta["editor"]),
+                JSONSupport.string(volumeMeta["publisher"]),
+                JSONSupport.integer(volumeMeta["year"]),
+                try JSONSupport.jsonString(root["abbreviations"]),
+                // A 2.3 volume's front matter is its sections' rows.
+                builder.rich ? nil : try Self.annotatedJSON(root["frontMatter"]),
+                try JSONSupport.jsonString(root["indices"]),
+                try builder.mediaJSON(),
+            ]
+        )
+
         try media.add(builder.media, from: filePath.hasPrefix(folderPath + "/") ? String(filePath.dropFirst(folderPath.count + 1)) : url.lastPathComponent)
         for row in builder.units {
             try CommentaryUnitTable.insert(row, moduleID: nil, book: bookNumber, in: db)
         }
-        return builder.units.count
+        for row in builder.frontMatterRows {
+            try CommentaryFrontMatterTable.insert(row, moduleID: nil, book: bookNumber, in: db)
+        }
+        return (builder.units.count, builder.frontMatterRows.count)
     }
 
     /// The tables `commentary_series_to_sqlite.py` creates, as it creates
@@ -672,7 +685,8 @@ extension LampModuleCompiler {
                 year INTEGER,
                 abbreviations_json TEXT,
                 front_matter_json TEXT,
-                indices_json TEXT
+                indices_json TEXT,
+                media_json TEXT
             );
             CREATE INDEX idx_books_number ON commentary_books(book_number);
             \(CommentaryUnitTable.createSQL(withModule: false));
@@ -686,6 +700,7 @@ extension LampModuleCompiler {
                 content_rowid='rowid'
             );
             """)
+        for sql in CommentaryFrontMatterTable.createSQL(withModule: false) { try db.execute(sql: sql) }
     }
 
     /// An object stored as it is, or words stored as annotated text with

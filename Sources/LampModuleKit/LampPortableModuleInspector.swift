@@ -470,8 +470,10 @@ public enum LampPortableModuleInspector {
             case .dictionary:
                 return [("module_metadata", "id"), ("dictionary_entries", "module_id")]
             case .commentary:
+                // A 2.3 volume's front matter too, where the file names its
+                // module. Found by Codex.
                 return [("series_meta", "id"), ("commentary_books", "module_id"),
-                        ("commentary_units", "module_id")]
+                        ("commentary_units", "module_id"), ("commentary_front_matter", "module_id")]
             case .book:
                 return [("book_modules", "id"), ("book_sections", "module_id")]
             case .devotional:
