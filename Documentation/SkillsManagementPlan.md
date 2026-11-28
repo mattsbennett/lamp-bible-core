@@ -202,8 +202,9 @@ Numbered as they landed:
   Markdown only; a reader chat asked for output offers a writing.
 - 0049: a reader's skill is deleted everywhere.
 - 0050: a writing's off-list rides in its selection.
-- Next: a skill has its own editor and is not a writing; no workspace file
-  tree; Markdown references are part of a plain skill.
+- 0051: a skill has its own window and is not a writing; no workspace file
+  tree.
+- 0052: Markdown references are part of a plain skill.
 
 ## Tests that must bite
 
