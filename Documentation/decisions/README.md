@@ -47,3 +47,5 @@ Records 0001–0017 come out of the scalability pass of 2026-11-24, and 0018–0
 (`../AgentHoldsAndApprovalsPlan.md`).
 0046 on come out of the skills management pass of 2026-11-28
 (`../SkillsManagementPlan.md`).
+0053 and 0054 come out of the sync controller harness of 2026-11-28
+(`../SyncControllerHarnessPlan.md`).
