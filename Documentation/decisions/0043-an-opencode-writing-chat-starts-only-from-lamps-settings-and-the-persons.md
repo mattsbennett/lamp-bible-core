@@ -75,6 +75,11 @@ the writing counts only for a `skills` folder in it.
   stale) too. No turn's end lets that hold go: only the person's Send.
 - Nothing is written into a writing that resolves outside the library: that
   is looked at first, since a linked parent would lead the write elsewhere.
+  The boundary: a writing's workspace is prepared for every turn, by any
+  provider, before this check, as it always has been, through the library's
+  own folders; no agent may relink those unasked, being outside every
+  writing. Codex raised preparation through a relinked parent as a P1 against
+  this check; it is not this check's, and was not changed here.
   A write of Lamp's file that fails is told to a phone as
   `writing-settings` too, its words naming the writing on the Mac.
 - Only OpenCode's own file is written before the check, so another

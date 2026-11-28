@@ -86,11 +86,12 @@ later one.
   until its daily sweep. Raised by Codex as a P3.
 - A wait in a chat its pane keeps drawn behind the Terminal is told as
   unwatched: the card can't be seen there.
-- A click on a wait's notice opens the writing's pane on Chat (the pane's
-  one Chat or Terminal setting, shared by every writing, as the person's own
-  switch is), where the
-  card is, though a Terminal was showing; taking it back removes one not yet
-  shown too.
+- A click on a wait's notice shows the writing's assistant as it was left;
+  in Terminal mode the person switches to Chat to see the card. Switching it
+  for them was built and taken out: the Chat or Terminal setting is one for
+  every writing, so a click would hide a Terminal being watched in another
+  window (Codex, P2).
+- Taking a wait's notice back removes one not yet shown too.
 - On the Mac, a wait's notice has a name of its own, so taking it back leaves
   an end's notice alone; and a click on either shows the writing's
   assistant, in a window already open too.
