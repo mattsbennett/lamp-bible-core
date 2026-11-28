@@ -13,18 +13,22 @@ import LampModuleKit
 /// compatibility publisher wrote, are adopted by that pass, never written
 /// over.
 ///
-/// So the Mac must have just imported the library it moves: on WebDAV the
-/// archive at `revision`, on a folder the tree it captured. The bundle is
-/// written over the archive only while it is still at that revision, and on a
-/// folder only where nothing is yet. Run again, it finds the bundle and writes
-/// nothing; a second Mac migrating at the same time has its write refused and
-/// returns the first Mac's bundle.
+/// So what only the archive held is not brought across: the Mac imports no
+/// archive, and publishes its own library. On WebDAV the Mac keeps the
+/// archive on the server, at a path of its own, before calling this; on a
+/// folder the old tree stays where it is. `archive` is what the Mac read when
+/// the move was pressed — on WebDAV the archive at `revision`, on a folder
+/// the tree it captured. The bundle is written over the archive only while it
+/// is still at that revision, and on a folder only where nothing is yet. Run
+/// again, it finds the bundle and writes nothing; a second Mac migrating at
+/// the same time has its write refused and returns the first Mac's bundle.
 ///
-/// Nothing old is deleted: the archive is replaced, and a folder's old tree
-/// stays where it is. Ask the person to update their other devices first. A
-/// device still on format 1 or 2 stops receiving deletions once the bundle is
-/// written, and the Mac's folder sync before it, which never reads the bundle,
-/// stops at the files it does not recognise.
+/// Nothing old is deleted: the archive is replaced at its path once the Mac
+/// has kept it, and a folder's old tree stays where it is. Ask the person to
+/// update their other devices first. A device still on format 1 or 2 stops
+/// receiving deletions once the bundle is written, and the Mac's folder sync
+/// before it, which never reads the bundle, stops at the files it does not
+/// recognise.
 public enum LampSyncLibraryMigration {
     public enum MigrationError: Error, Equatable, LocalizedError {
         /// An entry the migration cannot place: not a setting or ledger it

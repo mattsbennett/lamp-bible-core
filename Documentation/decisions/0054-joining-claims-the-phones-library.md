@@ -44,3 +44,44 @@ Both then run the same pass and the same follow-up.
   anything another device added since would be lost. Join carries the
   archive's own contents into the bundle and writes only over the archive
   it read, so the revision it read is the right condition.
+
+## Review
+
+Three Codex rounds were run over the harness and this change.
+
+- **Round one.** It said a Move or Join pressed after sync was repointed
+  acts on the new destination. I bound the offer to its source and account.
+- **Round two.** Every finding was in that binding:
+  - an account read after an await;
+  - a follow-up registered before the guard;
+  - the offer judged only once.
+
+  The binding protected nothing. A stale Move is refused by its revision
+  check, and a stale Join claims only what a fresh offer at the new
+  destination would claim. A library the Mac kept refuses Join. So, by
+  0022's rule, the binding was cut and round one's finding is not a defect.
+
+  What round two found that was real: an offer refused at the server stayed
+  on offer, and Sync Now never judged it again. Now the offer is judged
+  again whenever the bundle path's revision is not the one judged, and
+  always where nothing is there. Both providers are judged by core's
+  `earlierLibrary(in:)`. The Move admits itself as every pass does.
+- **Round three.** No P0 or P1. Left, as rare and losing nothing:
+  - **A server whose HEAD omits the ETag its GET sends.** The archive is
+    judged as a loose tree, and the Move is refused as "import again".
+    Earlier code failed the same way. Nothing is lost; the Move can't run.
+  - **An archive that changes between the HEAD and the classifying read.**
+    The offer is recorded under the older revision. The Move is refused and
+    the next sync judges it again, as the refusal says to do.
+  - **Two servers whose archives share an ETag.** After a repoint the old
+    offer stays. Synology's tags make that unlikely.
+  - **Join skips the old reader's manifest checks.** A phone's archive with
+    a bad legacy manifest can be claimed. Its settings are carried across
+    either way.
+  - **Join can leave copied files behind if it loses the race.** Core copies
+    format-3 writing files before its conditional write, so a Join that loses
+    to another Mac can leave them. They are written only where absent. This
+    is core's routine, shared with iOS.
+  - **A phone's folder can leave its old settings database behind.** Its
+    legacy `UserData` database is not carried into the first bundle. This is
+    core's claim, shared with iOS.
