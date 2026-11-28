@@ -73,6 +73,13 @@ later one.
   handed the alert, as with a turn's end: a subscription's predicate chooses
   records, not devices. What it shows is the chat's title and the
   provider's name.
+- A wait's notice is named by its provider too, so answering one provider's
+  wait can't take another's notice away.
+- **Left, an edge case:** a click opens the writing's chat on the provider
+  the pane has chosen; a wait from a provider moved away from while its turn
+  ran shows its card only once the pane is moved back to it. Raised by Codex
+  as a P2; rare, and choosing for the person on a click would change the
+  writing's provider.
 - A click on a wait's notice opens the writing's pane on Chat, where the
   card is, though a Terminal was showing; taking it back removes one not yet
   shown too.

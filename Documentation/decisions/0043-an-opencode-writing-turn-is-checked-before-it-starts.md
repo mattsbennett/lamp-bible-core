@@ -71,6 +71,11 @@ folder or link there can't be vouched for and stops the turn.
 - What is left writing while a turn runs is OpenCode's own agent, whose own
   settings it can change anyway, and sync bringing a change from another
   Mac; the next OpenCode turn checks again.
+- **Approved only as shown.** A file the sheet could show only by its size
+  (too long to show whole, or not text), in the writing or above it, stops
+  the turn rather than being approved unseen. Codex found this class three
+  times (a link, a file above, a file in the writing); it is closed here at
+  the root, for everything OpenCode reads.
 - **A link stops the turn** rather than being put to the person: it is
   fingerprinted by where it points, what it leads to can change unasked, and
   OpenCode rereads it at every request. Codex raised it as a P1 twice; the
@@ -104,6 +109,11 @@ folder or link there can't be vouched for and stops the turn.
   documented for the OpenCode installed.
 - Running OpenCode from a folder of Lamp's: the session would no longer be
   the writing's, and relative paths would land elsewhere.
+- **Left, an edge case:** with one writing open in two panes, each holding an
+  OpenCode message for Send Anyway, confirming one approves the shared
+  settings, and the other may be sent when the queue next moves while its
+  sheet is still up. Rare, and what goes is a message the person wrote to be
+  sent, on settings they had just approved. Raised by Codex as a P2.
 - Letting other chats run beside an OpenCode turn, which the first version
   did, reasoning that the writers it would stop were ones the person starts:
   Codex's first round showed the check then binds nothing, since OpenCode
