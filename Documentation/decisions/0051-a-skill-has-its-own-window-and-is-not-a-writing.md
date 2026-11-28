@@ -52,6 +52,11 @@ Codex's later reviews, none at P1, left these, each rare:
   can bring that window forward and Edit… can open a second one.
 - **A skill over 64 references**, from an older import or additions synced
   together, saves edits to what it has, but takes no more.
+- **A second New Skill window** saving the same name and the same SKILL.md
+  as a skill already there is taken for a retry, so its references join
+  that skill, under any reader-chat choice the skill already has.
+- **The test for updating each writing on its own** does not separate the
+  old loop from the new one; the code reads plainly, and the case is narrow.
 
 ## Rejected
 
