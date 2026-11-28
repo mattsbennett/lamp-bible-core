@@ -68,6 +68,16 @@ So a skill deleted on one Mac came back from the server on the next pass.
   review of step 5 raised it, at P2.
 - A skill file whose name sync cannot publish, with a backslash in it, is
   not queued, and does not stop the skill being removed here.
+- **Two more edges are left as they are.** Codex's third review of step 5
+  raised both, at P2.
+  - A removal of a copy fetched from a Mac whose clock ran ahead can be
+    undone until the clocks agree. Its write is dated after the removal, and
+    `queuedDeletionTime` dates past such a write for documents only.
+  - A removal made between a pass staging the skill and gathering its queue
+    can be taken for the skill made again, and forgotten. The skill then
+    comes back once.
+
+  Both cost a skill showing again, and removing it again sticks.
 
 - **A published write loses to a later removal; an unsent one does not.**
   If another Mac uploaded an edit and this one then removes the skill

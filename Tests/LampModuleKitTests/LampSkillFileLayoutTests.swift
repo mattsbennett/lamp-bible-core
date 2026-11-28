@@ -40,7 +40,7 @@ struct LampSkillFileLayoutTests {
         let file = try #require(LampWritingWorkspaceLayout.skillFile(
             ofPath: "Workspaces/Skills/word-study/Ro\u{0308}mer.md"
         ))
-        #expect(file.relativePath == "R\u{00F6}mer.md")
+        #expect(Array(file.relativePath.utf8) == Array("R\u{00F6}mer.md".utf8))
         // A name that begins with a combining mark is still split at its
         // slash.
         let marked = try #require(LampWritingWorkspaceLayout.skillFile(
