@@ -2,7 +2,8 @@
 
 Planned by Fable on 2026-11-28, against Mac `e26683e` and core `90bc79e`.
 The coordinator checked the load-bearing claims against the code the same
-day. Not yet approved by the owner.
+day. The owner approved the shape on 2026-11-28 and replaced the per-chat
+reader control with a "writings only" choice in Settings.
 
 ## What was asked
 
@@ -70,15 +71,18 @@ Info has. It opens from Settings and from a workspace's Edit.
 
 | Place | What it shows | Default |
 |---|---|---|
-| Settings ▸ AI & Agents ▸ **Skills** (only with AI on) | Built-in skills: a toggle and View each. "Off takes a skill away from every writing, reader chat and connected app. Lamp's own copy is never changed." | On |
+| Settings ▸ AI & Agents ▸ **Skills** (only with AI on) | Built-in skills: a "Use in" menu and View each. The menu reads "Writings and reader chats", "Writings only" or "Off" for a study skill, and "Writings" or "Off" for build-lamp-deck, which reader chats never get. "Off takes a skill away from every writing, reader chat and connected app. Lamp's own copy is never changed." | Writings and reader chats |
 | Same section | Your skills: Edit…, Remove…, New Skill… Remove confirms that the skill leaves every writing on every Mac. | — |
 | Writing workspace, "Skills" | One list of toggles: built-ins and your skills. A built-in that is off in Settings is greyed: "Off in Settings". The menu has New Skill… and Manage Skills…. | Built-ins on, yours off |
-| Reader chat setup | A Skills menu with the two study skills, for this chat. | On |
 
 - `import-lamp-writing` is never listed. Turning it off would break Add to
   Library's import.
 - There is no "duplicate a built-in": that would make the divergent copy
   the `bundledSkills` comment forbids.
+- **No per-chat control for reader chats.** The owner wants some skills in
+  writing chats but not reader chats. "Writings only" in Settings says that
+  once. A menu in each reader chat would have to be set again in every new
+  chat. Fable's plan had one; the owner's case replaced it on 2026-11-28.
 
 ## Data model
 
@@ -87,9 +91,13 @@ less what is off on that surface. A per-surface "inherit, on, off" control
 was rejected: it needs three states, and lets a writing silently contradict
 Settings.
 
-**In Settings**, `agent.skills.off.<name>` booleans, where absent means on.
+**In Settings**, two booleans per built-in, where absent means on:
+`agent.skills.off.<name>` (everywhere) and `agent.skills.readerOff.<name>`
+(reader chats). "Writings only" sets the second; "Off" sets the first.
 - They sync through `LampPortableSettingsCodec.syncedKeys`, whose merge is
   already per key. No Lean change.
+- Two keys rather than one three-valued key, so each surface reads one
+  boolean, and an older Mac without the reader key still syncs the other.
 - The MCP helper learns the set through its descriptor.
 
 **For a writing**, a sibling file, `.lamp/disabled-builtin-skills.json`,
@@ -97,8 +105,6 @@ published as `DisabledBuiltInSkills.json`.
 - A key in `enabled-skills.json` was rejected: an older Mac re-encodes only
   `formatVersion` and `names`, so it would strip the key.
 - A `formatVersion` bump was rejected: older builds would throw.
-
-**For a reader chat**, the same file in the chat's folder. It stays local.
 
 **Removing a custom skill is a synced deletion**, following 0019: a
 deletable kind for skill files, queued on the act and never inferred from
@@ -115,9 +121,10 @@ absence.
    - the AGENTS.md deck line;
    - `studySkillNames`;
    - the MCP prompts.
-2. **Off in Settings.** The keys, the Settings section's toggles and the
-   descriptor field. MCP filters on it, and open panes re-prepare when it
-   changes. In core, three `syncedKeys`.
+2. **Off in Settings.** The keys, the Settings section's "Use in" menus
+   and the descriptor field. MCP filters on the everywhere key, reader-chat
+   prepare on both, and open panes re-prepare when either changes. In core,
+   five `syncedKeys`.
 3. **Your skills in Settings.** The editor sheet moves to its own file; New
    and Edit appear in Settings.
 4. **Remove everywhere.**
@@ -131,8 +138,7 @@ absence.
    ships, test what an older exporter does with an unknown
    `DisabledBuiltInSkills.json`. If it re-fetches every pass, keep the
    choice local.
-6. **The reader-chat menu.**
-7. **The editor window with reference files.** `isPlainSkill` accepts
+6. **The editor window with reference files.** `isPlainSkill` accepts
    regular `.md` files under `references/`. It still refuses:
    - links;
    - hidden files;
@@ -142,7 +148,8 @@ absence.
 ## Decision records
 
 - 0046: off wins, by selection.
-- 0047: the Settings choice travels in the Mac's settings.
+- 0047: the Settings choice, everywhere or writings only, travels in the
+  Mac's settings; no per-chat control.
 - 0048: a writing's off-list is a sibling file.
 - 0049: a custom skill is deleted everywhere.
 - 0050: a skill has its own editor and is not a writing; no workspace file
@@ -151,6 +158,9 @@ absence.
 
 ## Tests that must bite
 
+- **Writings only.** With sola-scriptura set to writings only, a reader
+  chat's files and instructions do not name it, and a writing still holds
+  it.
 - **Off in Settings.** With sola-scriptura off, none of these hold it or
   name it:
   - a writing's provider folders;
@@ -184,5 +194,3 @@ absence.
   re-uploads, until every Mac is updated.
 - **Two Macs toggling offline.** Per-writing choices merge whole-file, so
   one Mac's toggles are lost, as with `EnabledSkills.json` today.
-- **The per-chat reader control is the weakest piece.** Chats are short,
-  and a choice made once per chat has to be made again in every new one.
