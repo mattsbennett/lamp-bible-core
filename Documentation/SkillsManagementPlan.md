@@ -144,11 +144,13 @@ there.
 - A chat already open re-prepares between turns when the setting or the
   catalog changes. A turn in flight keeps what it started with.
 
-**For a writing**, a sibling file, `.lamp/disabled-builtin-skills.json`,
-published as `DisabledBuiltInSkills.json`.
-- A key in `enabled-skills.json` was rejected: an older Mac re-encodes only
-  `formatVersion` and `names`, so it would strip the key.
-- A `formatVersion` bump was rejected: older builds would throw.
+**For a writing**, `off:<name>` entries among the names in its existing
+selection (0050). An older Mac reads only valid skill names, so it ignores
+them.
+- A sibling file was planned and dropped. A writing's portable folder has no
+  catch-all, so an older Mac would fetch it every pass and never place it.
+- Keeping the choice on one Mac was rejected: it would never reach the
+  others.
 
 **Removing a custom skill is a synced deletion**, following 0019: a
 deletable kind for skill files, queued on the act and never inferred from
@@ -180,11 +182,8 @@ absence.
      rows, and `coverage.json`.
    - Mac: `deleteSkill` and the pass's dispatch.
    - iOS: a core bump and one test row.
-6. **Per-writing toggles.** The sibling file, with its export and import,
-   and both selection files added to the local-work fingerprint. Before it
-   ships, test what an older exporter does with an unknown
-   `DisabledBuiltInSkills.json`. If it re-fetches every pass, keep the
-   choice local.
+6. **Per-writing toggles.** `off:` entries in the selection, kept by every
+   writer, and the selection file added to the local-work fingerprint.
 7. **The editor window with reference files.** `isPlainSkill` accepts
    regular `.md` files under `references/`. It still refuses:
    - links;
@@ -194,16 +193,17 @@ absence.
 
 ## Decision records
 
-- 0046: off wins, by selection.
-- 0047: the Settings choice, everywhere or writings only, travels in the
-  Mac's settings; no per-chat control.
-- 0048: a writing's off-list is a sibling file.
-- 0049: a custom skill is deleted everywhere.
-- 0050: a skill has its own editor and is not a writing; no workspace file
-  tree.
-- 0051: Markdown references are part of a plain skill.
-- 0052: your skill reaches reader chats by a Settings list, off by default,
+Numbered as they landed:
+
+- 0046: a surface's skills come from one table, and off wins.
+- 0047: Lamp's skills are turned off in the Mac's settings; no per-chat
+  control.
+- 0048: your skills reach reader chats by a Settings list, off by default,
   Markdown only; a reader chat asked for output offers a writing.
+- 0049: a reader's skill is deleted everywhere.
+- 0050: a writing's off-list rides in its selection.
+- Next: a skill has its own editor and is not a writing; no workspace file
+  tree; Markdown references are part of a plain skill.
 
 ## Tests that must bite
 
@@ -234,10 +234,9 @@ absence.
 - **On again.** Turning a skill back on installs a copy whose `treeDigest`
   equals the bundle's. The catalog and the export never hold a bundled
   name.
-- **Older Macs.**
-  - Re-encoding `enabled-skills.json` as today's selection leaves the
-    off-list intact.
-  - An import without `DisabledBuiltInSkills.json` turns nothing back on.
+- **Older Macs.** Today's reading of a selection with `off:` entries is
+  the reader's skills alone. Today's encoder drops them: the built-ins come
+  back on, nothing throws, and nothing loops.
 - **Two Macs.** An off set on one reaches the other's installed folders.
 - **Deletion.**
   - Each file is queued by its published path.
@@ -257,3 +256,5 @@ absence.
   re-uploads, until every Mac is updated.
 - **Two Macs toggling offline.** Per-writing choices merge whole-file, so
   one Mac's toggles are lost, as with `EnabledSkills.json` today.
+- **An older Mac's skill edit in a writing** turns that writing's built-ins
+  back on everywhere.

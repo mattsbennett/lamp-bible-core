@@ -152,8 +152,13 @@ public enum LampWritingWorkspaceLayout {
     /// the file's path inside the skill's folder: `SKILL.md`, a reference,
     /// anything the skill holds. Deleting a skill deletes each of them
     /// (`Documentation/decisions` on removing a skill everywhere).
+    ///
+    /// Split on the slash scalar, not on `Character`s: a file whose name
+    /// begins with a combining mark joins the slash before it into one
+    /// character, and the skill's whole removal would then fail on it.
     public static func skillFile(ofPath path: String) -> (name: String, relativePath: String)? {
-        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let components = path.unicodeScalars.split(separator: "/", omittingEmptySubsequences: false)
+            .map { String(String.UnicodeScalarView($0)) }
         let skills = skillsDirectory.split(separator: "/").map(String.init)
         guard components.count >= skills.count + 2,
               Array(components.prefix(skills.count)) == skills
@@ -161,7 +166,9 @@ public enum LampWritingWorkspaceLayout {
         let name = components[skills.count]
         let rest = Array(components[(skills.count + 1)...])
         guard isSkillName(name), !rest.isEmpty,
-              !rest.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("\u{0}") })
+              !rest.contains(where: {
+                  $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("\u{0}") || $0.contains("\\")
+              })
         else { return nil }
         return (name, rest.joined(separator: "/").precomposedStringWithCanonicalMapping)
     }

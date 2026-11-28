@@ -36,7 +36,17 @@ So a skill deleted on one Mac came back from the server on the next pass.
   - A skill deleted in the Finder is not queued, and comes back.
 - **The receiving Mac removes one file at a time**, on the workspace files'
   owner. Folders left empty go with it. Once SKILL.md is gone the folder is
-  no longer a skill, so the writings lose their copies straight away.
+  no longer a skill, so the writings that held it lose their copies straight
+  away.
+- **A deletion never takes a save it did not see.** As with a writing's
+  documents (`documentDeletionKeeps`):
+  - a file edited here since it was last agreed with the server is kept, as
+    checked against the live file on the owner;
+  - each file reports when it was saved here, so a later save outlives the
+    tombstone;
+  - a queued removal is forgotten once a file is held there again, so a
+    skill removed and made again under its name before the next pass is the
+    new skill.
 - **Lamp's own skills are refused.** They are turned off in Settings (0047),
   never removed.
 
@@ -49,6 +59,14 @@ So a skill deleted on one Mac came back from the server on the next pass.
   it shows nowhere and is given to nothing.
 - The iPhone has no skills, and no switch over these cases, so it is
   unchanged.
+- **A removal made while a pass uploads the skill can come back once.** The
+  pass records its upload after the removal, and the next pass reads that
+  as a newer save. Core's `queuedDeletionTime` dates past such an upload for
+  documents only, and a writing's sources have the same gap. Left as it is
+  for both: the skill shows again, and removing it again sticks. Codex's
+  review of step 5 raised it, at P2.
+- A skill file whose name sync cannot publish, with a backslash in it, is
+  not queued, and does not stop the skill being removed here.
 
 ## Rejected
 
